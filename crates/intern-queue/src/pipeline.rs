@@ -324,7 +324,7 @@ impl CoreFileActions {
         Self::with_file_system(store, Arc::new(StdFileSystem))
     }
 
-    /// The journalled file operations over `filesystem` rather than the
+    /// The journaled file operations over `filesystem` rather than the
     /// machine's own: what lets a held file, a refused rename or a slow copy
     /// be reproduced on any platform, against the queue's own store.
     pub fn with_file_system(store: Arc<QueueStore>, filesystem: Arc<dyn FileSystem>) -> Self {
@@ -580,7 +580,7 @@ pub struct ProposalRecord {
     /// differs from them, and why.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub house_rules: Vec<HouseRule>,
-    /// The person's own organisation as Settings named it when `filename`
+    /// The person's own organization as Settings named it when `filename`
     /// was composed. A party it names is left out of the name, so the name
     /// and the Party folder carry the other side. Kept with the record so the
     /// name can be read back exactly as it was composed, whatever Settings
@@ -685,7 +685,7 @@ impl ProposalRecord {
 
     /// The validated facts as the name carries them: the document's words,
     /// respelled the way the reviewer has taught Intern to, with the
-    /// person's own organisation left out where the document names someone
+    /// person's own organization left out where the document names someone
     /// else too. The one view the filename, the layout folder, a lesson
     /// from an edit, and a filing report are all read from.
     pub fn styled_proposal(&self) -> ValidatedProposal {
@@ -693,7 +693,7 @@ impl ProposalRecord {
     }
 
     /// [`Self::styled_proposal`], and the parties it left out because they
-    /// are the person's own organisation.
+    /// are the person's own organization.
     pub fn name_view(&self) -> (ValidatedProposal, Vec<String>) {
         let styled = HouseStyle::new(self.house_rules.clone())
             .apply(&self.analysis.proposal)
@@ -748,7 +748,7 @@ pub struct PipelineItem {
     pub filed_receipt: Option<OperationReceipt>,
     /// An operation that never finished, on an item that is not applying: one
     /// a reconciliation could not settle. Until it is checked again, no new
-    /// rename of the document can be journalled.
+    /// rename of the document can be journaled.
     pub unsettled_receipt: Option<OperationReceipt>,
     /// For an item flagged DUPLICATE: the name its content is already filed
     /// under (the completed apply's destination leaf, or the completed item's
@@ -876,7 +876,7 @@ impl Pipeline {
         )
     }
 
-    /// The queue with its real journalled file operations, over `filesystem`.
+    /// The queue with its real journaled file operations, over `filesystem`.
     ///
     /// The file operations share the queue's own store, as they do in the
     /// app: their ownership checks run against the same session as approve,
@@ -1895,7 +1895,7 @@ impl Pipeline {
         // document's and only the name is the reviewer's.
         let (styled, house_rules) = self.repository.active_style()?.apply(&analysis.proposal);
         // And named by the other side when it names the person's own
-        // organisation too. Settings that cannot be read name nobody, so the
+        // organization too. Settings that cannot be read name nobody, so the
         // name carries every party, as it did before the setting existed; an
         // automatic rename below reports the unreadable file.
         let own_names = self
@@ -1953,7 +1953,7 @@ impl Pipeline {
         )?;
         self.admission
             .processed(&item.source_path, &item.source_hash);
-        // The organisation's names were read before the name was composed,
+        // The organization's names were read before the name was composed,
         // and a Settings save since then renamed everything that was waiting
         // - which this document was not, yet. Read once more now that it
         // waits: a list that changed in between names it the way it names
@@ -2171,7 +2171,7 @@ impl Pipeline {
     }
 
     /// Names every document still waiting by the counterparty when it names
-    /// the person's own organisation, now that Settings names it `names`.
+    /// the person's own organization, now that Settings names it `names`.
     /// Waiting, unapproved documents are renamed in the queue at once, the
     /// way a learned spelling renames them; a name a person approved is
     /// theirs and keeps everything it says. A document already named by
@@ -2214,7 +2214,7 @@ impl Pipeline {
     /// The revision moves only when the name does. It is how the window
     /// knows the name it holds is no longer the proposal, and the reviewer's
     /// draft of the name and the description is replaced when it moves. A
-    /// change that leaves the name as it was - an organisation this document
+    /// change that leaves the name as it was - an organization this document
     /// never mentions, a respelling of a party the name leaves out - is
     /// stored without moving it, so whatever the reviewer has typed and not
     /// yet approved survives a Settings save.
@@ -2393,7 +2393,7 @@ impl Pipeline {
                 // A request that has already missed its deadline is given a
                 // little longer to notice the cancel, and then left to finish
                 // on its own. Waiting on it without a deadline meant one model
-                // that honoured neither its deadline nor its cancel stopped
+                // that honored neither its deadline nor its cancel stopped
                 // the queue for as long as the process lived.
                 if receiver
                     .recv_timeout(self.model_timeout.min(MODEL_CANCEL_GRACE))
@@ -3322,7 +3322,7 @@ impl Pipeline {
             ));
         }
         let mut item = self.find_item(id)?;
-        // A rename that never finished stops any new one being journalled,
+        // A rename that never finished stops any new one being journaled,
         // and approving again - once the program holding the file has let go
         // - is exactly how a person asks for it to be settled. So it is
         // checked first, rather than left to fail the apply every time.
@@ -3521,7 +3521,7 @@ impl Pipeline {
             let _files = self.hold_file_ops();
             let outcome = self.files.undo(&item, &receipt);
             if outcome.is_err() {
-                // A journalled undo that failed leaves the item applying, and
+                // A journaled undo that failed leaves the item applying, and
                 // one applying row stops every other document - until a
                 // recovery pass that steady intake could put off for good.
                 // Settle it now, as a failed apply is.
@@ -3530,7 +3530,7 @@ impl Pipeline {
             self.hold_undone_for_review(id);
             outcome
         };
-        // An undo the applier journalled can be finished by a reconciliation
+        // An undo the applier journaled can be finished by a reconciliation
         // even when the call itself reports a failure, so what settles this is
         // the store rather than the return value.
         self.report_settled(id);
@@ -3802,7 +3802,7 @@ fn undo_failure(
 /// verified copy whose original could not be deleted, and a reconciliation
 /// that could not tell which of the two the document is. Any other
 /// unfinished receipt is an operation nobody has looked at since it failed,
-/// and it stops the next rename from being journalled. Renaming, cancelling
+/// and it stops the next rename from being journaled. Renaming, canceling
 /// or removing such an item would decide what the files are on the person's
 /// behalf, so each of those refuses and says which question is open - by
 /// name, rather than letting an apply fail on it later as a conflict.
@@ -4666,7 +4666,7 @@ fn item_is_canceled(store: &QueueStore, id: i64) -> PipelineResult<bool> {
 /// The queue code an extraction failure is stored under, from the worker's
 /// code and its own word on whether trying again can help.
 ///
-/// Anything this does not recognise stays IO_ERROR and keeps its second
+/// Anything this does not recognize stays IO_ERROR and keeps its second
 /// attempt: crashes, a busy or misbehaving worker, and the worker's I/O
 /// failures, which it reports as retryable PARSE_FAILED.
 fn extraction_error_code(code: &str, retryable: bool) -> ErrorCode {
@@ -4746,7 +4746,7 @@ const MODEL_MISSING_GRACE: std::time::Duration = std::time::Duration::from_secs(
 /// What the queue does with a document whose analysis failed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ModelFailureAction {
-    /// Back to waiting, nothing counted: the document was never analysed.
+    /// Back to waiting, nothing counted: the document was never analyzed.
     Requeue,
     /// Fail this document now; another attempt would answer the same.
     Terminal,

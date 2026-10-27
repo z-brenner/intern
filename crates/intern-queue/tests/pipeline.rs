@@ -1178,7 +1178,7 @@ fn canceled_never_pauses() {
 }
 
 /// Switching from the hosted model to the local one leaves a moment with no
-/// model loaded. A document that meets that moment was never analysed: it
+/// model loaded. A document that meets that moment was never analyzed: it
 /// goes back to wait with nothing counted against it, as often as it happens
 /// within that moment, and the drain ends instead of claiming it again at
 /// once.
@@ -4285,7 +4285,7 @@ const AGREEMENT: &str = "EMPLOYMENT AGREEMENT\n\nThis Employment Agreement is si
     agreement.";
 
 /// A rename that really happens but is reported to the queue as a failure:
-/// what the caller sees when the applier journalled an ambiguous operation
+/// what the caller sees when the applier journaled an ambiguous operation
 /// and a reconciliation finished it afterwards.
 struct ReconciledApply {
     inner: CoreFileActions,
@@ -4371,7 +4371,7 @@ fn a_rename_finished_by_reconciliation_is_reported_and_fingerprinted() {
     assert_eq!(filed[0].destination, destination);
 
     // And the filing is remembered, so a second scan of the same agreement is
-    // recognised instead of being filed all over again.
+    // recognized instead of being filed all over again.
     let rescan = source(&inbox, "agreement-scan-2.pdf");
     pipeline
         .enqueue_files(std::slice::from_ref(&rescan))
@@ -6581,7 +6581,7 @@ fn already_named_source_is_completed_without_rename() {
         "{:?}",
         record.reasons
     );
-    assert!(item.receipt.is_none(), "no file operation was journalled");
+    assert!(item.receipt.is_none(), "no file operation was journaled");
     assert!(path.exists());
     let names = std::fs::read_dir(&inbox)
         .unwrap()

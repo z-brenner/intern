@@ -176,7 +176,7 @@ pub struct ListedReceipts {
     pub unsettled: Option<OperationReceipt>,
 }
 
-/// One finished journalled file operation, for the history view.
+/// One finished journaled file operation, for the history view.
 ///
 /// `at` is the receipt's `updated_at`: the moment the operation reached its
 /// terminal stage, not the moment it was planned. `original_path` and
@@ -646,7 +646,7 @@ impl QueueStore {
         // The newest *finished* receipt is where the content actually is now.
         // Asking for the newest receipt of any kind and then requiring it to be
         // a completed apply reported no filed name at all whenever something
-        // later had been journalled and abandoned - an undo that rolled back
+        // later had been journaled and abandoned - an undo that rolled back
         // sits on top of the apply that filed the document without having moved
         // anything. An operation that rolled back moved nothing, so it cannot
         // answer the question, and the completed apply underneath it still can.
@@ -1406,7 +1406,7 @@ impl QueueStore {
     ///
     /// The receipt itself is left in whatever stage it reached. It is not
     /// finished and pretending otherwise would lose the only record of what
-    /// happened, and while it is unfinished no new operation can be journalled
+    /// happened, and while it is unfinished no new operation can be journaled
     /// for the item. Keep original, cancel and an unconfirmed remove all
     /// refuse, because each would decide what the files are on the person's
     /// behalf. What moves a parked item on is `reattach_unsettled_receipt` -
@@ -2477,7 +2477,7 @@ impl QueueStore {
     /// only way to drop a waiting item was one at a time. Four hundred items
     /// meant four hundred clicks.
     ///
-    /// Strictly `queued`. An item being extracted or analysed is owned by a
+    /// Strictly `queued`. An item being extracted or analyzed is owned by a
     /// session and must reach its own end; `ready` and `needs_review` are
     /// waiting on a human decision, not on the queue; and terminal rows hold the
     /// receipts that make a rename undoable.
@@ -2779,7 +2779,7 @@ impl QueueStore {
     /// The item's newest operation that never reached a terminal stage, if
     /// any. While the item is applying that is the operation in flight;
     /// otherwise it is one a reconciliation could not settle, and no new
-    /// operation can be journalled for the item until it is.
+    /// operation can be journaled for the item until it is.
     pub fn load_unsettled_receipt(
         &self,
         queue_item_id: i64,

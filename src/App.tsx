@@ -579,7 +579,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     await bridge.saveSettings(next);
     setSettings(next);
   };
-  // Naming the organisation renames what is still waiting. The desktop
+  // Naming the organization renames what is still waiting. The desktop
   // backend says so with a queue event; reading the queue once more shows it
   // on a bridge that has no events, at the cost of one extra read on one that
   // does. The settings are saved either way, so a failed read is left to the
@@ -867,7 +867,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
         At the foot of the queue, beside the panel rather than in it: the
         panel is inert under the narrow drawer, and an error in an inert
         subtree is never announced. The drawer sits above it, so it never
-        covers the drawer's actions, as the centred error banner did.
+        covers the drawer's actions, as the centered error banner did.
       */}
       {(toast || actionError) && <div className="toasts">
         {toast && <Toast key={toast.key} tone={toast.kind === 'progress' ? 'progress' : 'success'} label={toast.kind === 'progress' ? 'Action progress' : 'Action result'}

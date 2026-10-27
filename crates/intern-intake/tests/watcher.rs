@@ -12,7 +12,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use common::{MockClock, facts_for, identity, labelled_identity, wait_until};
+use common::{MockClock, facts_for, identity, labeled_identity, wait_until};
 use intern_intake::{
     BACKLOG_FORGET_SECONDS, CLAIM_LEASE_SECONDS, COURTESY_DELAY_SECONDS, ClaimInfo, ClaimState,
     ClaimStore, DEFAULT_MIN_QUIET_SECONDS, DEFAULT_SCAN_INTERVAL, DoneOutcome,
@@ -573,7 +573,7 @@ fn replaced_backlog_file_is_new() {
 #[test]
 fn label_restart_keeps_backlog() {
     let rig = Rig::start_as(
-        labelled_identity("here-machine", "Office", "DESKTOP-A1"),
+        labeled_identity("here-machine", "Office", "DESKTOP-A1"),
         false,
         &["pre.pdf"],
     );
@@ -2089,9 +2089,9 @@ fn held_and_done_files_are_not_reverified_each_scan() {
 /// Settings. A labeled machine that only knows its label never recognizes its
 /// own conflict copies, and files the losing copy as a second document.
 #[test]
-fn a_labelled_machine_still_recognises_its_own_hostname_conflict_copies() {
+fn a_labeled_machine_still_recognizes_its_own_hostname_conflict_copies() {
     let rig = Rig::start_as(
-        labelled_identity("here-machine", "Front desk", "DESKTOP-A1B2C3"),
+        labeled_identity("here-machine", "Front desk", "DESKTOP-A1B2C3"),
         false,
         &[],
     );
@@ -2110,7 +2110,7 @@ fn a_labelled_machine_still_recognises_its_own_hostname_conflict_copies() {
     // is all this machine knows about it.
     let other = ClaimStore::new(
         rig.temp.path(),
-        labelled_identity("other-machine", "Reception", "LAPTOP-Z9"),
+        labeled_identity("other-machine", "Reception", "LAPTOP-Z9"),
     )
     .unwrap();
     other.touch_presence().unwrap();
@@ -2126,7 +2126,7 @@ fn a_labelled_machine_still_recognises_its_own_hostname_conflict_copies() {
 #[test]
 fn machine_label_is_not_a_conflict_suffix() {
     let rig = Rig::start_as(
-        labelled_identity("here-machine", "Office", "DESKTOP-A1"),
+        labeled_identity("here-machine", "Office", "DESKTOP-A1"),
         false,
         &[],
     );
@@ -2135,7 +2135,7 @@ fn machine_label_is_not_a_conflict_suffix() {
     // hostnames, when its display name was the hostname.
     ClaimStore::new(
         rig.temp.path(),
-        labelled_identity("other-machine", "Reception", "LAPTOP-Z9"),
+        labeled_identity("other-machine", "Reception", "LAPTOP-Z9"),
     )
     .unwrap()
     .touch_presence()

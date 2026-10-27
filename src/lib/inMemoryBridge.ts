@@ -60,7 +60,7 @@ const reviewBatchItems: QueueItem[] = [
 
 /**
  * What a seeded proposal naming two parties was composed from, so that naming
- * the organisation in Settings renames it the way the desktop backend's
+ * the organization in Settings renames it the way the desktop backend's
  * counterparty view does. A row naming one party needs no entry: the only
  * party is never left out.
  */
@@ -436,7 +436,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // approved is theirs: it leaves this map and keeps what they typed.
   const composedNames = new Map(options.items ? [] : Object.entries(seedNames));
   // Mirrors the backend's refresh_own_names: a document still waiting for a
-  // decision is named by the other side when Settings names the organisation,
+  // decision is named by the other side when Settings names the organization,
   // and by both sides again when it no longer does.
   const renameWaiting = () => {
     const own = settings.ourNames ?? [];
@@ -653,7 +653,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       if (isParked(item)) throw parkedRefusal();
       if (validateFilename(name, filenameExtension(item.originalFilename)) !== undefined) throw { code: 'NAME_INVALID', message: 'approved filename must preserve the source extension' };
       if (item.status !== 'review' && item.status !== 'ready') throw { code: 'INVALID_TRANSITION', message: 'proposal is not reviewable' };
-      // A name a person approved is theirs: Settings' organisation names no
+      // A name a person approved is theirs: Settings' organization names no
       // longer recompose it.
       composedNames.delete(id);
       // Pipeline::complete_already_named: filed in its own folder (no

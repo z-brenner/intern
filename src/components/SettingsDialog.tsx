@@ -182,7 +182,7 @@ function rebaseDraft(draft: AppSettings, shownFrom: AppSettings, arrived: AppSet
   return result;
 }
 
-/** The organisation's names as they are saved: one per line, trimmed, blank lines left out. */
+/** The organization's names as they are saved: one per line, trimmed, blank lines left out. */
 function withOwnNames(draft: AppSettings): AppSettings {
   if (draft.ourNames === undefined) return draft;
   return { ...draft, ourNames: draft.ourNames.map((name) => name.trim()).filter((name) => name.length > 0) };
