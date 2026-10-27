@@ -36,8 +36,17 @@ use crate::{
 pub struct IntakeWatcher {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
-    /// Kept beside the thread's own copies so `hand_over` can run the same
-    /// admission check and claim protocol on the caller's thread.
+    handle: IntakeHandle,
+}
+
+/// What a caller needs to hand documents to a running watcher's queue on its
+/// own thread, apart from the watcher itself: the watcher owns its scan
+/// thread and joins it when dropped, so the app keeps it behind a lock it
+/// must not hold through an admission check or a hash. A handle is cheap to
+/// clone and holds no lock.
+#[derive(Clone)]
+pub struct IntakeHandle {
+    shared: Arc<Shared>,
     identity: MachineIdentity,
     host: Arc<dyn IntakeHost>,
     clock: Arc<dyn Clock>,
@@ -48,9 +57,10 @@ struct Shared {
     wake: Condvar,
     status: Mutex<IntakeStatus>,
     shutdown: AtomicBool,
-    /// Claims `hand_over` took for this machine, by key, for the scan loop to
-    /// take into its own bookkeeping on its next pass.
-    adopted: Mutex<Vec<(String, PathBuf)>>,
+    /// Claims `hand_over` took for this machine - the folder they were taken
+    /// in, the key, the path - for the scan loop to take into its own
+    /// bookkeeping on its next pass, if it is still watching that folder.
+    adopted: Mutex<Vec<(PathBuf, String, PathBuf)>>,
 }
 
 /// What became of a document handed straight to the queue with
@@ -126,12 +136,29 @@ impl IntakeWatcher {
             })
             .expect("intake watcher thread could not be spawned");
         IntakeWatcher {
+            handle: IntakeHandle {
+                shared: shared.clone(),
+                identity,
+                host,
+                clock,
+            },
             shared,
             thread: Some(thread),
-            identity,
-            host,
-            clock,
         }
+    }
+
+    /// A handle for handing documents over without holding the watcher.
+    pub fn handle(&self) -> IntakeHandle {
+        self.handle.clone()
+    }
+
+    /// [`IntakeHandle::hand_over`] on this watcher.
+    pub fn hand_over<T>(
+        &self,
+        path: &Path,
+        enqueue: impl FnOnce(&Path) -> Result<T, String>,
+    ) -> HandOver<T> {
+        self.handle.hand_over(path, enqueue)
     }
 
     pub fn status(&self) -> IntakeStatus {
@@ -144,6 +171,22 @@ impl IntakeWatcher {
         self.shared.wake.notify_all();
     }
 
+    /// Re-arms the running watcher on a new configuration. Per-folder scan
+    /// state (stability, owned claims) is discarded, exactly as a
+    /// stop-and-start would discard it; the backlog is retaken only if the
+    /// folder changed or the configuration asks for it.
+    pub fn update_config(&self, config: IntakeConfig) {
+        {
+            let mut control = lock(&self.shared.control);
+            control.config = config;
+            control.generation += 1;
+            control.wake = true;
+        }
+        self.shared.wake.notify_all();
+    }
+}
+
+impl IntakeHandle {
     /// Hands a document this machine has just put into the intake folder
     /// itself - a copy of a file dropped on the window - straight to the
     /// queue, instead of leaving it for a scan to find once it has settled.
@@ -162,6 +205,8 @@ impl IntakeWatcher {
     /// without a claim, since the tombstone cannot be reopened.
     ///
     /// Runs on the caller's thread. `path` must be inside the intake folder.
+    /// A claim this machine already held is never released by a failed
+    /// hand-over.
     pub fn hand_over<T>(
         &self,
         path: &Path,
@@ -187,12 +232,17 @@ impl IntakeWatcher {
         let key = doc.key();
         let store = match ClaimStore::with_clock(&root, self.identity.clone(), self.clock.clone()) {
             Ok(store) => store,
-            Err(error) => {
-                return HandOver::Refused(format!("INTAKE_COORDINATION_UNAVAILABLE: {error}"));
-            }
+            Err(_) => return HandOver::Refused("INTAKE_COORDINATION_UNAVAILABLE".into()),
         };
         // Best effort, like a scan's: the claim below is what decides.
         let _ = store.write_origin(&doc);
+        // A claim this machine already holds - a scan took it, or an earlier
+        // hand-over did - is not this call's to give back: releasing it when
+        // the queue refuses the document now (it is being read, so it is
+        // locked) would let the next scan withdraw work under way.
+        let already_ours = store.read(&key).is_some_and(|claim| {
+            claim.machine_id == self.identity.id && claim.state == ClaimState::Claimed
+        });
         match store.acquire(&doc) {
             AcquireOutcome::Acquired if store.verify(&key) => {}
             AcquireOutcome::Acquired | AcquireOutcome::HeldByOther(_) => {
@@ -204,34 +254,39 @@ impl IntakeWatcher {
                     Err(message) => HandOver::Refused(message),
                 };
             }
-            AcquireOutcome::Failed(error) => {
-                return HandOver::Refused(format!("CLAIM_IO_FAILED: {error}"));
-            }
+            AcquireOutcome::Failed(_) => return HandOver::Refused("CLAIM_IO_FAILED".into()),
         }
         match enqueue(path) {
             Ok(queued) => {
-                lock(&self.shared.adopted).push((key, path.to_path_buf()));
+                lock(&self.shared.adopted).push((root, key, path.to_path_buf()));
                 HandOver::Queued(queued)
             }
             Err(message) => {
-                let _ = store.release(&key);
+                if !already_ours {
+                    let _ = store.release(&key);
+                }
                 HandOver::Refused(message)
             }
         }
     }
 
-    /// Re-arms the running watcher on a new configuration. Per-folder scan
-    /// state (stability, owned claims) is discarded, exactly as a
-    /// stop-and-start would discard it; the backlog is retaken only if the
-    /// folder changed or the configuration asks for it.
-    pub fn update_config(&self, config: IntakeConfig) {
-        {
-            let mut control = lock(&self.shared.control);
-            control.config = config;
-            control.generation += 1;
-            control.wake = true;
-        }
-        self.shared.wake.notify_all();
+    /// Whether `path` is a sync client's conflict copy, by the rule a scan
+    /// uses: the spelled-out form, or a suffix naming a machine this folder
+    /// has seen. Such a copy is never handed over.
+    pub fn is_conflict_copy(&self, path: &Path) -> bool {
+        let root = lock(&self.shared.control).config.intake_root.clone();
+        let mut machines: Vec<String> =
+            ClaimStore::with_clock(&root, self.identity.clone(), self.clock.clone())
+                .map(|store| {
+                    store
+                        .list_machines()
+                        .iter()
+                        .map(|presence| presence.conflict_name().to_owned())
+                        .collect()
+                })
+                .unwrap_or_default();
+        machines.push(self.identity.host_name.clone());
+        is_conflict_copy(path, &machines)
     }
 }
 
@@ -316,10 +371,15 @@ fn run(
             state_generation = Some(generation);
         }
         // Claims `hand_over` took: the queue has their items from that
-        // moment, exactly as for a claim this loop took itself.
-        for (key, path) in lock(&shared.adopted).drain(..) {
-            state.seen_live.insert(key.clone());
-            state.owned.insert(key, path);
+        // moment, exactly as for a claim this loop took itself. One taken in
+        // a folder this loop no longer watches belongs to that folder's claim
+        // store, not this one; a later watch of that folder adopts it from
+        // the store, as it adopts any claim this machine left there.
+        for (root, key, path) in lock(&shared.adopted).drain(..) {
+            if root == config.intake_root {
+                state.seen_live.insert(key.clone());
+                state.owned.insert(key, path);
+            }
         }
         // A rescan while files settle comes every few seconds, and asking
         // again about every document that is merely being held - for a shared

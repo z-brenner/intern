@@ -2450,3 +2450,73 @@ fn only_a_file_inside_the_intake_folder_can_be_handed_over() {
     let outcome = rig.watcher.hand_over(&path, |_| Ok(()));
     assert_eq!(outcome, HandOver::Refused("NOT_IN_INTAKE_FOLDER".into()));
 }
+
+/// The scan loop takes a handed-over claim into its own bookkeeping as one
+/// whose item it saw live. So a person who takes the copy out of the queue
+/// before any scan has looked has decided about it: the claim is closed as
+/// kept, and the document is not handed over again. Without the adoption the
+/// scan found a claim with no item it had ever seen, released it, and queued
+/// the document a second time.
+#[test]
+fn a_handed_over_document_removed_before_any_scan_is_not_queued_again() {
+    let rig = Rig::start(false, &[]);
+    let path = rig.write("removed.pdf", b"taken out of the queue at once");
+    let key = facts_for(rig.temp.path(), "removed.pdf").key();
+    let outcome = rig
+        .watcher
+        .hand_over(&path, |path| rig.host.enqueue(&[path.to_path_buf()]));
+    assert_eq!(outcome, HandOver::Queued(()));
+    rig.host.remove(&path);
+
+    rig.step();
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueue_calls.load(Ordering::SeqCst), 1);
+    let claim = rig.read_claim(&key);
+    assert_eq!(claim.state, ClaimState::Done);
+    assert_eq!(claim.outcome, Some(DoneOutcome::KeptOriginal));
+}
+
+/// A claim a scan already took is the scan's. Handing the same document over
+/// again while the queue refuses it - it is being read, so it is locked -
+/// must not give the claim back, or the next scan withdraws the work under
+/// way.
+#[test]
+fn a_failed_hand_over_keeps_a_claim_this_machine_already_held() {
+    let rig = Rig::start(false, &[]);
+    let path = rig.write("working.pdf", b"already being read");
+    let key = facts_for(rig.temp.path(), "working.pdf").key();
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+
+    let outcome: HandOver<()> = rig
+        .watcher
+        .hand_over(&path, |_| Err("SOURCE_LOCKED".to_string()));
+    assert_eq!(outcome, HandOver::Refused("SOURCE_LOCKED".into()));
+    let claim = rig.read_claim(&key);
+    assert_eq!(claim.state, ClaimState::Claimed);
+    assert_eq!(claim.machine_id, "here-machine");
+
+    rig.step();
+    assert!(
+        rig.host.abandoned().is_empty(),
+        "the work under way is kept"
+    );
+    assert_eq!(rig.host.item_state(&path), ItemState::Active);
+}
+
+#[test]
+fn a_handle_knows_a_conflict_copy_by_the_scan_s_rule() {
+    let rig = Rig::start(false, &[]);
+    let handle = rig.watcher.handle();
+    assert!(
+        handle.is_conflict_copy(
+            &rig.temp
+                .path()
+                .join("report (Jane's conflicted copy 2026-08-31).pdf")
+        )
+    );
+    assert!(handle.is_conflict_copy(&rig.temp.path().join("report-here.pdf")));
+    assert!(!handle.is_conflict_copy(&rig.temp.path().join("Invoice-ACME.pdf")));
+}

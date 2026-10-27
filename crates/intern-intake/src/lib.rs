@@ -46,4 +46,6 @@ pub use scan::{
     IntakeHost, IntakeStatus, ItemState, SETTLING_SCAN_INTERVAL, StabilityTracker, SystemHydration,
     is_conflict_copy,
 };
-pub use watcher::{ENQUEUE_RETRY_CAP_SECONDS, ENQUEUE_RETRY_SECONDS, HandOver, IntakeWatcher};
+pub use watcher::{
+    ENQUEUE_RETRY_CAP_SECONDS, ENQUEUE_RETRY_SECONDS, HandOver, IntakeHandle, IntakeWatcher,
+};
