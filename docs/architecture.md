@@ -890,18 +890,32 @@ known to be working. The rule, in plain words:
   counted against it. It goes back to wait "in doubt" (`doubted_documents`),
   under its own name, behind every document that is not in doubt, and is not
   tried again until the machine is shown to work.
-- The machine is shown to work when another document is read successfully
-  (any success clears doubts over the model and the reader; a document that
-  is only extracted clears doubts over the reader). If nothing else is left
-  to read, Intern runs its own self-test: for the model, the same calibration
-  document every model must read correctly at setup; for the reader, a small
-  text file Intern writes and has it read.
+- The machine is shown to work when another document is read successfully.
+  A document the model reads clears doubts over the model. A reader crash is
+  doubted by the kind of file it crashed on (PDF, image, Word, spreadsheet,
+  email, text, ...), and only another document of the same kind read
+  successfully clears it: a reader that crashes on every PDF still reads a
+  text file. If nothing else is left to read, Intern runs its own self-test:
+  for the model, the same calibration document every model must read
+  correctly at setup; for the reader on text files, a small text file Intern
+  writes in its own data folder (if it cannot write it, the queue stops and
+  says that instead). Other kinds of file have no self-test: documents of a
+  kind the reader crashed on wait under their own names for a document of
+  that kind, several of them waiting stop the queue, and resuming gives each
+  one more attempt that proves nothing - failing again, it keeps waiting.
+- While a document waits in doubt, the window says why it waits ("Waiting to
+  be read again once Intern has shown it can read another document"), not
+  that it is in review.
 - Once the machine has been shown to work, each document in doubt gets one
   more attempt. If it fails the same way again, the failure is its own: it
   goes to review and its file is renamed, under the usual rules below. If it
   is read, it goes on like any other document.
-- If the self-test fails too, it is the machine: the queue stops and says
-  why, and the documents in doubt keep their names and wait.
+- If the self-test fails too - or no model has loaded for it in the minutes
+  a switch between models may take - it is the machine: the queue stops and
+  says why, and the documents in doubt keep their names and wait.
+- A document in doubt that goes anywhere else - to review for another
+  reason, canceled, failed - is no longer in doubt, so a person's retry
+  starts it afresh.
 - Three different documents in a row failing the same way (unusable replies,
   time-outs and reader crashes are each counted on their own, and a document
   once however often it failed) stop the queue as well (`failure_runs`).
