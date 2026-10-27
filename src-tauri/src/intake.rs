@@ -1150,6 +1150,7 @@ mod fate_tests {
             filed_receipt: Some(filed),
             unsettled_receipt: None,
             duplicate_of: None,
+            doubt: None,
         };
 
         assert_eq!(

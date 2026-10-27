@@ -1975,7 +1975,9 @@ fn a_doubted_document_canceled_and_retried_is_read_afresh() {
     rig.break_down(Outage::TimesOut);
     rig.pipeline.run_next().unwrap();
     assert_eq!(rig.status(id), QueueStatus::Queued);
+    assert_eq!(rig.item(id).doubt.as_deref(), Some("timeout"));
     rig.pipeline.cancel(id).unwrap();
+    assert_eq!(rig.item(id).doubt, None);
     rig.fix();
     rig.pipeline.retry(id).unwrap();
     rig.run();

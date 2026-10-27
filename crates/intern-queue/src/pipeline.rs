@@ -755,6 +755,12 @@ pub struct PipelineItem {
     /// original filename for keep-original completions). `None` once the
     /// completed row is gone, e.g. after the history was cleared.
     pub duplicate_of: Option<String>,
+    /// For a waiting item in doubt: what it is in doubt over (`reply`,
+    /// `timeout`, or `crash:` and a family of file). It failed in a way that
+    /// may be the machine's, and waits to be read again once the machine is
+    /// shown to work (see `QueueStore::doubt`); its error code says how it
+    /// failed, not that it is in review.
+    pub doubt: Option<String>,
 }
 
 /// What adding a batch of documents did, document by document.
@@ -1411,6 +1417,11 @@ impl Pipeline {
             filed_receipt,
             unsettled_receipt,
             duplicate_of,
+            doubt: if item.status == QueueStatus::Queued {
+                self.store.doubt_kind(item.id)?
+            } else {
+                None
+            },
         })
     }
 

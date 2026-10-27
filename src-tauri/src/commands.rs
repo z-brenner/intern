@@ -280,6 +280,19 @@ impl TauriPipelineEvents {
 /// itself for a failure every document would share - an account out of
 /// credit, missing text-recognition files - says which failure, so the
 /// window can say what to fix before resuming.
+/// Why a waiting document in doubt waits (see `PipelineItem::doubt`): it
+/// failed in a way that may be the machine's, and is read again once Intern
+/// has shown it works - for a reader crash, by reading another document of
+/// the same kind.
+fn waiting_in_doubt(item: &PipelineItem) -> Option<&'static str> {
+    let doubt = item.doubt.as_deref()?;
+    Some(if doubt.starts_with("crash:") {
+        "Waiting to be read again once Intern has read another document of this kind."
+    } else {
+        "Waiting to be read again once Intern has shown it can read another document."
+    })
+}
+
 fn queue_changed_payload(paused: bool, reason: Option<&str>) -> serde_json::Value {
     match reason {
         Some(reason) if paused => serde_json::json!({ "paused": true, "error": reason }),
@@ -4073,6 +4086,7 @@ pub fn queue_discard_waiting(state: State<'_, AppState>) -> Result<usize, Comman
 }
 
 fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
+    let waiting = waiting_in_doubt(&item);
     let proposal = item.proposal.as_ref();
     let evidence = proposal.map(|record| EvidenceDto {
         date: record.analysis.proposal.evidence.date.clone(),
@@ -4111,9 +4125,13 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
             .map(|record| record.analysis.proposal.confidence),
         description: proposal.map(|record| record.description.clone()),
         evidence,
-        reason: proposal
-            .filter(|record| !record.reasons.is_empty())
-            .map(|record| record.reasons.join(", "))
+        reason: waiting
+            .map(str::to_owned)
+            .or_else(|| {
+                proposal
+                    .filter(|record| !record.reasons.is_empty())
+                    .map(|record| record.reasons.join(", "))
+            })
             // A DUPLICATE flag is raised before analysis, so no proposal
             // carries its reason; name the file the content is already
             // filed under.
@@ -4122,7 +4140,12 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
                     .as_deref()
                     .map(|name| format!("Duplicate of {name}"))
             }),
-        error_code: item.error_code.map(|code| code.as_str().to_owned()),
+        // A document waiting in doubt is not in review: the sentence above
+        // says why it waits, and no code offers actions it does not have.
+        error_code: item
+            .error_code
+            .filter(|_| waiting.is_none())
+            .map(|code| code.as_str().to_owned()),
         // The apply that filed the document, not the newest receipt: an undo
         // that was refused and rolled back used to take the Undo button away
         // from a document that was still filed.
@@ -5555,6 +5578,7 @@ mod document_path_tests {
             filed_receipt: filed,
             unsettled_receipt: None,
             duplicate_of: None,
+            doubt: None,
         }
     }
 
@@ -7949,6 +7973,7 @@ mod duplicate_reason_tests {
             filed_receipt: None,
             unsettled_receipt: None,
             duplicate_of: duplicate_of.map(str::to_owned),
+            doubt: None,
         }
     }
 
@@ -8016,7 +8041,40 @@ mod filed_dto_tests {
             filed_receipt: None,
             unsettled_receipt: None,
             duplicate_of: None,
+            doubt: None,
         }
+    }
+
+    /// A waiting document in doubt is not in review: it says why it waits,
+    /// and carries no code that would offer review's actions.
+    #[test]
+    fn queue_item_dto_says_why_a_doubted_document_waits() {
+        for (doubt, sentence) in [
+            (
+                "timeout",
+                "Waiting to be read again once Intern has shown it can read another document.",
+            ),
+            (
+                "crash:pdf",
+                "Waiting to be read again once Intern has read another document of this kind.",
+            ),
+        ] {
+            let dto = queue_item_dto(PipelineItem {
+                error_code: Some(intern_core::ErrorCode::ModelFailed),
+                doubt: Some(doubt.into()),
+                ..item(QueueStatus::Queued)
+            })
+            .unwrap();
+            assert_eq!(dto.reason.as_deref(), Some(sentence), "{doubt}");
+            assert_eq!(dto.error_code, None, "{doubt}");
+        }
+        // Not in doubt, a waiting document's code is kept as it was.
+        let dto = queue_item_dto(PipelineItem {
+            error_code: Some(intern_core::ErrorCode::IoError),
+            ..item(QueueStatus::Queued)
+        })
+        .unwrap();
+        assert_eq!(dto.error_code.as_deref(), Some("IO_ERROR"));
     }
 
     #[test]
