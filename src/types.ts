@@ -323,16 +323,35 @@ export interface LearnedRule extends HouseRule {
 }
 
 /**
- * What adding files or a folder did. A batch is never refused whole for one
- * bad file: what could be queued was, and every file left out is named with
- * the code of the reason.
+ * What adding files or a folder did. Adding copies them into the input
+ * folder; a batch is never refused whole for one bad file: what could be
+ * copied and queued was, and every file left out is named with the code of
+ * the reason.
  */
 export interface AddReport {
   /** Documents newly in the queue. */
   added: number;
-  /** Documents whose path already held these exact bytes in the queue. */
+  /** Documents the queue already had: the same file added again while its copy still waits, or one already in the input folder and queued. */
   alreadyQueued: number;
   skipped: SkippedDocument[];
+  /**
+   * Files copied into the input folder. Absent from a report that copied
+   * nothing by design - setup's "Process them too", which hands over what is
+   * already in the input folder.
+   */
+  copied?: number;
+  /**
+   * Copied but not in the queue yet: the verified team Inbox takes a file
+   * only once Microsoft confirms who uploaded it, which follows OneDrive's
+   * upload of the copy.
+   */
+  held?: number;
+  /** Why they are held: AWAITING_MICROSOFT until OneDrive has uploaded the copy and Microsoft can say who did. */
+  heldReason?: string;
+  /** Of `added`, how many were already in the input folder and were queued where they are rather than copied. */
+  inPlace?: number;
+  /** The input folder the files were copied into. */
+  inputFolder?: string;
 }
 
 /** A file an add left out: its name, and why (UNSUPPORTED_FORMAT, EMPTY_FILE, SOURCE_LOCKED, ...). */

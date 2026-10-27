@@ -5,7 +5,7 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
   await page.goto('/?fixtureBatch=1');
   await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
 
-  await page.getByRole('region', { name: 'Drag files or folders here to add to the queue' }).evaluate((dropZone) => {
+  await page.getByRole('region', { name: 'Drag files or folders here to copy them into Input' }).evaluate((dropZone) => {
     const transfer = new DataTransfer();
     transfer.items.add(new File(['fictional invoice'], 'duplicate-invoice-a.pdf', { type: 'application/pdf' }));
     transfer.items.add(new File(['fictional invoice'], 'duplicate-invoice-b.pdf', { type: 'application/pdf' }));
@@ -18,14 +18,14 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
   await expect(page.getByRole('row', { name: /duplicate-invoice-b\.pdf/i })).toContainText('Needs review');
   // Files Intern cannot read are left out of the queue and named, with the
   // reason, instead of refusing the whole drop or sitting there as failures.
-  await expect(page.getByRole('note', { name: 'Files not added' })).toHaveText(/Added 2 documents\. Skipped 2: unsupported\.zip \(not a supported format\), ~\$nda\.docx \(a temporary or hidden file\)\./);
+  await expect(page.getByRole('note', { name: 'Files not added' })).toHaveText(/Copied 2 files into Input\. Skipped 2: unsupported\.zip \(not a supported format\), ~\$nda\.docx \(a temporary or hidden file\)\./);
   await expect(page.getByRole('row', { name: /unsupported\.zip/i })).toHaveCount(0);
   await expect(page.getByRole('row', { name: /~\$nda\.docx/i })).toHaveCount(0);
 
   await openDetails(page, 'duplicate-invoice-b.pdf');
   await expect(page.getByText(/different path.*separate/i)).toBeVisible();
 
-  await page.getByRole('region', { name: 'Drag files or folders here to add to the queue' }).evaluate((dropZone) => {
+  await page.getByRole('region', { name: 'Drag files or folders here to copy them into Input' }).evaluate((dropZone) => {
     const transfer = new DataTransfer();
     transfer.items.add(new File(['fictional invoice'], 'duplicate-invoice-a.pdf', { type: 'application/pdf' }));
     dropZone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));

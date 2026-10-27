@@ -125,7 +125,7 @@ test.describe('whole-product browser QA', () => {
     await page.goto('/');
     await expect(page.getByRole('row')).toHaveCount(9);
     // Eight seeded rows in the Queue view, plus 52 dropped.
-    await page.getByRole('region', { name: 'Drag files or folders here to add to the queue' }).evaluate((zone) => {
+    await page.getByRole('region', { name: 'Drag files or folders here to copy them into Input' }).evaluate((zone) => {
       const transfer = new DataTransfer();
       for (let index = 1; index <= 52; index += 1) transfer.items.add(new File(['scan'], `Scan ${String(index).padStart(2, '0')}.pdf`, { type: 'application/pdf' }));
       zone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));

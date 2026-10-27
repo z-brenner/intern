@@ -73,7 +73,7 @@ describe('guided onboarding routing', () => {
   });
 
   it('offers folder setup, never SharePoint onboarding, when the backend reports it required without a deployment', async () => {
-    const base = createInMemoryBridge();
+    const base = createInMemoryBridge({ settings: { intakeFolder: '', intakeEnabled: false, destination: '' } });
     const bridge: DesktopBridge = { ...base, getOnboarding: async () => ({ currentVersion: 1, completedVersion: 0, required: true, sharePointAvailable: false }) };
     render(<App bridge={bridge} />);
 
@@ -187,10 +187,10 @@ describe('guided onboarding steps', () => {
     expect(within(dialog).getByLabelText('Hosted model with my API key')).toBeVisible();
     // Let the dialog learn this build is managed before looking for what it hides.
     await act(async () => {});
-    await waitFor(() => expect(within(dialog).queryByLabelText('Destination folder')).not.toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).queryByRole('button', { name: 'Change output folder' })).not.toBeInTheDocument());
     expect(within(dialog).queryByRole('region', { name: 'SharePoint connection' })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Reconnect Microsoft' })).not.toBeInTheDocument();
-    expect(within(dialog).queryByLabelText('Intake folder')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Change input folder' })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('group', { name: 'Microsoft upload identity' })).not.toBeInTheDocument();
   });
 

@@ -220,10 +220,10 @@ pub(crate) fn lists_one_drive(tasklist: &str) -> bool {
     })
 }
 
-/// Where setup offers to file documents from `intake`: a "Filed" folder
-/// beside it, because the destination may not be inside the watched folder.
+/// Where setup offers to file documents from `intake`: an "Output" folder
+/// beside it, because the output folder may not be inside the input folder.
 pub(crate) fn filed_folder_for(intake: &Path) -> Option<PathBuf> {
-    intake.parent().map(|parent| parent.join("Filed"))
+    intake.parent().map(|parent| parent.join("Output"))
 }
 
 fn machine_dto(machine: &MachinePresence, now: i64) -> IntakeMachineDto {
@@ -386,6 +386,12 @@ pub(crate) fn screen_lookup(
         Ok(found) => Ok(found),
         Err(_) => Err(ItemState::Unavailable),
     }
+}
+
+/// Whether the watcher withdrew `item` (see `withdrawn`), so handing the
+/// document over again should start it again.
+pub(crate) fn withdrawn_by_intake(item: &PipelineItem) -> bool {
+    withdrawn(item.status, item.error_code)
 }
 
 /// Whether a row is one the watcher withdrew rather than one a person

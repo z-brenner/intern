@@ -50,8 +50,11 @@ function managedBridge(overrides: Partial<DesktopBridge> = {}) {
   return bridge;
 }
 
+/** A folder picker that always picks C:\Elsewhere. */
+const picker = { pickFiles: async () => [], pickFolder: async () => ({ path: 'C:\\Elsewhere', displayName: 'Elsewhere' }), pickExistingModelFiles: async () => undefined, resolveDrop: async () => ({}) };
+
 function renderDialog(bridge: DesktopBridge, settings: AppSettings = managedSettings, onSave = vi.fn(async () => {})) {
-  render(<SettingsDialog settings={settings} bridge={bridge} onSave={onSave} onClose={() => {}} onCheckForUpdate={async () => ({ state: 'unsupported' })} onInstallUpdate={async () => {}} />);
+  render(<SettingsDialog settings={settings} bridge={bridge} selection={picker} onSave={onSave} onClose={() => {}} onCheckForUpdate={async () => ({ state: 'unsupported' })} onInstallUpdate={async () => {}} />);
   return { onSave };
 }
 
@@ -76,10 +79,14 @@ describe('SharePoint connection in Settings', () => {
     expect(within(card).getByRole('button', { name: 'Check again' })).toBeEnabled();
     expect(within(card).getByText('Support details')).toBeVisible();
 
-    // Nothing that would let a person point Intern somewhere else, or weaken the policy.
-    expect(screen.queryByLabelText('Destination folder')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Intake folder')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /browse for/i })).not.toBeInTheDocument();
+    // Nothing that would let a person point Intern somewhere else, or weaken the
+    // policy: the folders are shown, as input and output, but not changed here.
+    const folders = screen.getByRole('group', { name: 'Folders' });
+    expect(within(folders).getByText(managedSettings.intakeFolder)).toBeVisible();
+    expect(within(folders).getByText(managedSettings.destination)).toBeVisible();
+    expect(within(folders).getByText(/cannot be changed here/)).toBeVisible();
+    expect(screen.queryByRole('button', { name: /^Change (input|output) folder$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set up folders step by step…' })).not.toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Synced locations on this computer' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Watch a folder for new documents')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Also process documents uploaded by others')).not.toBeInTheDocument();
@@ -393,7 +400,8 @@ describe('SharePoint connection in Settings', () => {
     let resolveOnboarding!: (value: OnboardingStatus) => void;
     const bridge = managedBridge({ getOnboarding: vi.fn(() => new Promise<OnboardingStatus>((done) => { resolveOnboarding = done; })) });
     const { onSave } = renderDialog(bridge);
-    fireEvent.change(screen.getByLabelText('Destination folder'), { target: { value: 'C:\\Elsewhere' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Change output folder' }));
+    expect(await screen.findByText('C:\\Elsewhere')).toBeVisible();
     await waitFor(() => expect(bridge.getOnboarding).toHaveBeenCalled());
     await act(async () => { resolveOnboarding({ currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: true }); });
     await screen.findByRole('region', { name: 'SharePoint connection' });
@@ -411,8 +419,7 @@ describe('SharePoint connection in Settings', () => {
     await waitFor(() => expect(bridge.getOnboarding).toHaveBeenCalled());
 
     expect(screen.getByRole('status', { name: 'Loading intake settings' })).toBeVisible();
-    expect(screen.queryByLabelText('Intake folder')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Watch a folder for new documents')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Also process documents uploaded by others')).not.toBeInTheDocument();
     expect(screen.queryByLabelText("This machine's name")).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Run in background')).not.toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Microsoft upload identity' })).not.toBeInTheDocument();
@@ -422,7 +429,7 @@ describe('SharePoint connection in Settings', () => {
     await act(async () => { resolveOnboarding({ currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: true }); });
     expect(await screen.findByRole('region', { name: 'SharePoint connection' })).toBeVisible();
     expect(screen.queryByRole('status', { name: 'Loading intake settings' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Intake folder')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Change input folder' })).not.toBeInTheDocument();
   });
 
   // A failed read is not an answer: the build may well carry the
@@ -431,8 +438,9 @@ describe('SharePoint connection in Settings', () => {
     const bridge = managedBridge({ getOnboarding: vi.fn(async () => { throw { code: 'ONBOARDING_STATE_UNREADABLE', message: 'corrupt' }; }) });
     renderDialog(bridge);
 
-    expect(await screen.findByLabelText('Intake folder')).toBeVisible();
-    expect(screen.getByRole('group', { name: 'Microsoft upload identity' })).toBeVisible();
+    expect(await screen.findByLabelText('Also process documents uploaded by others')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Change input folder' })).toBeVisible();
+    expect(screen.getByRole('group', { name: 'Microsoft upload identity' })).toBeInTheDocument();
     expect(screen.queryByRole('status', { name: 'Loading intake settings' })).not.toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'SharePoint connection' })).not.toBeInTheDocument();
   });
@@ -446,10 +454,11 @@ describe('SharePoint connection in Settings', () => {
     await act(async () => {});
 
     expect(screen.queryByRole('region', { name: 'SharePoint connection' })).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Destination folder')).toBeVisible();
-    expect(screen.getByLabelText('Intake folder')).toBeVisible();
-    expect(screen.getByLabelText("This machine's name")).toBeVisible();
-    expect(screen.getByLabelText('Also process documents uploaded by others')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Change output folder' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Change input folder' })).toBeVisible();
+    // Under Advanced, folded away but still there.
+    expect(screen.getByLabelText("This machine's name")).toBeInTheDocument();
+    expect(screen.getByLabelText('Also process documents uploaded by others')).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Microsoft upload identity' })).not.toBeInTheDocument();
     expect(getSharePointSetup).not.toHaveBeenCalled();
 
@@ -468,8 +477,8 @@ describe('SharePoint connection in Settings', () => {
     const settings = { ...managedSettings, intakeLocalOnly: false };
     const unmanaged = { currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: false };
 
-    const view = render(<SettingsDialog settings={settings} bridge={managedBridge({ getOnboarding: vi.fn(async () => unmanaged), microsoftIntakeStatus })} onSave={vi.fn(async () => {})} onClose={() => {}} onCheckForUpdate={async () => ({ state: 'unsupported' })} onInstallUpdate={async () => {}} />);
-    expect(await screen.findByLabelText('Intake folder')).toBeVisible();
+    const view = render(<SettingsDialog settings={settings} bridge={managedBridge({ getOnboarding: vi.fn(async () => unmanaged), microsoftIntakeStatus })} selection={picker} onSave={vi.fn(async () => {})} onClose={() => {}} onCheckForUpdate={async () => ({ state: 'unsupported' })} onInstallUpdate={async () => {}} />);
+    expect(await screen.findByRole('button', { name: 'Change input folder' })).toBeVisible();
     await act(async () => {});
     expect(screen.queryByRole('group', { name: 'Microsoft upload identity' })).not.toBeInTheDocument();
     expect(screen.queryByText(/browser preview/i)).not.toBeInTheDocument();

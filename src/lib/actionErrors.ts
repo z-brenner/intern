@@ -22,6 +22,11 @@ const ACTION_ERRORS: Record<string, string> = {
   // rename - one the panel showed before it was parked. Checking them is the
   // way on, and the panel now offers it.
   RECONCILIATION_REQUIRED: 'A rename of this document stopped part-way, so its files need checking first. Use Check again.',
+  // Adding copies files into the input folder, and there is no processing a
+  // file where it sits to fall back to: without an input folder the add is
+  // refused whole, and the sentence says where to choose one.
+  INPUT_FOLDER_NOT_SET: 'Nothing was copied: no input folder is set up yet. Choose one in Settings, under Folders.',
+  INPUT_FOLDER_UNAVAILABLE: 'Nothing was copied: Intern could not open your input folder. Check that it still exists and its drive or OneDrive is connected, or choose another in Settings.',
 };
 
 /**
