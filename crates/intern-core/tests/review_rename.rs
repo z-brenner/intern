@@ -687,27 +687,175 @@ fn a_mark_put_off_or_decided_against_is_never_made_by_recovery() {
     assert_eq!(row(&store, ids[0].0).source_path, ids[0].1);
 }
 
-/// A run of failures that stops the queue puts the documents whose marks
-/// were put off back to wait, under their own names, with nothing counted.
+/// A run of failures that stops the queue puts its own documents back to
+/// wait - and only those - under their own names, with nothing counted. A
+/// document is counted once however often it failed, and one a run put
+/// back never counts again, so a resumed queue cannot stop on it again.
 #[test]
-fn a_run_that_stops_the_queue_requeues_the_put_off_documents() {
+fn a_run_that_stops_the_queue_requeues_its_own_documents_once() {
     let temp = TempDir::new().unwrap();
     let store = QueueStore::open(database(&temp)).unwrap();
+    let days_ago = store.enqueue(Path::new("/in/old.pdf"), "old").unwrap();
     let put_off = store.enqueue(Path::new("/in/a.pdf"), "a").unwrap();
     let decided = store.enqueue(Path::new("/in/b.pdf"), "b").unwrap();
+    let retrying = store.enqueue(Path::new("/in/c.pdf"), "c").unwrap();
+
+    // A put-off document from an earlier run, which a resume ended.
+    assert_eq!(store.claim_next().unwrap().unwrap().id, days_ago.id);
+    store
+        .record_unreadable(
+            days_ago.id,
+            ErrorCode::ModelOutputInvalid,
+            ReviewMark::Defer,
+        )
+        .unwrap();
+    assert_eq!(
+        store.join_failure_streak(days_ago.id, "reply").unwrap(),
+        Some(1)
+    );
+    store.end_failure_streaks(None, None).unwrap();
+
     for (item, mark) in [(&put_off, ReviewMark::Defer), (&decided, ReviewMark::Now)] {
         assert_eq!(store.claim_next().unwrap().unwrap().id, item.id);
         store
             .record_unreadable(item.id, ErrorCode::ModelOutputInvalid, mark)
             .unwrap();
     }
-    assert_eq!(store.requeue_deferred_reviews().unwrap(), 1);
+    assert_eq!(
+        store.join_failure_streak(put_off.id, "reply").unwrap(),
+        Some(1)
+    );
+    // Twice is still one document; another kind is another run.
+    assert_eq!(
+        store.join_failure_streak(put_off.id, "reply").unwrap(),
+        Some(1)
+    );
+    assert_eq!(store.claim_next().unwrap().unwrap().id, retrying.id);
+    store
+        .record_processing_failure(retrying.id, ErrorCode::ModelFailed)
+        .unwrap();
+    assert_eq!(
+        store.join_failure_streak(retrying.id, "timeout").unwrap(),
+        Some(1)
+    );
+
+    assert_eq!(store.requeue_failure_streak().unwrap(), 2);
     let requeued = row(&store, put_off.id);
     assert_eq!(requeued.status, QueueStatus::Queued);
     assert_eq!(requeued.error_code, None);
     assert_eq!(requeued.processing_failures, 0);
+    assert_eq!(row(&store, retrying.id).processing_failures, 0);
     assert_eq!(row(&store, decided.id).status, QueueStatus::NeedsReview);
-    assert!(store.promote_deferred_marks().unwrap().is_empty());
+    // The earlier run's document still waits in review for its person.
+    assert_eq!(row(&store, days_ago.id).status, QueueStatus::NeedsReview);
+    assert_eq!(store.promote_deferred_marks().unwrap(), vec![days_ago.id]);
+
+    // Put back once, they never count towards a run again, until read.
+    assert_eq!(
+        store.join_failure_streak(put_off.id, "reply").unwrap(),
+        None
+    );
+    assert_eq!(
+        store.join_failure_streak(retrying.id, "reply").unwrap(),
+        None
+    );
+    store.end_failure_streaks(None, Some(put_off.id)).unwrap();
+    assert_eq!(
+        store.join_failure_streak(put_off.id, "reply").unwrap(),
+        Some(1)
+    );
+}
+
+/// The mark of a canceled document whose file is gone is given up rather
+/// than tried on every recovery pass; one whose name is refused back is
+/// tried again only now and then, and the journal keeps one refusal.
+#[test]
+fn a_mark_that_cannot_be_taken_back_is_not_tried_for_ever() {
+    let temp = TempDir::new().unwrap();
+    let store = Arc::new(QueueStore::open(database(&temp)).unwrap());
+    let folder = inbox(&temp);
+    let filesystem = Arc::new(RefusingRenames {
+        refuse: AtomicBool::new(false),
+    });
+    let applier = FileApplier::new(filesystem.clone(), Arc::clone(&store));
+    let cancel = |id| {
+        store
+            .transition(id, QueueStatus::NeedsReview, QueueStatus::Canceled, None)
+            .unwrap();
+    };
+
+    let (gone, _) = unreadable(&store, &folder, "gone.pdf", ErrorCode::PasswordProtected);
+    let gone_marked = applier.mark_for_review(gone).unwrap().unwrap();
+    fs::remove_file(&gone_marked).unwrap();
+    cancel(gone);
+    for _ in 0..10 {
+        applier.reconcile_review_renames().unwrap();
+    }
+    assert!(store.marked_but_settled().unwrap().is_empty());
+
+    let (held, _) = unreadable(&store, &folder, "held.pdf", ErrorCode::PasswordProtected);
+    let held_marked = applier.mark_for_review(held).unwrap().unwrap();
+    cancel(held);
+    filesystem.refuse.store(true, Ordering::SeqCst);
+    for _ in 0..10 {
+        applier.reconcile_review_renames().unwrap();
+    }
+    assert!(held_marked.exists());
+    assert_eq!(
+        stages(&temp),
+        vec![
+            ("mark".to_string(), "abandoned".to_string()),
+            ("mark".to_string(), "complete".to_string()),
+            ("unmark".to_string(), "failed".to_string()),
+        ]
+    );
+    // Not offered again until the wait is over; then tried, and the
+    // journal still holds only the latest refusal.
+    assert!(store.marked_but_settled().unwrap().is_empty());
+    let connection = Connection::open(database(&temp)).unwrap();
+    connection
+        .execute(
+            "UPDATE review_renames SET updated_at = updated_at - 3600",
+            [],
+        )
+        .unwrap();
+    assert_eq!(store.marked_but_settled().unwrap().len(), 1);
+    applier.reconcile_review_renames().unwrap();
+    assert_eq!(stages(&temp).len(), 3);
+}
+
+/// Clearing the history never clears away a canceled document whose file
+/// still carries Intern's mark: nothing would be left to give its name
+/// back, and every scan would skip the file for good.
+#[test]
+fn clearing_the_history_keeps_a_document_whose_name_is_not_back_yet() {
+    let temp = TempDir::new().unwrap();
+    let store = Arc::new(QueueStore::open(database(&temp)).unwrap());
+    let folder = inbox(&temp);
+    let applier = FileApplier::local(Arc::clone(&store));
+    let (marked, _) = unreadable(&store, &folder, "held.pdf", ErrorCode::PasswordProtected);
+    applier.mark_for_review(marked).unwrap().unwrap();
+    store
+        .transition(
+            marked,
+            QueueStatus::NeedsReview,
+            QueueStatus::Canceled,
+            None,
+        )
+        .unwrap();
+    let plain = store.enqueue(Path::new("/in/plain.pdf"), "plain").unwrap();
+    store.record_intake_claim("plain", plain.id).unwrap();
+    store
+        .transition(plain.id, QueueStatus::Queued, QueueStatus::Canceled, None)
+        .unwrap();
+
+    assert_eq!(store.clear_terminal().unwrap(), 1);
+    assert!(store.get(marked).unwrap().is_some());
+    // The cleared item's claim reads as gone for one round, then goes.
+    assert_eq!(store.find_by_intake_claim("plain").unwrap(), Some(None));
+    applier.unmark_settled(marked).unwrap().unwrap();
+    assert_eq!(store.clear_terminal().unwrap(), 1);
+    assert_eq!(store.find_by_intake_claim("plain").unwrap(), None);
 }
 
 /// Retry after the person fixed the file - removed the password, saved it

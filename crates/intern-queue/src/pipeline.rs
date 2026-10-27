@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicI64, Ordering},
     },
 };
 
@@ -784,15 +784,6 @@ pub struct Pipeline {
     /// Why the queue stopped itself, as a code the window has a sentence
     /// for; `None` when it is running or a person paused it.
     pause_reason: Mutex<Option<String>>,
-    /// Documents in a row whose model reply could not be used. One such
-    /// reply is that document's problem; several in a row is the model's.
-    consecutive_unreadable_replies: AtomicU32,
-    /// Model requests in a row that ran out of time. One slow document is
-    /// its own problem; several in a row is the model's.
-    consecutive_timeouts: AtomicU32,
-    /// Reader crashes in a row. One document that crashes the parser is that
-    /// document's problem; a reader that crashes on everything is broken.
-    consecutive_crashes: AtomicU32,
     /// When a document first found no model loaded to ask, in the current
     /// run of such documents; `None` once a model has answered since.
     model_missing_since: Mutex<Option<std::time::Instant>>,
@@ -915,9 +906,6 @@ impl Pipeline {
             settings,
             paused: AtomicBool::new(false),
             pause_reason: Mutex::new(None),
-            consecutive_unreadable_replies: AtomicU32::new(0),
-            consecutive_timeouts: AtomicU32::new(0),
-            consecutive_crashes: AtomicU32::new(0),
             model_missing_since: Mutex::new(None),
             model_missing_grace: MODEL_MISSING_GRACE,
             active_item: AtomicI64::new(0),
@@ -1628,12 +1616,7 @@ impl Pipeline {
                     QueueStatus::Failed => self.unmark_if_marked(item.id),
                     _ => {}
                 }
-                if error.crashed
-                    && self
-                        .consecutive_crashes
-                        .fetch_add(1, Ordering::SeqCst)
-                        .saturating_add(1)
-                        >= CRASHES_BEFORE_PAUSE
+                if error.crashed && self.streak_with(item.id, STREAK_CRASH) >= CRASHES_BEFORE_PAUSE
                 {
                     self.pause_for_streak(READER_CRASHED);
                 }
@@ -1653,7 +1636,7 @@ impl Pipeline {
             }
         };
         // The reader read a document, so it is not crashing on everything.
-        self.consecutive_crashes.store(0, Ordering::SeqCst);
+        let _ = self.store.end_failure_streaks(Some(STREAK_CRASH), None);
         self.ensure_lease(&lease)?;
         if self.paused.load(Ordering::SeqCst) {
             lease.stop_and_check()?;
@@ -1703,9 +1686,7 @@ impl Pipeline {
         }
         let analysis = match self.analyze_with_deadline(&source, &extension, &existing) {
             Ok(analysis) => {
-                self.consecutive_unreadable_replies
-                    .store(0, Ordering::SeqCst);
-                self.consecutive_timeouts.store(0, Ordering::SeqCst);
+                let _ = self.store.end_failure_streaks(None, Some(item.id));
                 self.forget_missing_model();
                 // A document read successfully proves the model and the
                 // reader are working, so the documents whose marks were put
@@ -1791,22 +1772,15 @@ impl Pipeline {
                             by_nature,
                         );
                         self.hold_unreadable(item.id, code, mark)?;
-                        if is_unreadable_reply(&error.code) {
-                            // One reply that cannot be used is that
-                            // document's problem. Several documents in a row
-                            // is the model's, and every document behind them
-                            // would fail the same way. Resuming does not
-                            // clear the count: only a document read
-                            // successfully ends the row, so a model still
-                            // broken after a resume stops the queue again at
-                            // the next such reply rather than three later.
-                            let streak = self
-                                .consecutive_unreadable_replies
-                                .fetch_add(1, Ordering::SeqCst)
-                                .saturating_add(1);
-                            if streak >= UNREADABLE_REPLIES_BEFORE_PAUSE {
-                                self.pause_for_streak(pause_reason_code(&error.code, code));
-                            }
+                        // One reply that cannot be used is that document's
+                        // problem. Several documents in a row is the
+                        // model's, and every document behind them would
+                        // fail the same way.
+                        if is_unreadable_reply(&error.code)
+                            && self.streak_with(item.id, STREAK_REPLY)
+                                >= UNREADABLE_REPLIES_BEFORE_PAUSE
+                        {
+                            self.pause_for_streak(pause_reason_code(&error.code, code));
                         }
                     }
                     ModelFailureAction::Pause => {
@@ -1856,11 +1830,7 @@ impl Pipeline {
                             _ => {}
                         }
                         if timed_out
-                            && self
-                                .consecutive_timeouts
-                                .fetch_add(1, Ordering::SeqCst)
-                                .saturating_add(1)
-                                >= TIMEOUTS_BEFORE_PAUSE
+                            && self.streak_with(item.id, STREAK_TIMEOUT) >= TIMEOUTS_BEFORE_PAUSE
                         {
                             self.pause_for_streak(ErrorCode::ModelFailed.as_str());
                         }
@@ -2685,9 +2655,27 @@ impl Pipeline {
     /// against them. Sent to review, they would wait there for a person over
     /// a fault that is fixed by resuming; renamed, their names would say so
     /// in the input folder too.
+    ///
+    /// The run counts documents, not attempts - a document that timed out
+    /// on both of its attempts is one - and the documents it puts back are
+    /// flagged: failing the same way once the queue is resumed, they go to
+    /// review under the usual rules and start no new run, so the documents
+    /// behind them are read. Without that, the same few documents, read
+    /// first after every resume, stopped the queue for good.
     fn pause_for_streak(&self, reason: &str) {
         self.pause_for(reason);
-        let _ = self.store.requeue_deferred_reviews();
+        let _ = self.store.requeue_failure_streak();
+    }
+
+    /// Counts `item_id`'s failure into the current run of `kind` and
+    /// returns how many documents the run holds: none for a document a run
+    /// already put back once, or when the count cannot be kept.
+    fn streak_with(&self, item_id: i64, kind: &str) -> u32 {
+        self.store
+            .join_failure_streak(item_id, kind)
+            .ok()
+            .flatten()
+            .unwrap_or(0)
     }
 
     /// Gives a canceled or failed item's file its own name back when Intern
@@ -2705,9 +2693,30 @@ impl Pipeline {
     /// and the document still waits in review under its own name, which is
     /// no worse than before it was renamed: so the refusal is not the
     /// queue's to report.
+    ///
+    /// The input folder is asked again here, not only when the document went
+    /// to review: a mark put off until a later success can come due after
+    /// the input folder changed in Settings, and Intern renames only what is
+    /// in the input folder now. One outside it is recorded as never to be
+    /// marked.
     fn mark_unreadable(&self, item_id: i64) {
         let _files = self.hold_file_ops();
-        let _ = self.files.mark_for_review(item_id);
+        if !self.withheld_outside_input_folder(item_id) {
+            let _ = self.files.mark_for_review(item_id);
+        }
+    }
+
+    /// Records the mark of `item_id` as never to be made when its file is no
+    /// longer in the input folder, and says whether it did.
+    fn withheld_outside_input_folder(&self, item_id: i64) -> bool {
+        let Ok(Some(item)) = self.store.get(item_id) else {
+            return false;
+        };
+        if self.in_input_folder(&item.source_path) {
+            return false;
+        }
+        let _ = self.store.withhold_review_mark(item_id);
+        true
     }
 
     /// Puts an item an undo returned to ready back in review, as undone: a
@@ -2837,6 +2846,9 @@ impl Pipeline {
             .pause_reason
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        // A person resuming starts every run of failures over; the documents
+        // a run put back stay flagged, so they cannot stop the queue again.
+        let _ = self.store.end_failure_streaks(None, None);
         self.paused.store(false, Ordering::SeqCst);
         self.events.queue_changed();
     }
@@ -3422,6 +3434,15 @@ impl Pipeline {
     }
 
     pub fn clear_history(&self) -> PipelineResult<usize> {
+        // Names first: a canceled or failed document whose file still
+        // carries Intern's mark gets its name back, and one whose name is
+        // refused back (a viewer holding the file) stays in the history
+        // until it can be (see `QueueStore::clear_terminal`).
+        if let Ok(settled) = self.store.marked_but_settled() {
+            for item in settled {
+                self.unmark_if_marked(item.id);
+            }
+        }
         let removed = self.store.clear_terminal()?;
         self.events.queue_changed();
         Ok(removed)
@@ -3454,6 +3475,15 @@ impl Pipeline {
             // One that cannot be settled now stays journaled for the next
             // pass, and is no reason to leave the rest of recovery undone.
             let _files = self.hold_file_ops();
+            // A mark recovery would make up for, on a file the input folder
+            // no longer holds, is never made.
+            if let Ok(awaiting) = self.store.awaiting_review_mark() {
+                for item in awaiting {
+                    if !self.in_input_folder(&item.source_path) {
+                        let _ = self.store.withhold_review_mark(item.id);
+                    }
+                }
+            }
             let _ = self.files.reconcile_review_renames();
         }
         let interrupted = self
@@ -4492,6 +4522,12 @@ const TIMEOUTS_BEFORE_PAUSE: u32 = 3;
 /// How many reader crashes in a row stop the queue: the reader, not the
 /// documents, is broken.
 const CRASHES_BEFORE_PAUSE: u32 = 3;
+
+/// The kinds of runs of failures, each counted on its own (see
+/// `QueueStore::join_failure_streak`).
+const STREAK_REPLY: &str = "reply";
+const STREAK_TIMEOUT: &str = "timeout";
+const STREAK_CRASH: &str = "crash";
 
 /// The reason the queue stopped for a run of reader crashes, as the window
 /// names it.

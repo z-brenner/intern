@@ -1558,6 +1558,14 @@ impl FileApplier {
         if !matches!(item.status, QueueStatus::Failed | QueueStatus::Canceled) {
             return Ok(None);
         }
+        // The marked file is gone - deleted, or moved away by hand - so
+        // there is no name to give back, now or on any later pass.
+        if self.store.current_review_mark(queue_item_id)?.is_some()
+            && !self.filesystem.exists(&item.source_path)
+        {
+            self.store.abandon_review_mark(queue_item_id)?;
+            return Ok(None);
+        }
         self.take_back_mark(queue_item_id, ReviewRenamePurpose::Unmark)
     }
 

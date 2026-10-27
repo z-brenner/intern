@@ -133,7 +133,14 @@ pub enum ReviewRenameStage {
     /// ([`ReviewMark::Hold`]); becomes `Skipped` once a later document is
     /// read successfully.
     Held,
+    /// A mark that can no longer be taken back: the item was canceled or
+    /// failed and its marked file is gone.
+    Abandoned,
 }
+
+/// How long a canceled or failed item whose name was refused back waits
+/// before it is offered again (see [`QueueStore::marked_but_settled`]).
+pub const UNMARK_RETRY_SECONDS: i64 = 15 * 60;
 
 impl ReviewRenameStage {
     fn as_db(self) -> &'static str {
@@ -145,6 +152,7 @@ impl ReviewRenameStage {
             Self::Skipped => "skipped",
             Self::Deferred => "deferred",
             Self::Held => "held",
+            Self::Abandoned => "abandoned",
         }
     }
 
@@ -157,6 +165,7 @@ impl ReviewRenameStage {
             "skipped" => Some(Self::Skipped),
             "deferred" => Some(Self::Deferred),
             "held" => Some(Self::Held),
+            "abandoned" => Some(Self::Abandoned),
             _ => None,
         }
     }
@@ -347,6 +356,20 @@ impl QueueStore {
                  CREATE TABLE IF NOT EXISTS intake_claims (
                    claim_key TEXT PRIMARY KEY,
                    queue_item_id INTEGER REFERENCES queue_items(id) ON DELETE SET NULL,
+                   created_at INTEGER NOT NULL
+                 );
+                 -- The documents of a run of failures that may be the
+                 -- machine's (`kind`: unusable replies, time-outs, reader
+                 -- crashes), one row per document however often it failed.
+                 -- A run that stops the queue puts its documents back to
+                 -- wait and flags them (`requeued`): failing the same way
+                 -- again, they go to review and never start a run of their
+                 -- own, so a resumed queue cannot stop on them for good.
+                 CREATE TABLE IF NOT EXISTS failure_streaks (
+                   queue_item_id INTEGER PRIMARY KEY
+                     REFERENCES queue_items(id) ON DELETE CASCADE,
+                   kind TEXT NOT NULL,
+                   requeued INTEGER NOT NULL DEFAULT 0,
                    created_at INTEGER NOT NULL
                  );",
             )
@@ -747,6 +770,14 @@ impl QueueStore {
             .execute(
                 "DELETE FROM review_renames
                  WHERE queue_item_id = ?1 AND stage IN ('deferred', 'skipped', 'held')",
+                params![id],
+            )
+            .map_err(InternError::from)?;
+        // A person's retry is a fresh start: no longer one a run of
+        // failures put back.
+        transaction
+            .execute(
+                "DELETE FROM failure_streaks WHERE queue_item_id = ?1",
                 params![id],
             )
             .map_err(InternError::from)?;
@@ -1709,12 +1740,67 @@ impl QueueStore {
         Ok(ids)
     }
 
-    /// Puts every document whose mark was put off back in the queue, for a
-    /// run of failures that stopped it: the machine, not those documents,
-    /// was the likely problem, so they wait to be read again once the queue
-    /// is resumed, under their own names and with nothing counted against
-    /// them. Returns how many went back.
-    pub fn requeue_deferred_reviews(&self) -> InternResult<usize> {
+    /// Counts a failure of `id` that may be the machine's rather than the
+    /// document's into the current run of its `kind`, and returns how many
+    /// documents that run now holds. A document is counted once however
+    /// often it fails, so a document tried twice is not two in a row.
+    /// `None` for a document a run already put back once (see
+    /// [`Self::requeue_failure_streak`]): it never counts again.
+    pub fn join_failure_streak(&self, id: i64, kind: &str) -> InternResult<Option<u32>> {
+        let connection = self.lock()?;
+        let requeued = connection
+            .query_row(
+                "SELECT requeued FROM failure_streaks WHERE queue_item_id = ?1",
+                params![id],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()
+            .map_err(InternError::from)?;
+        if requeued == Some(true) {
+            return Ok(None);
+        }
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO failure_streaks(queue_item_id, kind, requeued, created_at)
+                 VALUES (?1, ?2, 0, ?3)",
+                params![id, kind, now()],
+            )
+            .map_err(InternError::from)?;
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM failure_streaks WHERE kind = ?1 AND requeued = 0",
+                params![kind],
+                |row| row.get::<_, u32>(0),
+            )
+            .map(Some)
+            .map_err(InternError::from)
+    }
+
+    /// Ends the current runs of failures: of `kind`, or of every kind with
+    /// `None`. Their documents stay where they are. A document `read`
+    /// successfully is also no longer one a run put back.
+    pub fn end_failure_streaks(&self, kind: Option<&str>, read: Option<i64>) -> InternResult<()> {
+        let connection = self.lock()?;
+        connection
+            .execute(
+                "DELETE FROM failure_streaks
+                 WHERE (requeued = 0 AND (?1 IS NULL OR kind = ?1)) OR queue_item_id = ?2",
+                params![kind, read],
+            )
+            .map_err(InternError::from)?;
+        Ok(())
+    }
+
+    /// Puts the documents of the run of failures that stopped the queue
+    /// back to wait - and only those: the machine, not they, was the likely
+    /// problem, so they are read again once the queue is resumed, under
+    /// their own names and with nothing counted against them. A document
+    /// whose mark was put off days ago, outside this run, stays in review
+    /// for the person it waits for. Each is flagged as put back, so failing
+    /// the same way again it goes to review rather than into a new run: a
+    /// queue resumed onto the same documents moves past them. Returns how
+    /// many went back.
+    pub fn requeue_failure_streak(&self) -> InternResult<usize> {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1725,11 +1811,12 @@ impl QueueStore {
                     "UPDATE queue_items
                      SET status = 'queued', processing_failures = 0, error_code = NULL,
                          owner_session = NULL, lease_expires_at = NULL, updated_at = ?1
-                     WHERE status = 'needs_review' AND error_code IN ({})
-                       AND id IN (
-                         SELECT queue_item_id FROM review_renames WHERE stage IN ('deferred', 'held')
-                       )
-                       AND NOT EXISTS (SELECT 1 FROM proposals WHERE queue_item_id = queue_items.id)",
+                     WHERE id IN (SELECT queue_item_id FROM failure_streaks WHERE requeued = 0)
+                       AND (status = 'queued'
+                            OR (status = 'needs_review' AND error_code IN ({})
+                                AND NOT EXISTS (
+                                  SELECT 1 FROM proposals WHERE queue_item_id = queue_items.id
+                                )))",
                     unreadable_codes_sql()
                 ),
                 params![now()],
@@ -1737,7 +1824,17 @@ impl QueueStore {
             .map_err(InternError::from)?;
         transaction
             .execute(
-                "DELETE FROM review_renames WHERE stage IN ('deferred', 'held')",
+                "DELETE FROM review_renames
+                 WHERE stage IN ('deferred', 'held')
+                   AND queue_item_id IN (
+                     SELECT queue_item_id FROM failure_streaks WHERE requeued = 0
+                   )",
+                [],
+            )
+            .map_err(InternError::from)?;
+        transaction
+            .execute(
+                "UPDATE failure_streaks SET requeued = 1 WHERE requeued = 0",
                 [],
             )
             .map_err(InternError::from)?;
@@ -1745,9 +1842,34 @@ impl QueueStore {
         Ok(requeued)
     }
 
+    /// Records that an item's file is not to be renamed after all - it is
+    /// no longer in the input folder Settings names - so neither a later
+    /// success nor recovery makes the mark.
+    pub fn withhold_review_mark(&self, id: i64) -> InternResult<()> {
+        let connection = self.lock()?;
+        note_review_mark(&connection, id, ReviewMark::Never)
+    }
+
+    /// Records that the mark of a canceled or failed item cannot be taken
+    /// back because its file is gone: nothing is left to give its name
+    /// back to, and the item is no longer offered for un-marking.
+    pub fn abandon_review_mark(&self, id: i64) -> InternResult<()> {
+        let connection = self.lock()?;
+        connection
+            .execute(
+                "UPDATE review_renames SET stage = 'abandoned', updated_at = ?2
+                 WHERE queue_item_id = ?1 AND purpose = 'mark' AND stage = 'complete'",
+                params![id, now()],
+            )
+            .map_err(InternError::from)?;
+        Ok(())
+    }
+
     /// Items that were canceled or failed while their file still carries
     /// the mark Intern gave it, and must get their own name back before the
-    /// row can be cleared away with the history.
+    /// row can be cleared away with the history. One whose name was refused
+    /// back - a viewer holding the file - is offered again only once
+    /// [`UNMARK_RETRY_SECONDS`] have passed, not on every recovery pass.
     pub fn marked_but_settled(&self) -> InternResult<Vec<QueueItem>> {
         let connection = self.lock()?;
         let mut statement = connection
@@ -1760,11 +1882,18 @@ impl QueueStore {
                        AND review_renames.stage = 'complete'
                        AND review_renames.to_path_key = queue_items.source_path_key
                    )
+                   AND NOT EXISTS (
+                     SELECT 1 FROM review_renames
+                     WHERE review_renames.queue_item_id = queue_items.id
+                       AND review_renames.purpose = 'unmark'
+                       AND review_renames.stage = 'failed'
+                       AND review_renames.updated_at > ?1
+                   )
                  ORDER BY id",
             ))
             .map_err(InternError::from)?;
         let rows = statement
-            .query_map([], read_item)
+            .query_map(params![now() - UNMARK_RETRY_SECONDS], read_item)
             .map_err(InternError::from)?;
         let mut items = Vec::new();
         for row in rows {
@@ -1851,6 +1980,18 @@ impl QueueStore {
             ));
         };
         let timestamp = now();
+        // A name refused back is tried again now and then for as long as the
+        // file is held; only the latest refusal is worth keeping, so the
+        // journal does not grow with every try.
+        if purpose == ReviewRenamePurpose::Unmark {
+            transaction
+                .execute(
+                    "DELETE FROM review_renames
+                     WHERE queue_item_id = ?1 AND purpose = 'unmark' AND stage = 'failed'",
+                    params![id],
+                )
+                .map_err(InternError::from)?;
+        }
         transaction
             .execute(
                 "INSERT INTO review_renames(
@@ -2225,11 +2366,29 @@ impl QueueStore {
         Ok(entries)
     }
 
+    /// Clears finished items away. A canceled or failed item whose file
+    /// still carries Intern's `NEEDS REVIEW` mark stays until its name is
+    /// back: cleared, nothing would be left to give it back, and every scan
+    /// would skip the file for good. Claims whose item was cleared by an
+    /// earlier clearing go too; this clearing's stay one more round, for the
+    /// intake watcher to read the item as gone.
     pub fn clear_terminal(&self) -> InternResult<usize> {
         let connection = self.lock()?;
         connection
+            .execute("DELETE FROM intake_claims WHERE queue_item_id IS NULL", [])
+            .map_err(InternError::from)?;
+        connection
             .execute(
-                "DELETE FROM queue_items WHERE status IN ('failed', 'canceled', 'completed')",
+                "DELETE FROM queue_items
+                 WHERE status = 'completed'
+                    OR (status IN ('failed', 'canceled')
+                        AND NOT EXISTS (
+                          SELECT 1 FROM review_renames
+                          WHERE review_renames.queue_item_id = queue_items.id
+                            AND review_renames.purpose = 'mark'
+                            AND review_renames.stage = 'complete'
+                            AND review_renames.to_path_key = queue_items.source_path_key
+                        ))",
                 [],
             )
             .map_err(InternError::from)

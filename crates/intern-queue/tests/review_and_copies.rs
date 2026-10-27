@@ -893,8 +893,9 @@ fn naming_an_undone_copy_files_it_as_a_document_of_its_own() {
 /// Replies that cannot be used, several in a row, are the model's problem:
 /// the queue stops, and the documents of that run go back to wait under
 /// their own names - nothing renamed, nothing counted - and resuming the
-/// queue reads them again. A resume that meets a still broken model renames
-/// nothing either.
+/// queue reads them again. One still unusable after the resume is that
+/// document's own: it goes to review, the rest are read, and its file is
+/// marked once they are.
 #[test]
 fn a_run_of_unusable_replies_stops_the_queue_and_renames_nothing() {
     let invalid = || Err(ModelFailure::fatal("MODEL_RESPONSE_INVALID"));
@@ -931,22 +932,19 @@ fn a_run_of_unusable_replies_stops_the_queue_and_renames_nothing() {
         assert_eq!(item.processing_failures, 0);
     }
 
-    // Still broken after a resume: the next unusable reply stops it again,
-    // and still nothing is renamed.
+    // After the resume the first document's reply is still unusable: put
+    // back once, it goes to review and starts no new run, and the rest are
+    // read - which proves the reply its own, so its file is marked.
     rig.pipeline.resume();
     rig.pipeline.run_until_idle().unwrap();
-    assert!(rig.pipeline.is_paused());
-    assert_eq!(
-        rig.inbox_names(),
-        vec!["d0.pdf", "d1.pdf", "d2.pdf", "d3.pdf", "d4.pdf"]
-    );
-
-    // Working again: everything is read.
-    rig.pipeline.resume();
-    rig.pipeline.run_until_idle().unwrap();
-    for id in &ids {
+    assert!(!rig.pipeline.is_paused());
+    let first = rig.item(ids[0]);
+    assert_eq!(first.status, QueueStatus::NeedsReview);
+    assert_eq!(first.error_code, Some(ErrorCode::ModelOutputInvalid));
+    for id in &ids[1..] {
         assert_eq!(rig.item(*id).status, QueueStatus::Completed);
     }
+    assert_eq!(rig.inbox_names(), vec!["NEEDS REVIEW - d0.pdf"]);
 }
 
 /// A model too slow for anything times out on every document. It used to
@@ -1233,4 +1231,365 @@ fn a_staged_copy_follows_a_changed_output_folder() {
         !rig.filed.join("2024").exists(),
         "the old folder is not recreated"
     );
+}
+
+// ---- runs of failures, keyed on the documents' own words ----------------
+
+/// Reads a file's bytes as its text: "CRASH" in it crashes the reader, and
+/// "LOCKED" makes it password-protected.
+struct BytesWorker;
+
+impl WorkerBoundary for BytesWorker {
+    fn extract(
+        &self,
+        _request_id: &str,
+        path: &Path,
+        _progress: &mut dyn FnMut(ExtractProgress),
+    ) -> Result<DocumentSource, WorkerFailure> {
+        let text = fs::read_to_string(path).unwrap_or_default();
+        if text.contains("CRASH") {
+            return Err(WorkerFailure::crashed());
+        }
+        if text.contains("LOCKED") {
+            return Err(WorkerFailure::reported(
+                "PASSWORD_PROTECTED",
+                "encrypted",
+                false,
+            ));
+        }
+        Ok(parsed(&format!("{text} {READABLE}")))
+    }
+    fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+        Ok(())
+    }
+    fn restart(&self) -> Result<(), WorkerFailure> {
+        Ok(())
+    }
+}
+
+/// Answers from the document's text: "INVALID" gets a reply that cannot be
+/// used, "SLOW" a time-out, anything else the agreement's proposal.
+struct TextModel;
+
+impl AnalyzerBoundary for TextModel {
+    fn analyze(
+        &self,
+        source: &DocumentSource,
+        extension: &str,
+        existing_names: &[&str],
+    ) -> Result<DocumentAnalysis, ModelFailure> {
+        let text = source
+            .pages
+            .iter()
+            .map(|page| page.text.clone())
+            .collect::<String>();
+        if text.contains("INVALID") {
+            return Err(ModelFailure::fatal("MODEL_RESPONSE_INVALID"));
+        }
+        if text.contains("SLOW") {
+            return Err(ModelFailure::fatal("MODEL_TIMEOUT"));
+        }
+        let digest = distill(source, DigestBudget::default());
+        let mut analysis = finish(
+            validate(proposal(), &digest),
+            &digest,
+            extension,
+            existing_names,
+            AnalysisTelemetry::default(),
+        );
+        analysis.text_fingerprint =
+            fingerprint::source_fingerprint(source).map(fingerprint::encode);
+        Ok(analysis)
+    }
+}
+
+/// An input folder and a queue whose reader and model answer from each
+/// document's own words.
+struct TextRig {
+    temp: TempDir,
+    inbox: PathBuf,
+    pipeline: Pipeline,
+}
+
+impl TextRig {
+    fn new() -> TextRig {
+        let temp = tempdir().unwrap();
+        let inbox = temp.path().join("Inbox");
+        let filed = temp.path().join("Filed");
+        fs::create_dir_all(&inbox).unwrap();
+        fs::create_dir_all(&filed).unwrap();
+        let inbox = inbox.canonicalize().unwrap();
+        let settings = AppSettings {
+            destination: filed.canonicalize().unwrap().to_string_lossy().into_owned(),
+            intake_folder: inbox.to_string_lossy().into_owned(),
+            intake_enabled: true,
+            automatic_rename: true,
+            ..AppSettings::default()
+        };
+        TextRig::settings(&temp).save(&settings).unwrap();
+        let pipeline = TextRig::open(&temp);
+        TextRig {
+            temp,
+            inbox,
+            pipeline,
+        }
+    }
+
+    fn settings(temp: &TempDir) -> SettingsStore {
+        SettingsStore::new(temp.path().join("settings.json"))
+    }
+
+    /// The queue over this rig's database, as the app opens it on start.
+    fn open(temp: &TempDir) -> Pipeline {
+        Pipeline::with_local_files(
+            temp.path().join("queue.sqlite3"),
+            Arc::new(BytesWorker),
+            Arc::new(TextModel),
+            Arc::new(Quiet),
+            TextRig::settings(temp),
+        )
+        .unwrap()
+    }
+
+    fn add(&self, name: &str, body: &str) -> i64 {
+        let path = self.inbox.join(name);
+        fs::write(&path, body).unwrap();
+        self.pipeline
+            .enqueue_files(&[path])
+            .unwrap()
+            .pop()
+            .unwrap()
+            .id
+    }
+
+    fn status(&self, id: i64) -> QueueStatus {
+        self.item(id).status
+    }
+
+    fn item(&self, id: i64) -> PipelineItem {
+        self.pipeline
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == id)
+            .unwrap()
+    }
+
+    fn journal_rows(&self, id: i64) -> i64 {
+        rusqlite::Connection::open(self.temp.path().join("queue.sqlite3"))
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM review_renames WHERE queue_item_id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+}
+
+/// Two documents in a row that the model is too slow for, or that crash the
+/// reader, each fail twice: that is two documents, not four failures, and
+/// never a run that stops the queue. The good one behind them is filed, and
+/// that success proves the failures theirs, so both are marked.
+#[test]
+fn two_failing_documents_tried_twice_each_are_not_a_run() {
+    for (bad, pause) in [("SLOW", "MODEL_FAILED"), ("CRASH", "READER_CRASHED")] {
+        let rig = TextRig::new();
+        let a = rig.add("a.pdf", &format!("{bad} a"));
+        let b = rig.add("b.pdf", &format!("{bad} b"));
+        let c = rig.add("c.pdf", "good c");
+
+        rig.pipeline.run_until_idle().unwrap();
+
+        assert!(!rig.pipeline.is_paused(), "{bad}: stopped for {pause}");
+        assert_eq!(rig.status(c), QueueStatus::Completed, "{bad}");
+        assert_eq!(rig.status(a), QueueStatus::NeedsReview, "{bad}");
+        assert_eq!(rig.status(b), QueueStatus::NeedsReview, "{bad}");
+        assert_eq!(
+            names_in(&rig.inbox),
+            vec!["NEEDS REVIEW - a.pdf", "NEEDS REVIEW - b.pdf"],
+            "{bad}"
+        );
+    }
+}
+
+/// Three documents in a row that fail the same way stop the queue, and go
+/// back to wait. Resumed, they fail again: put back once, they go to review
+/// and start no new run, so the good document behind them is filed - and
+/// however often the queue is resumed, it never stops on them again.
+#[test]
+fn a_resumed_queue_moves_past_the_documents_that_stopped_it() {
+    for (bad, pause) in [
+        ("SLOW", "MODEL_FAILED"),
+        ("CRASH", "READER_CRASHED"),
+        ("INVALID", "MODEL_OUTPUT_INVALID"),
+    ] {
+        let rig = TextRig::new();
+        let failing = ["a.pdf", "b.pdf", "c.pdf"]
+            .into_iter()
+            .map(|name| rig.add(name, &format!("{bad} {name}")))
+            .collect::<Vec<_>>();
+        let good = rig.add("d.pdf", "good d");
+
+        rig.pipeline.run_until_idle().unwrap();
+        assert_eq!(rig.pipeline.pause_reason().as_deref(), Some(pause), "{bad}");
+        for id in &failing {
+            let item = rig.item(*id);
+            assert_eq!(item.status, QueueStatus::Queued, "{bad}");
+            assert_eq!(item.processing_failures, 0, "{bad}");
+        }
+        assert_eq!(rig.status(good), QueueStatus::Queued, "{bad}");
+        assert_eq!(
+            names_in(&rig.inbox),
+            vec!["a.pdf", "b.pdf", "c.pdf", "d.pdf"],
+            "{bad}"
+        );
+
+        for _ in 0..3 {
+            rig.pipeline.resume();
+            rig.pipeline.run_until_idle().unwrap();
+            assert!(!rig.pipeline.is_paused(), "{bad}: stopped again");
+        }
+        assert_eq!(rig.status(good), QueueStatus::Completed, "{bad}");
+        for id in &failing {
+            assert_eq!(rig.status(*id), QueueStatus::NeedsReview, "{bad}");
+        }
+        assert_eq!(
+            names_in(&rig.inbox),
+            vec![
+                "NEEDS REVIEW - a.pdf",
+                "NEEDS REVIEW - b.pdf",
+                "NEEDS REVIEW - c.pdf"
+            ],
+            "{bad}"
+        );
+    }
+}
+
+/// A run that stops the queue puts back only its own documents. One whose
+/// mark was put off before the run - and before a person resumed, which
+/// starts every run over - stays in review for that person.
+#[test]
+fn a_run_puts_back_only_its_own_documents() {
+    let rig = TextRig::new();
+    let earlier = rig.add("earlier.pdf", "INVALID earlier");
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(rig.status(earlier), QueueStatus::NeedsReview);
+    rig.pipeline.pause();
+    rig.pipeline.resume();
+
+    let run = ["a.pdf", "b.pdf", "c.pdf"]
+        .into_iter()
+        .map(|name| rig.add(name, &format!("INVALID {name}")))
+        .collect::<Vec<_>>();
+    rig.pipeline.run_until_idle().unwrap();
+
+    assert_eq!(
+        rig.pipeline.pause_reason().as_deref(),
+        Some("MODEL_OUTPUT_INVALID")
+    );
+    assert_eq!(rig.status(earlier), QueueStatus::NeedsReview);
+    for id in &run {
+        assert_eq!(rig.status(*id), QueueStatus::Queued);
+    }
+}
+
+/// A put-off mark outlives a restart, and is made once a document is read.
+#[test]
+fn a_put_off_mark_is_made_after_a_restart_once_a_document_is_read() {
+    let rig = TextRig::new();
+    let slow = rig.add("a.pdf", "SLOW a");
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(rig.status(slow), QueueStatus::NeedsReview);
+    assert_eq!(names_in(&rig.inbox), vec!["a.pdf"]);
+
+    let TextRig {
+        temp,
+        inbox,
+        pipeline,
+    } = rig;
+    drop(pipeline);
+    let rig = TextRig {
+        pipeline: TextRig::open(&temp),
+        temp,
+        inbox,
+    };
+    rig.pipeline.recover().unwrap();
+    assert_eq!(names_in(&rig.inbox), vec!["a.pdf"]);
+    let good = rig.add("b.pdf", "good b");
+    rig.pipeline.run_until_idle().unwrap();
+
+    assert_eq!(rig.status(good), QueueStatus::Completed);
+    assert_eq!(names_in(&rig.inbox), vec!["NEEDS REVIEW - a.pdf"]);
+}
+
+/// A put-off mark that comes due after the input folder changed in
+/// Settings is not made: Intern renames only what the input folder holds
+/// now.
+#[test]
+fn a_put_off_mark_is_not_made_once_the_input_folder_moved() {
+    let rig = TextRig::new();
+    let slow = rig.add("a.pdf", "SLOW a");
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(rig.status(slow), QueueStatus::NeedsReview);
+
+    let elsewhere = rig.temp.path().join("Elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    let settings = TextRig::settings(&rig.temp);
+    let mut changed = settings.load().unwrap();
+    changed.intake_folder = elsewhere.to_string_lossy().into_owned();
+    settings.save(&changed).unwrap();
+    let good = elsewhere.join("b.pdf");
+    fs::write(&good, "good b").unwrap();
+    let good = rig
+        .pipeline
+        .enqueue_files(&[good])
+        .unwrap()
+        .pop()
+        .unwrap()
+        .id;
+    rig.pipeline.run_until_idle().unwrap();
+    rig.pipeline.recover().unwrap();
+
+    assert_eq!(rig.status(good), QueueStatus::Completed);
+    assert_eq!(rig.status(slow), QueueStatus::NeedsReview);
+    assert_eq!(names_in(&rig.inbox), vec!["a.pdf"]);
+}
+
+/// A canceled document whose marked file was deleted has no name to get
+/// back: recovery gives up on it rather than journaling a new try on every
+/// pass for as long as the app runs.
+#[test]
+fn a_canceled_document_whose_file_is_gone_is_not_unmarked_for_ever() {
+    let rig = TextRig::new();
+    let id = rig.add("locked.pdf", "LOCKED");
+    rig.pipeline.run_until_idle().unwrap();
+    let marked = rig.inbox.join("NEEDS REVIEW - locked.pdf");
+    assert!(marked.exists());
+    let before = rig.journal_rows(id);
+    fs::remove_file(&marked).unwrap();
+    rig.pipeline.cancel(id).unwrap();
+
+    for _ in 0..10 {
+        rig.pipeline.recover().unwrap();
+    }
+
+    assert_eq!(rig.journal_rows(id), before);
+    assert_eq!(rig.status(id), QueueStatus::Canceled);
+    assert_eq!(rig.pipeline.clear_history().unwrap(), 1);
+}
+
+/// Canceling a marked document and clearing the history leaves its file
+/// under its own name, so the next scan takes it in again.
+#[test]
+fn a_canceled_and_cleared_document_has_its_own_name() {
+    let rig = TextRig::new();
+    let id = rig.add("locked.pdf", "LOCKED");
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(names_in(&rig.inbox), vec!["NEEDS REVIEW - locked.pdf"]);
+    rig.pipeline.cancel(id).unwrap();
+    rig.pipeline.clear_history().unwrap();
+
+    assert_eq!(names_in(&rig.inbox), vec!["locked.pdf"]);
+    assert!(rig.pipeline.list().unwrap().is_empty());
 }
