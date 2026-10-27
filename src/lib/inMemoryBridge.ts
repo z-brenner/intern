@@ -218,6 +218,25 @@ function within(folder: string, path: string): boolean {
   return root.length > 0 && (lower.startsWith(`${root}\\`) || lower.startsWith(`${root}/`));
 }
 
+/**
+ * The backend's folder-pair rules on save (validate_intake_settings): while
+ * watching, the output folder may not be the input folder or inside it, and -
+ * asked only of a save that chooses the folders - the input folder may not be
+ * inside the output folder.
+ */
+function folderPairProblem(previous: AppSettings, next: AppSettings): { code: string; message: string } | undefined {
+  const input = next.intakeFolder.trim();
+  const output = next.destination.trim();
+  if (!next.intakeEnabled || !input || !output) return undefined;
+  const same = input.replace(/[\\/]+$/, '').toLowerCase() === output.replace(/[\\/]+$/, '').toLowerCase();
+  if (same || within(input, output)) return { code: 'DESTINATION_INSIDE_INTAKE', message: 'the destination cannot be the intake folder or live inside it' };
+  const choosesFolders = !previous.intakeEnabled
+    || previous.intakeFolder.trim() !== input
+    || previous.destination.trim() !== output;
+  if (choosesFolders && within(output, input)) return { code: 'INTAKE_INSIDE_DESTINATION', message: 'the intake folder cannot live inside the destination' };
+  return undefined;
+}
+
 /** "Lease.pdf", then "Lease (2).pdf", "Lease (3).pdf": the backend's numbering. */
 function numberedName(name: string, index: number): string {
   if (index === 1) return name;
@@ -440,6 +459,10 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // document has left it.
   const inputNames = new Set(items.filter((item) => item.status !== 'completed').map((item) => fileNameKey(item.originalFilename)));
   const copyOf = new Map<string, string>();
+  // Copies held in the simulated verified Inbox, by path: they stay in the
+  // folder, as the backend leaves them for the watcher, and "Process them
+  // too" finds them there and holds them again.
+  const heldCopies = new Map<string, string>();
   const inputFolder = () => {
     if (!settings.intakeEnabled || !settings.intakeFolder.trim()) throw { code: 'INPUT_FOLDER_NOT_SET', message: 'no input folder is set up; choose one in Settings' };
     return settings.intakeFolder.replace(/[\\/]+$/, '');
@@ -488,6 +511,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       inputNames.add(fileNameKey(copy));
       report.copied = (report.copied ?? 0) + 1;
       if (verifiedInbox) {
+        heldCopies.set(`${input}${separator}${copy}`, copy);
         report.held = (report.held ?? 0) + 1;
         report.heldReason = 'AWAITING_MICROSOFT';
         continue;
@@ -509,7 +533,10 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
         inputNames.add(fileNameKey(name));
         queueAt(`${input}\\${name}`, name);
       }
-      return { added: count, alreadyQueued: 0, skipped: [] };
+      const held = [...heldCopies.keys()].filter((path) => within(input, path)).length;
+      return held > 0
+        ? { added: count, alreadyQueued: 0, skipped: [], held, heldReason: 'AWAITING_MICROSOFT' }
+        : { added: count, alreadyQueued: 0, skipped: [] };
     },
     pauseQueue: async () => { items = items.map((item) => item.status === 'processing' ? { ...item, status: 'waiting' as const, stage: undefined, progress: undefined } : item); },
     resumeQueue: async () => { const item = items.find((entry) => entry.status === 'waiting'); if (item) update(item.id, { status: 'processing', stage: 'reading' }); },
@@ -630,6 +657,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
         if (hostedKey === undefined) throw { code: 'HOSTED_MODEL_KEY_MISSING', message: 'no API key is stored for the hosted model' };
         if (hostedEndpoint(next) === null) throw { code: 'HOSTED_MODEL_MISCONFIGURED', message: 'the hosted model\'s address or model name is not usable' };
       }
+      const pairProblem = folderPairProblem(settings, next);
+      if (pairProblem) throw pairProblem;
       settings = next.ourNames === undefined ? { ...next } : { ...next, ourNames: ownNames(next.ourNames) };
       renameWaiting();
     },

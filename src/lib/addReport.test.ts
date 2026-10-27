@@ -39,6 +39,11 @@ describe('describeAddReport', () => {
       .toBe('Copied 1 file into Scans. 1 waits in Scans until Intern can confirm who uploaded it.');
   });
 
+  it('says a copy Microsoft reports as another account\'s upload is left in the Inbox', () => {
+    expect(describeAddReport({ added: 0, alreadyQueued: 0, skipped: [], copied: 1, held: 1, heldReason: 'UPLOADER_OTHER', inputFolder: 'C:\\Users\\pat\\Contoso\\Files\\Inbox' }))
+      .toBe('Copied 1 file into Inbox. 1 was left in Inbox: Microsoft reports another account uploaded a file under that name, so Intern does not process it here.');
+  });
+
   it('says the shared folder\'s own refusals in words', () => {
     expect(describeAddReport({ added: 0, alreadyQueued: 0, skipped: [{ name: 'a.pdf', code: 'SYNC_CONFLICT_COPY' }, { name: 'b.pdf', code: 'CLAIM_IO_FAILED' }] }))
       .toBe('Skipped 2: a.pdf (a OneDrive conflict copy; resolve the conflict first), b.pdf (Intern could not note in the shared folder that it is working on it).');

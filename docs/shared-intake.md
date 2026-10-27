@@ -157,7 +157,10 @@ The input folder requires an output folder, and neither may be inside the
 other. A processed
 document landing back in the input folder would reappear as a new document;
 Intern refuses the configuration at save time - and setup and Settings refuse
-the pick before that - rather than discovering the loop at run time.
+the pick before that - rather than discovering the loop at run time. An input
+folder inside the output folder is refused only by a save that chooses the
+folders (watching turned on, or either folder changed): an install from before
+that rule keeps saving its other settings.
 
 ### Documents Intern copies in
 
@@ -165,13 +168,19 @@ A drop, **Add files**, **Add folder**, and **Send to > Intern** copy what they
 are given into the input folder (`input_copy`, in `src-tauri/src/input_folder.rs`).
 A folder is flattened, with the same rules an add always had for what counts
 as a document: unsupported, empty, temporary, and hidden files are reported as
-left out, never copied. Each copy is written under a dot-prefixed temporary
-name ending `.intern-copy` - the scan skips dot-names, so it never sees a
-half-written copy, and on Windows the file is hidden too - checked against the
-original's fingerprint, and only then published onto its real name with a
-rename that refuses to replace anything. A temporary copy a crash left behind
-is removed when the watcher next starts, once it is an hour old; nothing else
-is touched by that sweep, a filing's own temporary files included. Two files
+left out, never copied. Each copy is written under a temporary name ending
+`.intern-copy` inside the input folder's own `.intern/incoming` folder - the
+scan never enters `.intern`, so it never sees a half-written copy, and on
+Windows that folder is hidden, so the copy is out of sight from the moment it
+is created while the published document is an ordinary file - checked against
+the original's fingerprint, and only then published onto its real name with a
+rename that refuses to replace anything. The temporary name carries this
+machine's tag (the start of its machine id) and process id. When the watcher
+next starts, a temporary copy a crash left behind is removed - only one this
+machine made, by a process no longer running, stamped over an hour ago. The
+incoming folder is synced like the rest, so teammates' copies are there too,
+and their clocks and their copies are never judged; nothing else is touched by
+that sweep, a filing's own temporary files included. Two files
 with the same content in one add are copied once. A name already taken
 in the folder, or one the queue has held a document at before, gets " (2)",
 " (3)", and so on. A file already inside the input folder is not copied; one
@@ -187,16 +196,29 @@ the claim to the scan loop. The scan that later finds the copy settled sees a
 claim this machine holds and does not hand it over again, and a copy filed
 before any scan saw it still has its claim closed. A copy the queue will not
 take is removed again, so the folder is as it was and the report's "left out"
-is true. Where the admission check holds a document - the verified team Inbox,
-before Microsoft has heard of the upload - the copy stays in the folder,
-unclaimed, for the scans to ask about again, and the window says it is waiting
-rather than queued. A verdict instead - someone else's upload, or an uploader
-that cannot be known - leaves the document out, and a copy is taken back out
-of the folder. A claim this machine already held is never released by a
-hand-over the queue refuses. With no input folder set up, an add is refused
+is true - but only while it is provably still the copy: it is opened for
+deletion and its file identity and fingerprint must match what the copy step
+wrote. In a synced folder the name can hold a teammate's document by then, and
+deleting that would delete it for everyone; a name that holds anything else is
+left alone and the copy counted. Where the admission check holds a document -
+the verified team Inbox, before Microsoft has heard of the upload, or when
+Microsoft reports another account's upload under that name - the copy stays in
+the folder, unclaimed, for the scans to ask about again, and the window says
+it is waiting rather than queued, with the reason. An uploader that cannot be
+known leaves the document out, and the copy is taken back, on the same
+condition. A claim is released after a refused hand-over only when that
+hand-over created it; one this machine already held is kept. A document
+handed over is the scan's to shepherd even when its name looks like this
+machine's own sync conflict copy ("Report-<host>.pdf"): the claim is checked
+before the conflict-copy rule. Each document of an add takes the running
+watcher's handle afresh, so a settings save that restarts the watcher midway
+does not leave a claim with a scan loop that has stopped. With no input folder set up, an add is refused
 whole (`INPUT_FOLDER_NOT_SET`); nothing is ever processed where it sits.
-"Send to > Intern" before setup has chosen the folders keeps its documents
-and copies them in once the save that chooses them succeeds. "Process them
+"Send to > Intern" before setup has chosen the folders keeps its documents -
+in the app's data (`pending-launch.json`), so closing Intern does not lose
+them - and copies them in once the save that chooses them succeeds, or the
+next time the window opens. Whatever comes of them is reported; a document
+sent again after setup is copied by that launch and dropped from the list. "Process them
 too" follows the scan's rules: a conflict copy is named and left alone.
 
 A subfolder the scan cannot list — a folder this account has no permission to

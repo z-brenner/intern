@@ -173,9 +173,10 @@ queues them, whether or not it is already open. Every way of adding — Add
 files, Add folder, a drop, Send to — copies into the input folder: a folder is
 flattened, a name already taken gets " (2)", " (3)", a file already in the
 input folder is not copied again, and the originals are never changed. Each
-copy is written under a hidden temporary name, checked against the original,
-and only then given its real name, so the folder never holds half a copy (one
-a crash leaves behind is swept away an hour later); it joins the queue at once
+copy is written under a temporary name in the input folder's hidden
+`.intern` folder, checked against the original, and only then given its real
+name, so the folder never holds half a copy (one a crash leaves behind is
+swept away an hour later, by the computer that made it); it joins the queue at once
 rather than after the watcher's settle time. Two identical files in one drop
 are copied once. An add is
 never refused as a batch: a file Intern cannot read (a `.zip`, an empty file,

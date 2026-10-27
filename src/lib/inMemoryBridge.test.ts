@@ -410,5 +410,31 @@ describe('copying into the input folder, as input_copy does', () => {
     const report = await bridge.copyToInput({ files: [{ path: 'C:\\Downloads\\scan.pdf', displayName: 'scan.pdf' }] });
     expect(report).toMatchObject({ added: 0, copied: 1, held: 1, heldReason: 'AWAITING_MICROSOFT' });
     expect(await bridge.listItems()).toHaveLength(0);
+    // The copy stays in the Inbox: "Process them too" finds it there, and it
+    // is held again rather than forgotten.
+    expect(await bridge.queueInputFolder()).toMatchObject({ added: 0, held: 1, heldReason: 'AWAITING_MICROSOFT' });
+    // Its name stays taken.
+    expect(await bridge.copyToInput({ files: [{ path: 'C:\\Scans\\scan.pdf', displayName: 'scan.pdf' }] })).toMatchObject({ copied: 1, held: 1 });
+    expect((await bridge.queueInputFolder()).held).toBe(2);
+  });
+});
+
+describe('saving a pair of folders, as settings_save does', () => {
+  it('refuses an output folder inside the input folder on any save', async () => {
+    const bridge = createInMemoryBridge({ items: [], settings: { intakeFolder: 'D:\\Docs', destination: 'D:\\Out', intakeEnabled: true } });
+    const settings = await bridge.getSettings();
+    await expect(bridge.saveSettings({ ...settings, destination: 'D:\\Docs\\Filed' })).rejects.toMatchObject({ code: 'DESTINATION_INSIDE_INTAKE' });
+    await expect(bridge.saveSettings({ ...settings, destination: 'd:\\docs\\' })).rejects.toMatchObject({ code: 'DESTINATION_INSIDE_INTAKE' });
+  });
+
+  it('refuses an input folder inside the output folder only when the folders are chosen', async () => {
+    const nested = createInMemoryBridge({ items: [], settings: { intakeFolder: 'D:\\Docs\\Inbox', destination: 'D:\\Docs', intakeEnabled: true } });
+    const stored = await nested.getSettings();
+    // An install from before the rule still saves its other settings.
+    await nested.saveSettings({ ...stored, machineLabel: 'Front desk' });
+    expect((await nested.getSettings()).machineLabel).toBe('Front desk');
+    await expect(nested.saveSettings({ ...stored, intakeFolder: 'D:\\Docs\\Scans' })).rejects.toMatchObject({ code: 'INTAKE_INSIDE_DESTINATION' });
+    const fresh = createInMemoryBridge({ items: [], settings: { intakeFolder: '', destination: '', intakeEnabled: false } });
+    await expect(fresh.saveSettings({ ...await fresh.getSettings(), intakeFolder: 'D:\\Docs\\Inbox', destination: 'D:\\Docs', intakeEnabled: true })).rejects.toMatchObject({ code: 'INTAKE_INSIDE_DESTINATION' });
   });
 });

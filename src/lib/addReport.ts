@@ -42,6 +42,20 @@ const files = (count: number) => `${count} ${count === 1 ? 'file' : 'files'}`;
  * without a copy count - setup's "Process them too", which queues what is
  * already in the input folder - says what it added instead.
  */
+/** Why copies wait in the input folder instead of joining the queue. */
+function heldSentence(reason: string | undefined, held: number, into: string): string {
+  const one = held === 1;
+  switch (reason) {
+    case undefined:
+    case 'AWAITING_MICROSOFT':
+      return `${one ? 'It joins' : 'They join'} the queue once OneDrive has uploaded ${one ? 'it' : 'them'} and Microsoft confirms ${one ? 'it is' : 'they are'} yours.`;
+    case 'UPLOADER_OTHER':
+      return `${held} ${one ? 'was' : 'were'} left in ${into}: Microsoft reports another account uploaded ${one ? 'a file' : 'files'} under ${one ? 'that name' : 'those names'}, so Intern does not process ${one ? 'it' : 'them'} here.`;
+    default:
+      return `${held} ${one ? 'waits' : 'wait'} in ${into} until Intern can confirm who uploaded ${one ? 'it' : 'them'}.`;
+  }
+}
+
 export function describeAddReport(report: AddReport): string {
   const parts: string[] = [];
   const into = report.inputFolder ? folderName(report.inputFolder) : 'your input folder';
@@ -51,12 +65,9 @@ export function describeAddReport(report: AddReport): string {
     const inPlace = report.inPlace ?? 0;
     if (inPlace > 0) parts.push(`${inPlace} already in ${into} ${inPlace === 1 ? 'was' : 'were'} added to the queue.`);
     if (held > 0) {
-      const one = held === 1;
       // The usual reason is the verified team Inbox waiting for OneDrive's
       // upload of the copy; any other is said without promising Microsoft.
-      parts.push(report.heldReason === undefined || report.heldReason === 'AWAITING_MICROSOFT'
-        ? `${one ? 'It joins' : 'They join'} the queue once OneDrive has uploaded ${one ? 'it' : 'them'} and Microsoft confirms ${one ? 'it is' : 'they are'} yours.`
-        : `${held} ${one ? 'waits' : 'wait'} in ${into} until Intern can confirm who uploaded ${one ? 'it' : 'them'}.`);
+      parts.push(heldSentence(report.heldReason, held, into));
     }
   } else if (report.added > 0) {
     parts.push(`Added ${report.added} ${report.added === 1 ? 'document' : 'documents'}.`);
