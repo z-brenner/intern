@@ -100,7 +100,9 @@ $Arguments = @(
     "--host", "127.0.0.1", "--port", "$Port", "--api-key", $ApiKey,
     "--model", $ModelPath, "--parallel", "1", "--ctx-size", "8192",
     "--n-gpu-layers", "0", "--threads", "$Threads", "--threads-batch", "$Threads",
-    "--jinja", "--no-webui", "--no-mmproj"
+    "--jinja", "--no-webui", "--no-mmproj",
+    # The flags every app launch adds (MEASURED_FLAGS in server.rs).
+    "--cache-ram", "0", "-ub", "256", "--prio", "-1", "--poll", "0"
 )
 $ServerLog = Join-Path $ModelDirectory "llama-server.log"
 $Process = Start-Process -FilePath $Server -ArgumentList $Arguments -PassThru -NoNewWindow -RedirectStandardOutput $ServerLog -RedirectStandardError "$ServerLog.err"

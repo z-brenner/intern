@@ -103,6 +103,7 @@ KEY="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 "$LLAMA_SERVER" --host 127.0.0.1 --port "$PORT" --api-key "$KEY" --model "$MODEL" \
   --parallel 1 --ctx-size 8192 --n-gpu-layers 0 \
   --threads "$THREADS" --threads-batch "$THREADS" --jinja --no-webui --no-mmproj \
+  --cache-ram 0 -ub 256 --prio -1 --poll 0 \
   > "$OUT_DIR/llama-server.log" 2>&1 &
 SERVER=$!
 trap 'kill "$SERVER" 2>/dev/null || true; wait "$SERVER" 2>/dev/null || true' EXIT

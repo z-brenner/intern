@@ -64,11 +64,13 @@ if ($Note) { $Description = "$Description; $Note" }
 
 $ApiKey = [Guid]::NewGuid().ToString("N")
 # The same flags src/server.rs passes: one slot, CPU only, the model's own
-# chat template so the no-thinking switch reaches it, no web UI, no projector.
+# chat template so the no-thinking switch reaches it, no web UI, no projector,
+# and the measured flags every launch adds (MEASURED_FLAGS).
 $ServerArguments = @(
     "--host", "127.0.0.1", "--port", "$Port", "--api-key", $ApiKey, "--model", $Model,
     "--parallel", "1", "--ctx-size", "8192", "--n-gpu-layers", "0",
-    "--threads", "$Threads", "--threads-batch", "$Threads", "--jinja", "--no-webui", "--no-mmproj"
+    "--threads", "$Threads", "--threads-batch", "$Threads", "--jinja", "--no-webui", "--no-mmproj",
+    "--cache-ram", "0", "-ub", "256", "--prio", "-1", "--poll", "0"
 )
 $Server = Start-Process -FilePath (Join-Path $Runtime "llama-server.exe") -ArgumentList $ServerArguments -PassThru -WindowStyle Hidden
 try {
