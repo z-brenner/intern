@@ -166,7 +166,10 @@ fn skipped_name(path: &Path) -> bool {
     path.file_name()
         .and_then(|value| value.to_str())
         .is_none_or(|name| {
-            name.starts_with('.') || name.starts_with("~$") || intern_core::is_history_export(name)
+            name.starts_with('.')
+                || name.starts_with("~$")
+                || intern_core::is_history_export(name)
+                || intern_core::is_needs_review_name(name)
         })
 }
 

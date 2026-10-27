@@ -7,7 +7,7 @@ import type { QueueStatus } from '../types';
  * The number is the claim and it never leaves: a person deciding whether to
  * trust a proposed filename is owed the figure, not an adjective. The track
  * beside it exists only so a column of forty rows can be scanned without
- * reading every number, and it carries the same status colour as the text so
+ * reading every number, and it carries the same status color as the text so
  * it adds a second channel rather than a second meaning.
  *
  * An absent confidence stays an em dash rather than an empty track, because

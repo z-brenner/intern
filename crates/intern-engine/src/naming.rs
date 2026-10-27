@@ -129,7 +129,7 @@ fn fit(
     // Validation turns "between" into "with" when fewer than two parties
     // validate, but a party can still go after it: a house-style rule can
     // merge two of the document's spellings into one, and a name can
-    // sanitise to nothing. "between Acme" says the document has a second
+    // sanitize to nothing. "between Acme" says the document has a second
     // side it does not name.
     let relation = if parties.len() < 2 {
         single_party_relation(relation)
@@ -365,7 +365,7 @@ const SHORT_WORDS: &[&str] = &[
 /// reads like every other name in the folder.
 ///
 /// Only a segment with no lowercase letter and at least two words of four or
-/// more letters is touched. A single capitalised word - "IBM", "NASA", "KPMG
+/// more letters is touched. A single capitalized word - "IBM", "NASA", "KPMG
 /// LLP" - is more likely an initialism than shouting, and a segment with any
 /// lowercase letter already says how it wants to be written. Inside a
 /// segment that qualifies, word by word:
@@ -378,8 +378,8 @@ const SHORT_WORDS: &[&str] = &[
 ///   "Inc.", "GMBH" becomes "GmbH"), and LLC, LLP, PLC, PC, NA and LP stay
 ///   in capitals;
 /// - of, and, the, for, to, with, in, on, at and by are lower case, except
-///   as the first word, where they are capitalised like any other word;
-/// - a word followed by a full stop is an abbreviation and is capitalised
+///   as the first word, where they are capitalized like any other word;
+/// - a word followed by a period is an abbreviation and is capitalized
 ///   ("NO. 2" becomes "No. 2", "ST. LOUIS" becomes "St. Louis"); an
 ///   initialism with stops carries them inside ("N.A.") and is kept;
 /// - a common short word ([`SHORT_WORDS`]: "NEW", "TAX", "ST") is cased
@@ -453,7 +453,7 @@ fn display_word(word: &str, first: bool) -> String {
             lowered
         }
     } else if trail.starts_with('.') && core.chars().all(char::is_alphabetic) {
-        // A word cut short by a full stop is an abbreviation, not an
+        // A word cut short by a period is an abbreviation, not an
         // initialism, which carries its stops inside ("N.A.", "U.S."):
         // "AMENDMENT NO. 2" reads "No.", "ST. LOUIS" reads "St.".
         capitalize_runs(core)
@@ -862,7 +862,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_hostile_characters_and_device_names_are_neutralised() {
+    fn windows_hostile_characters_and_device_names_are_neutralized() {
         let value = name(
             &proposal(
                 Some("2026-04-01"),
@@ -991,7 +991,7 @@ mod tests {
     }
 
     /// The Mc and Mac rule protects surnames, not every word that happens to
-    /// start that way, and a short word with a full stop is an abbreviation
+    /// start that way, and a short word with a period is an abbreviation
     /// rather than an initialism.
     #[test]
     fn machine_words_and_abbreviations_with_a_full_stop_are_cased() {
@@ -1030,7 +1030,7 @@ mod tests {
     }
 
     /// "between" with one name says the document has a second side it does
-    /// not name. A party that sanitises to nothing leaves one.
+    /// not name. A party that sanitizes to nothing leaves one.
     #[test]
     fn one_surviving_party_never_reads_between() {
         assert_eq!(

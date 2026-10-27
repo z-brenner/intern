@@ -19,7 +19,7 @@ pub struct SetupOperationGate {
 
 struct Operation {
     cancellation: CancellationToken,
-    /// The work has produced its result and cancelling can no longer change
+    /// The work has produced its result and canceling can no longer change
     /// it. The gate is still held, so no second operation may start until the
     /// outcome has been published.
     settled: bool,
@@ -81,7 +81,7 @@ pub struct ExistingModelSelection {
 
 /// Which pinned file each chosen path is, before anything is copied.
 ///
-/// A chosen file is recognised by its length - the pinned files all differ
+/// A chosen file is recognized by its length - the pinned files all differ
 /// in it - and accepted only once its digest matches too, which
 /// [`install_selected_file`] checks. A file of no pinned length, two files
 /// for one tier, or no file at all is refused before a byte moves, so a

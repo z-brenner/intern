@@ -28,7 +28,7 @@
 //!
 //! The check of a subject's or a key fact's words ([`every_word_stated`])
 //! guards against a model's honest mistakes: a word, a number or a symbol
-//! it adds, swaps or misremembers. It is no defence against text crafted
+//! it adds, swaps or misremembers. It is no defense against text crafted
 //! to slip past it, and need not be one: whoever writes the document
 //! already decides what the context states. Each word must be stated in
 //! some unit, a plural's "s" aside; single letters and the glue words
@@ -499,7 +499,7 @@ pub fn validate_facts_at(
     if !date_supported {
         push(&mut reasons, ReviewReason::DateUnsupported);
     }
-    // A deadline: labelled as one in either view.
+    // A deadline: labeled as one in either view.
     if !replaced && let Some(date) = document_date.clone() {
         let fires_context = deadline_fires(context, &date);
         let fires_document = deadline_fires(document, &date);
@@ -595,7 +595,7 @@ pub fn validate_facts_at(
         let trimmed = completed_name(scope, &trimmed).unwrap_or(trimmed);
         let name = trimmed.as_str();
         // A first name on its own is never a party: one word, not an
-        // initialism, with nothing that makes it an organisation.
+        // initialism, with nothing that makes it an organization.
         if is_first_name_alone(name) {
             support.parties.push(Support::Unsupported);
             parties_supported = false;
@@ -634,7 +634,7 @@ pub fn validate_facts_at(
         };
         let supported = matches!(role_support, Support::Cited | Support::Context);
         let document_role = (!supported && !copied)
-            .then(|| labelled_role(scope, name))
+            .then(|| labeled_role(scope, name))
             .flatten();
         // The role the document supports: the reply's, else the one its
         // own wording gives, else none. Someone copied is a bystander.
@@ -677,15 +677,15 @@ pub fn validate_facts_at(
         .into_iter()
         .map(|(party, _)| party)
         .collect::<Vec<_>>();
-    // A person who signs for an organisation among the parties acts for it
+    // A person who signs for an organization among the parties acts for it
     // and is no party of their own.
-    let organisations = parties
+    let organizations = parties
         .iter()
-        .filter(|party| is_organisation(&party.name))
+        .filter(|party| is_organization(&party.name))
         .map(|party| normalize_loosely(&party.name))
         .collect::<Vec<_>>();
     for party in &mut parties {
-        if !party.copied && signs_for(scope, &party.name, &organisations) {
+        if !party.copied && signs_for(scope, &party.name, &organizations) {
             party.signatory = true;
             party.role = Some(PartyRole::Other);
         }
@@ -693,12 +693,12 @@ pub fn validate_facts_at(
     let class = DocumentClass::of(document_type.as_deref());
     // An issued document whose reply said what it is but named no one
     // who could have issued it - no one, or only parties a customer cue
-    // labels - takes as its issuer the one organisation at the head of its
+    // labels - takes as its issuer the one organization at the head of its
     // first page, before any customer.
     let customer_only = parties.iter().all(|party| {
         party.copied
             || party.signatory
-            || labelled_role(scope, &party.name) == Some(PartyRole::Customer)
+            || labeled_role(scope, &party.name) == Some(PartyRole::Customer)
             || party
                 .role
                 .is_some_and(|role| RECEIVING_ROLES.contains(&role))
@@ -707,7 +707,7 @@ pub fn validate_facts_at(
         && proposed_type.is_some()
         && type_supported
         && customer_only
-        && let Some((name, unit)) = header_organisation(scope)
+        && let Some((name, unit)) = header_organization(scope)
         && !parties
             .iter()
             .any(|party| normalize_loosely(&party.name) == normalize_loosely(&name))
@@ -750,7 +750,7 @@ pub fn validate_facts_at(
             && (party
                 .role
                 .is_some_and(|role| ADDRESSED_ROLES.contains(&role))
-                || labelled_role(scope, &party.name)
+                || labeled_role(scope, &party.name)
                     .is_some_and(|role| ADDRESSED_ROLES.contains(&role)))
     });
     if matches!(class, DocumentClass::Notice | DocumentClass::Letter)
@@ -901,7 +901,7 @@ pub fn validate_facts_at(
     // "Project:" field holds, never a "Bill to" line, the type again or a
     // party's name; an amount reads with the label the document gives it.
     // A reply that names no identifier leaves it to the document: the
-    // number on the type's own title line, or a field labelled as this
+    // number on the type's own title line, or a field labeled as this
     // kind of document's number.
     if identifier.is_none()
         && let Some(read) = read_identifier(scope, document_type.as_deref(), type_line.as_deref())
@@ -1381,7 +1381,7 @@ fn title_units<'s, 'a>(
                         || unit.features.position.letterhead
                         || unit.features.position.page_index < 8))
         })
-        .filter(|unit| !names_an_organisation(unit))
+        .filter(|unit| !names_an_organization(unit))
         .take(8)
 }
 
@@ -1397,19 +1397,19 @@ const NOT_TITLE_WORDS: &[&str] = &[
     "privileged",
 ];
 
-/// Whether a unit is only an organisation's name - a letterhead's
+/// Whether a unit is only an organization's name - a letterhead's
 /// "Meadowlark Health Plan" - or a delivery line: no title either way.
-fn names_an_organisation(unit: &EvidenceUnit) -> bool {
+fn names_an_organization(unit: &EvidenceUnit) -> bool {
     let text = normalize(&unit.text);
     let text = text.trim();
     NOT_TITLE_WORDS.iter().any(|words| text.contains(words))
         || unit
             .features
-            .organisations
+            .organizations
             .iter()
             .any(|name| normalize(name).trim() == text)
         || text.split_whitespace().any(|word| {
-            crate::cues::ORGANISATION_ENDINGS.contains(
+            crate::cues::ORGANIZATION_ENDINGS.contains(
                 &word
                     .trim_matches(|c: char| !c.is_alphanumeric() && c != '.')
                     .trim_end_matches('.'),
@@ -1583,7 +1583,7 @@ fn significant_words(value: &str) -> Vec<String> {
         .collect()
 }
 
-/// Finds a free-text fact by its claims - its numbers and capitalised
+/// Finds a free-text fact by its claims - its numbers and capitalized
 /// names - as the digest pipeline checks a description's.
 fn claims_found<'a>(scope: &ValidationScope<'a>, cited: &[String], value: &str) -> Found<'a> {
     // A leading word is never a claim in a sentence; here it is the fact's
@@ -2018,7 +2018,7 @@ fn role_words(role: PartyRole) -> (&'static [&'static str], &'static [&'static s
 
 /// Whether the document supports `role` for the party `name`: in a cited
 /// unit ([`Support::Cited`]) or another excerpt naming it
-/// ([`Support::Context`]) - a role word labelling the name, a defined term
+/// ([`Support::Context`]) - a role word labeling the name, a defined term
 /// after it, a page-one letterhead for an issuer or sender, or the issuer
 /// and customer cues of an issued document on its line.
 fn role_support(
@@ -2043,7 +2043,7 @@ fn role_support(
 
 /// The roles a document's wording can give a party, the sides a document is
 /// about and the sides it comes from first, the generic ones last.
-const LABELLED_ROLES: [PartyRole; 18] = [
+const LABELED_ROLES: [PartyRole; 18] = [
     PartyRole::Tenant,
     PartyRole::Landlord,
     PartyRole::Borrower,
@@ -2064,10 +2064,10 @@ const LABELLED_ROLES: [PartyRole; 18] = [
     PartyRole::Addressee,
 ];
 
-/// The first role, in [`LABELLED_ROLES`]' order, that what the model was
+/// The first role, in [`LABELED_ROLES`]' order, that what the model was
 /// shown gives `name` in its own words: a label, a defined term, a
 /// letterhead, an issuer or customer cue.
-fn labelled_role(scope: &ValidationScope<'_>, name: &str) -> Option<PartyRole> {
+fn labeled_role(scope: &ValidationScope<'_>, name: &str) -> Option<PartyRole> {
     let normalized = normalize(name);
     let loose = normalize_loosely(name);
     let naming = scope
@@ -2078,7 +2078,7 @@ fn labelled_role(scope: &ValidationScope<'_>, name: &str) -> Option<PartyRole> {
         })
         .collect::<Vec<_>>();
     let letter = LetterLayout::of(scope);
-    LABELLED_ROLES.into_iter().find(|role| {
+    LABELED_ROLES.into_iter().find(|role| {
         naming
             .iter()
             .any(|unit| unit_supports_role(unit, &normalized, &loose, *role, false, letter))
@@ -2179,7 +2179,7 @@ fn unit_supports_role(
             return true;
         }
     }
-    if labelled_on_its_line(unit, normalized, loose, labels) {
+    if labeled_on_its_line(unit, normalized, loose, labels) {
         return true;
     }
     for (text, at, length) in positions {
@@ -2225,7 +2225,7 @@ fn unit_supports_role(
 /// stands under a line that is only such a label ("BILL TO" over the
 /// customer's name). What stands before the name on its line must be the
 /// label and nothing more, so "payable to Acme" is no "to".
-fn labelled_on_its_line(
+fn labeled_on_its_line(
     unit: &EvidenceUnit,
     normalized: &str,
     loose: &str,
@@ -2391,22 +2391,22 @@ fn display_name(name: &str) -> String {
     tidy_case(name)
 }
 
-/// The whole organisation name a reply's name is the end of - "MANUFACTURING
+/// The whole organization name a reply's name is the end of - "MANUFACTURING
 /// LLC" of "EMBer POSt MANUFACtURInG LLC" - when a unit of the context names
-/// the organisation, as the document writes it. `None` when the name is no
-/// organisation's end, or names it whole.
+/// the organization, as the document writes it. `None` when the name is no
+/// organization's end, or names it whole.
 fn completed_name(scope: &ValidationScope<'_>, name: &str) -> Option<String> {
     let loose = normalize_loosely(name);
     let last = loose.split_whitespace().last()?;
-    if !crate::cues::ORGANISATION_ENDINGS.contains(&last) {
+    if !crate::cues::ORGANIZATION_ENDINGS.contains(&last) {
         return None;
     }
     scope.context_units().find_map(|unit| {
         // What completes the name is a few words of its own, never another
-        // organisation's legal form or noun: "Systems LLC and" is no part
+        // organization's legal form or noun: "Systems LLC and" is no part
         // of "Quill and Vane Advisory Group, Inc.".
-        let organisation = unit.features.organisations.iter().find(|organisation| {
-            let Some(before) = organisation
+        let organization = unit.features.organizations.iter().find(|organization| {
+            let Some(before) = organization
                 .strip_suffix(loose.as_str())
                 .filter(|before| before.ends_with(' '))
             else {
@@ -2415,15 +2415,15 @@ fn completed_name(scope: &ValidationScope<'_>, name: &str) -> Option<String> {
             let words = before.split_whitespace().collect::<Vec<_>>();
             (1..=4).contains(&words.len())
                 && !words.iter().any(|word| {
-                    crate::cues::ORGANISATION_ENDINGS.contains(word)
+                    crate::cues::ORGANIZATION_ENDINGS.contains(word)
                         || matches!(*word, "and" | "&" | "of")
                 })
         })?;
-        written_span(unit, organisation)
+        written_span(unit, organization)
     })
 }
 
-/// A subject with any run of capitalised words the document does not state
+/// A subject with any run of capitalized words the document does not state
 /// as one phrase written in lower case: "Credit Union Merger", put together
 /// from a notice that writes "credit union" and "merger" apart, reads as
 /// "credit union merger" - words of the document, not a name it never gives.
@@ -2431,7 +2431,7 @@ fn completed_name(scope: &ValidationScope<'_>, name: &str) -> Option<String> {
 /// capitals.
 fn unstated_names_lowered(subject: &str, scope: &ValidationScope<'_>) -> String {
     let tokens = subject.split(' ').collect::<Vec<_>>();
-    let capitalised = |token: &str| {
+    let capitalized = |token: &str| {
         let core = token.trim_matches(|character: char| !character.is_alphanumeric());
         core.chars().next().is_some_and(char::is_uppercase)
             && !(core.chars().count() <= 4 && core.chars().all(|c| !c.is_lowercase()))
@@ -2450,12 +2450,12 @@ fn unstated_names_lowered(subject: &str, scope: &ValidationScope<'_>) -> String 
         .collect::<Vec<_>>();
     let mut at = 0;
     while at < tokens.len() {
-        if !capitalised(tokens[at]) {
+        if !capitalized(tokens[at]) {
             at += 1;
             continue;
         }
         let mut end = at + 1;
-        while end < tokens.len() && capitalised(tokens[end]) {
+        while end < tokens.len() && capitalized(tokens[end]) {
             end += 1;
         }
         if end - at >= 2 && !stated(&tokens[at..end]) {
@@ -2468,9 +2468,9 @@ fn unstated_names_lowered(subject: &str, scope: &ValidationScope<'_>) -> String 
     lowered.join(" ")
 }
 
-/// Whether a name is one capitalised word and nothing else - "Rowan",
+/// Whether a name is one capitalized word and nothing else - "Rowan",
 /// "Priya" - the way a note names a person by first name. An initialism
-/// ("IBM") or a word ending an organisation's name is not one.
+/// ("IBM") or a word ending an organization's name is not one.
 fn is_first_name_alone(name: &str) -> bool {
     let mut parts = name.split_whitespace();
     let (Some(word), None) = (parts.next(), parts.next()) else {
@@ -2484,7 +2484,7 @@ fn is_first_name_alone(name: &str) -> bool {
             .chars()
             .all(|character| character.is_alphabetic() || character == '-' || character == '\'')
         && !all_capitals
-        && !crate::cues::ORGANISATION_ENDINGS.contains(&word.to_lowercase().as_str())
+        && !crate::cues::ORGANIZATION_ENDINGS.contains(&word.to_lowercase().as_str())
 }
 
 /// The roles of the side a document is sent or billed to.
@@ -2496,12 +2496,12 @@ const RECEIVING_ROLES: &[PartyRole] = &[
     PartyRole::Addressee,
 ];
 
-/// The organisation a customer field names - "Bill To: Ferncastle
+/// The organization a customer field names - "Bill To: Ferncastle
 /// Veterinary Hospital", a "SOLD TO" line over it - as the document writes
 /// it.
 fn customer_field(scope: &ValidationScope<'_>) -> Option<String> {
     scope.context_units().find_map(|unit| {
-        let labelled = unit
+        let labeled = unit
             .label
             .as_deref()
             .is_some_and(|label| has_cue(&normalize_loosely(label), CUSTOMER_CUES))
@@ -2510,11 +2510,11 @@ fn customer_field(scope: &ValidationScope<'_>) -> Option<String> {
                 .lines()
                 .next()
                 .is_some_and(|line| has_cue(&normalize_loosely(line), CUSTOMER_CUES));
-        if !labelled {
+        if !labeled {
             return None;
         }
-        let organisation = unit.features.organisations.first()?;
-        written_span(unit, organisation)
+        let organization = unit.features.organizations.first()?;
+        written_span(unit, organization)
     })
 }
 
@@ -2540,7 +2540,7 @@ const SUBJECT_FIELDS: &[&str] = &[
     "matter",
 ];
 
-/// The value of the first field of the context labelled as what the
+/// The value of the first field of the context labeled as what the
 /// document is about, cut to eight words.
 fn field_subject(scope: &ValidationScope<'_>) -> Option<String> {
     scope.context_units().find_map(|unit| {
@@ -2575,13 +2575,13 @@ fn field_subject(scope: &ValidationScope<'_>) -> Option<String> {
     })
 }
 
-/// Whether a name is an organisation's: it ends on a legal form or an
-/// organisation's noun.
-fn is_organisation(name: &str) -> bool {
+/// Whether a name is an organization's: it ends on a legal form or an
+/// organization's noun.
+fn is_organization(name: &str) -> bool {
     normalize_loosely(name)
         .split_whitespace()
         .last()
-        .is_some_and(|word| crate::cues::ORGANISATION_ENDINGS.contains(&word))
+        .is_some_and(|word| crate::cues::ORGANIZATION_ENDINGS.contains(&word))
 }
 
 /// Words a person's job title is made of.
@@ -2613,12 +2613,12 @@ const JOB_TITLE_WORDS: &[&str] = &[
     "controller",
 ];
 
-/// Whether a person signs for one of `organisations`: a unit names them,
-/// then a job title, then the organisation - "Harriet Voss, Vice President
+/// Whether a person signs for one of `organizations`: a unit names them,
+/// then a job title, then the organization - "Harriet Voss, Vice President
 /// of People Operations Northstar Lantern Works LLC", "Keziah Ambrose,
 /// Owner, Briarport Coffee Roasters LLC".
-fn signs_for(scope: &ValidationScope<'_>, name: &str, organisations: &[String]) -> bool {
-    if is_organisation(name) || organisations.is_empty() {
+fn signs_for(scope: &ValidationScope<'_>, name: &str, organizations: &[String]) -> bool {
+    if is_organization(name) || organizations.is_empty() {
         return false;
     }
     let loose = normalize_loosely(name);
@@ -2631,9 +2631,9 @@ fn signs_for(scope: &ValidationScope<'_>, name: &str, organisations: &[String]) 
                 .take(6)
                 .any(|word| JOB_TITLE_WORDS.contains(&word));
             titled
-                && organisations
+                && organizations
                     .iter()
-                    .any(|organisation| !whole_positions(after, organisation).is_empty())
+                    .any(|organization| !whole_positions(after, organization).is_empty())
         })
     })
 }
@@ -2642,11 +2642,11 @@ fn signs_for(scope: &ValidationScope<'_>, name: &str, organisations: &[String]) 
 const ADDRESSED_ROLES: &[PartyRole] = &[PartyRole::Addressee, PartyRole::Recipient];
 
 /// Labels of a field that names who a notice or a letter is to. An
-/// "Attn:" line names the person who reads it for the organisation it is
+/// "Attn:" line names the person who reads it for the organization it is
 /// addressed to, never the addressee itself.
 const ADDRESSEE_LABELS: &[&str] = &["to", "addressee"];
 
-/// The person or organisation a first-page "To:" field names, as the
+/// The person or organization a first-page "To:" field names, as the
 /// document writes it, with its unit and line: the name the field's value
 /// opens with, an address after it left out ("To: John Smith, 1420 Fielder
 /// Lane, ...").
@@ -2668,7 +2668,7 @@ fn addressee_field<'a>(scope: &ValidationScope<'a>) -> Option<(String, &'a Evide
                 .features
                 .people
                 .iter()
-                .chain(&unit.features.organisations)
+                .chain(&unit.features.organizations)
                 .filter(|known| {
                     !known.is_empty()
                         && opening.starts_with(known.as_str())
@@ -2683,9 +2683,9 @@ fn addressee_field<'a>(scope: &ValidationScope<'a>) -> Option<(String, &'a Evide
         })
 }
 
-/// The one organisation the first page of the context names before any
+/// The one organization the first page of the context names before any
 /// line with a customer cue, as the document writes it, and its unit.
-fn header_organisation<'a>(scope: &ValidationScope<'a>) -> Option<(String, &'a EvidenceUnit)> {
+fn header_organization<'a>(scope: &ValidationScope<'a>) -> Option<(String, &'a EvidenceUnit)> {
     let units = scope.context_units().collect::<Vec<_>>();
     let first_page = units.iter().map(|unit| unit.page).min()?;
     let mut found: Vec<(String, &EvidenceUnit)> = Vec::new();
@@ -2698,14 +2698,14 @@ fn header_organisation<'a>(scope: &ValidationScope<'a>) -> Option<(String, &'a E
         {
             break;
         }
-        for organisation in &unit.features.organisations {
+        for organization in &unit.features.organizations {
             if found
                 .iter()
-                .any(|(known, _)| normalize_loosely(known) == *organisation)
+                .any(|(known, _)| normalize_loosely(known) == *organization)
             {
                 continue;
             }
-            if let Some(span) = written_span(unit, organisation) {
+            if let Some(span) = written_span(unit, organization) {
                 found.push((span, unit));
             }
         }
@@ -2767,7 +2767,7 @@ fn copied(scope: &ValidationScope<'_>, name: &str) -> bool {
 /// The one party at the head of an issued document's first page: named
 /// before any line that names a customer, and not under a customer's label
 /// itself. An invoice's, an order's or a slip's issuer is its letterhead
-/// or header, and is seldom labelled as such; this is that structural cue.
+/// or header, and is seldom labeled as such; this is that structural cue.
 /// `None` unless exactly one party stands there.
 fn header_issuer(scope: &ValidationScope<'_>, cast: &[CastMember]) -> Option<usize> {
     let units = scope.context_units().collect::<Vec<_>>();
@@ -2783,7 +2783,7 @@ fn header_issuer(scope: &ValidationScope<'_>, cast: &[CastMember]) -> Option<usi
             let loose = normalize_loosely(&party.name);
             let mut customer_seen = false;
             for unit in &page {
-                let labelled = unit
+                let labeled = unit
                     .label
                     .as_deref()
                     .is_some_and(|label| has_cue(&normalize_loosely(label), CUSTOMER_CUES));
@@ -2794,11 +2794,11 @@ fn header_issuer(scope: &ValidationScope<'_>, cast: &[CastMember]) -> Option<usi
                             && lines[index - 1].split_whitespace().count() <= 3
                             && has_cue(&lines[index - 1], CUSTOMER_CUES);
                         return !customer_seen
-                            && !labelled
+                            && !labeled
                             && !under_label
                             && !has_cue(&line[..at], CUSTOMER_CUES);
                     }
-                    if labelled || has_cue(line, CUSTOMER_CUES) {
+                    if labeled || has_cue(line, CUSTOMER_CUES) {
                         customer_seen = true;
                     }
                 }
@@ -2885,7 +2885,7 @@ fn amount_in(unit: &EvidenceUnit) -> Option<(String, String)> {
             offset = at + money.len();
         }
     }
-    let totalled = |(at, _, line): &&(usize, String, String)| {
+    let totaled = |(at, _, line): &&(usize, String, String)| {
         let before = normalize(line.get(..*at).unwrap_or_default());
         before.split_whitespace().rev().take(6).any(|word| {
             matches!(
@@ -2897,7 +2897,7 @@ fn amount_in(unit: &EvidenceUnit) -> Option<(String, String)> {
     let pick = match unit.kind {
         UnitKind::TableRow => found.last(),
         UnitKind::Field => found.first(),
-        _ => found.iter().find(totalled).or_else(|| found.first()),
+        _ => found.iter().find(totaled).or_else(|| found.first()),
     }?;
     Some((pick.1.clone(), pick.2.clone()))
 }
@@ -2948,10 +2948,10 @@ const TOTAL_LABELS: &[&str] = &[
 ];
 
 /// The amount the document labels as its total (an issued document's
-/// last labelled total) or, for any other kind, the first amount labelled
+/// last labeled total) or, for any other kind, the first amount labeled
 /// as what the document is for (a price, a fee, rent, a salary, a
 /// principal) or as its total: in a field, a two-cell row, or the words
-/// just before it on a line. `None` when no amount is labelled so.
+/// just before it on a line. `None` when no amount is labeled so.
 fn document_amount<'a>(
     scope: &ValidationScope<'a>,
     class: DocumentClass,
@@ -3064,7 +3064,7 @@ fn document_amount<'a>(
             }
         }
     }
-    // No labelled amount: one a first-page title states - "$350,000,000
+    // No labeled amount: one a first-page title states - "$350,000,000
     // Senior Secured Credit Facilities" - is what the document is for.
     if found.is_empty() && class != DocumentClass::Issued {
         let first_page = scope.context_units().map(|unit| unit.page).min()?;
@@ -3183,7 +3183,7 @@ fn identifier_labels(head: &str) -> &'static [&'static str] {
 
 /// The identifier a document states for itself: the number right after
 /// its type on its title line ("PACKING SLIP PS-311"), or the value of a
-/// field labelled as this kind's number ("Invoice No.: 7731-B", "| Policy
+/// field labeled as this kind's number ("Invoice No.: 7731-B", "| Policy
 /// Number | CPP-4471 |"). `None` when it states neither.
 fn read_identifier<'a>(
     scope: &ValidationScope<'a>,
@@ -3206,12 +3206,12 @@ fn read_identifier<'a>(
             unit,
         });
     }
-    // A field labelled as this kind's number; else, on the first page, any
-    // field labelled as a number that is not a phone's, a tax id's or a
+    // A field labeled as this kind's number; else, on the first page, any
+    // field labeled as a number that is not a phone's, a tax id's or a
     // page's.
     let kinds = identifier_labels(&head);
     let first_page = scope.context_units().map(|unit| unit.page).min()?;
-    let labelled = |unit: &'a EvidenceUnit, own_kind: bool| -> Option<ReadIdentifier<'a>> {
+    let labeled = |unit: &'a EvidenceUnit, own_kind: bool| -> Option<ReadIdentifier<'a>> {
         let label = unit.label.as_deref()?;
         let label_words = words(label);
         let names_kind = label_words
@@ -3274,7 +3274,7 @@ fn read_identifier<'a>(
         })
     };
     // A line that labels this kind's number and gives it after the label,
-    // or on the next line; a table whose column is so labelled.
+    // or on the next line; a table whose column is so labeled.
     let on_a_line = || {
         scope.context_units().find_map(|unit| {
             let lines = unit.text.lines().collect::<Vec<_>>();
@@ -3359,14 +3359,14 @@ fn read_identifier<'a>(
     };
     scope
         .context_units()
-        .find_map(|unit| (!kinds.is_empty()).then(|| labelled(unit, true)).flatten())
+        .find_map(|unit| (!kinds.is_empty()).then(|| labeled(unit, true)).flatten())
         .or_else(|| (!kinds.is_empty()).then(on_a_line).flatten())
         .or_else(|| (!kinds.is_empty()).then(in_a_column).flatten())
         .or_else(|| {
             scope
                 .context_units()
                 .filter(|unit| unit.page == first_page)
-                .find_map(|unit| labelled(unit, false))
+                .find_map(|unit| labeled(unit, false))
         })
 }
 
@@ -3487,7 +3487,7 @@ fn identifier_label(
     identifier: &str,
 ) -> Option<String> {
     // A table row's label is its first cell; an identifier in a row is
-    // labelled by its column's header ("| Invoice No. | ... |").
+    // labeled by its column's header ("| Invoice No. | ... |").
     if unit.kind == UnitKind::TableRow
         && let Some(header) = unit
             .table_header
@@ -3751,7 +3751,7 @@ Payment terms: net 30. Remit to Halvorsen Fixture Works LLC.";
         assert_eq!(
             proposal.description,
             "Invoice from Halvorsen Fixture Works LLC to Quillon Ridge Bakery, Inc. for display \
-             shelving for the bakery counter, invoice INV-10438, totalling $1,248.00."
+             shelving for the bakery counter, invoice INV-10438, totaling $1,248.00."
         );
         // What a reviewer is shown is the document's own lines.
         let lines = INVOICE.lines().map(str::trim).collect::<Vec<_>>();
@@ -4159,7 +4159,7 @@ Dated May 12, 2026";
         let mut facts = invoice_facts(&index);
         facts.parties.remove(0);
         let outcome = check(facts, &whole(&index), &index);
-        // The customer is never the filename's party; the organisation at
+        // The customer is never the filename's party; the organization at
         // the head of the page, before the "Bill To", issued it.
         assert_eq!(
             outcome.proposal.parties,
@@ -4176,7 +4176,7 @@ Dated May 12, 2026";
             "{}",
             outcome.proposal.description
         );
-        // With no header organisation before the customer, no one.
+        // With no header organization before the customer, no one.
         let text = "INVOICE\n\nBill To: Quillon Ridge Bakery, Inc.\n\nTotal: $10.00";
         let index = index_of(text);
         let outcome = check(
@@ -4200,7 +4200,7 @@ Dated May 12, 2026";
         );
     }
 
-    /// An identifier in a table is labelled by its column.
+    /// An identifier in a table is labeled by its column.
     #[test]
     fn an_identifier_in_a_table_reads_with_its_columns_header() {
         let text = "Halvorsen Fixture Works LLC\n\nINVOICE\n\n| Invoice No. | Invoice Date | Terms |\n\
@@ -4294,7 +4294,7 @@ Dated May 12, 2026";
 
     /// The description `invoice_facts` gives with no subject.
     const INVOICE_WITHOUT_SUBJECT: &str = "Invoice from Halvorsen Fixture Works LLC to Quillon \
-                                           Ridge Bakery, Inc., invoice INV-10438, totalling \
+                                           Ridge Bakery, Inc., invoice INV-10438, totaling \
                                            $1,248.00.";
 
     /// `invoice_facts` with another subject, cited to the first unit
@@ -4944,10 +4944,10 @@ Dis\u{ad}play shelving for the bak\u{ad}ery counter, $1,248.00";
     /// review and never takes the place of the document's own total.
     #[test]
     fn a_key_fact_amount_is_accepted_only_as_the_context_writes_it() {
-        const TOTALLED: &str = "Nimbus Orchard Supply Co.\n\nINVOICE\n\n\
+        const TOTALED: &str = "Nimbus Orchard Supply Co.\n\nINVOICE\n\n\
 Invoice date: April 30, 2025\n\nBill to Atlas Threadworks LLC\n\nTotal: $1,248.00";
-        let unclaimed = with_key_facts(TOTALLED, &[]).proposal.description;
-        assert!(unclaimed.contains("totalling $1,248.00"), "{unclaimed}");
+        let unclaimed = with_key_facts(TOTALED, &[]).proposal.description;
+        assert!(unclaimed.contains("totaling $1,248.00"), "{unclaimed}");
         for (fact, cited) in [
             ("$48", Some("Total")),
             ("$7", None),
@@ -4959,7 +4959,7 @@ Invoice date: April 30, 2025\n\nBill to Atlas Threadworks LLC\n\nTotal: $1,248.0
             ("\u{20ac}1,248.00", Some("Total")),
             ("$1,248.00 million", Some("Total")),
         ] {
-            let outcome = with_key_facts(TOTALLED, &[(fact, cited)]);
+            let outcome = with_key_facts(TOTALED, &[(fact, cited)]);
             let facts = outcome.facts.as_ref().unwrap();
             assert_eq!(
                 facts.support.key_facts,
@@ -4977,7 +4977,7 @@ Invoice date: April 30, 2025\n\nBill to Atlas Threadworks LLC\n\nTotal: $1,248.0
             assert_eq!(outcome.proposal.description, unclaimed, "{fact}");
         }
         for fact in ["$1,248.00", "Total: $1,248.00"] {
-            let outcome = with_key_facts(TOTALLED, &[(fact, Some("Total"))]);
+            let outcome = with_key_facts(TOTALED, &[(fact, Some("Total"))]);
             assert!(
                 !outcome
                     .reasons
@@ -5086,7 +5086,7 @@ All invoices are payable within 30 days.";
             filename,
             "2025-05-01 Invoice from Halvorsen Fixture Works LLC.pdf"
         );
-        // A mark the line holds once is no licence to decorate the type with
+        // A mark the line holds once is no license to decorate the type with
         // it, at either end.
         const NUMBERED: &str = "Halvorsen Fixture Works LLC\n12 Quay Street, Brackenridge\n\n\
 Invoice Date: May 1, 2025\n\nAll invoices #123 are payable within 30 days.";
@@ -5483,7 +5483,7 @@ Total: $1,248.00";
         assert_eq!(outcome.proposal.parties, vec!["Nimbus Orchard Supply Co."]);
         assert_eq!(
             outcome.proposal.description,
-            "Invoice INV-2048 from Nimbus Orchard Supply Co., totalling $1,248.00."
+            "Invoice INV-2048 from Nimbus Orchard Supply Co., totaling $1,248.00."
         );
         // The customer alone, under its label, is never the issuer.
         let (outcome, _) = facts_for(INVOICE, |index| ModelFacts {
@@ -5603,7 +5603,7 @@ $28,703.00.";
         let description = &outcome.proposal.description;
         assert!(description.contains("$28,703.00"), "{description}");
         assert!(!description.contains("$1,287.40"), "{description}");
-        // An issued document's amount is its last labelled total, not a
+        // An issued document's amount is its last labeled total, not a
         // line item or a subtotal.
         const INVOICE: &str = "INVOICE INV-7\n\nInvoice date: May 1, 2025\n\n\
 | Item | Amount |\n| Shelving | $1,000.00 |\n| Subtotal | $1,000.00 |\n| Tax | $80.00 |\n\
@@ -5614,7 +5614,7 @@ $28,703.00.";
             ..ModelFacts::default()
         });
         let description = &outcome.proposal.description;
-        assert!(description.contains("totalling $1,080.00"), "{description}");
+        assert!(description.contains("totaling $1,080.00"), "{description}");
         // A line a hosted reply cites for the amount stands in when the
         // document labels none; a line with no amount gives none and is no
         // claim either.
@@ -5663,21 +5663,21 @@ $28,703.00.";
 | | | | Order Total (USD) | $84,438.00 |",
             "Purchase Order",
         );
-        assert!(order.contains("totalling $84,438.00"), "{order}");
+        assert!(order.contains("totaling $84,438.00"), "{order}");
         let rent = described(
             "NOTICE OF RENT INCREASE\n\n| Charge | Current | New |\n\
 | Base rent | $1,845.00 | $1,965.00 |\n\nThe base rent increase is $120.00 per month.",
             "Notice of Rent Increase",
         );
         assert!(rent.contains("base rent of $1,965.00"), "{rent}");
-        // An amount alone in its row is labelled by its header.
+        // An amount alone in its row is labeled by its header.
         let loss = described(
             "PROPERTY LOSS NOTICE\n\n| Estimated amount of loss | Property damaged |\n\
 | $38,500.00 | Flooring, two mixers |",
             "Property Loss Notice",
         );
         assert!(loss.contains("$38,500.00"), "{loss}");
-        // With no labelled amount, the one a first-page title states.
+        // With no labeled amount, the one a first-page title states.
         let credit = described(
             "CREDIT AGREEMENT\n\n$350,000,000 SENIOR SECURED CREDIT FACILITIES\n\n\
 The Lenders agree to lend on the terms below.",
@@ -5800,7 +5800,7 @@ Date of notice: August 12, 2026";
     }
 
     #[test]
-    fn a_name_cut_short_is_completed_to_the_organisation_and_its_scattered_capitals_tidied() {
+    fn a_name_cut_short_is_completed_to_the_organization_and_its_scattered_capitals_tidied() {
         const ORDER: &str =
             "PURCHASE ORDER PO-310\n\nDAtE JULY 14 20z5\n\nEMBer POSt MANUFACtURInG LLC";
         let (outcome, _) = facts_for(ORDER, |index| ModelFacts {

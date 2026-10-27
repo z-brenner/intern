@@ -153,7 +153,7 @@ pub(crate) fn contains_whole(haystack: &str, needle: &str) -> bool {
 /// through a name: commas, periods, apostrophes, and quotation marks.
 ///
 /// "Contoso Worldwide Inc" and "Contoso Worldwide, Inc." are one company, and
-/// a name a person would recognise as the same name should not be thrown out
+/// a name a person would recognize as the same name should not be thrown out
 /// of a filename over a comma. A standalone "&" reads as "and" for the same
 /// reason - "Quill & Vane" and "Quill and Vane" are one firm - while the "&"
 /// inside a name like "AT&T" is part of the name and stays.

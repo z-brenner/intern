@@ -14,7 +14,7 @@
 //! its last handle closes, and the last handle is this process's - closed by
 //! the kernel however this process ends, deliberately or not. So every child
 //! Intern spawns joins one process-wide job, and the ordinary stop paths
-//! below become an optimisation rather than the only hope.
+//! below become an optimization rather than the only hope.
 //!
 //! On Linux the kernel does it by another route. A child that sets
 //! `PR_SET_PDEATHSIG` before it runs anything is sent `SIGKILL` when its

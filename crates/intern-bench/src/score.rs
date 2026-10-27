@@ -86,7 +86,7 @@ pub struct Outcome<'a> {
     /// The document still counts: every answer the gold defines is scored
     /// as missed, because a person was given no name (see the module
     /// documentation for exactly which keys).
-    pub analysed: bool,
+    pub analyzed: bool,
     pub filename: Option<&'a str>,
     pub description: &'a str,
     pub document_type: Option<&'a str>,
@@ -196,7 +196,7 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
         // attached to no date, or to a wrong one, measures nothing. A
         // failed document is a miss here as everywhere.
         if let Some(role) = gold.date_role.as_deref().filter(|role| !role.is_empty()) {
-            if !outcome.analysed {
+            if !outcome.analyzed {
                 flag(scores, "date_role_correct", false);
             } else if outcome.document_date.is_some()
                 && outcome.document_date == gold.document_date.as_deref()
@@ -220,10 +220,10 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
     // Parties. A failed document named nobody by failing, not by choice:
     // it matches no set, not even a reviewed answer that names nobody.
     let sets = gold.party_sets();
-    let judged = if outcome.analysed {
+    let judged = if outcome.analyzed {
         judge_parties(&sets, outcome.parties)
     } else {
-        PartyJudgement::failed(&sets)
+        PartyJudgment::failed(&sets)
     };
     if gold.parties.is_some() {
         let counts = &judged.counts;
@@ -236,7 +236,7 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
             .party_relation
             .as_deref()
             .filter(|value| !value.is_empty());
-        if !outcome.analysed {
+        if !outcome.analyzed {
             // Missed wherever the reviewed answer would be judged.
             if reviewed_relation.is_some() && !reviewed_parties.is_empty() {
                 flag(scores, "relation_correct", false);
@@ -252,7 +252,7 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
         // landlord, though both are acceptable parties - the landlord with
         // "from".
         if reviewed_relation.is_some()
-            && outcome.analysed
+            && outcome.analyzed
             && !outcome.parties.is_empty()
             && let Some(produced) = outcome.party_relation
         {
@@ -271,7 +271,7 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
                     .any(|&index| sets[index].relation.as_deref() == Some(produced)),
             );
         }
-        if outcome.analysed
+        if outcome.analyzed
             && let Some(relation) = outcome.party_relation
             && let Some(correct) = party_role_correct(document, &sets, relation, outcome.parties)
         {
@@ -333,9 +333,9 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
     flag(
         scores,
         "unsupported_fact_doc",
-        outcome.analysed && outcome.unsupported_reason,
+        outcome.analyzed && outcome.unsupported_reason,
     );
-    if outcome.analysed {
+    if outcome.analyzed {
         if let Some(text) = texts.document {
             scored.claims = check_claims(description, text);
         }
@@ -387,7 +387,7 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
         flag(
             scores,
             "readiness_match",
-            outcome.analysed && (expected == "ready") == outcome.ready,
+            outcome.analyzed && (expected == "ready") == outcome.ready,
         );
     }
     if let Some(correct) = filename_correct {
@@ -571,7 +571,7 @@ struct PartyCounts {
     spurious: usize,
 }
 
-struct PartyJudgement {
+struct PartyJudgment {
     /// The index of the first party set the output names exactly: every
     /// party, nobody else.
     correct_set: Option<usize>,
@@ -583,7 +583,7 @@ struct PartyJudgement {
     counts: PartyCounts,
 }
 
-impl PartyJudgement {
+impl PartyJudgment {
     /// A failed document: no set matched, counted against the reviewed
     /// one.
     fn failed(sets: &[PartySet]) -> Self {
@@ -600,7 +600,7 @@ impl PartyJudgement {
     }
 }
 
-fn judge_parties(sets: &[PartySet], produced: &[String]) -> PartyJudgement {
+fn judge_parties(sets: &[PartySet], produced: &[String]) -> PartyJudgment {
     let counts = |set: &PartySet| PartyCounts {
         matched: set
             .parties
@@ -621,7 +621,7 @@ fn judge_parties(sets: &[PartySet], produced: &[String]) -> PartyJudgement {
         .filter(|&index| all[index].matched > 0)
         .collect::<Vec<_>>();
     let correct_set = exact.first().copied();
-    PartyJudgement {
+    PartyJudgment {
         counts: all
             .get(correct_set.unwrap_or(0))
             .copied()
@@ -903,9 +903,9 @@ mod tests {
 
     fn outcome<'a>(parties: &'a [String], relation: &'a str, filename: &'a str) -> Outcome<'a> {
         Outcome {
-            analysed: true,
+            analyzed: true,
             filename: Some(filename),
-            description: "Invoice from Halvorsen Fixture Works LLC for display fixtures totalling $4,812.50, issued March 4, 2026.",
+            description: "Invoice from Halvorsen Fixture Works LLC for display fixtures totaling $4,812.50, issued March 4, 2026.",
             document_type: Some("Invoice"),
             document_date: Some("2026-03-04"),
             date_role: Some("invoice"),
@@ -1082,10 +1082,10 @@ mod tests {
             &Texts::default(),
         );
         assert_eq!(scored.scores["party_role_correct"], json!(true));
-        let mut unlabelled = notice.clone();
-        unlabelled.gold.party_roles[0].role = "tenant".into();
+        let mut unlabeled = notice.clone();
+        unlabeled.gold.party_roles[0].role = "tenant".into();
         let scored = score(
-            &unlabelled,
+            &unlabeled,
             &outcome(&issuer, "for", "x.pdf"),
             &Texts::default(),
         );

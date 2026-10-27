@@ -5,7 +5,7 @@
 //! path that the Microsoft sync client replicates, so detection is a matter of
 //! reading the sync client's own breadcrumbs: environment variables and the
 //! per-user registry on Windows, well-known home-directory names elsewhere.
-//! A network share is recognised from the path itself - a UNC path, or on
+//! A network share is recognized from the path itself - a UNC path, or on
 //! Windows a drive letter that the operating system reports as remote.
 
 use std::path::{Path, PathBuf};

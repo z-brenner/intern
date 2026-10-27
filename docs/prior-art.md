@@ -1,6 +1,6 @@
 # Prior art: what other tools do, and what Intern took from them
 
-A research pass over open-source document organisers, run in September 2026
+A research pass over open-source document organizers, run in September 2026
 before round six. The question was not "what is fashionable" but "what has
 someone already got right that Intern lacks, and what has someone got wrong
 that Intern should keep avoiding". Each item below says which.
@@ -11,8 +11,8 @@ that Intern should keep avoiding". Each item below says which.
 | --- | --- | --- |
 | [paperless-ngx](https://docs.paperless-ngx.com/usage/) | The self-hosted document archive most people mean by "paperless" | A workflow engine (triggers on consumption, filters on filename and path, actions that assign title, correspondent, type, storage path); matching algorithms per tag and correspondent, including an "auto" classifier trained on the user's own assignments; duplicates by checksum only |
 | [paperless-gpt](https://github.com/icereed/paperless-gpt) | LLM front-end for paperless-ngx, in Go | Passes the user's existing tags, correspondents, and document types to the model to choose from; manual review before applying; LLM-vision OCR through hosted or Ollama models; per-prompt templates edited in the UI |
-| [AI File Sorter](https://github.com/hyperfield/ai-file-sorter) | Qt desktop organiser with embedded llama.cpp | A "learned-behaviour database" of approved decisions that stabilises later suggestions; category whitelists; dry run; undo the last run; bundled local models with hosted ones as an option |
-| [LlamaFS](https://github.com/iyaja/llama-fs) | Self-organising file system demo | A watch mode that observes how the person renames and moves files and completes the same organisation for the rest |
+| [AI File Sorter](https://github.com/hyperfield/ai-file-sorter) | Qt desktop organizer with embedded llama.cpp | A "learned-behaviour database" of approved decisions that stabilizes later suggestions; category whitelists; dry run; undo the last run; bundled local models with hosted ones as an option |
+| [LlamaFS](https://github.com/iyaja/llama-fs) | Self-organizing file system demo | A watch mode that observes how the person renames and moves files and completes the same organization for the rest |
 | [Offline AI File Organizer](https://github.com/yousefebrahimi0/Offline-AI-File-Organizer) | Local-LLM batch renamer | Dates appended from modification timestamps; predefined category folders; JSON log for reversal |
 | [ocrs](https://github.com/robertknight/ocrs) | Pure-Rust OCR engine | A clean toolchain with less preprocessing than Tesseract; early preview, Latin script only, no published accuracy against Tesseract |
 | [msg_parser](https://lib.rs/crates/msg_parser) | Rust parser for Outlook `.msg` | Pure Rust, no unsafe code, bounded reader, resolves MAPI named properties, decompresses RTF bodies |
@@ -36,7 +36,7 @@ date on one side only a near-identical text counts. A near-duplicate waits
 for a person, named after the filing it repeats, and is never filed on its
 own. Details in [architecture.md](architecture.md#the-same-document-twice).
 
-**Outlook `.msg`, natively.** Most desktop organisers skip Outlook's own
+**Outlook `.msg`, natively.** Most desktop organizers skip Outlook's own
 format, and paperless-ngx needs Apache Tika beside it to read one. Dragging
 a message out of Outlook produces `.msg`, not `.eml`, so this was the gap
 Outlook users hit first. Intern reads `.msg` through `msg_parser` and renders
@@ -50,7 +50,7 @@ assumed.
 
 ## Already in Intern, under another name
 
-* AI File Sorter's learned-behaviour database is Intern's house style: the
+* AI File Sorter's learned-behavior database is Intern's house style: the
   spellings learned from review edits, listed in Settings, applied on the
   second identical edit.
 * Its dry run and preview are Intern's review queue; its "undo last run" is
@@ -88,5 +88,5 @@ assumed.
   leaves the machine.
 * **Predefined category folders and timestamp dates** (Offline AI File
   Organizer). Intern derives folders from validated facts and dates from the
-  document's own wording; a modification timestamp is the labelled last
+  document's own wording; a modification timestamp is the labeled last
   resort, never the default.

@@ -1,11 +1,11 @@
-//! Your organisation: the names a firm's own filing should look past.
+//! Your organization: the names a firm's own filing should look past.
 //!
 //! A firm's own name is on almost every document it files - the engagement
 //! letter it sent, the contract it signed, the invoice it was billed - so a
 //! filename that carries every party says the same thing over and over, and
 //! a Party layout scatters one counterparty's documents across folders by
 //! whichever side the model happened to name first. The person names their
-//! own organisation once; the name, and the Party folder, then carry the
+//! own organization once; the name, and the Party folder, then carry the
 //! other side.
 //!
 //! Like house style, this is applied deterministically after validation:
@@ -20,7 +20,7 @@ use crate::house_style::HouseRule;
 /// "Co", "LLP", "The" - so it is ignored rather than trusted.
 const MIN_OWN_KEY_CHARS: usize = 4;
 
-/// Whether `party` names the organisation `own` names.
+/// Whether `party` names the organization `own` names.
 ///
 /// Matched under the same key house style uses - case, punctuation and
 /// spacing disregarded - so "CONTOSO WORLDWIDE INC" is "Contoso Worldwide,
@@ -48,19 +48,19 @@ fn starts_with_words(longer: &str, shorter: &str) -> bool {
 }
 
 /// The proposal as a name filed by the counterparty carries it, and the
-/// parties left out because they are the person's own organisation.
+/// parties left out because they are the person's own organization.
 ///
 /// Unchanged when no own name is configured, when the document names fewer
-/// than two parties, or when it names only the organisation or only others:
+/// than two parties, or when it names only the organization or only others:
 /// the only party is never dropped, because a name with no party at all says
-/// less than one that names the firm. Otherwise the organisation's parties
+/// less than one that names the firm. Otherwise the organization's parties
 /// go and the others keep their order.
 ///
 /// The connecting word follows. "between" needs two sides, so one remaining
 /// party is "with" it. A directional word - "from", "to", "for" - is about
 /// the first party alone, which is why validation keeps only that one; a
 /// proposal stored before it did can still carry two. When that first party
-/// was the organisation, the word described the firm and not the other side,
+/// was the organization, the word described the firm and not the other side,
 /// so the name keeps the other side with the plain separator rather than a
 /// direction the document never stated about them: an invoice the firm
 /// issued is not an invoice "from" its customer.

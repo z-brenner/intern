@@ -162,7 +162,7 @@ fn both_tiers_install_from_files_chosen_in_any_order() {
     assert_eq!(events.last().unwrap().completed_bytes, total);
 }
 
-/// A file is recognised by its length and accepted only by its digest. One
+/// A file is recognized by its length and accepted only by its digest. One
 /// that matches no pinned length, two for the same tier, or an empty choice
 /// are refused before anything is copied; one of the right length and the
 /// wrong bytes is refused by its digest, and the tier before it stays
@@ -220,7 +220,7 @@ fn a_file_that_is_not_a_pinned_model_is_refused() {
     assert!(!destination.join("accurate.gguf").exists());
 }
 
-/// Cancelling must leave nothing half-installed, and a second attempt must
+/// Canceling must leave nothing half-installed, and a second attempt must
 /// still work. With one file there is no partial set to resume, so the
 /// guarantee is that the destination stays clean and the retry succeeds.
 #[test]

@@ -281,7 +281,7 @@ fn extract_path(
     // is reading this one: OCR keeps none of this document's memory.
     LAZY_OCR.release();
     // PDFium's reader times binding the library and loading the format
-    // apart from analysing pages; every other reader reads in one call, so
+    // apart from analyzing pages; every other reader reads in one call, so
     // its time less the stages it reported is its parse.
     if reader != Reader::Pdf {
         let reader_micros = micros_since(reading);
@@ -308,7 +308,7 @@ fn read_with(
         Reader::Text => extract_text(path, limits, cancel),
         Reader::Pdf => {
             // Binding PDFium - the first PDF a worker process reads loads and
-            // initialises the library - is part of reading the format, so it
+            // initializes the library - is part of reading the format, so it
             // is charged to parse rather than left in no stage.
             let backend = cancel.timed(|timings| &mut timings.parse_micros, pdf_backend)?;
             extract_pdf(path, &backend, &LAZY_OCR, limits, cancel)

@@ -181,7 +181,7 @@ fn every_layout_the_worker_writes_reaches_the_engine_whole() {
 /// A page the engine has no layout for - stored before layouts existed, or
 /// built from plain text - is segmented by the engine exactly as this
 /// worker segments a page of text it has no geometry for: the same blocks,
-/// ids, kinds, text, lines, table rows and cells, labelled values and
+/// ids, kinds, text, lines, table rows and cells, labeled values and
 /// sections. The evidence index reads either the same way.
 #[test]
 fn the_engine_segments_text_exactly_as_the_worker_does() {

@@ -57,7 +57,7 @@ pub const MAX_TSV_WORDS: usize = 20_000;
 ///
 /// A reading of more than [`MAX_TSV_WORDS`] words keeps its text and
 /// confidence but no lines: its words' boxes are let go once there are more
-/// than a page's layout could be analysed from, and its layout is built
+/// than a page's layout could be analyzed from, and its layout is built
 /// from its text.
 pub fn parse_tsv(bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
     let tsv = std::str::from_utf8(bytes)
@@ -257,10 +257,10 @@ fn line_of(words: &[(String, [u32; 4], f32)]) -> OcrLine {
     }
 }
 
-/// The page as Tesseract is given it to read: grey.
+/// The page as Tesseract is given it to read: gray.
 ///
-/// Tesseract binarises whatever it is given, so colour tells it nothing,
-/// and grey is a third of the bytes to encode, write and decode on every
+/// Tesseract binarizes whatever it is given, so color tells it nothing,
+/// and gray is a third of the bytes to encode, write and decode on every
 /// pass.
 pub fn recognition_image(page: &DynamicImage) -> DynamicImage {
     DynamicImage::ImageLuma8(page.to_luma8())
@@ -645,17 +645,17 @@ mod page_image_tests {
     use super::{orientation_image, recognition_image};
 
     #[test]
-    fn recognition_reads_a_grey_page() {
+    fn recognition_reads_a_gray_page() {
         let page = DynamicImage::ImageRgb8(RgbImage::from_pixel(30, 20, Rgb([200, 40, 40])));
 
-        let grey = recognition_image(&page);
+        let gray = recognition_image(&page);
 
-        assert_eq!(grey.color(), image::ColorType::L8);
-        assert_eq!(grey.dimensions(), (30, 20));
-        // Encoded the way the adapter writes it: a greyscale PNG, colour
+        assert_eq!(gray.color(), image::ColorType::L8);
+        assert_eq!(gray.dimensions(), (30, 20));
+        // Encoded the way the adapter writes it: a grayscale PNG, color
         // type 0 in the header.
         let mut png = Vec::new();
-        grey.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+        gray.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
             .unwrap();
         assert_eq!(png[25], 0);
     }
@@ -672,8 +672,8 @@ mod page_image_tests {
 
         assert_eq!(half.dimensions(), (20, 10));
         assert_eq!(half.color(), image::ColorType::L8);
-        let grey = half.to_luma8();
-        assert!(grey.pixels().all(|pixel| pixel.0[0] == 128), "{grey:?}");
+        let gray = half.to_luma8();
+        assert!(gray.pixels().all(|pixel| pixel.0[0] == 128), "{gray:?}");
         // An odd edge loses its last row or column, and nothing is ever
         // halved to nothing.
         let odd = DynamicImage::ImageLuma8(GrayImage::new(41, 21));

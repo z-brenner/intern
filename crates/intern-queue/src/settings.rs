@@ -38,7 +38,7 @@ impl ModelSource {
 /// A flat destination is the default and what every earlier version did. The
 /// other layouts put each document in a subfolder derived from the facts its
 /// filename already carries, so a year of contracts does not become one
-/// folder of a thousand files. The subfolder names are sanitised the same
+/// folder of a thousand files. The subfolder names are sanitized the same
 /// way filenames are; a document missing the fact a layout needs goes in a
 /// clearly named catch-all rather than the root.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -84,7 +84,7 @@ pub struct AppSettings {
     /// Subfolders under the destination, derived from each document's facts.
     #[serde(default)]
     pub destination_layout: DestinationLayout,
-    /// The person's own organisation, as each of its names is written. A
+    /// The person's own organization, as each of its names is written. A
     /// document that names it and someone else is named, and filed in the
     /// Party layout, by the someone else. Empty means Intern names every
     /// party, as every earlier version did.
@@ -156,7 +156,7 @@ pub struct AppSettings {
 }
 
 impl AppSettings {
-    /// The organisation's names as a name is composed with them.
+    /// The organization's names as a name is composed with them.
     pub fn own_names(&self) -> Vec<String> {
         normalize_own_names(&self.our_names)
     }

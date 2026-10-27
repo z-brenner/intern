@@ -22,7 +22,7 @@ use crate::timing::micros_since;
 #[cfg(feature = "native-pdfium")]
 use pdfium_render::prelude::*;
 
-/// PDFium initialises itself once per process. Binding it again - which is what
+/// PDFium initializes itself once per process. Binding it again - which is what
 /// building a backend per document used to do - fails on the second attempt and
 /// can abort the process outright, so the binding is created exactly once and
 /// every backend shares it.
@@ -75,7 +75,7 @@ impl PdfiumBackend {
             Some(Ok(pdfium)) => Ok(pdfium),
             Some(Err(message)) => Err(ExtractionError::native_assets_missing(message.clone())),
             None => Err(ExtractionError::native_assets_missing(
-                "PDFium was not initialised",
+                "PDFium was not initialized",
             )),
         }
     }

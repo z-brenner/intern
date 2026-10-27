@@ -40,7 +40,7 @@ describe('settings that could not be read', () => {
     view.rerender(<SettingsDialog settings={loaded} {...props} />);
 
     // The read's values replace the placeholders it was not shown; the choice stays.
-    expect(within(dialog).getByLabelText('Destination folder')).toHaveValue('D:\\Filed');
+    expect(within(within(dialog).getByRole('group', { name: 'Folders' })).getByText('D:\\Filed')).toBeVisible();
     expect(within(dialog).getByLabelText('Hosted model with my API key')).toBeChecked();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({ ...loaded, modelSource: 'hosted' }));

@@ -58,7 +58,7 @@ export function SetupScreen({ setup, busy, canChooseExisting, operationError, on
       The other way in. A hosted model needs no download, but it sends the
       text of every document to the service named in Settings - the one
       thing the paragraph above promises Intern does not do - so it is
-      offered as the smaller, plainly-labelled choice, never the default.
+      offered as the smaller, plainly-labeled choice, never the default.
     */}
     {onUseHostedModel && <p className="setup-alternative">Or use a hosted model with your own API key — no download, but document text is sent to that service. <button type="button" className="link-button" disabled={downloading || busy} onClick={onUseHostedModel}>Set up a hosted model</button></p>}
   </section></main>;

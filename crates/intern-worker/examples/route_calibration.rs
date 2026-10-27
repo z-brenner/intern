@@ -9,7 +9,7 @@
 //! For every page of every PDF it prints one tab-separated row: the
 //! document, the page, the route the router chose, every signal, what the
 //! geometry analysis finds when it reads the page's characters anyway -
-//! tables of two rows or more, labelled values not on their label's line, a
+//! tables of two rows or more, labeled values not on their label's line, a
 //! reading order that jumps back up the page (side-by-side flows) - whether
 //! that makes the page one the layout route should have taken, how many
 //! runs the analysis reads and the most of them on one line (what the
@@ -106,7 +106,7 @@ fn main() {
         "document\tpage\troute\tchars\tsegments\timage_coverage\tinvisible\tgarbage\tcolumns\t\
          interleave\taligned_rows\tkey_values\tkey_value_grid\toverlap\tfont_sizes\trulings\timage_region\t\
          tables\tset_apart_fields\tcolumn_jumps\tneeds_layout\timages\truns\tmost_runs_on_a_line\t\
-         analysed\tsignals_us\tfast_blocks_us\tgeometry_us\tpage_runs_us\tinspect_us\t\
+         analyzed\tsignals_us\tfast_blocks_us\tgeometry_us\tpage_runs_us\tinspect_us\t\
          inspect_analysis_us\tinspect_all_runs_analysis_us"
     );
     for argument in std::env::args().skip(1) {
@@ -157,11 +157,11 @@ fn main() {
                 geometry_layout(full_native, Vec::new(), signals, PageRoute::Layout, &never)
             });
             // A page past the analysis's bounds is read on the fast route.
-            let analysed =
+            let analyzed =
                 geometry_layout(full_native, Vec::new(), signals, PageRoute::Layout, &never);
-            let analysed_at_all = analysed.is_some();
+            let analyzed_at_all = analyzed.is_some();
             let layout =
-                analysed.unwrap_or_else(|| fast_layout(&page.native_text, Some(native), signals));
+                analyzed.unwrap_or_else(|| fast_layout(&page.native_text, Some(native), signals));
             let found = found(&layout);
             let (runs, most_on_a_line) = crowding(&full_native.runs);
             // What reading a page's characters costs when the route asks.
@@ -198,7 +198,7 @@ fn main() {
                 native.images.len(),
                 runs,
                 most_on_a_line,
-                analysed_at_all,
+                analyzed_at_all,
                 signals_us,
                 fast_us,
                 geometry_us,

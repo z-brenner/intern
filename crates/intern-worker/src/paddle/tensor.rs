@@ -75,7 +75,7 @@ pub fn detection_input(page: &RgbImage, width: u32, height: u32) -> Vec<f32> {
 }
 
 /// The two source pixels a destination pixel falls between, and how far
-/// along it is, with pixel centres aligned the way OpenCV aligns them.
+/// along it is, with pixel centers aligned the way OpenCV aligns them.
 fn source_taps(destination: u32, scale: f32, limit: u32) -> (u32, u32, f32) {
     let source = ((destination as f32 + 0.5) * scale - 0.5).max(0.0);
     let low = (source.floor() as u32).min(limit - 1);
@@ -95,7 +95,7 @@ fn bilinear(page: &RgbImage, x0: u32, x1: u32, fx: f32, y0: u32, y1: u32, fy: f3
     })
 }
 
-/// The page's colour at any point, bilinear, with the edge pixels repeated
+/// The page's color at any point, bilinear, with the edge pixels repeated
 /// beyond the page.
 fn sample(page: &RgbImage, point: Point) -> [f32; 3] {
     let x = point.x.clamp(0.0, (page.width() - 1) as f32);
@@ -231,7 +231,7 @@ pub fn recognition_batch(crops: &[&LineCrop], min_width: u32) -> (Vec<f32>, u32)
 const MAX_ORIENTATION_ASPECT: u32 = 8;
 
 /// The square the orientation classifier looks at: the page shrunk so its
-/// shorter side is 256, by area averaging, then its centre 224 x 224, RGB,
+/// shorter side is 256, by area averaging, then its center 224 x 224, RGB,
 /// ImageNet-normalized, `3 x 224 x 224`.
 pub fn orientation_input(page: &RgbImage) -> Vec<f32> {
     const SHORT: u32 = 256;
@@ -239,7 +239,7 @@ pub fn orientation_input(page: &RgbImage) -> Vec<f32> {
     let (width, height) = page.dimensions();
     // A page many times longer than it is wide - a till roll, or a crafted
     // strip of one pixel by a million - would be shrunk to a thumbnail as
-    // long as itself: 196 GB for that strip. Only its centre reaches the
+    // long as itself: 196 GB for that strip. Only its center reaches the
     // classifier, so only its central square is shrunk. Every page of an
     // ordinary shape is read exactly as before.
     let short = width.min(height);
@@ -307,18 +307,18 @@ pub fn stretch_contrast(crop: &LineCrop) -> LineCrop {
 }
 
 /// A crop made black and white at the threshold that best separates its
-/// two populations of grey (Otsu's method). Speckle lighter than the ink
+/// two populations of gray (Otsu's method). Speckle lighter than the ink
 /// and shading darker than the paper both fall to the side they are
 /// nearer.
 pub fn binarize(crop: &LineCrop) -> LineCrop {
-    let grey: Vec<u8> = crop
+    let gray: Vec<u8> = crop
         .pixels
         .chunks_exact(3)
         .map(|rgb| ((rgb[0] + rgb[1] + rgb[2]) / 3.0).round().clamp(0.0, 255.0) as u8)
         .collect();
-    let threshold = otsu_threshold(&grey);
+    let threshold = otsu_threshold(&gray);
     LineCrop {
-        pixels: grey
+        pixels: gray
             .iter()
             .flat_map(|&value| {
                 let level = if value > threshold { 255.0 } else { 0.0 };
@@ -329,7 +329,7 @@ pub fn binarize(crop: &LineCrop) -> LineCrop {
     }
 }
 
-/// The grey level that maximizes the between-class variance of `values`.
+/// The gray level that maximizes the between-class variance of `values`.
 pub fn otsu_threshold(values: &[u8]) -> u8 {
     let mut histogram = [0_u64; 256];
     for &value in values {
@@ -364,16 +364,16 @@ pub fn otsu_threshold(values: &[u8]) -> u8 {
     best
 }
 
-/// The page turned by `degrees` about its centre, counter-clockwise for a
+/// The page turned by `degrees` about its center, counter-clockwise for a
 /// positive angle, on a canvas of the same size with white where the page
 /// no longer reaches.
 pub fn rotate_page(page: &RgbImage, degrees: f32) -> RgbImage {
     let (width, height) = page.dimensions();
-    let centre = Point::new((width as f32 - 1.0) / 2.0, (height as f32 - 1.0) / 2.0);
+    let center = Point::new((width as f32 - 1.0) / 2.0, (height as f32 - 1.0) / 2.0);
     // Each output pixel looks up where it came from: the inverse turn.
     let radians = -degrees.to_radians();
     RgbImage::from_fn(width, height, |x, y| {
-        let source = Point::new(x as f32, y as f32).rotated_about(centre, radians);
+        let source = Point::new(x as f32, y as f32).rotated_about(center, radians);
         if source.x < -0.5
             || source.y < -0.5
             || source.x > width as f32 - 0.5
@@ -394,7 +394,7 @@ mod tests {
     /// square: the classifier's input is the usual size, and the thumbnail
     /// is never as long as the strip.
     #[test]
-    fn a_very_long_strip_is_classified_by_its_centre() {
+    fn a_very_long_strip_is_classified_by_its_center() {
         let strip = RgbImage::from_pixel(1, 100_000, image::Rgb([255, 255, 255]));
         let input = orientation_input(&strip);
         assert_eq!(input.len(), 3 * 224 * 224);

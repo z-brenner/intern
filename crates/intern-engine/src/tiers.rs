@@ -58,7 +58,7 @@ pub enum AutomaticStrategy {
     AccurateFirst,
     /// Every document is read by the fast model first, and read again by the
     /// accurate one only when the fast reading carries a signal
-    /// [`escalation`] recognises. Cheaper on most documents; only as good as
+    /// [`escalation`] recognizes. Cheaper on most documents; only as good as
     /// the signals. Kept, tested, and off: the 77-document evaluation found
     /// the quick model's review flag a poor trigger - the documents it sends
     /// to review are mostly ones a bigger model also gets wrong, and where the

@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
+import { detailsToggle, openDetails, queueCell } from './grid';
 
 test.describe('whole-product browser QA', () => {
   test.use({ viewport: { width: 1536, height: 1024 } });
@@ -11,6 +12,11 @@ test.describe('whole-product browser QA', () => {
 
     await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
     await expect(page.getByRole('navigation', { name: 'Queue navigation' })).toBeVisible();
+    // The Details panel opens only when asked; the seeded selection is the
+    // item needing review, and F2 opens the panel at its name.
+    await expect(page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/ })).toHaveAttribute('aria-current', 'true');
+    await expect(page.getByRole('complementary', { name: 'Review item' })).toHaveCount(0);
+    await page.keyboard.press('F2');
     await expect(page.getByRole('complementary', { name: 'Review item' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add files' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add folder' })).toBeVisible();
@@ -90,9 +96,9 @@ test.describe('whole-product browser QA', () => {
     await page.goto('/');
 
     await expect(page.getByRole('button', { name: 'Apply all ready' })).toBeVisible();
-    await page.getByRole('button', { name: 'Select Q1 Financials.pdf' }).click();
+    await openDetails(page, 'Q1 Financials.pdf');
     await expect(page.getByRole('button', { name: 'Cancel processing' })).toBeVisible();
-    await page.getByRole('button', { name: 'Completed' }).click();
+    await page.getByRole('button', { name: /^Completed, / }).click();
     await expect(page.getByRole('button', { name: 'Clear history' })).toBeVisible();
   });
 
@@ -102,7 +108,7 @@ test.describe('whole-product browser QA', () => {
   test('approve is visible at the default window', async ({ page }) => {
     await page.setViewportSize({ width: 1200, height: 800 });
     await page.goto('/');
-    const inspector = page.getByRole('complementary', { name: 'Review item' });
+    const inspector = await openDetails(page);
     await expect(inspector.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
 
     await expect(inspector.getByRole('button', { name: 'Approve & rename' })).toBeInViewport({ ratio: 1 });
@@ -119,7 +125,7 @@ test.describe('whole-product browser QA', () => {
     await page.goto('/');
     await expect(page.getByRole('row')).toHaveCount(9);
     // Eight seeded rows in the Queue view, plus 52 dropped.
-    await page.getByRole('region', { name: 'Drag files or folders here to add to the queue' }).evaluate((zone) => {
+    await page.getByRole('region', { name: 'Drag files or folders here to copy them into Input' }).evaluate((zone) => {
       const transfer = new DataTransfer();
       for (let index = 1; index <= 52; index += 1) transfer.items.add(new File(['scan'], `Scan ${String(index).padStart(2, '0')}.pdf`, { type: 'application/pdf' }));
       zone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
@@ -127,8 +133,8 @@ test.describe('whole-product browser QA', () => {
     await expect(page.getByRole('row')).toHaveCount(61);
     await expect(page.getByText('60 items')).toBeVisible();
 
-    await page.getByRole('button', { name: 'Select Employment Agreement - John Smith.pdf' }).click();
-    await page.getByRole('button', { name: 'Select Scan 52.pdf' }).click();
+    await openDetails(page, 'Employment Agreement - John Smith.pdf');
+    await queueCell(page, 'Scan 52.pdf').click();
 
     const inspector = page.getByRole('complementary', { name: 'Review item' });
     await expect(inspector).toContainText('Scan 52.pdf');
@@ -161,6 +167,7 @@ test.describe('whole-product browser QA', () => {
     // A real click: Playwright refuses one that something else would receive.
     await install.click();
     await expect(banner.getByRole('alert')).toContainText('only available in the desktop application');
+    await openDetails(page);
     await expect(page.getByRole('button', { name: 'Approve & rename' })).toBeInViewport({ ratio: 1 });
   });
 
@@ -172,15 +179,19 @@ test.describe('whole-product browser QA', () => {
     // the panel is not empty opened it. A person who has clicked nothing is
     // owed their queue, so the drawer is opened here the way one is opened.
     await expect(navigation).not.toHaveAttribute('inert', '');
-    await expect(page.getByRole('complementary', { name: 'Review item' })).toBeVisible();
+    await expect(page.getByRole('complementary', { name: 'Review item' })).toHaveCount(0);
     // Collapsed, the labels are tooltips; the accessible names also carry the counts.
-    for (const name of ['Queue', 'Needs Review', 'Completed', 'Settings']) {
+    for (const name of ['Queue', 'Completed', 'Settings']) {
       await expect(navigation.locator(`button[title="${name}"]`)).toBeVisible();
     }
-    await expect(navigation.getByRole('button', { name: 'Needs Review, 1' })).toBeVisible();
-    await expect(navigation.locator('button[data-view="review"] .nav-badge')).toHaveText('1');
-    await expect(navigation.locator('button[data-view="review"] .nav-badge')).toBeVisible();
-    await page.getByRole('button', { name: 'Select Lease Agreement - 123 Main St.pdf' }).click();
+    await expect(navigation.getByRole('button', { name: 'Queue, 8' })).toBeVisible();
+    await expect(navigation.locator('button[data-view="queue"] .nav-badge')).toHaveText('8');
+    await expect(navigation.locator('button[data-view="queue"] .nav-badge')).toBeVisible();
+    // What the Needs Review page counted is on the queue's toolbar.
+    await expect(page.getByRole('button', { name: '1 needs review' })).toBeVisible();
+    await queueCell(page, 'Lease Agreement - 123 Main St.pdf').click();
+    await expect(navigation).not.toHaveAttribute('inert', '');
+    await detailsToggle(page).click();
     await expect(navigation).toHaveAttribute('inert', '');
     const drawer = page.getByRole('dialog', { name: 'Review item' });
     await expect(drawer).toBeVisible();
@@ -202,9 +213,13 @@ test.describe('whole-product browser QA', () => {
     await page.keyboard.press('Tab');
     await expect(page.getByRole('button', { name: 'Close review' })).toBeFocused();
     await page.keyboard.press('Escape');
+    // Back to the cell of the row being worked on.
+    await expect(queueCell(page, 'Lease Agreement - 123 Main St.pdf')).toBeFocused();
 
-    const trigger = page.getByRole('button', { name: 'Select Lease Agreement - 123 Main St.pdf' });
+    // Enter on a cell opens it too; Escape goes back to that cell.
+    const trigger = queueCell(page, 'Lease Agreement - 123 Main St.pdf');
     await trigger.click();
+    await page.keyboard.press('Enter');
     await expect(page.getByRole('dialog', { name: 'Review item' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(trigger).toBeFocused();

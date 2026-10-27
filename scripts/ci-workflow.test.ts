@@ -53,7 +53,7 @@ describe('the runtime-asset cache in CI', () => {
     for (const save of saves) expect(steps.indexOf(save)).toBeGreaterThan(fetch);
   });
 
-  it('concurrency_group_present: one run per pull request, cancelling only superseded pull request runs', async () => {
+  it('concurrency_group_present: one run per pull request, canceling only superseded pull request runs', async () => {
     const workflow = await ci();
     const block = [
       'concurrency:',

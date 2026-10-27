@@ -1709,7 +1709,7 @@ fn nothing_moved_rollback_uses_shared_read() {
     );
     assert!(store.load_unsettled_receipt(item_id).unwrap().is_none());
 
-    // So once the program lets go, the next apply can be journalled.
+    // So once the program lets go, the next apply can be journaled.
     filesystem.held.store(false, Ordering::SeqCst);
     store.begin_applying(item_id, QueueStatus::Ready).unwrap();
     let applied = applier
@@ -1747,7 +1747,7 @@ fn nothing_moved_rollback_uses_shared_read() {
     );
     assert_eq!(fs::read(&source).unwrap(), b"saved with an annotation");
 
-    // A rollback the applier itself journalled is settled by the same read:
+    // A rollback the applier itself journaled is settled by the same read:
     // the rename landed, its verification failed, and the document was put
     // back - and is then held open before the reconciliation looks at it.
     let rolled = TempDir::new().unwrap();

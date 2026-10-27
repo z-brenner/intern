@@ -30,7 +30,7 @@ const MONTHS: [&str; 12] = [
 ];
 
 /// The month a word names, 1-12, by full name or three-letter
-/// abbreviation ("Sept" too), ignoring case and a trailing full stop or
+/// abbreviation ("Sept" too), ignoring case and a trailing period or
 /// comma.
 fn month_number(word: &str) -> Option<u32> {
     let word = word.trim_end_matches(['.', ',']).to_ascii_lowercase();
@@ -51,7 +51,7 @@ fn has_digit(word: &str) -> bool {
 }
 
 /// Whether the line holds something a misread would cost: a date, an
-/// amount, an identifier, or a capitalised name of two or more words.
+/// amount, an identifier, or a capitalized name of two or more words.
 pub fn holds_critical_field(text: &str) -> bool {
     let words: Vec<&str> = text.split_whitespace().collect();
     for (index, word) in words.iter().enumerate() {
@@ -67,23 +67,23 @@ pub fn holds_critical_field(text: &str) -> bool {
             return true;
         }
     }
-    capitalised_run(&words) >= 2
+    capitalized_run(&words) >= 2
 }
 
 /// The longest run of consecutive words that start with a capital letter
 /// and continue in letters - "Harbourline Freight Partners".
-fn capitalised_run(words: &[&str]) -> usize {
+fn capitalized_run(words: &[&str]) -> usize {
     let mut best = 0;
     let mut run = 0;
     for word in words {
         let word = word.trim_matches(|c: char| !c.is_alphanumeric());
         let mut chars = word.chars();
-        let capitalised = chars.next().is_some_and(char::is_uppercase)
+        let capitalized = chars.next().is_some_and(char::is_uppercase)
             && word.chars().count() >= 2
             && word
                 .chars()
                 .all(|c| c.is_alphabetic() || c == '\'' || c == '-');
-        run = if capitalised { run + 1 } else { 0 };
+        run = if capitalized { run + 1 } else { 0 };
         best = best.max(run);
     }
     best
@@ -139,7 +139,7 @@ fn date_shaped(parts: &[&str]) -> bool {
 }
 
 /// A word's parts between `/`, `-` and `.`, without the punctuation around
-/// it. A full stop at its end ends the sentence, not the date: "due by
+/// it. A period at its end ends the sentence, not the date: "due by
 /// 09/30/2026." is a date, not four numbers.
 fn date_parts(word: &str) -> Vec<&str> {
     word.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '(' | ')'))
@@ -517,7 +517,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn critical_fields_are_recognised() {
+    fn critical_fields_are_recognized() {
         for line in [
             "Invoice Date: March 4, 2026",
             "Dated 4 March 2026",

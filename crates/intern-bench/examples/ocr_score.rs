@@ -12,9 +12,9 @@
 //! * amounts: every money amount printed on a truth page (`$1,234.56`,
 //!   `1,234.56`, `$25,000`, `436.73`), found when the reading has it as a
 //!   whole token, punctuation around it aside - so an amount glued to its
-//!   neighbour (`13.14100,436.73`) is a miss;
+//!   neighbor (`13.14100,436.73`) is a miss;
 //! * merged tokens: tokens of the reading that are not on the page but are
-//!   two neighbouring printed tokens run together, the failure docs/ocr.md
+//!   two neighboring printed tokens run together, the failure docs/ocr.md
 //!   records for the newer recognizers on widely spaced table columns.
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -20,7 +20,7 @@ use crate::domain::DocumentSource;
 /// a second scan of one page with a handful of misread characters lands
 /// well inside this.
 pub const NEAR_DUPLICATE_DISTANCE: u32 = 6;
-/// Fewer characters than this, once normalised, and a fingerprint would say
+/// Fewer characters than this, once normalized, and a fingerprint would say
 /// little: a note of a dozen words looks like every other note of a dozen
 /// words.
 pub const MIN_CHARACTERS: usize = 200;
@@ -32,12 +32,12 @@ const SHINGLE: usize = 5;
 /// The fingerprint of a text, or `None` when the text is too short to have
 /// one worth comparing.
 pub fn text_fingerprint(text: &str) -> Option<u64> {
-    let normalised = normalise(text);
-    if normalised.len() < MIN_CHARACTERS {
+    let normalized = normalize(text);
+    if normalized.len() < MIN_CHARACTERS {
         return None;
     }
     let mut weights = [0i32; 64];
-    for shingle in normalised.windows(SHINGLE) {
+    for shingle in normalized.windows(SHINGLE) {
         let feature = fnv1a(shingle);
         for (bit, weight) in weights.iter_mut().enumerate() {
             if (feature >> bit) & 1 == 1 {
@@ -58,7 +58,7 @@ pub fn text_fingerprint(text: &str) -> Option<u64> {
 
 /// Lowercase letters and digits with single spaces between words: layout,
 /// punctuation, and case are not what makes two documents different.
-fn normalise(text: &str) -> Vec<char> {
+fn normalize(text: &str) -> Vec<char> {
     let mut output = Vec::with_capacity(text.len());
     let mut pending_space = false;
     for character in text.chars() {

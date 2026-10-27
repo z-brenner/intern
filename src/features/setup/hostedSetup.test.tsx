@@ -17,7 +17,7 @@ describe('setup with a hosted model', () => {
     // replaces its draft. On a loaded machine that effect was still pending
     // when the hosted choice below was clicked and ran after it, so the local
     // model was saved; change nothing until the saved settings are showing.
-    await waitFor(() => expect(within(dialog).getByLabelText('Destination folder')).toHaveValue('C:\\Filed'));
+    expect(await within(dialog).findByText('C:\\Filed')).toBeVisible();
     fireEvent.click(within(dialog).getByLabelText('Hosted model with my API key'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
 
@@ -35,7 +35,7 @@ describe('setup with a hosted model', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Settings' });
     // The same wait as above: until the saved settings reach the dialog, a
     // pending draft reset can undo the hosted choice clicked next.
-    await waitFor(() => expect(within(dialog).getByLabelText('Destination folder')).toHaveValue('C:\\Filed'));
+    expect(await within(dialog).findByText('C:\\Filed')).toBeVisible();
     fireEvent.click(within(dialog).getByLabelText('Hosted model with my API key'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
 

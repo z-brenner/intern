@@ -5,7 +5,7 @@ import { ConfidenceMeter } from './ConfidenceMeter';
 import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
 import { StatusCell } from './StatusCell';
-import { itemActions, keptOriginal } from '../features/review/actions';
+import { isUnreadable, itemActions, keptOriginal, withoutReviewPrefix } from '../features/review/actions';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
 import type { ModelReading, QueueItem } from '../types';
@@ -55,6 +55,8 @@ const Shortcut = ({ keys }: { keys: string }) => <kbd className="shortcut" aria-
 
 interface Props {
   item: QueueItem;
+  /** For the Details toggle's aria-controls. */
+  id?: string;
   drawer: boolean;
   busy?: boolean;
   /** How the keyboard shortcuts reach the panel. */
@@ -75,7 +77,7 @@ interface Props {
   onOpen(): void;
   onReveal(): void;
 }
-export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal }: Props) {
+export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal }: Props) {
   // Exactly what the backend accepts for this item. Retry on an ordinary
   // review item, and nothing at all for a ready or waiting one, were the
   // two ways this panel used to be wrong (FRONTEND_UX-3, FRONTEND_UX-4).
@@ -84,7 +86,12 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
   // is not part of what can be edited: the field holds the name before it,
   // and the extension sits after the field, locked.
   const sourceExtension = filenameExtension(item.originalFilename);
-  const { stem: proposedStem, extension } = splitFilename(item.proposedFilename ?? '', sourceExtension);
+  // A document Intern could not read has no proposal; the person names it,
+  // starting from the name it arrived with - without the NEEDS REVIEW prefix
+  // Intern gave the file, which the filed name leaves behind.
+  const unreadable = isUnreadable(item) && item.proposedFilename === undefined;
+  const startingName = item.proposedFilename ?? (unreadable ? withoutReviewPrefix(item.originalFilename) : '');
+  const { stem: proposedStem, extension } = splitFilename(startingName, sourceExtension);
   // The name and description being edited belong to one item, and to one
   // revision of its proposal. The panel stays mounted as review moves on, and
   // they used to be put back to the new item's in a passive effect: a task
@@ -206,7 +213,7 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
     { label: 'Type', quotes: quotations(item.evidence?.type) },
     { label: 'Parties', quotes: quotations(item.evidence?.parties) },
   ].filter((entry) => entry.quotes.length > 0);
-  return <aside ref={inspectorRef} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown}>
+  return <aside ref={inspectorRef} id={id} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown}>
     {/* A filed document's name is no longer its "current" one; it said so anyway (FRONTEND_UX-8). */}
     {/* Focusable so selecting a row can bring a keyboard user here, past the rest of the queue. */}
     <div className="inspector-title"><h2 ref={headingRef} tabIndex={-1}>{completed ? 'Filed document' : 'Review item'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close review"><Icon icon={X} /></button></div>
@@ -233,7 +240,7 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
       </div>}
     </div>
     {editable && <section className="proposal">
-      <h3>Proposed rename</h3>
+      <h3>{unreadable ? 'Name it yourself' : 'Proposed rename'}</h3>
       <label className="filename-label">Filename
         <span className="filename-field">
           <textarea ref={filenameRef} aria-label="Filename" className="filename-input" rows={1} spellCheck={false} autoComplete="off" value={stem}
@@ -256,11 +263,11 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
       </p>}
       {/*
         The same for a party the evidence names and the name does not: the
-        person's own organisation, left out so the name says who the
+        person's own organization, left out so the name says who the
         document is with.
       */}
       {omitted.length > 0 && <p className="check-hint own-names-hint" role="note" aria-label="Filed by the other side">
-        Filed by the other side: {omitted.map((name, index) => <span key={`${index}-${name}`}>{index === 0 ? '' : index === omitted.length - 1 ? ' and ' : ', '}<q>{name}</q></span>)} {omitted.length === 1 ? 'is your organisation, so it is' : 'are your organisation, so they are'} left out of the name. Change this under Settings.
+        Filed by the other side: {omitted.map((name, index) => <span key={`${index}-${name}`}>{index === 0 ? '' : index === omitted.length - 1 ? ' and ' : ', '}<q>{name}</q></span>)} {omitted.length === 1 ? 'is your organization, so it is' : 'are your organization, so they are'} left out of the name. Change this under Settings.
       </p>}
       {/*
         The gate above would otherwise be a dead end for the commonest review:
@@ -309,7 +316,8 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
         <dd>{quotes.map((quote) => <q key={quote}>{quote}</q>)}</dd>
       </div>)}</dl></section>}
     {/* Settled, a reason is no longer why the item waits - "already had this name" is a note about what happened. */}
-    {item.reason && <section className={`note${item.status === 'failed' ? ' note--failed' : completed ? '' : ' note--review'}`}><h3>{item.status === 'failed' ? 'Failure details' : completed ? 'Note' : 'Reason for review'}</h3><p>{item.reason}</p>
+    {/* A waiting document is not in review: its reason says why it waits (a document in doubt, to be read again once Intern has shown it can read). */}
+    {item.reason && <section className={`note${item.status === 'failed' ? ' note--failed' : completed || item.status === 'waiting' ? '' : ' note--review'}`}><h3>{item.status === 'failed' ? 'Failure details' : completed ? 'Note' : item.status === 'waiting' ? 'Why it is waiting' : 'Reason for review'}</h3><p>{item.reason}</p>
       {/*
         The sentence says "a document that was filed already"; this says
         which one, so the person can open it and compare rather than take
@@ -324,7 +332,7 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
       }}>
         <p>{remove.resolvedFiles
           ? 'This rename stopped part-way, so its files may need putting right by hand. Remove it only once you have: Intern will not touch them again.'
-          : <>Remove <q>{item.originalFilename}</q> from the queue? The file itself stays where it is.</>}</p>
+          : <>Remove <q>{item.originalFilename}</q> from the queue? The file itself stays where it is{isUnreadable(item) ? ', under this name, and Intern leaves it alone' : ''}.</>}</p>
         <button ref={confirmRef} type="button" className="primary" disabled={busy} onClick={decides(() => { setConfirmingRemove(false); onRemove(remove.resolvedFiles); })}>{remove.resolvedFiles ? 'I have resolved the files myself' : remove.label}</button>
         <button type="button" disabled={busy} onClick={cancelRemove}>Cancel</button>
       </div> : <>

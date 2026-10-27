@@ -14,7 +14,8 @@
     "fixtures": "node fixtures/generate-fixtures.mjs",
     "bench:generate": "node bench/generate.mjs",
     "test:e2e": "vite optimize && playwright test",
-    "assets:verify": "node scripts/verify-assets.mjs"
+    "assets:verify": "node scripts/verify-assets.mjs",
+    "flow:build": "node scripts/build-description-flow.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",

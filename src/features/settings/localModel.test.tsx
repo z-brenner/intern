@@ -4,6 +4,7 @@ import { App } from '../../App';
 import { readByLine } from '../../components/ReviewInspector';
 import { ACCURATE_MODEL_BYTES, FAST_MODEL_BYTES, createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { QueueItem, SetupState } from '../../types';
+import { openRow } from '../queue/gridTesting';
 import { accuracyStatus } from './LocalModel';
 
 async function openSettings() {
@@ -11,7 +12,6 @@ async function openSettings() {
   return screen.findByRole('dialog', { name: 'Settings' });
 }
 
-const selectRow = (row: HTMLElement) => fireEvent.click(within(row).getByRole('button', { name: /select/i }));
 
 /** The fast model in place and the accurate one 41% of the way down. */
 function arriving(): SetupState {
@@ -150,13 +150,13 @@ describe('who read a document', () => {
 
   it('is named in the review panel, and a stand-in reading says it will be read again', async () => {
     render(<App bridge={lease({ tier: 'fast', modelId: 'ternary-bonsai-2-2b-pq2_0', displayName: 'Bonsai 2 2B', provisional: true })} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await openRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     expect(screen.getByLabelText('Read by')).toHaveTextContent('Read by Bonsai 2 2B. Provisional — will be re-read by the accurate model.');
   });
 
   it('says nothing for a reading no local model is named for', async () => {
     render(<App bridge={lease(undefined)} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await openRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     expect(screen.queryByLabelText('Read by')).not.toBeInTheDocument();
   });
 

@@ -26,7 +26,7 @@ interface Props {
  * focus is on it, so Undo never disappears from under someone reaching for
  * it; the ten seconds start again when they leave. A failure stays until it
  * is dismissed. It used to stay until the next action, with no way to close
- * it, centred over whatever was beneath it - the drawer's own buttons
+ * it, centered over whatever was beneath it - the drawer's own buttons
  * included.
  *
  * Only a failure is a live region: an alert, because it is created with its

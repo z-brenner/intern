@@ -1,7 +1,7 @@
 //! Durable queue state and safe file operations.
 //!
 //! This crate owns everything that must survive a crash: the queue database,
-//! the leases, and the journalled rename/move machinery. It knows nothing about
+//! the leases, and the journaled rename/move machinery. It knows nothing about
 //! documents, models, or filenames - that lives in `intern-engine`.
 
 #![deny(unsafe_code)]
@@ -10,6 +10,7 @@ mod atomic_file;
 mod domain;
 mod error;
 mod file_ops;
+mod names;
 mod snapshot;
 mod store;
 
@@ -17,6 +18,7 @@ pub use atomic_file::{DurableReplaceError, replace_file_durable};
 pub use domain::*;
 pub use error::*;
 pub use file_ops::*;
+pub use names::*;
 pub use snapshot::*;
 pub use store::*;
 

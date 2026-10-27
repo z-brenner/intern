@@ -19,7 +19,7 @@ intern-evaluate --fixtures fixtures/generated --expected fixtures/expected.json 
 A recording (`fixtures/corpus-recording.json`) holds, per fixture, the text
 the worker extracted and the reply the model gave, keyed by the SHA-256 of
 the exact prompt that reply answers. Replay indexes the recorded text again
-and retrieves its evidence (or, for a digest recording, distils it),
+and retrieves its evidence (or, for a digest recording, distills it),
 rebuilds the prompt to check it is still the one the reply answers, and then
 re-runs everything *after* the model - validation, evidence checks, date-role
 and type inference, composition, house style, naming - from that text and

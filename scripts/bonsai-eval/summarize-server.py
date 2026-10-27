@@ -1,4 +1,4 @@
-"""Summarise serverbench.py JSONL: one row per label, and reply identity against a reference label.
+"""Summarize serverbench.py JSONL: one row per label, and reply identity against a reference label.
 python3 -I summarize-server.py server.jsonl [REF_LABEL=OTHER_LABEL ...]"""
 import json, sys
 rows = {}

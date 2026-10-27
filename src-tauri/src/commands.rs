@@ -21,6 +21,7 @@ use intern_queue::{LearnedRule, ModelSource};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use intern_core::StdFileSystem;
 use intern_engine::download::{
     CancellationToken, DiskSpace, Downloader, HttpTransport, ReqwestHttpTransport, SetupProgress,
     SystemDiskSpace, validate_selected_file,
@@ -29,7 +30,9 @@ use intern_engine::setup::{
     ExistingModelSelection, SetupOperationGate, install_existing_model_files,
     match_existing_model_files, semantic_probes, validate_semantic_probe,
 };
-use intern_intake::{IntakeConfig, IntakeWatcher, MachineIdentity};
+use intern_intake::{
+    HandOver, IntakeAdmission, IntakeConfig, IntakeHandle, IntakeWatcher, MachineIdentity,
+};
 use intern_queue::{
     AnalyzerBoundary, AppSettings, FilingSink, FilingSinks, LoadedSettings, ModelFailure, Pipeline,
     PipelineError, PipelineEventSink, PipelineItem, PipelineProgress, SettingsStore,
@@ -39,6 +42,14 @@ use intern_queue::{
     },
 };
 
+use crate::input_folder::{
+    AWAITING_MICROSOFT, Arrival, Folders, INPUT_FOLDER_NOT_SET, INPUT_FOLDER_UNAVAILABLE,
+    UPLOADER_OTHER, UPLOADER_UNVERIFIED, copy_into_input, machine_tag, queue_existing,
+    sweep_stale_copies,
+};
+
+/// A sync client's conflict copy, which the watcher never takes.
+const SYNC_CONFLICT_COPY: &str = "SYNC_CONFLICT_COPY";
 use crate::intake::{
     CloudLocationDto, CloudRootDto, DescriptionsStatusDto, IntakeStatusDto, LedgerSink,
     PipelineIntakeHost, SharedFiledIndex, classify_folder, filed_folder_for, list_cloud_roots,
@@ -51,23 +62,9 @@ use crate::secrets::{KeyringStore, SecretStore};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FileSelectionDto {
-    pub path: String,
-    pub display_name: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FolderSelectionDto {
-    pub path: String,
-    pub display_name: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExistingModelFilesDto {
     /// One file per model, in any order: the fast model, the accurate one,
-    /// or both. Each is recognised by its length and accepted only once its
+    /// or both. Each is recognized by its length and accepted only once its
     /// digest matches.
     pub model_paths: Vec<String>,
 }
@@ -126,7 +123,7 @@ pub struct QueueItemDto {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     dates_in_document: Vec<String>,
     /// The file's own last-modified date, in this machine's calendar - a
-    /// last resort for a document that states no date, labelled as such.
+    /// last resort for a document that states no date, labeled as such.
     #[serde(skip_serializing_if = "Option::is_none")]
     file_modified_date: Option<String>,
     /// The reviewer's own spellings applied to the proposed name, so the
@@ -150,7 +147,7 @@ pub struct QueueItemDto {
     /// is what moves the item on.
     parked: bool,
     /// The parties left out of the proposed name because they are the
-    /// person's own organisation, as the document spells them, so the
+    /// person's own organization, as the document spells them, so the
     /// inspector can say why a party in the evidence is not in the name.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     omitted_parties: Vec<String>,
@@ -160,6 +157,12 @@ pub struct QueueItemDto {
     /// reading stored before there were two local models.
     #[serde(skip_serializing_if = "Option::is_none")]
     read_by: Option<ModelReading>,
+    /// For an exact duplicate filed, or staged to be filed, as a copy: the
+    /// name of the document it repeats. A staged copy waits for nobody's
+    /// decision - the queue files it under its COPY name when it is free -
+    /// so the window neither offers to approve it nor counts it as undecided.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    copy_of: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -303,6 +306,19 @@ impl TauriPipelineEvents {
 /// itself for a failure every document would share - an account out of
 /// credit, missing text-recognition files - says which failure, so the
 /// window can say what to fix before resuming.
+/// Why a waiting document in doubt waits (see `PipelineItem::doubt`): it
+/// failed in a way that may be the machine's, and is read again once Intern
+/// has shown it works - for a reader crash, by reading another document of
+/// the same kind.
+fn waiting_in_doubt(item: &PipelineItem) -> Option<&'static str> {
+    let doubt = item.doubt.as_deref()?;
+    Some(if doubt.starts_with("crash:") {
+        "Waiting to be read again once Intern has read another document of this kind."
+    } else {
+        "Waiting to be read again once Intern has shown it can read another document."
+    })
+}
+
 fn queue_changed_payload(paused: bool, reason: Option<&str>) -> serde_json::Value {
     match reason {
         Some(reason) if paused => serde_json::json!({ "paused": true, "error": reason }),
@@ -2165,7 +2181,7 @@ impl SetupManager {
         let completed = self.get()?.downloaded_bytes;
         let cancellation = self.operation.begin()?;
         // What this operation moves: the first-use model for a download, and
-        // whatever was chosen for an install - recognised by length alone
+        // whatever was chosen for an install - recognized by length alone
         // here, before a byte is read.
         let total = match &source {
             SetupSource::Existing(selection) => {
@@ -2992,6 +3008,8 @@ pub struct AppState {
     /// What the documents a launch named came to, when some could not be
     /// added, until the window takes it.
     launch_reports: LaunchReports,
+    /// Documents launches named before there was an input folder.
+    pending_launch: PendingLaunch,
 }
 
 /// The watcher's configuration for the canonical intake `folder`.
@@ -3206,6 +3224,7 @@ impl AppState {
                 code: "APP_DATA_UNAVAILABLE".into(),
                 message: "machine identity could not be created".into(),
             })?;
+        let pending_launch = PendingLaunch::load(data.join(PENDING_LAUNCH));
         let state = Self {
             pipeline,
             settings,
@@ -3223,6 +3242,7 @@ impl AppState {
             settings_gate: Mutex::new(()),
             sharepoint_activation: AtomicBool::new(false),
             launch_reports: LaunchReports::default(),
+            pending_launch,
         };
         state.refresh_hosted_active(&startup_settings);
         if state.setup.model_ready.load(Ordering::SeqCst) {
@@ -3245,6 +3265,44 @@ impl AppState {
             self.scheduler.wake()?;
         }
         Ok(())
+    }
+
+    /// The input and output folders as saved, canonical: where an add copies
+    /// to, and the filed documents it must not copy back. An add with no
+    /// input folder is refused rather than processing anything where it is.
+    fn input_folders(&self) -> Result<Folders, CommandError> {
+        let settings = self.settings.load()?;
+        let machine = self
+            .identity
+            .lock()
+            .map_err(|_| intake_state_conflict())?
+            .id
+            .clone();
+        input_folders_for(&settings, &machine)
+    }
+
+    /// The running watcher's hand-over handle, taken under the intake lock
+    /// and used without it: a hand-over runs an admission check that can ask
+    /// Microsoft, and hashes the document, and neither may hold up a status
+    /// read, Scan now, or a settings save.
+    fn intake_handle(&self) -> Option<IntakeHandle> {
+        self.intake
+            .lock()
+            .ok()
+            .and_then(|watcher| watcher.as_ref().map(IntakeWatcher::handle))
+    }
+
+    /// The hand-over handle of the watcher running now, taken afresh for each
+    /// document an add hands over: a copy can take minutes, a settings save
+    /// restarts the watcher meanwhile, and a handle kept from before would
+    /// claim the document for a scan loop that has stopped - one whose
+    /// adoption nobody drains. A handle whose watcher stopped in the moment
+    /// after it was taken is taken once more.
+    fn live_intake_handle(&self) -> Option<IntakeHandle> {
+        match self.intake_handle() {
+            Some(handle) if !handle.is_running() => self.intake_handle(),
+            handle => handle,
+        }
     }
 
     /// Tells setup whether a hosted model is chosen and able to answer, so
@@ -3280,6 +3338,13 @@ impl AppState {
         if settings.intake_enabled {
             match canonical_folder(Path::new(&settings.intake_folder)) {
                 Ok(folder) => {
+                    // Copies a crash left part-written, from an earlier run
+                    // on this machine. Never a teammate's.
+                    sweep_stale_copies(
+                        &folder,
+                        &machine_tag(&identity.id),
+                        std::time::SystemTime::now(),
+                    );
                     let config = intake_config(folder, settings, &self.data_dir, first_look);
                     let host = Arc::new(PipelineIntakeHost::new(
                         Arc::clone(&self.pipeline),
@@ -3498,28 +3563,34 @@ fn is_short_windows_switch(argument: &str) -> bool {
 /// with the reason, as it would a file it refused: a launch has no window of
 /// its own to say so in, and nothing else will.
 fn add_launch_documents(
-    pipeline: &Pipeline,
     arguments: &[String],
     cwd: &Path,
-    wake: impl FnOnce() -> Result<(), CommandError>,
-) -> AddReportDto {
+    pending: &PendingLaunch,
+    add: impl FnOnce(&[PathBuf]) -> Result<AddReportDto, CommandError>,
+) -> Option<AddReportDto> {
     let documents = launch_documents(arguments, cwd);
-    let report = add_inputs(pipeline, &documents).unwrap_or_else(|error| {
-        // The code only: the message can name a document.
-        crate::startup::log_line(&format!(
-            "documents a launch named could not be queued: {}",
-            error.code
-        ));
-        refused_launch(&documents, &error.code)
-    });
-    // Queued, so not skipped; they wait for the scheduler's own timer.
-    if let Err(error) = wake_if_added(&report, wake) {
-        crate::startup::log_line(&format!(
-            "the queue could not be woken for documents a launch named: {}",
-            error.code
-        ));
+    let outcome = add(&documents);
+    if !matches!(&outcome, Err(error) if error.code == INPUT_FOLDER_NOT_SET) {
+        // Sent again once there were folders, and dealt with now: what was
+        // kept of these from before setup is not copied a second time.
+        pending.forget(&documents);
     }
-    report
+    match outcome {
+        Ok(report) => Some(report),
+        // Before setup has chosen the folders: kept, and copied once it has.
+        Err(error) if error.code == INPUT_FOLDER_NOT_SET => {
+            pending.keep(&documents);
+            None
+        }
+        Err(error) => {
+            // The code only: the message can name a document.
+            crate::startup::log_line(&format!(
+                "documents a launch named could not be added: {}",
+                error.code
+            ));
+            Some(refused_launch(&documents, &error.code))
+        }
+    }
 }
 
 /// A launch's documents, every one left out for `code`.
@@ -3552,9 +3623,174 @@ pub(crate) fn queue_launch_documents(app: &AppHandle, arguments: Vec<String>, cw
         let Some(state) = app.try_state::<AppState>() else {
             return;
         };
-        let report = add_launch_documents(&state.pipeline, &arguments, &cwd, || state.schedule());
+        let Some(report) =
+            add_launch_documents(&arguments, &cwd, &state.pending_launch, |documents| {
+                copy_and_wake(&state, documents)
+            })
+        else {
+            return;
+        };
         if state.launch_reports.hold(report) {
             let _ = app.emit(LAUNCH_REPORT_EVENT, ());
+        }
+    });
+}
+
+/// Where the documents launches named before setup are kept, in the app's
+/// own data.
+const PENDING_LAUNCH: &str = "pending-launch.json";
+
+/// Documents a launch named before the folders were chosen: "Send to >
+/// Intern" on a fresh install, while setup is on screen. There is no input
+/// folder to copy them into yet, and refusing them left a report telling the
+/// person to set up folders they were setting up. They wait here instead and
+/// are copied once a save gives Intern an input folder - or, if that save
+/// came and went without them, the next time the window asks for what
+/// launches came to. The list is kept in the app's own data, so closing
+/// Intern before setup is finished does not lose them.
+#[derive(Debug, Default)]
+pub(crate) struct PendingLaunch {
+    documents: Mutex<Vec<PathBuf>>,
+    /// Where the list is kept; `None` keeps it in memory only.
+    file: Option<PathBuf>,
+    /// Held while the list is copied, so it is never copied twice at once.
+    copying: Mutex<()>,
+}
+
+impl PendingLaunch {
+    /// The list kept in `file`, or an empty one kept there from now on.
+    pub(crate) fn load(file: PathBuf) -> Self {
+        let documents = std::fs::read(&file)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Vec<PathBuf>>(&bytes).ok())
+            .unwrap_or_default();
+        Self {
+            documents: Mutex::new(documents),
+            file: Some(file),
+            copying: Mutex::new(()),
+        }
+    }
+
+    fn keep(&self, documents: &[PathBuf]) {
+        if let Ok(mut pending) = self.documents.lock() {
+            for document in documents {
+                if !pending.contains(document) {
+                    pending.push(document.clone());
+                }
+            }
+            self.save(&pending);
+        }
+    }
+
+    fn forget(&self, documents: &[PathBuf]) {
+        if let Ok(mut pending) = self.documents.lock() {
+            let before = pending.len();
+            pending.retain(|document| !documents.contains(document));
+            if pending.len() != before {
+                self.save(&pending);
+            }
+        }
+    }
+
+    fn documents(&self) -> Vec<PathBuf> {
+        self.documents
+            .lock()
+            .map(|pending| pending.clone())
+            .unwrap_or_default()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.documents
+            .lock()
+            .map(|pending| pending.is_empty())
+            .unwrap_or(true)
+    }
+
+    /// Writes the list beside the app's other data, whole or not at all.
+    fn save(&self, documents: &[PathBuf]) {
+        let Some(file) = &self.file else {
+            return;
+        };
+        let written = if documents.is_empty() {
+            match std::fs::remove_file(file) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+                _ => Ok(()),
+            }
+        } else {
+            let temporary = file.with_extension("json.tmp");
+            serde_json::to_vec(documents)
+                .map_err(std::io::Error::other)
+                .and_then(|bytes| {
+                    // On disk before it replaces the list, so a power cut
+                    // leaves the old list or the new one, never an empty file.
+                    let mut written = std::fs::File::create(&temporary)?;
+                    std::io::Write::write_all(&mut written, &bytes)?;
+                    written.sync_all()
+                })
+                .and_then(|()| std::fs::rename(&temporary, file))
+        };
+        if let Err(error) = written {
+            crate::startup::log_line(&format!(
+                "documents a launch named could not be kept for after setup: {:?}",
+                error.kind()
+            ));
+        }
+    }
+}
+
+/// Copies what launches named before there was an input folder with `add`,
+/// and returns what came of it for the window, whatever it says: the person
+/// sent these before setup, and this is the first they hear of them. Still no
+/// input folder: kept for the next try. Any other failure names every
+/// document with the reason, as a launch does, and lets them go.
+fn copy_pending(
+    pending: &PendingLaunch,
+    add: impl FnOnce(&[PathBuf]) -> Result<AddReportDto, CommandError>,
+) -> Option<AddReportDto> {
+    // Another caller is copying them right now.
+    let Ok(_copying) = pending.copying.try_lock() else {
+        return None;
+    };
+    let documents = pending.documents();
+    if documents.is_empty() {
+        return None;
+    }
+    let report = match add(&documents) {
+        Err(error) if error.code == INPUT_FOLDER_NOT_SET => return None,
+        Ok(report) => report,
+        Err(error) => {
+            crate::startup::log_line(&format!(
+                "documents a launch named before setup could not be added: {}",
+                error.code
+            ));
+            refused_launch(&documents, &error.code)
+        }
+    };
+    pending.forget(&documents);
+    Some(report)
+}
+
+/// Copies what launches named before there was an input folder, now that
+/// there may be one, and holds the report for the window. Blocking.
+fn copy_pending_launch(state: &AppState) {
+    if let Some(report) = copy_pending(&state.pending_launch, |documents| {
+        copy_and_wake(state, documents)
+    }) && state.launch_reports.keep(report)
+    {
+        let _ = state.app.emit(LAUNCH_REPORT_EVENT, ());
+    }
+}
+
+/// Tries the documents launches named before setup again, off the calling
+/// thread, when there are any.
+fn retry_pending_launch(state: &AppState) {
+    if state.pending_launch.is_empty() {
+        return;
+    }
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(state) = app.try_state::<AppState>() {
+            copy_pending_launch(&state);
         }
     });
 }
@@ -3572,13 +3808,20 @@ const LAUNCH_REPORT_EVENT: &str = "queue://launch-report";
 pub(crate) struct LaunchReports(Mutex<Option<AddReportDto>>);
 
 impl LaunchReports {
-    /// Keeps `report` when it left something out, adding it to whatever the
-    /// window has not taken yet, and says whether it did. A launch whose
-    /// documents were all added has nothing to tell: they are in the queue.
+    /// Keeps `report` when it left something out or copied something the
+    /// queue cannot take yet, adding it to whatever the window has not taken
+    /// yet, and says whether it did. A launch whose documents were all added
+    /// has nothing to tell: they are in the queue.
     fn hold(&self, report: AddReportDto) -> bool {
-        if report.skipped.is_empty() {
+        if report.skipped.is_empty() && report.held == 0 {
             return false;
         }
+        self.keep(report)
+    }
+
+    /// Keeps `report` for the window whatever it says, adding it to whatever
+    /// the window has not taken yet.
+    fn keep(&self, report: AddReportDto) -> bool {
         let Ok(mut held) = self.0.lock() else {
             return false;
         };
@@ -3587,6 +3830,14 @@ impl LaunchReports {
                 earlier.added = earlier.added.saturating_add(report.added);
                 earlier.already_queued =
                     earlier.already_queued.saturating_add(report.already_queued);
+                earlier.held = earlier.held.saturating_add(report.held);
+                earlier.held_reason = earlier.held_reason.take().or(report.held_reason);
+                earlier.in_place = earlier.in_place.saturating_add(report.in_place);
+                earlier.copied = match (earlier.copied, report.copied) {
+                    (Some(left), Some(right)) => Some(left.saturating_add(right)),
+                    (left, right) => left.or(right),
+                };
+                earlier.input_folder = earlier.input_folder.take().or(report.input_folder);
                 earlier.skipped.extend(report.skipped);
             }
             None => *held = Some(report),
@@ -3606,6 +3857,9 @@ impl LaunchReports {
 pub fn queue_take_launch_report(
     state: State<'_, AppState>,
 ) -> Result<Option<AddReportDto>, CommandError> {
+    // The window asks on opening and whenever a report is ready: the moment
+    // to copy what launches sent before setup, if a save has not already.
+    retry_pending_launch(&state);
     Ok(state.launch_reports.take())
 }
 
@@ -3827,14 +4081,39 @@ fn attention_counts(items: &[PipelineItem]) -> (usize, usize) {
     (count(QueueStatus::NeedsReview), count(QueueStatus::Ready))
 }
 
-/// What adding documents did, for the window to say in one line: "Added 24
-/// documents. Skipped 1: notes.zip (not a supported format)."
+/// What adding documents did, for the window to say in one line: "Copied 24
+/// files into Input. Skipped 1: notes.zip (not a supported format)."
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddReportDto {
-    added: u32,
-    already_queued: u32,
-    skipped: Vec<SkippedDocumentDto>,
+    /// New items in the queue.
+    pub(crate) added: u32,
+    pub(crate) already_queued: u32,
+    pub(crate) skipped: Vec<SkippedDocumentDto>,
+    /// How many files were copied into the input folder. Absent from a report
+    /// that copied nothing by design: setup's "Process them too", which hands
+    /// over what is already there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) copied: Option<u32>,
+    /// In the input folder but not taken into the queue yet: the verified
+    /// team Inbox waits for Microsoft to confirm who uploaded each one.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(crate) held: u32,
+    /// Why they are held: `AWAITING_MICROSOFT` until OneDrive has uploaded
+    /// the copy and Microsoft can say who did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) held_reason: Option<String>,
+    /// Of `added`, how many were already in the input folder and were queued
+    /// where they are rather than copied.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(crate) in_place: u32,
+    /// The input folder the files were copied into, as a person would read it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) input_folder: Option<String>,
+}
+
+fn is_zero(count: &u32) -> bool {
+    *count == 0
 }
 
 /// A document left out of an add: its name as a person would recognize it,
@@ -3842,14 +4121,19 @@ pub struct AddReportDto {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkippedDocumentDto {
-    name: String,
-    code: String,
+    pub(crate) name: String,
+    pub(crate) code: String,
 }
 
 /// An Office lock file (`~$Contract.docx`) or a hidden file (`.DS_Store`):
 /// never a document, and the reason for that differs from "not a supported
 /// format" in what a person should do about it - nothing.
 const TEMPORARY_FILE: &str = "TEMPORARY_FILE";
+
+/// A file named `NEEDS REVIEW - ...`: one Intern renamed because it could
+/// not read it, and which waits for a person in the queue rather than being
+/// taken in again as a new document.
+const NEEDS_REVIEW_FILE: &str = "NEEDS_REVIEW_FILE";
 /// A document with no bytes in it, often a download or a scan that has not
 /// finished.
 const EMPTY_FILE: &str = "EMPTY_FILE";
@@ -3862,7 +4146,7 @@ const EMPTY_FILE: &str = "EMPTY_FILE";
 /// twenty-five, because the first path `canonical_file` refused ended the
 /// command. A folder expands to the supported documents inside it, exactly as
 /// Add folder does; anything else is named in the report and the others go on.
-fn partition_inputs(inputs: &[PathBuf]) -> (Vec<PathBuf>, Vec<(String, String)>) {
+pub(crate) fn partition_inputs(inputs: &[PathBuf]) -> (Vec<PathBuf>, Vec<(String, String)>) {
     let mut files = Vec::new();
     let mut rejected = Vec::new();
     for input in inputs {
@@ -3894,6 +4178,9 @@ fn skip_code(input: &Path, error: PipelineError) -> String {
     if name.starts_with("~$") || name.starts_with('.') {
         return TEMPORARY_FILE.into();
     }
+    if intern_core::is_needs_review_name(name) {
+        return NEEDS_REVIEW_FILE.into();
+    }
     let supported = input
         .extension()
         .and_then(|extension| extension.to_str())
@@ -3911,32 +4198,10 @@ fn skip_code(input: &Path, error: PipelineError) -> String {
 
 /// The last component of a path, which is what a person picked; the whole
 /// path only when there is no last component to show.
-fn document_name(path: &Path) -> String {
+pub(crate) fn document_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| display_path(path))
-}
-
-/// Queues what a person handed over and reports on all of it: Add files, a
-/// drop, Send to Intern, and a document opened with Intern all come here.
-/// Blocking - every path is canonicalized and every document hashed.
-fn add_inputs(pipeline: &Pipeline, inputs: &[PathBuf]) -> Result<AddReportDto, CommandError> {
-    let (files, mut skipped) = partition_inputs(inputs);
-    let report = pipeline.enqueue_files_report(&files)?;
-    skipped.extend(
-        report
-            .skipped
-            .into_iter()
-            .map(|(path, code)| (document_name(&path), code)),
-    );
-    Ok(AddReportDto {
-        added: u32::try_from(report.added.len()).unwrap_or(u32::MAX),
-        already_queued: u32::try_from(report.already_queued).unwrap_or(u32::MAX),
-        skipped: skipped
-            .into_iter()
-            .map(|(name, code)| SkippedDocumentDto { name, code })
-            .collect(),
-    })
 }
 
 /// Wakes the scheduler when an add queued anything. Without it the documents
@@ -3949,56 +4214,207 @@ fn wake_if_added(
     if report.added > 0 { wake() } else { Ok(()) }
 }
 
-/// An add made from the window, whole: queued, reported, and the scheduler
-/// woken (`wake`) for whatever was queued. Both add commands are this and
-/// nothing else, so what is tested here is what they do.
-fn add_and_wake(
+/// Hands one document in the input folder to the queue and says what the
+/// queue made of it. A row the intake watcher once withdrew is queued again,
+/// as the watcher's own hand-overs do; any other row the queue already has is
+/// left as it is.
+fn enqueue_arrival(pipeline: &Pipeline, path: &Path) -> Result<Arrival, String> {
+    let report = pipeline
+        .enqueue_files_report(&[path.to_path_buf()])
+        .map_err(|error| error.code)?;
+    if let Some((_, code)) = report.skipped.into_iter().next() {
+        return Err(code);
+    }
+    if !report.added.is_empty() {
+        return Ok(Arrival::Added);
+    }
+    match pipeline.find_by_source_path(path) {
+        Ok(Some(item)) if crate::intake::withdrawn_by_intake(&item) => {
+            pipeline.retry(item.id).map_err(|error| error.code)?;
+            Ok(Arrival::Added)
+        }
+        _ => Ok(Arrival::AlreadyQueued),
+    }
+}
+
+/// Copies what a person handed over into the input folder and queues the
+/// copies: Add files, Add folder, a drop, and "Send to > Intern" all come
+/// here. Blocking - every file is read twice and written once.
+fn copy_and_wake(state: &AppState, inputs: &[PathBuf]) -> Result<AddReportDto, CommandError> {
+    let folders = state.input_folders()?;
+    let report = copy_with_queue(
+        &state.pipeline,
+        inputs,
+        &folders,
+        &|path| excluded_by_watcher(state.live_intake_handle().as_ref(), path),
+        &|path| hand_off(&state.pipeline, state.live_intake_handle().as_ref(), path),
+    );
+    Ok(woken(report, || state.schedule()))
+}
+
+/// Wakes the scheduler for what an add queued, and returns the add's report
+/// either way. The copies are made and queued by then, so a scheduler that
+/// cannot be woken is no reason to call them skipped - "Send to > Intern"
+/// used to report every document it had just queued as refused. They are
+/// picked up on the scheduler's own timer, and the failure is logged.
+fn woken(report: AddReportDto, wake: impl FnOnce() -> Result<(), CommandError>) -> AddReportDto {
+    if let Err(error) = wake_if_added(&report, wake) {
+        crate::startup::log_line(&format!(
+            "the queue could not be woken for added documents: {}",
+            error.code
+        ));
+    }
+    report
+}
+
+/// Hands a document in the input folder to the queue through the intake
+/// watcher, so it is claimed for this machine exactly as a scan would claim
+/// it and the scan that later finds it settled does not hand it over again.
+/// Without a running watcher - its folder failed to open when it last
+/// started - it goes to the queue directly.
+fn hand_off(pipeline: &Pipeline, watcher: Option<&IntakeHandle>, path: &Path) -> Arrival {
+    let enqueue = |path: &Path| enqueue_arrival(pipeline, path);
+    match watcher {
+        Some(watcher) => arrival_of(watcher.hand_over(path, enqueue)),
+        None => enqueue(path).unwrap_or_else(Arrival::Refused),
+    }
+}
+
+/// What a hand-over came to, as an add reports it. "Microsoft could not
+/// answer yet" is held: that is a copy OneDrive has not uploaded, and the
+/// scans will ask again. So is "Microsoft says someone else uploaded it": in
+/// the shared Inbox that name can be a teammate's document by now, so the
+/// copy is left where it is, never taken back, and the person is told it
+/// waits. A verdict that its uploader cannot be known is the document's
+/// reason for being left out - and a copy left out that way is taken back
+/// out of the folder, if it is still provably the copy.
+fn arrival_of(outcome: HandOver<Arrival>) -> Arrival {
+    match outcome {
+        HandOver::Queued(arrival) => arrival,
+        HandOver::Held(IntakeAdmission::Other) => Arrival::Held(UPLOADER_OTHER.into()),
+        HandOver::Held(IntakeAdmission::Retryable) => Arrival::Held(AWAITING_MICROSOFT.into()),
+        HandOver::Held(_) => Arrival::Refused(UPLOADER_UNVERIFIED.into()),
+        HandOver::ClaimedElsewhere => Arrival::ClaimedElsewhere,
+        HandOver::Refused(code) => Arrival::Refused(code),
+    }
+}
+
+/// Why the watcher would never take `path`, if it would not: a sync client's
+/// conflict copy, by the scan's own rule.
+fn excluded_by_watcher(watcher: Option<&IntakeHandle>, path: &Path) -> Option<String> {
+    watcher
+        .is_some_and(|watcher| watcher.is_conflict_copy(path))
+        .then(|| SYNC_CONFLICT_COPY.to_owned())
+}
+
+/// `copy_into_input` against the real queue: no copy is published onto a
+/// path the queue has a row for, and a file whose copy already waits in the
+/// input folder is not copied again.
+fn copy_with_queue(
     pipeline: &Pipeline,
     inputs: &[PathBuf],
-    wake: impl FnOnce() -> Result<(), CommandError>,
-) -> Result<AddReportDto, CommandError> {
-    let report = add_inputs(pipeline, inputs)?;
-    wake_if_added(&report, wake)?;
-    Ok(report)
+    folders: &Folders,
+    excluded: &dyn Fn(&Path) -> Option<String>,
+    hand_off: &dyn Fn(&Path) -> Arrival,
+) -> AddReportDto {
+    let waiting = waiting_in(pipeline, &folders.input);
+    copy_into_input(
+        inputs,
+        folders,
+        &StdFileSystem,
+        &|path| matches!(pipeline.find_by_source_path(path), Ok(Some(_))),
+        &|hash| waiting.contains(hash),
+        excluded,
+        hand_off,
+    )
 }
 
-/// Adds files, folders, or a mixture of both - a drop carries whatever was
-/// dragged. Partial by design: what cannot be added is reported, and the
-/// scheduler is woken for whatever was, so nothing waits for its timer.
+/// The content, by fingerprint, of every document in `input` that is still
+/// waiting in the queue - not filed, failed, or canceled.
+fn waiting_in(pipeline: &Pipeline, input: &Path) -> std::collections::HashSet<String> {
+    pipeline
+        .list()
+        .map(|items| {
+            items
+                .into_iter()
+                .filter(|item| {
+                    !matches!(
+                        item.status,
+                        QueueStatus::Completed | QueueStatus::Failed | QueueStatus::Canceled
+                    ) && item.source_path.starts_with(input)
+                })
+                .map(|item| item.source_hash)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Copies files and folders - a drop carries whatever was dragged - into the
+/// input folder and queues them. Partial by design: what cannot be copied or
+/// queued is reported, the rest goes on, and the originals are never changed.
+/// Refused whole, and nothing copied, when no input folder is set up: there is
+/// no "process it where it is" any more to fall back to.
 #[tauri::command]
-pub async fn queue_add_files(
-    files: Vec<FileSelectionDto>,
+pub async fn input_copy(
+    paths: Vec<String>,
     state: State<'_, AppState>,
 ) -> Result<AddReportDto, CommandError> {
     let app = state.app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        let inputs = files
-            .into_iter()
-            .map(|file| PathBuf::from(file.path))
-            .collect::<Vec<_>>();
-        add_and_wake(&state.pipeline, &inputs, || state.schedule())
+        let inputs = paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+        copy_and_wake(&state, &inputs)
     })
     .await
-    .map_err(|_| background_task_failed("file intake"))?
+    .map_err(|_| background_task_failed("copying into the input folder"))?
 }
 
-/// Adds the supported documents in a folder. The folder itself must exist -
-/// that is the whole selection - but a document in it that cannot be read is
-/// reported, not allowed to drop the rest.
+/// Queues the documents already in the input folder: setup's answer "Process
+/// them too" when the folder it just started watching was not empty. Takes no
+/// path, so it can never be pointed at a folder outside the input folder.
 #[tauri::command]
-pub async fn queue_add_folder(
-    folder: FolderSelectionDto,
+pub async fn intake_queue_existing(
     state: State<'_, AppState>,
 ) -> Result<AddReportDto, CommandError> {
     let app = state.app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        let folder = canonical_folder(Path::new(&folder.path))?;
-        add_and_wake(&state.pipeline, &[folder], || state.schedule())
+        let folders = state.input_folders()?;
+        let report = queue_existing(
+            &folders.input,
+            &|path| excluded_by_watcher(state.live_intake_handle().as_ref(), path),
+            &|path| hand_off(&state.pipeline, state.live_intake_handle().as_ref(), path),
+        )?;
+        Ok(woken(report, || state.schedule()))
     })
     .await
-    .map_err(|_| background_task_failed("folder intake"))?
+    .map_err(|_| background_task_failed("queueing the input folder"))?
+}
+
+/// The input and output folders `settings` name, canonical. Refused with
+/// `INPUT_FOLDER_NOT_SET` when no input folder is being watched, and with
+/// `INPUT_FOLDER_UNAVAILABLE` when it cannot be reached.
+fn input_folders_for(settings: &AppSettings, machine_id: &str) -> Result<Folders, CommandError> {
+    if !settings.intake_enabled || settings.intake_folder.trim().is_empty() {
+        return Err(CommandError {
+            code: INPUT_FOLDER_NOT_SET.into(),
+            message: "no input folder is set up; choose one in Settings".into(),
+        });
+    }
+    let input = canonical_folder(Path::new(settings.intake_folder.trim())).map_err(|error| {
+        CommandError {
+            code: INPUT_FOLDER_UNAVAILABLE.into(),
+            message: format!("the input folder could not be opened: {}", error.message),
+        }
+    })?;
+    let output = Some(settings.destination.trim())
+        .filter(|destination| !destination.is_empty())
+        .and_then(|destination| canonical_folder(Path::new(destination)).ok());
+    Ok(Folders {
+        input,
+        output,
+        machine: machine_tag(machine_id),
+    })
 }
 
 #[tauri::command]
@@ -4019,9 +4435,9 @@ pub fn queue_resume(state: State<'_, AppState>) -> Result<(), CommandError> {
     state.schedule()
 }
 
-/// Stops the document being analysed.
+/// Stops the document being analyzed.
 ///
-/// Blocking: cancelling the local model kills llama-server and starts it
+/// Blocking: canceling the local model kills llama-server and starts it
 /// again, which reloads the model and waits for the new process to answer, so
 /// this cannot run on the thread WebView2 delivers invokes on.
 #[tauri::command]
@@ -4337,7 +4753,12 @@ pub async fn settings_save(
 ) -> Result<(), CommandError> {
     let app = state.app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        save_settings(app.state::<AppState>().inner(), settings)
+        let state = app.state::<AppState>();
+        save_settings(state.inner(), settings)?;
+        // Setup's save is the one that gives a fresh install its input folder;
+        // what "Send to > Intern" sent before it is copied in now.
+        copy_pending_launch(state.inner());
+        Ok(())
     })
     .await
     .map_err(|_| background_task_failed("settings save"))?
@@ -4364,7 +4785,7 @@ pub(crate) trait SettingsRuntime {
     /// already in the folder again; see `starts_a_new_watch`.
     fn restart_intake(&self, settings: &AppSettings, first_look: bool) -> Result<(), CommandError>;
     fn emit_intake_changed(&self) -> Result<(), CommandError>;
-    /// The organisation's names as just saved: documents still waiting that
+    /// The organization's names as just saved: documents still waiting that
     /// were named under another list are named by the other side, or by
     /// every side again, at once. Asked after every save, so a rename an
     /// earlier save never reached is finished by the next; one already
@@ -4535,7 +4956,7 @@ fn save_settings_with_microsoft_protection(
     protect_microsoft: bool,
 ) -> Result<(), CommandError> {
     let previous = state.load_settings().unwrap_or_default();
-    validate_intake_settings(&mut settings, &previous.intake_folder, &|path| {
+    validate_intake_settings(&mut settings, &previous, &|path| {
         state.canonical_folder(path).ok()
     })?;
     // With intake enabled the destination was already canonicalized (with the
@@ -4595,7 +5016,7 @@ fn save_settings_with_microsoft_protection(
     // Asked on every save, not only when the list differs from the one
     // stored before: the list is stored first, so when a step above (or the
     // rename itself) failed, the next save found nothing different, and the
-    // documents waiting kept the old organisation's names until the list
+    // documents waiting kept the old organization's names until the list
     // was edited again. Documents already named by this list are not
     // touched, so a save that changes nothing renames nothing.
     let renamed = state.own_names_changed(&settings.our_names);
@@ -4804,12 +5225,13 @@ fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), CommandError> {
 /// the intake folder. Canonical forms are written back so later comparisons
 /// and the containment check are component-wise, never string-prefix.
 /// `canonicalize` is `canonical_folder` in production and a seam for tests;
-/// `stored` is the intake folder as it is saved now.
+/// `previous` is the settings as they are saved now.
 fn validate_intake_settings(
     settings: &mut AppSettings,
-    stored: &str,
+    previous: &AppSettings,
     canonicalize: &dyn Fn(&Path) -> Option<PathBuf>,
 ) -> Result<(), CommandError> {
+    let stored = previous.intake_folder.as_str();
     if settings.intake_folder.trim().is_empty() {
         if settings.intake_enabled {
             return Err(CommandError {
@@ -4853,6 +5275,23 @@ fn validate_intake_settings(
         return Err(CommandError {
             code: "DESTINATION_INSIDE_INTAKE".into(),
             message: "the destination cannot be the intake folder or live inside it".into(),
+        });
+    }
+    // The other way round as well: neither folder may hold the other. An
+    // input folder inside the output folder sits where layouts make folders
+    // and undo moves documents back to, and an add's "already filed" and
+    // "already in the input folder" would both be true of the same file.
+    // Asked only of a save that chooses the folders - watching turned on, or
+    // either folder changed. Installs from before the rule can have an Inbox
+    // inside the folder they file to, and must still be able to save their
+    // other settings; an add copes with that layout (see `copy_into_input`).
+    let chooses_folders = !previous.intake_enabled
+        || previous.intake_folder != settings.intake_folder
+        || Path::new(&previous.destination) != destination;
+    if chooses_folders && Path::new(&settings.intake_folder).starts_with(&destination) {
+        return Err(CommandError {
+            code: "INTAKE_INSIDE_DESTINATION".into(),
+            message: "the intake folder cannot live inside the destination".into(),
         });
     }
     settings.destination = destination.to_string_lossy().into_owned();
@@ -4948,8 +5387,8 @@ pub async fn intake_folder_documents(path: String) -> Result<usize, CommandError
     .map_err(|_| background_task_failed("folder count"))?
 }
 
-/// Creates the "Filed" folder beside a chosen intake folder, or finds the one
-/// already there, and returns where it is.
+/// Creates the "Output" folder setup offers beside a chosen input folder, or
+/// finds the one already there, and returns where it is.
 ///
 /// Blocking: the folder can be on a network share.
 #[tauri::command]
@@ -4962,17 +5401,18 @@ pub async fn filed_folder_create(intake_folder: String) -> Result<String, Comman
         })?;
         std::fs::create_dir_all(&filed).map_err(|error| CommandError {
             code: "FILED_FOLDER_UNAVAILABLE".into(),
-            message: format!("the Filed folder could not be created: {error}"),
+            message: format!("the Output folder could not be created: {error}"),
         })?;
         Ok(display_path(&filed))
     })
     .await
-    .map_err(|_| background_task_failed("Filed folder creation"))?
+    .map_err(|_| background_task_failed("Output folder creation"))?
 }
 
-/// Creates (or finds) an "Inbox" folder inside a OneDrive or SharePoint
-/// folder's own top folder, for folder setup to watch: a Filed folder beside
-/// the top folder would sit outside what OneDrive syncs. Refused for any
+/// Creates (or finds) an "Input" folder inside a OneDrive or SharePoint
+/// folder's own top folder, for folder setup to watch: an output folder beside
+/// the top folder would sit outside what OneDrive syncs, so setup makes
+/// "Input" and "Output" side by side inside it instead. Refused for any
 /// other folder, so the webview cannot make folders anywhere it likes.
 ///
 /// Blocking: every cloud folder the sync client keeps is canonicalized to
@@ -4990,12 +5430,12 @@ pub async fn inbox_folder_create(root: String) -> Result<String, CommandError> {
             .any(|candidate| canonical_folder(&candidate.root).is_ok_and(|found| found == root));
         if !synced {
             return Err(unavailable(
-                "only a OneDrive or SharePoint folder's top folder gets an Inbox".into(),
+                "only a OneDrive or SharePoint folder's top folder gets an Input folder".into(),
             ));
         }
-        let inbox = root.join("Inbox");
+        let inbox = root.join("Input");
         std::fs::create_dir_all(&inbox).map_err(|error| {
-            unavailable(format!("the Inbox folder could not be created: {error}"))
+            unavailable(format!("the Input folder could not be created: {error}"))
         })?;
         Ok(display_path(&inbox))
     })
@@ -5401,6 +5841,7 @@ pub fn queue_discard_waiting(state: State<'_, AppState>) -> Result<usize, Comman
 }
 
 fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
+    let waiting = waiting_in_doubt(&item);
     let proposal = item.proposal.as_ref();
     let evidence = proposal.map(|record| EvidenceDto {
         date: record.analysis.proposal.evidence.date.clone(),
@@ -5432,12 +5873,20 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
             .to_owned(),
         status: item.status,
         proposed_filename: proposal.map(|record| record.filename.clone()),
-        confidence: proposal.map(|record| record.analysis.proposal.confidence),
+        // A name typed by hand, or a copy's, has no reading behind it to be
+        // confident in.
+        confidence: proposal
+            .filter(|record| !record.is_synthetic())
+            .map(|record| record.analysis.proposal.confidence),
         description: proposal.map(|record| record.description.clone()),
         evidence,
-        reason: proposal
-            .filter(|record| !record.reasons.is_empty())
-            .map(|record| record.reasons.join(", "))
+        reason: waiting
+            .map(str::to_owned)
+            .or_else(|| {
+                proposal
+                    .filter(|record| !record.reasons.is_empty())
+                    .map(|record| record.reasons.join(", "))
+            })
             // A DUPLICATE flag is raised before analysis, so no proposal
             // carries its reason; name the file the content is already
             // filed under.
@@ -5446,7 +5895,12 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
                     .as_deref()
                     .map(|name| format!("Duplicate of {name}"))
             }),
-        error_code: item.error_code.map(|code| code.as_str().to_owned()),
+        // A document waiting in doubt is not in review: the sentence above
+        // says why it waits, and no code offers actions it does not have.
+        error_code: item
+            .error_code
+            .filter(|_| waiting.is_none())
+            .map(|code| code.as_str().to_owned()),
         // The apply that filed the document, not the newest receipt: an undo
         // that was refused and rolled back used to take the Undo button away
         // from a document that was still filed.
@@ -5491,6 +5945,9 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
             .map(|record| record.name_view().1)
             .unwrap_or_default(),
         read_by: proposal.and_then(|record| record.analysis.telemetry.read_by.clone()),
+        copy_of: proposal
+            .and_then(|record| record.copy_of.as_ref())
+            .map(|copy| copy.original.clone()),
     })
 }
 
@@ -5546,6 +6003,12 @@ mod intake_tests {
         }
     }
 
+    /// Settings as saved before a save: watching `intake_folder` (when it is
+    /// not blank) and filing into `destination`.
+    fn saved(intake_folder: &str, destination: &str) -> AppSettings {
+        settings(!intake_folder.is_empty(), intake_folder, destination)
+    }
+
     fn error_code(result: Result<(), super::CommandError>) -> String {
         result.expect_err("validation should fail").code
     }
@@ -5555,12 +6018,20 @@ mod intake_tests {
         let fs = canonicalizer(&[("/out", "/out")]);
         let mut blank = settings(true, "  ", "/out");
         assert_eq!(
-            error_code(validate_intake_settings(&mut blank, "", &fs)),
+            error_code(validate_intake_settings(
+                &mut blank,
+                &AppSettings::default(),
+                &fs
+            )),
             "INTAKE_FOLDER_MISSING"
         );
         let mut missing = settings(true, "/gone", "/out");
         assert_eq!(
-            error_code(validate_intake_settings(&mut missing, "", &fs)),
+            error_code(validate_intake_settings(
+                &mut missing,
+                &AppSettings::default(),
+                &fs
+            )),
             "INTAKE_FOLDER_MISSING"
         );
     }
@@ -5578,8 +6049,8 @@ mod intake_tests {
         })
         .join("Legal - Documents");
         assert_eq!(
-            filed_folder_for(&library.join("Inbox")),
-            Some(library.join("Filed"))
+            filed_folder_for(&library.join("Input")),
+            Some(library.join("Output"))
         );
     }
 
@@ -5612,12 +6083,20 @@ mod intake_tests {
         let fs = canonicalizer(&[("/in", "/in")]);
         let mut blank = settings(true, "/in", "");
         assert_eq!(
-            error_code(validate_intake_settings(&mut blank, "", &fs)),
+            error_code(validate_intake_settings(
+                &mut blank,
+                &AppSettings::default(),
+                &fs
+            )),
             "INTAKE_NEEDS_DESTINATION"
         );
         let mut missing = settings(true, "/in", "/gone");
         assert_eq!(
-            error_code(validate_intake_settings(&mut missing, "", &fs)),
+            error_code(validate_intake_settings(
+                &mut missing,
+                &AppSettings::default(),
+                &fs
+            )),
             "INTAKE_NEEDS_DESTINATION"
         );
     }
@@ -5632,19 +6111,78 @@ mod intake_tests {
         ]);
         let mut equal = settings(true, "/a/b", "/a/b");
         assert_eq!(
-            error_code(validate_intake_settings(&mut equal, "", &fs)),
+            error_code(validate_intake_settings(
+                &mut equal,
+                &AppSettings::default(),
+                &fs
+            )),
             "DESTINATION_INSIDE_INTAKE"
         );
         let mut inside = settings(true, "/a/b", "/a/b/c");
         assert_eq!(
-            error_code(validate_intake_settings(&mut inside, "", &fs)),
+            error_code(validate_intake_settings(
+                &mut inside,
+                &AppSettings::default(),
+                &fs
+            )),
             "DESTINATION_INSIDE_INTAKE"
         );
         // `/a/bc` shares the string prefix `/a/b` but is a sibling, not a child.
         let mut sibling = settings(true, "/a/b", "/a/bc");
-        assert!(validate_intake_settings(&mut sibling, "", &fs).is_ok());
+        assert!(validate_intake_settings(&mut sibling, &AppSettings::default(), &fs).is_ok());
         let mut outside = settings(true, "/a/b", "/a/other");
-        assert!(validate_intake_settings(&mut outside, "", &fs).is_ok());
+        assert!(validate_intake_settings(&mut outside, &AppSettings::default(), &fs).is_ok());
+    }
+
+    /// Neither folder may hold the other: an input folder inside the output
+    /// folder is refused too, component-wise like the other way round.
+    #[test]
+    fn the_intake_folder_may_not_live_inside_the_destination() {
+        let fs = canonicalizer(&[
+            ("/docs", "/docs"),
+            ("/docs/inbox", "/docs/inbox"),
+            ("/docsx", "/docsx"),
+        ]);
+        let mut nested = settings(true, "/docs/inbox", "/docs");
+        assert_eq!(
+            error_code(validate_intake_settings(
+                &mut nested,
+                &AppSettings::default(),
+                &fs
+            )),
+            "INTAKE_INSIDE_DESTINATION"
+        );
+        let mut sibling = settings(true, "/docs/inbox", "/docsx");
+        assert!(validate_intake_settings(&mut sibling, &AppSettings::default(), &fs).is_ok());
+    }
+
+    /// An install from before the rule, watching an Inbox inside the folder it
+    /// files to, can still save its other settings: the rule is asked only of
+    /// a save that chooses the folders. Moving either folder, or turning
+    /// watching back on, is choosing them.
+    #[test]
+    fn an_existing_nested_pair_saves_until_the_folders_are_chosen_again() {
+        let fs = canonicalizer(&[
+            ("/docs", "/docs"),
+            ("/docs/inbox", "/docs/inbox"),
+            ("/docs/other", "/docs/other"),
+        ]);
+        let stored = saved("/docs/inbox", "/docs");
+        let mut unchanged = settings(true, "/docs/inbox", "/docs");
+        unchanged.machine_label = "Front desk".into();
+        assert!(validate_intake_settings(&mut unchanged, &stored, &fs).is_ok());
+        let mut moved = settings(true, "/docs/other", "/docs");
+        assert_eq!(
+            error_code(validate_intake_settings(&mut moved, &stored, &fs)),
+            "INTAKE_INSIDE_DESTINATION"
+        );
+        let mut off = stored.clone();
+        off.intake_enabled = false;
+        let mut back_on = settings(true, "/docs/inbox", "/docs");
+        assert_eq!(
+            error_code(validate_intake_settings(&mut back_on, &off, &fs)),
+            "INTAKE_INSIDE_DESTINATION"
+        );
     }
 
     #[test]
@@ -5654,13 +6192,15 @@ mod intake_tests {
             ("/out-entered", "/out/canonical"),
         ]);
         let mut enabled = settings(true, "/in-entered", "/out-entered");
-        validate_intake_settings(&mut enabled, "", &fs).expect("valid settings");
+        validate_intake_settings(&mut enabled, &AppSettings::default(), &fs)
+            .expect("valid settings");
         assert_eq!(enabled.intake_folder, "/in/canonical");
         assert_eq!(enabled.destination, "/out/canonical");
         // A non-blank intake folder is canonicalized even while disabled, so
         // the stored form stays the one every later comparison uses.
         let mut disabled = settings(false, "/in-entered", "");
-        validate_intake_settings(&mut disabled, "", &fs).expect("valid settings");
+        validate_intake_settings(&mut disabled, &AppSettings::default(), &fs)
+            .expect("valid settings");
         assert_eq!(disabled.intake_folder, "/in/canonical");
     }
 
@@ -5672,17 +6212,22 @@ mod intake_tests {
         // with intake must go through, and the folder keeps the spelling
         // already stored - still canonical for when intake is turned back on.
         let mut disabled = settings(false, "//server/share", "");
-        validate_intake_settings(&mut disabled, "/in/canonical", &fs).expect("valid settings");
+        validate_intake_settings(&mut disabled, &saved("/in/canonical", ""), &fs)
+            .expect("valid settings");
         assert_eq!(disabled.intake_folder, "/in/canonical");
         // With nothing stored yet, what the person chose is kept rather than
         // silently cleared.
         let mut fresh = settings(false, "//server/share", "");
-        validate_intake_settings(&mut fresh, "", &fs).expect("valid settings");
+        validate_intake_settings(&mut fresh, &AppSettings::default(), &fs).expect("valid settings");
         assert_eq!(fresh.intake_folder, "//server/share");
         // Turning intake on is still refused: that folder would be watched.
         let mut enabled = settings(true, "//server/share", "/out-entered");
         assert_eq!(
-            error_code(validate_intake_settings(&mut enabled, "/in/canonical", &fs)),
+            error_code(validate_intake_settings(
+                &mut enabled,
+                &saved("/in/canonical", ""),
+                &fs
+            )),
             "INTAKE_FOLDER_MISSING"
         );
     }
@@ -6125,7 +6670,7 @@ mod intake_tests {
 
 /// A real queue in a scratch folder, for the tests that add documents to one.
 #[cfg(test)]
-mod scratch_queue {
+pub(crate) mod scratch_queue {
     use std::{
         path::{Path, PathBuf},
         sync::{
@@ -6191,7 +6736,7 @@ mod scratch_queue {
         fn progress(&self, _progress: PipelineProgress) {}
     }
 
-    pub(super) fn folder(name: &str) -> PathBuf {
+    pub(crate) fn folder(name: &str) -> PathBuf {
         let folder = std::env::temp_dir().join(format!(
             "intern-{name}-{}-{}",
             std::process::id(),
@@ -6204,7 +6749,7 @@ mod scratch_queue {
         folder.canonicalize().unwrap()
     }
 
-    pub(super) fn write(folder: &Path, name: &str, bytes: &[u8]) -> PathBuf {
+    pub(crate) fn write(folder: &Path, name: &str, bytes: &[u8]) -> PathBuf {
         let path = folder.join(name);
         std::fs::write(&path, bytes).unwrap();
         path
@@ -6224,14 +6769,35 @@ mod scratch_queue {
         .unwrap();
         (pipeline, changes)
     }
+
+    /// [`queue`] under `settings`, with `oracle` saying what content was
+    /// filed before.
+    pub(super) fn queue_with(
+        data: &Path,
+        settings: SettingsStore,
+        oracle: Arc<dyn intern_queue::pipeline::DuplicateOracle>,
+    ) -> Pipeline {
+        std::fs::create_dir_all(data).unwrap();
+        Pipeline::with_local_files(
+            data.join("queue.sqlite3"),
+            Arc::new(NothingRuns),
+            Arc::new(NothingRuns),
+            Arc::new(Changes::default()),
+            settings,
+        )
+        .unwrap()
+        .with_duplicate_oracle(oracle)
+    }
 }
 
 #[cfg(test)]
 mod add_report_tests {
+    use intern_queue::{AppSettings, paths::display_path};
+
     use super::{
-        AddReportDto, CommandError, LaunchReports, SkippedDocumentDto, add_and_wake,
-        partition_inputs,
-        scratch_queue::{folder, queue, write},
+        AddReportDto, Arrival, Folders, LaunchReports, SkippedDocumentDto, copy_with_queue,
+        enqueue_arrival, input_folders_for, partition_inputs,
+        scratch_queue::{folder, queue, queue_with, write},
     };
 
     #[test]
@@ -6267,10 +6833,115 @@ mod add_report_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// A file Intern renamed because it could not read it waits in the
+    /// queue for a person; added again, it is named as that rather than as
+    /// an unsupported format. Inside a folder it is passed over silently.
+    #[test]
+    fn a_needs_review_file_is_left_out_as_one_already_waiting_for_review() {
+        let root = folder("needs-review");
+        let marked = write(&root, "NEEDS REVIEW - scan.pdf", b"%PDF-1.7 unreadable");
+        let scans = root.join("Scans");
+        std::fs::create_dir_all(&scans).unwrap();
+        write(&scans, "Needs Review - other.pdf", b"%PDF-1.7 unreadable");
+        let scan = write(&scans, "scan.pdf", b"%PDF-1.7 a scan");
+
+        let (files, rejected) = partition_inputs(&[marked, scans]);
+
+        assert_eq!(files, vec![scan.canonicalize().unwrap()]);
+        assert_eq!(
+            rejected,
+            vec![(
+                "NEEDS REVIEW - scan.pdf".to_owned(),
+                "NEEDS_REVIEW_FILE".to_owned()
+            )]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A document dropped on the window whose content was filed before is
+    /// copied into the input folder like any other - and that copy, being in
+    /// the input folder, is filed at once as `COPY - <the filing's name>` in
+    /// the output folder. The input folder is left as it was, and the
+    /// original where it was.
+    #[test]
+    fn a_dropped_exact_duplicate_ends_in_the_output_folder_as_a_copy() {
+        struct FiledBefore;
+        impl intern_queue::pipeline::DuplicateOracle for FiledBefore {
+            fn filed_elsewhere(
+                &self,
+                _source_hash: &str,
+                _source_path: &std::path::Path,
+            ) -> Option<intern_queue::pipeline::KnownFiling> {
+                Some(intern_queue::pipeline::KnownFiling {
+                    filename: "2026-01-02 Lease.pdf".into(),
+                    filed_by: None,
+                })
+            }
+        }
+        let root = folder("drop-copy");
+        let folders = folders(&root);
+        let output = folders.output.clone().unwrap();
+        let data = root.join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let settings = intern_queue::SettingsStore::new(data.join("settings.json"));
+        settings
+            .save(&AppSettings {
+                intake_folder: folders.input.to_string_lossy().into_owned(),
+                intake_enabled: true,
+                destination: output.to_string_lossy().into_owned(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        let pipeline = queue_with(&data, settings, std::sync::Arc::new(FiledBefore));
+        let downloads = root.join("Downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+        let lease = write(&downloads, "lease.pdf", b"%PDF-1.7 the lease");
+        let hand_off = |path: &std::path::Path| {
+            enqueue_arrival(&pipeline, path).unwrap_or_else(Arrival::Refused)
+        };
+
+        let report = copy_with_queue(&pipeline, &[lease.clone()], &folders, &|_| None, &hand_off);
+
+        assert_eq!(report.added, 1);
+        assert_eq!(report.copied, Some(1));
+        assert!(lease.exists(), "the original stays where it was");
+        let documents = |folder: &std::path::Path| {
+            let mut names = std::fs::read_dir(folder)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| !name.starts_with('.'))
+                .collect::<Vec<_>>();
+            names.sort();
+            names
+        };
+        assert!(
+            documents(&folders.input).is_empty(),
+            "{:?}",
+            documents(&folders.input)
+        );
+        assert_eq!(documents(&output), vec!["COPY - 2026-01-02 Lease.pdf"]);
+        drop(pipeline);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Scratch input and output folders beside a scratch queue.
+    fn folders(root: &std::path::Path) -> Folders {
+        let input = root.join("Input");
+        let output = root.join("Output");
+        std::fs::create_dir_all(&input).unwrap();
+        std::fs::create_dir_all(&output).unwrap();
+        Folders {
+            input: input.canonicalize().unwrap(),
+            output: Some(output.canonicalize().unwrap()),
+            machine: "here0123456789ab".into(),
+        }
+    }
+
     #[test]
     fn one_bad_file_in_a_drop_no_longer_refuses_the_rest() {
         // TAURI_SHELL-5: [a.pdf, b.zip, c.docx, an empty file, a folder].
         let root = folder("drop");
+        let folders = folders(&root);
         let documents = root.join("Attachments");
         std::fs::create_dir_all(&documents).unwrap();
         let first = write(&documents, "a.pdf", b"%PDF-1.7 first");
@@ -6279,19 +6950,19 @@ mod add_report_tests {
         let empty = write(&documents, "d.pdf", b"");
         let inner = documents.join("More");
         std::fs::create_dir_all(&inner).unwrap();
-        let fourth = write(&inner, "e.txt", b"a plain text letter");
+        write(&inner, "e.txt", b"a plain text letter");
         let (pipeline, changes) = queue(&root.join("data"));
-        let mut woken = 0;
+        let hand_off = |path: &std::path::Path| {
+            enqueue_arrival(&pipeline, path).unwrap_or_else(Arrival::Refused)
+        };
 
-        let report = add_and_wake(
+        let report = copy_with_queue(
             &pipeline,
-            &[first.clone(), archive, third.clone(), empty, inner],
-            || {
-                woken += 1;
-                Ok(())
-            },
-        )
-        .unwrap();
+            &[first.clone(), archive, third, empty, inner],
+            &folders,
+            &|_| None,
+            &hand_off,
+        );
 
         assert_eq!(
             report,
@@ -6308,67 +6979,138 @@ mod add_report_tests {
                         code: "EMPTY_FILE".into(),
                     },
                 ],
+                copied: Some(3),
+                held: 0,
+                held_reason: None,
+                in_place: 0,
+                input_folder: Some(display_path(&folders.input)),
             }
         );
+        // The queue holds the copies in the input folder, never the originals.
         let queued = pipeline
             .list()
             .unwrap()
             .into_iter()
             .map(|item| item.source_path)
             .collect::<Vec<_>>();
-        assert_eq!(queued, vec![first.clone(), third, fourth]);
-        // One announcement for the batch, which is what refreshes the window.
-        assert_eq!(changes.count(), 1);
-        // And the scheduler is woken for what was added, though two of the
-        // five were not: nothing waits for its timer.
-        assert_eq!(woken, 1);
+        assert_eq!(
+            queued,
+            ["a.pdf", "c.docx", "e.txt"].map(|name| folders.input.join(name))
+        );
+        assert!(first.exists(), "the original stays where it was");
+        // One announcement per document queued, each refreshing the window.
+        assert_eq!(changes.count(), 3);
 
-        // The same files again are already there, and say so.
-        let again = add_and_wake(&pipeline, std::slice::from_ref(&first), || {
-            panic!("nothing new was queued, so nothing is woken")
-        })
-        .unwrap();
+        // The same file again, its copy still waiting: not copied twice.
+        let again = copy_with_queue(
+            &pipeline,
+            std::slice::from_ref(&first),
+            &folders,
+            &|_| None,
+            &hand_off,
+        );
         assert_eq!(again.added, 0);
+        assert_eq!(again.copied, Some(0));
         assert_eq!(again.already_queued, 1);
-        assert_eq!(changes.count(), 1);
+        assert_eq!(pipeline.list().unwrap().len(), 3);
+        drop(pipeline);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
-        // A scheduler that cannot be woken is the add's error: what was
-        // queued stays queued, and the window hears why nothing will run.
-        let late = write(&documents, "f.pdf", b"%PDF-1.7 late");
-        let refused = add_and_wake(&pipeline, &[late], || {
-            Err(CommandError {
+    /// Adding with no input folder set up is refused whole, rather than
+    /// processing anything where it is, and says where to fix it.
+    #[test]
+    fn an_add_without_an_input_folder_is_refused() {
+        let mut settings = AppSettings::default();
+        assert_eq!(
+            input_folders_for(&settings, "machine-id").unwrap_err().code,
+            "INPUT_FOLDER_NOT_SET"
+        );
+        settings.intake_folder = "/nowhere/at/all/Input".into();
+        assert_eq!(
+            input_folders_for(&settings, "machine-id").unwrap_err().code,
+            "INPUT_FOLDER_NOT_SET",
+            "a folder that is not being watched is not an input folder"
+        );
+        settings.intake_enabled = true;
+        assert_eq!(
+            input_folders_for(&settings, "machine-id").unwrap_err().code,
+            "INPUT_FOLDER_UNAVAILABLE"
+        );
+        let root = folder("input-folders");
+        let folders = folders(&root);
+        settings.intake_folder = folders.input.to_string_lossy().into_owned();
+        settings.destination = folders
+            .output
+            .as_ref()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let found = input_folders_for(&settings, "machine-id").unwrap();
+        assert_eq!(found.input, folders.input);
+        assert_eq!(found.output, folders.output);
+        assert_eq!(
+            found.machine, "machineid",
+            "the tag its temporary copies carry"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The copies are made and queued before the scheduler is woken, so a
+    /// wake that fails is not the add's failure: the report is the real one.
+    #[test]
+    fn a_scheduler_that_cannot_be_woken_does_not_turn_copies_into_refusals() {
+        let report = AddReportDto {
+            added: 2,
+            copied: Some(2),
+            ..AddReportDto::default()
+        };
+        let woken = super::woken(report.clone(), || {
+            Err(super::CommandError {
                 code: "STATE_CONFLICT".into(),
                 message: "pipeline scheduler is unavailable".into(),
             })
-        })
-        .unwrap_err();
-        assert_eq!(refused.code, "STATE_CONFLICT");
-        assert_eq!(pipeline.list().unwrap().len(), 4);
+        });
+        assert_eq!(woken, report);
+    }
 
-        // The wire shape the window reads.
+    /// "Microsoft could not answer yet" and "Microsoft says someone else
+    /// uploaded it" hold a copy - in the shared Inbox the second can be a
+    /// teammate's document under that name, and it is never taken back. Only
+    /// an uploader that cannot be known is the document's reason for being
+    /// left out.
+    #[test]
+    fn a_hand_over_held_for_microsoft_s_word_or_another_uploader_is_held() {
+        use intern_intake::{HandOver, IntakeAdmission};
         assert_eq!(
-            serde_json::to_value(&report).unwrap(),
-            serde_json::json!({
-                "added": 3,
-                "alreadyQueued": 0,
-                "skipped": [
-                    { "name": "b.zip", "code": "UNSUPPORTED_FORMAT" },
-                    { "name": "d.pdf", "code": "EMPTY_FILE" },
-                ],
-            })
+            super::arrival_of(HandOver::Held(IntakeAdmission::Retryable)),
+            Arrival::Held("AWAITING_MICROSOFT".into())
         );
-        drop(pipeline);
-        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            super::arrival_of(HandOver::Held(IntakeAdmission::Other)),
+            Arrival::Held("UPLOADER_OTHER".into())
+        );
+        for verdict in [IntakeAdmission::Unknown, IntakeAdmission::Revoked] {
+            assert_eq!(
+                super::arrival_of(HandOver::Held(verdict)),
+                Arrival::Refused("UPLOADER_UNVERIFIED".into())
+            );
+        }
+        assert_eq!(
+            super::arrival_of(HandOver::Queued(Arrival::Added)),
+            Arrival::Added
+        );
     }
 
     fn skipped(added: u32, name: &str, code: &str) -> AddReportDto {
         AddReportDto {
             added,
-            already_queued: 0,
             skipped: vec![SkippedDocumentDto {
                 name: name.into(),
                 code: code.into(),
             }],
+            copied: Some(added),
+            ..AddReportDto::default()
         }
     }
 
@@ -6396,7 +7138,6 @@ mod add_report_tests {
             held.take(),
             Some(AddReportDto {
                 added: 1,
-                already_queued: 0,
                 skipped: vec![
                     SkippedDocumentDto {
                         name: "notes.zip".into(),
@@ -6407,9 +7148,20 @@ mod add_report_tests {
                         code: "EMPTY_FILE".into(),
                     },
                 ],
+                copied: Some(1),
+                ..AddReportDto::default()
             })
         );
         assert_eq!(held.take(), None, "said once");
+
+        // Copied but waiting for Microsoft's word is said too: the queue does
+        // not show those yet.
+        assert!(held.hold(AddReportDto {
+            copied: Some(2),
+            held: 2,
+            ..AddReportDto::default()
+        }));
+        assert_eq!(held.take().unwrap().held, 2);
     }
 }
 
@@ -6423,8 +7175,9 @@ mod second_instance_tests {
     use intern_queue::{AppSettings, Pipeline, SettingsStore};
 
     use super::{
-        LaunchReports, LaunchTarget, SkippedDocumentDto, UPDATE_RELAUNCH, add_launch_documents,
-        expect_update_relaunch, forget_update_relaunch, is_short_windows_switch,
+        AddReportDto, Arrival, CommandError, Folders, LaunchReports, LaunchTarget, PendingLaunch,
+        SkippedDocumentDto, UPDATE_RELAUNCH, add_launch_documents, copy_pending, copy_with_queue,
+        enqueue_arrival, expect_update_relaunch, forget_update_relaunch, is_short_windows_switch,
         is_update_relaunch, launch_documents, launch_names_documents, launch_starts_hidden,
         refused_launch,
         scratch_queue::{folder, queue, write},
@@ -6436,17 +7189,22 @@ mod second_instance_tests {
     /// `queue_launch_documents` does, and the window's showing counted.
     struct ScratchApp<'a> {
         pipeline: &'a Pipeline,
+        /// `None` before setup has chosen the folders.
+        folders: Option<Folders>,
         reports: LaunchReports,
+        pending: PendingLaunch,
         woken: Cell<usize>,
         told: Cell<usize>,
         shown: Cell<usize>,
     }
 
     impl<'a> ScratchApp<'a> {
-        fn new(pipeline: &'a Pipeline) -> Self {
+        fn new(pipeline: &'a Pipeline, folders: Option<Folders>) -> Self {
             Self {
                 pipeline,
+                folders,
                 reports: LaunchReports::default(),
+                pending: PendingLaunch::default(),
                 woken: Cell::new(0),
                 told: Cell::new(0),
                 shown: Cell::new(0),
@@ -6456,10 +7214,24 @@ mod second_instance_tests {
 
     impl LaunchTarget for ScratchApp<'_> {
         fn add_documents(&self, arguments: Vec<String>, cwd: PathBuf) {
-            let report = add_launch_documents(self.pipeline, &arguments, &cwd, || {
-                self.woken.set(self.woken.get() + 1);
-                Ok(())
-            });
+            let Some(report) = add_launch_documents(&arguments, &cwd, &self.pending, |documents| {
+                let Some(folders) = &self.folders else {
+                    return Err(CommandError {
+                        code: "INPUT_FOLDER_NOT_SET".into(),
+                        message: "no input folder is set up".into(),
+                    });
+                };
+                let report =
+                    copy_with_queue(self.pipeline, documents, folders, &|_| None, &|path| {
+                        enqueue_arrival(self.pipeline, path).unwrap_or_else(Arrival::Refused)
+                    });
+                if report.added > 0 {
+                    self.woken.set(self.woken.get() + 1);
+                }
+                Ok(report)
+            }) else {
+                return;
+            };
             if self.reports.hold(report) {
                 self.told.set(self.told.get() + 1);
             }
@@ -6544,7 +7316,16 @@ mod second_instance_tests {
         let scan = write(&inbox, "scan.pdf", b"%PDF-1.7 a scan");
         write(&inbox, "notes.zip", b"PK an archive");
         let (pipeline, changes) = queue(&root.join("data"));
-        let app = ScratchApp::new(&pipeline);
+        let input = root.join("Input");
+        std::fs::create_dir_all(&input).unwrap();
+        let app = ScratchApp::new(
+            &pipeline,
+            Some(Folders {
+                input: input.canonicalize().unwrap(),
+                output: None,
+                machine: "here0123456789ab".into(),
+            }),
+        );
         // What Explorer's "Send to > Intern" hands the second process, and
         // the single-instance plugin hands on: its arguments, and its working
         // folder as a string. The documents are relative to that folder, not
@@ -6557,9 +7338,15 @@ mod second_instance_tests {
 
         second_launch(&app, arguments, inbox.to_string_lossy().into_owned());
 
+        // Copied into the input folder and queued from there; the original
+        // stays where Explorer sent it from.
         let queued = pipeline.list().unwrap();
         assert_eq!(queued.len(), 1);
-        assert_eq!(queued[0].source_path, scan);
+        assert_eq!(
+            queued[0].source_path,
+            input.canonicalize().unwrap().join("scan.pdf")
+        );
+        assert!(scan.exists());
         assert_eq!(changes.count(), 1);
         assert_eq!(app.woken.get(), 1, "the scheduler is woken for it");
         // And the window comes up to show it, told about the archive.
@@ -6584,6 +7371,127 @@ mod second_instance_tests {
         );
         assert_eq!(app.shown.get(), 1);
         assert_eq!(app.told.get(), 1);
+        assert_eq!(pipeline.list().unwrap().len(), 1);
+        drop(pipeline);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// "Send to > Intern" on a fresh install, while setup is still on screen:
+    /// no input folder yet, so the documents are kept - not reported as
+    /// refused - for the save that chooses one.
+    #[test]
+    fn a_launch_before_setup_keeps_its_documents_for_later() {
+        let root = folder("launch-before-setup");
+        let scan = write(&root, "scan.pdf", b"%PDF-1.7 a scan");
+        let (pipeline, _changes) = queue(&root.join("data"));
+        let app = ScratchApp::new(&pipeline, None);
+
+        second_launch(
+            &app,
+            args(&["intern.exe", "scan.pdf"]),
+            root.to_string_lossy().into_owned(),
+        );
+
+        assert_eq!(app.told.get(), 0, "nothing to tell yet");
+        assert_eq!(app.reports.take(), None);
+        assert!(pipeline.list().unwrap().is_empty());
+        assert_eq!(app.pending.documents(), vec![scan]);
+        drop(pipeline);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// What a launch sent before setup survives Intern being closed before
+    /// setup is finished, and is gone from the app's data once dealt with.
+    #[test]
+    fn documents_kept_from_before_setup_survive_a_restart() {
+        let root = folder("launch-pending-kept");
+        let file = root.join(super::PENDING_LAUNCH);
+        let scan = root.join("scan.pdf");
+        let pending = PendingLaunch::load(file.clone());
+        pending.keep(std::slice::from_ref(&scan));
+        pending.keep(std::slice::from_ref(&scan));
+        drop(pending);
+
+        let reopened = PendingLaunch::load(file.clone());
+        assert_eq!(reopened.documents(), vec![scan.clone()]);
+        reopened.forget(&[scan]);
+        assert!(reopened.is_empty());
+        assert!(!file.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Still no input folder: kept for the next try. Copied: reported and let
+    /// go. Refused for any other reason: every document named, and let go -
+    /// never kept and silently retried for ever.
+    #[test]
+    fn documents_kept_from_before_setup_are_copied_once_and_always_reported() {
+        let error = |code: &str| CommandError {
+            code: code.into(),
+            message: "test".into(),
+        };
+        let scan = PathBuf::from("/drop/scan.pdf");
+        let pending = PendingLaunch::default();
+        pending.keep(std::slice::from_ref(&scan));
+
+        assert_eq!(
+            copy_pending(&pending, |_| Err(error("INPUT_FOLDER_NOT_SET"))),
+            None
+        );
+        assert_eq!(pending.documents(), vec![scan.clone()]);
+
+        let report = copy_pending(&pending, |_| Err(error("INPUT_FOLDER_UNAVAILABLE")))
+            .expect("the person hears of them");
+        assert_eq!(report.skipped[0].code, "INPUT_FOLDER_UNAVAILABLE");
+        assert!(pending.is_empty());
+
+        pending.keep(std::slice::from_ref(&scan));
+        let copied = AddReportDto {
+            added: 1,
+            copied: Some(1),
+            ..AddReportDto::default()
+        };
+        assert_eq!(
+            copy_pending(&pending, |documents| {
+                assert_eq!(documents, std::slice::from_ref(&scan));
+                Ok(copied.clone())
+            }),
+            Some(copied.clone())
+        );
+        assert_eq!(copy_pending(&pending, |_| Ok(copied.clone())), None);
+    }
+
+    /// A document sent before setup and sent again once there are folders is
+    /// copied by the second launch, and not a second time from the list.
+    #[test]
+    fn a_document_sent_again_after_setup_is_not_copied_twice() {
+        let root = folder("launch-sent-again");
+        let input = root.join("Input");
+        std::fs::create_dir_all(&input).unwrap();
+        let scan = write(&root, "scan.pdf", b"%PDF-1.7 a scan");
+        let (pipeline, _changes) = queue(&root.join("data"));
+        let before = ScratchApp::new(&pipeline, None);
+        second_launch(
+            &before,
+            args(&["intern.exe", "scan.pdf"]),
+            root.to_string_lossy().into_owned(),
+        );
+        assert_eq!(before.pending.documents(), vec![scan.clone()]);
+
+        let mut after = ScratchApp::new(
+            &pipeline,
+            Some(Folders {
+                input: input.canonicalize().unwrap(),
+                output: None,
+                machine: "here0123456789ab".into(),
+            }),
+        );
+        after.pending = before.pending;
+        second_launch(
+            &after,
+            args(&["intern.exe", "scan.pdf"]),
+            root.to_string_lossy().into_owned(),
+        );
+        assert!(after.pending.is_empty());
         assert_eq!(pipeline.list().unwrap().len(), 1);
         drop(pipeline);
         std::fs::remove_dir_all(root).unwrap();
@@ -6880,6 +7788,7 @@ mod document_path_tests {
             filed_receipt: filed,
             unsettled_receipt: None,
             duplicate_of: None,
+            doubt: None,
         }
     }
 
@@ -9756,10 +10665,10 @@ mod model_source_settings_tests {
 
     /// The model's answer waits for the end of the save, and the end of the
     /// save is also where the waiting documents are renamed by the
-    /// organisation: a busy local model must not keep that rename from
+    /// organization: a busy local model must not keep that rename from
     /// happening, nor a rename that failed hide the model's answer.
     #[test]
-    fn a_busy_local_model_still_renames_by_the_organisation() {
+    fn a_busy_local_model_still_renames_by_the_organization() {
         let dir = scratch("source-busy-own-names");
         let runtime = RecordingRuntime::new(dir.join("settings.json"));
         runtime.store.save(&hosted()).unwrap();
@@ -10228,6 +11137,7 @@ mod duplicate_reason_tests {
             filed_receipt: None,
             unsettled_receipt: None,
             duplicate_of: duplicate_of.map(str::to_owned),
+            doubt: None,
         }
     }
 
@@ -10295,7 +11205,40 @@ mod filed_dto_tests {
             filed_receipt: None,
             unsettled_receipt: None,
             duplicate_of: None,
+            doubt: None,
         }
+    }
+
+    /// A waiting document in doubt is not in review: it says why it waits,
+    /// and carries no code that would offer review's actions.
+    #[test]
+    fn queue_item_dto_says_why_a_doubted_document_waits() {
+        for (doubt, sentence) in [
+            (
+                "timeout",
+                "Waiting to be read again once Intern has shown it can read another document.",
+            ),
+            (
+                "crash:pdf",
+                "Waiting to be read again once Intern has read another document of this kind.",
+            ),
+        ] {
+            let dto = queue_item_dto(PipelineItem {
+                error_code: Some(intern_core::ErrorCode::ModelFailed),
+                doubt: Some(doubt.into()),
+                ..item(QueueStatus::Queued)
+            })
+            .unwrap();
+            assert_eq!(dto.reason.as_deref(), Some(sentence), "{doubt}");
+            assert_eq!(dto.error_code, None, "{doubt}");
+        }
+        // Not in doubt, a waiting document's code is kept as it was.
+        let dto = queue_item_dto(PipelineItem {
+            error_code: Some(intern_core::ErrorCode::IoError),
+            ..item(QueueStatus::Queued)
+        })
+        .unwrap();
+        assert_eq!(dto.error_code.as_deref(), Some("IO_ERROR"));
     }
 
     #[test]
@@ -10429,7 +11372,7 @@ mod own_names_tests {
         dir
     }
 
-    /// Naming the organisation renames what is waiting, so the queue hears
+    /// Naming the organization renames what is waiting, so the queue hears
     /// the list after every save - stored the way it is matched, so stray
     /// spaces and blank lines are not a different list. The queue leaves a
     /// document already named by the list as it is, so hearing the same
@@ -10542,11 +11485,11 @@ mod own_names_tests {
     }
 
     /// Putting back the settings stored before a failed SharePoint
-    /// activation puts back the organisation the waiting documents are named
+    /// activation puts back the organization the waiting documents are named
     /// by - every time, like the tray and the watcher, because the queue
     /// need not be named by what was stored when the activation failed.
     #[test]
-    fn restoring_settings_renames_by_the_restored_organisation() {
+    fn restoring_settings_renames_by_the_restored_organization() {
         let dir = scratch("own-names-restore");
         let runtime = RecordingRuntime::new(dir.join("settings.json"));
         runtime

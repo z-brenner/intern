@@ -1,7 +1,7 @@
 //! A live run: the real worker, the real engine, the local model.
 //!
 //! Each document goes the way it goes in the app - the supervised parser
-//! worker extracts it, [`Engine::analyze`] distils it, fits the prompt to
+//! worker extracts it, [`Engine::analyze`] distills it, fits the prompt to
 //! the model's context, asks the model once (or again, condensed, if the
 //! server says the prompt did not fit), validates the reply, and names the
 //! document - with a proposer in front of the model client that records

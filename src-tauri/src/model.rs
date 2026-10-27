@@ -309,7 +309,7 @@ const LOCAL: u8 = 1;
 const HOSTED: u8 = 2;
 
 /// The queue's model: whichever one the settings name at the moment a
-/// document is analysed, so a change in Settings takes effect at the next
+/// document is analyzed, so a change in Settings takes effect at the next
 /// document with nothing restarted.
 pub struct SwitchingModel<L: AnalyzerBoundary> {
     local: Arc<L>,
@@ -637,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn the_retry_wait_honours_the_service_and_otherwise_jitters_the_default() {
+    fn the_retry_wait_honors_the_service_and_otherwise_jitters_the_default() {
         assert_eq!(
             retry_wait(Some(Duration::from_secs(7)), 0.2),
             Duration::from_secs(7)

@@ -123,7 +123,7 @@ impl ModelManifest {
         }
         // Each tier exactly once: a tier named twice would leave which file
         // runs it to the order of a list, and a tier missing would leave
-        // Intern unable to honour a setting that asks for it.
+        // Intern unable to honor a setting that asks for it.
         if self.models.len() != ModelTier::ALL.len()
             || ModelTier::ALL.iter().any(|tier| {
                 self.models

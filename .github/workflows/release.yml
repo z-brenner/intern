@@ -300,7 +300,7 @@ jobs:
           # practice and weaker than it looks: the reviewer would have to predict
           # the digest of an image that does not exist yet, and the image they
           # inspected would not be the image that shipped. Any difference in font
-          # rasterisation between runs blocked the release for no safety gain.
+          # rasterization between runs blocked the release for no safety gain.
           #
           # The freshness guarantee comes from elsewhere and is unchanged: the
           # sign-off must carry `release_inputs_sha256`, which

@@ -189,7 +189,7 @@ fn segment(source: &DocumentSource) -> Vec<Block> {
                 );
             }
             pending_table = table_line;
-            // A table row is never a heading, however capitalised: a ledger's
+            // A table row is never a heading, however capitalized: a ledger's
             // `| 4000 | SALES REVENUE | CR |` rows each became one, and a
             // 600-row sheet filled the outline with 600 of them.
             if !table_line && is_heading_line(trimmed) {
@@ -565,7 +565,7 @@ fn date_lines(blocks: &[Block], kept: &[usize]) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for index in kept {
         // The line is the unit. On an invoice, an order form, or a letter every
-        // date sits on its own labelled line, and running them together is
+        // date sits on its own labeled line, and running them together is
         // exactly what destroys the distinction this index exists to make. Only
         // a line too long to read on its own is split further, which is what
         // hard-wrapped contract prose needs.
@@ -795,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn a_form_keeps_each_labelled_date_on_its_own_line() {
+    fn a_form_keeps_each_labeled_date_on_its_own_line() {
         let source = DocumentSource::from_pages(vec![page(
             1,
             "INVOICE\nAcme Corporation, 500 Foundry Road\nInvoice Number: INV-7741\nInvoice Date: January 5, 2026\nPayment Due Date: February 4, 2026\nBill To: Contoso Worldwide, Inc.\n",

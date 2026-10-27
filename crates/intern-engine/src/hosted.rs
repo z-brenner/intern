@@ -222,7 +222,7 @@ pub fn request_timeout_for(url: &Url) -> Duration {
 
 /// Whether a request to this endpoint goes through the machine's proxy.
 ///
-/// The same judgement that lets plain HTTP through decides this, and it has
+/// The same judgment that lets plain HTTP through decides this, and it has
 /// to: the loopback exception exists so a server on this machine can be used
 /// without a certificate, not so a proxy configured for the internet can be
 /// handed the API key and the whole distilled text of every document in
@@ -256,7 +256,7 @@ impl HostedClient {
     pub fn new(config: HostedModelConfig) -> EngineResult<Self> {
         let config = config.resolved()?;
         let endpoint = endpoint_for(config.provider, &config.base_url)?;
-        // The system proxy is honoured for a service on the internet, unlike
+        // The system proxy is honored for a service on the internet, unlike
         // for the local server: a machine that reaches the internet through a
         // proxy reaches that endpoint through it too. It is bypassed for an
         // endpoint on this machine, because a proxy would otherwise be handed
@@ -1057,7 +1057,7 @@ mod tests {
     }
 
     /// The whole path, against a service that answers 429: the wait it named
-    /// rides out on the error for the queue to honour, and a quota that has
+    /// rides out on the error for the queue to honor, and a quota that has
     /// run out is a billing failure, sent once.
     #[test]
     fn a_rate_limit_carries_its_wait_and_an_exhausted_quota_is_billing() {

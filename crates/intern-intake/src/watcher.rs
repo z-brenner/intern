@@ -28,13 +28,28 @@ use crate::{
     identity::MachineIdentity,
     scan::{
         FileFacts, Hydration, IntakeAdmission, IntakeConfig, IntakeHost, IntakeStatus, ItemState,
-        StabilityTracker, SystemHydration, is_conflict_copy, walk_intake,
+        StabilityTracker, SystemHydration, is_conflict_copy, modified_secs, relative_slash_path,
+        walk_intake,
     },
 };
 
 pub struct IntakeWatcher {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
+    handle: IntakeHandle,
+}
+
+/// What a caller needs to hand documents to a running watcher's queue on its
+/// own thread, apart from the watcher itself: the watcher owns its scan
+/// thread and joins it when dropped, so the app keeps it behind a lock it
+/// must not hold through an admission check or a hash. A handle is cheap to
+/// clone and holds no lock.
+#[derive(Clone)]
+pub struct IntakeHandle {
+    shared: Arc<Shared>,
+    identity: MachineIdentity,
+    host: Arc<dyn IntakeHost>,
+    clock: Arc<dyn Clock>,
 }
 
 struct Shared {
@@ -42,6 +57,28 @@ struct Shared {
     wake: Condvar,
     status: Mutex<IntakeStatus>,
     shutdown: AtomicBool,
+    /// Claims `hand_over` took for this machine - the folder they were taken
+    /// in, the key, the path - for the scan loop to take into its own
+    /// bookkeeping on its next pass, if it is still watching that folder.
+    adopted: Mutex<Vec<(PathBuf, String, PathBuf)>>,
+}
+
+/// What became of a document handed straight to the queue with
+/// [`IntakeWatcher::hand_over`].
+#[derive(Debug, Eq, PartialEq)]
+pub enum HandOver<T> {
+    /// Claimed for this machine and taken by the queue; `T` is what the
+    /// queue said about it.
+    Queued(T),
+    /// The host's admission check does not let this machine take it yet - a
+    /// verified team Inbox that has not heard from Microsoft about the file,
+    /// typically. It stays in the folder, and scans ask again.
+    Held(IntakeAdmission),
+    /// Another machine holds the claim and is working on it.
+    ClaimedElsewhere,
+    /// The claim could not be written, or the queue refused the document;
+    /// the code or message says why. Nothing is left claimed.
+    Refused(String),
 }
 
 struct Control {
@@ -79,6 +116,7 @@ impl IntakeWatcher {
         let shared = Arc::new(Shared {
             status: Mutex::new(IntakeStatus::idle(config.intake_root.clone())),
             shutdown: AtomicBool::new(false),
+            adopted: Mutex::new(Vec::new()),
             control: Mutex::new(Control {
                 config,
                 generation: 0,
@@ -91,13 +129,36 @@ impl IntakeWatcher {
             .name("intern-intake-watcher".to_string())
             .spawn({
                 let shared = shared.clone();
+                let identity = identity.clone();
+                let host = host.clone();
+                let clock = clock.clone();
                 move || run(&shared, &identity, host, clock, hydration)
             })
             .expect("intake watcher thread could not be spawned");
         IntakeWatcher {
+            handle: IntakeHandle {
+                shared: shared.clone(),
+                identity,
+                host,
+                clock,
+            },
             shared,
             thread: Some(thread),
         }
+    }
+
+    /// A handle for handing documents over without holding the watcher.
+    pub fn handle(&self) -> IntakeHandle {
+        self.handle.clone()
+    }
+
+    /// [`IntakeHandle::hand_over`] on this watcher.
+    pub fn hand_over<T>(
+        &self,
+        path: &Path,
+        enqueue: impl FnOnce(&Path) -> Result<T, String>,
+    ) -> HandOver<T> {
+        self.handle.hand_over(path, enqueue)
     }
 
     pub fn status(&self) -> IntakeStatus {
@@ -122,6 +183,124 @@ impl IntakeWatcher {
             control.wake = true;
         }
         self.shared.wake.notify_all();
+    }
+}
+
+impl IntakeHandle {
+    /// Hands a document this machine has just put into the intake folder
+    /// itself - a copy of a file dropped on the window - straight to the
+    /// queue, instead of leaving it for a scan to find once it has settled.
+    ///
+    /// It goes through what a scan would put it through, in the same order:
+    /// the host's admission check, the origin marker naming this machine, an
+    /// exclusive claim, and `enqueue` (the caller's, so it can say what the
+    /// queue made of it). The claim is then the scan loop's to shepherd like
+    /// any it took itself, so the scan that later finds the file settled sees
+    /// a claim this machine holds and does not hand the document over again,
+    /// and a document filed away before any scan saw it still has its claim
+    /// closed. A person dropped this document on purpose, so it is claimed
+    /// even where teammates' documents are not processed, and even over an
+    /// old tombstone left for the same name, size and time - a document filed
+    /// long ago whose history was cleared, dropped again; that one is queued
+    /// without a claim, since the tombstone cannot be reopened.
+    ///
+    /// Runs on the caller's thread. `path` must be inside the intake folder.
+    /// A claim this machine already held is never released by a failed
+    /// hand-over.
+    pub fn hand_over<T>(
+        &self,
+        path: &Path,
+        enqueue: impl FnOnce(&Path) -> Result<T, String>,
+    ) -> HandOver<T> {
+        let root = lock(&self.shared.control).config.intake_root.clone();
+        let Some(relative_path) = relative_slash_path(&root, path) else {
+            return HandOver::Refused("NOT_IN_INTAKE_FOLDER".into());
+        };
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => metadata,
+            _ => return HandOver::Refused("FILE_MISSING".into()),
+        };
+        match self.host.admission(path) {
+            IntakeAdmission::Verified | IntakeAdmission::LocalOnly => {}
+            held => return HandOver::Held(held),
+        }
+        let doc = DocumentFacts {
+            relative_path,
+            size: metadata.len(),
+            modified_secs: modified_secs(&metadata),
+        };
+        let key = doc.key();
+        let store = match ClaimStore::with_clock(&root, self.identity.clone(), self.clock.clone()) {
+            Ok(store) => store,
+            Err(_) => return HandOver::Refused("INTAKE_COORDINATION_UNAVAILABLE".into()),
+        };
+        // Best effort, like a scan's: the claim below is what decides.
+        let _ = store.write_origin(&doc);
+        // A claim this machine already holds - a scan took it, or an earlier
+        // hand-over did - is not this call's to give back: releasing it when
+        // the queue refuses the document now (it is being read, so it is
+        // locked) would let the next scan withdraw work under way. The store
+        // says whether this call created the claim, in the same step that
+        // takes it, so a scan claiming it a moment earlier cannot be missed.
+        let (acquired, created) = store.acquire_reporting(&doc);
+        match acquired {
+            AcquireOutcome::Acquired if store.verify(&key) => {}
+            AcquireOutcome::Acquired | AcquireOutcome::HeldByOther(_) => {
+                return HandOver::ClaimedElsewhere;
+            }
+            AcquireOutcome::Done(_) => {
+                return match enqueue(path) {
+                    Ok(queued) => HandOver::Queued(queued),
+                    Err(message) => HandOver::Refused(message),
+                };
+            }
+            AcquireOutcome::Failed(_) => return HandOver::Refused("CLAIM_IO_FAILED".into()),
+        }
+        match enqueue(path) {
+            Ok(queued) => {
+                // Tied to the item now, as a scan's claim is when it hands a
+                // document over: the copy can leave this path at once - an
+                // exact copy of a filed document is moved to the output
+                // folder as it is queued, an unreadable one renamed
+                // NEEDS REVIEW - and the claim must follow it there rather
+                // than read it as withdrawn.
+                self.host.tie_claim(&key, path);
+                lock(&self.shared.adopted).push((root, key, path.to_path_buf()));
+                HandOver::Queued(queued)
+            }
+            Err(message) => {
+                if created {
+                    let _ = store.release(&key);
+                }
+                HandOver::Refused(message)
+            }
+        }
+    }
+
+    /// Whether the watcher this handle belongs to is still running. A handle
+    /// kept past a restart of the watcher reaches one that no longer scans,
+    /// and a claim handed to it would never be shepherded.
+    pub fn is_running(&self) -> bool {
+        !self.shared.shutdown.load(Ordering::SeqCst)
+    }
+
+    /// Whether `path` is a sync client's conflict copy, by the rule a scan
+    /// uses: the spelled-out form, or a suffix naming a machine this folder
+    /// has seen. Such a copy is never handed over.
+    pub fn is_conflict_copy(&self, path: &Path) -> bool {
+        let root = lock(&self.shared.control).config.intake_root.clone();
+        let mut machines: Vec<String> =
+            ClaimStore::with_clock(&root, self.identity.clone(), self.clock.clone())
+                .map(|store| {
+                    store
+                        .list_machines()
+                        .iter()
+                        .map(|presence| presence.conflict_name().to_owned())
+                        .collect()
+                })
+                .unwrap_or_default();
+        machines.push(self.identity.host_name.clone());
+        is_conflict_copy(path, &machines)
     }
 }
 
@@ -168,6 +347,9 @@ struct ScanState {
     /// The verdict that holds each held document, by key, as the last full
     /// scan heard it. A rescan while files settle reuses it.
     held: HashMap<String, IntakeAdmission>,
+    /// Whether this run has taken back the open claims of documents no
+    /// longer where they were claimed (see `adopt_out_of_place`).
+    adopted: bool,
 }
 
 impl ScanState {
@@ -204,6 +386,17 @@ fn run(
         if state_generation != Some(generation) {
             state = ScanState::new(&config);
             state_generation = Some(generation);
+        }
+        // Claims `hand_over` took: the queue has their items from that
+        // moment, exactly as for a claim this loop took itself. One taken in
+        // a folder this loop no longer watches belongs to that folder's claim
+        // store, not this one; a later watch of that folder adopts it from
+        // the store, as it adopts any claim this machine left there.
+        for (root, key, path) in lock(&shared.adopted).drain(..) {
+            if root == config.intake_root {
+                state.seen_live.insert(key.clone());
+                state.owned.insert(key, path);
+            }
         }
         // A rescan while files settle comes every few seconds, and asking
         // again about every document that is merely being held - for a shared
@@ -279,6 +472,7 @@ fn scan_once(
         seen_live,
         enqueue_failures,
         held,
+        adopted,
     } = state;
     if store.is_none() {
         match ClaimStore::with_clock(&config.intake_root, identity.clone(), clock.clone()) {
@@ -302,7 +496,7 @@ fn scan_once(
     let hidden = walk.hidden;
     let files = walk.files;
 
-    // Read before the walk is processed so a conflict copy is recognised on the
+    // Read before the walk is processed so a conflict copy is recognized on the
     // same scan it appears, and include this machine: OneDrive names the losing
     // side of a conflict after whichever machine wrote it, which is often us.
     // Hostnames only: a label typed into Settings ("Office", "Jane") is not
@@ -343,6 +537,10 @@ fn scan_once(
             break;
         }
         scanner.process_file(facts);
+    }
+    if !interrupted && !*adopted {
+        scanner.adopt_out_of_place();
+        *adopted = true;
     }
     scanner.finish_unseen_owned();
     // A refused document that is gone, or changed into a new key, starts
@@ -408,8 +606,11 @@ impl Scanner<'_> {
         self.backlog.note(&key, &facts.relative_path);
         // A conflict copy is the sync client's bookkeeping, not a new document.
         // Naming it would file a second copy of something already filed, so it
-        // is counted and left where it is for a person to resolve.
-        if is_conflict_copy(&facts.path, &self.machines) {
+        // is counted and left where it is for a person to resolve - unless
+        // this machine holds its claim: a document a person dropped whose name
+        // merely looks like one ("Report-<this host>.pdf") was handed over
+        // on purpose, and its claim must still be renewed and closed.
+        if is_conflict_copy(&facts.path, &self.machines) && !self.holds_claim(&key) {
             self.status.sync_conflicts += 1;
             return;
         }
@@ -465,6 +666,15 @@ impl Scanner<'_> {
         }
     }
 
+    /// Whether this machine holds the claim on `key`: one this run owns, or
+    /// one left in the store by an earlier run or a hand-over.
+    fn holds_claim(&self, key: &str) -> bool {
+        self.owned.contains_key(key)
+            || self.store.read(key).is_some_and(|claim| {
+                claim.machine_id == self.identity.id && claim.state == ClaimState::Claimed
+            })
+    }
+
     /// What this machine may do with a document nobody is processing: ask the
     /// host who uploaded it, and claim it only if the answer allows. A rescan
     /// while files settle takes a document's hold from the last full scan
@@ -506,7 +716,7 @@ impl Scanner<'_> {
     /// unreachable Microsoft, a throttled connection, metadata that has not
     /// caught up with an upload yet — leaves the claim and the queue item
     /// alone: the queue authorizes again at every stage of its own, so nothing
-    /// is processed on stale evidence, and cancelling here would throw away
+    /// is processed on stale evidence, and canceling here would throw away
     /// work that was legitimately admitted a moment ago.
     fn manage_admitted(&mut self, key: &str, facts: &FileFacts) {
         let admission = self.host.admission(&facts.path);
@@ -618,7 +828,7 @@ impl Scanner<'_> {
                     // owns the surviving claim keeps the document.
                     return;
                 }
-                match self.host.enqueue(&[path.to_path_buf()]) {
+                match self.host.enqueue_claimed(key, path) {
                     Ok(()) => {
                         self.enqueue_failures.remove(key);
                         self.owned.insert(key.to_string(), path.to_path_buf());
@@ -688,19 +898,31 @@ impl Scanner<'_> {
     /// this run handed it over or saw it working or in review, a person took
     /// it out of the queue - Remove, or Discard waiting - and that decision is
     /// recorded as `KeptOriginal`: releasing the claim instead put the
-    /// document straight back into the queue on the next scan, to be analysed
+    /// document straight back into the queue on the next scan, to be analyzed
     /// again. If it was never seen live, the claim outlived a crash between
     /// acquire and enqueue, and is released so the next scan hands the
     /// document over. A run that started after the person removed it cannot
-    /// tell the two apart, and hands it over again: analysing a document twice
-    /// is the lesser mistake next to never analysing it.
+    /// tell the two apart, and hands it over again: analyzing a document twice
+    /// is the lesser mistake next to never analyzing it.
     ///
     /// A document whose item failed before its content ever arrived is
     /// released too. Nothing judged it, and Clear history tidying its failed
     /// item away is no decision about it; handed over again, it gets the
     /// attempt it is owed.
+    ///
+    /// A document the queue could not read is renamed where it lies, to
+    /// `NEEDS REVIEW - <name>`, and waits in review. No scan claims that
+    /// name (see `walk_intake`), so the claim is never seen at its key again
+    /// and arrives here with its file gone. The host answers for the name
+    /// the document arrived under - the queue keeps it beside the row - so
+    /// the item reads as waiting for review and the claim is kept, until the
+    /// item's own fate closes it like any other: renamed once a person files
+    /// it, kept once they keep its name (which takes the prefix off again),
+    /// removed once they take it out of the queue. The host withdraws only
+    /// an item still at the path it is asked about, so giving up such a
+    /// claim never cancels the document in review.
     fn manage_owned(&mut self, key: &str, path: &Path, file_present: bool) {
-        match self.host.item_state(path) {
+        match self.host.claim_state(key, path) {
             ItemState::Active | ItemState::NeedsReview => {
                 self.seen_live.insert(key.to_owned());
                 self.keep(key, path);
@@ -742,7 +964,7 @@ impl Scanner<'_> {
     fn abandon(&mut self, key: &str, path: &Path) {
         self.owned.remove(key);
         self.seen_live.remove(key);
-        self.host.abandon(path);
+        self.host.abandon_claim(key, path);
     }
 
     /// A document that failed while its bytes were still in the cloud has not
@@ -796,7 +1018,7 @@ impl Scanner<'_> {
     /// that cannot retry, gets the claim released as before.
     fn forgive(&mut self, key: &str, path: &Path) {
         self.awaiting_hydration.remove(key);
-        if self.visited.contains(key) && self.host.retry(path) {
+        if self.visited.contains(key) && self.host.retry_claim(key, path) {
             self.keep(key, path);
             return;
         }
@@ -811,6 +1033,24 @@ impl Scanner<'_> {
                 self.status.processed_here += 1;
             }
             Err(error) => self.status.error = Some(format!("CLAIM_UPDATE_FAILED: {error}")),
+        }
+    }
+
+    /// Takes back this machine's open claims whose document is no longer
+    /// where it was claimed, once per run, so their fate is followed like
+    /// that of any claim held since it was taken.
+    ///
+    /// A run holds what it claims only in memory. A claimed document still
+    /// in place is picked up again when a scan sees it, but one renamed
+    /// `NEEDS REVIEW - ...` because it could not be read is never seen at its
+    /// key again, so after a restart its claim was neither renewed nor
+    /// closed - not when a person filed the document, not when they removed
+    /// it - until it expired. Adopted here, it is followed through the host
+    /// like any other: kept while the document waits for review, closed on
+    /// its fate.
+    fn adopt_out_of_place(&mut self) {
+        for (claim, path) in self.store.own_open_claims_out_of_place() {
+            self.owned.entry(claim.key).or_insert(path);
         }
     }
 

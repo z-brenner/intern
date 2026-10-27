@@ -3,7 +3,7 @@
 //! A one-sentence description is the part of Intern's output a person reads
 //! as fact, and the part no evidence check guards. This module pulls the
 //! checkable claims out of it - amounts, percentages, other numbers, dates,
-//! month-and-year mentions, identifiers, and capitalised multi-word names -
+//! month-and-year mentions, identifiers, and capitalized multi-word names -
 //! and asks whether each occurs in the document's own text.
 //!
 //! It is a heuristic and errs towards *supported*: a number counts as
@@ -11,7 +11,7 @@
 //! occur in that order with punctuation and case ignored. What it is built
 //! to catch is the invented fact - an amount, a date, an identifier, or a
 //! company the document never mentions - not a paraphrase. Single
-//! capitalised words are not claims (every sentence starts with one), and a
+//! capitalized words are not claims (every sentence starts with one), and a
 //! leading article or preposition is dropped from a name ("The Halvorsen
 //! Group" claims "Halvorsen Group").
 
@@ -276,7 +276,7 @@ struct Token<'a> {
 
 impl Token<'_> {
     /// Whether a name cannot continue past this token: it closed a clause
-    /// or a sentence. "Inc." and initials end in a full stop without ending
+    /// or a sentence. "Inc." and initials end in a period without ending
     /// anything.
     fn ends_phrase(&self) -> bool {
         let raw = self
@@ -411,7 +411,7 @@ fn extract(description: &str) -> Vec<Found> {
         }
     }
 
-    // Names: runs of two or more capitalised words among what is left.
+    // Names: runs of two or more capitalized words among what is left.
     let mut run: Vec<usize> = Vec::new();
     let flush = |run: &mut Vec<usize>, found: &mut Vec<Found>| {
         let mut start = 0;
@@ -864,7 +864,7 @@ mod tests {
     }
 
     #[test]
-    fn names_are_runs_of_capitalised_words_without_their_leading_article() {
+    fn names_are_runs_of_capitalized_words_without_their_leading_article() {
         assert_eq!(
             kinds(
                 "The Halvorsen Fixture Works LLC invoice to Quillon Ridge Bakery for Display Fixtures, approved by Marta Quillon."
@@ -876,7 +876,7 @@ mod tests {
                 (ClaimKind::Name, "Marta Quillon".to_owned()),
             ]
         );
-        // One capitalised word is not a name claim; "Inc." does not end one;
+        // One capitalized word is not a name claim; "Inc." does not end one;
         // a comma does.
         assert_eq!(
             kinds("Invoice from Brightwater Tooling, Inc. and Ostrander & Vey."),

@@ -8,7 +8,7 @@
 //! these sampled peaks. Elsewhere nothing is sampled and every peak is
 //! `null`: absent, not zero.
 //!
-//! The worker is recognised as a child of this process named
+//! The worker is recognized as a child of this process named
 //! `intern-worker`; the server by the process id passed in, or failing
 //! that by the name `llama-server` - on a machine running more than one
 //! server, pass the id.

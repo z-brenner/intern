@@ -302,7 +302,7 @@ impl PartyRole {
     }
 
     /// The role a reply named, or `None` for a word that is not one: an
-    /// unrecognised role is no role, never [`PartyRole::Other`].
+    /// unrecognized role is no role, never [`PartyRole::Other`].
     pub fn parse(word: &str) -> Option<Self> {
         let word = word.trim();
         Self::ALL
@@ -446,7 +446,7 @@ pub struct ValidatedParty {
     /// Named only on a "cc:" line: a bystander, never a filename's party.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub copied: bool,
-    /// A person who signs for an organisation that is a party - "Harriet
+    /// A person who signs for an organization that is a party - "Harriet
     /// Voss, Vice President of People Operations, Northstar Lantern Works
     /// LLC" - and so is not a party of their own.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -668,7 +668,7 @@ pub enum ReviewReason {
     /// The accepted date's year is implausible for a document (an OCR
     /// misread such as 2625, or a year before 1900).
     DateImplausible,
-    /// The date the model chose is labelled in the document as a due,
+    /// The date the model chose is labeled in the document as a due,
     /// renewal, or expiry date rather than the document's own date.
     DateIsDeadline,
     /// The date is written only as numbers whose day and month could be

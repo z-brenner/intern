@@ -62,18 +62,18 @@ and a `.doc` that is really a Word 2007 package (or a `.pptx` that is really a
 97-2003 deck) reaches no reader without the caps it would have had. A file
 saved with a password to open is reported as `PASSWORD_PROTECTED` rather than
 as damage: an encrypted Office package is an OLE compound file holding
-`EncryptionInfo` and `EncryptedPackage` streams, recognised before the zip
+`EncryptionInfo` and `EncryptedPackage` streams, recognized before the zip
 pre-pass would have called it a corrupt archive; a legacy workbook carries a
 `FilePass` record; and PDFium's password error on a PDF maps to the same code.
 Every error message is one line, never a debug dump.
 
 Every page also carries a layout: the page as blocks in reading order -
-headings, paragraphs, tables with their rows and cells, labelled values -
+headings, paragraphs, tables with their rows and cells, labeled values -
 each with a stable id (`p3.b7`, rows `p3.b7.r2`, fields `p3.b7.f1`), the
 heading it falls under, its box on the page where the reader knows one, and
 where its text came from. A PDF page is routed before it is read: most pages
 keep PDFium's text exactly as it has always been read and get blocks built
-cheaply from it; a page whose columns, tables or grids of labelled values
+cheaply from it; a page whose columns, tables or grids of labeled values
 PDFium would run together is rebuilt from the geometry of its characters,
 and its text becomes those blocks in order; a page with no usable text, or
 an invisible text layer that is a bad prior OCR, is read by OCR; and a large
@@ -125,7 +125,7 @@ that would have to go below 50 DPI to fit is a resource limit, and the size of
 what was actually rendered is still checked against the cap. A standalone
 image is decoded up to 100 megapixels — a phone's 48- and 50-megapixel modes
 are ordinary — and up to 400 MB of decoded pixels, which holds a scanner's
-16-bit colour mode to the memory an 8-bit image takes. It is scaled down to
+16-bit color mode to the memory an 8-bit image takes. It is scaled down to
 the page cap before OCR by averaging the pixels each page pixel covers,
 straight into the page-sized copy, and only then turned upright, so a
 48-megapixel photo costs the worker about 220 MB at its peak rather than the
@@ -143,14 +143,14 @@ reads scans exactly as before. [OCR](ocr.md) has the engine, its settings,
 the benchmark behind each one, and what it costs. Either way the reading
 comes back as lines with boxes and confidences, which the layout analysis
 turns into blocks like any other page's, and the page's text is those blocks
-in reading order: tables as rows, labelled values as `Label: value` lines.
+in reading order: tables as rows, labeled values as `Label: value` lines.
 An engine's own order read an unruled table down its columns and left a
 form's labels apart from their values ([Document routing](document-routing.md)
 has the measurement).
 
 Tesseract's lines come from its TSV output: words on a line joined with a
 space, lines grouped into Tesseract's blocks and paragraphs. Its text used to
-be one line per page, which left distillation no headings, no labelled lines,
+be one line per page, which left distillation no headings, no labeled lines,
 and no date lines on exactly the documents where dates go missing; the
 scanned lease's evidence for its date was its whole page.
 
@@ -162,8 +162,8 @@ rather than dropped silently. `.eml` emails and Outlook `.msg` messages
 emit a fixed-order header block followed by the body and a listing (never an
 extraction) of attachments. The `Date:` line is the message's own `Date`
 header, verbatim — for a `.msg`, the one in the transport headers it
-travelled with — so the sent date is checkable against the document like any
-other fact, in the sender's own offset. A `.msg` that never travelled (a
+traveled with — so the sent date is checkable against the document like any
+other fact, in the sender's own offset. A `.msg` that never traveled (a
 draft, a sent item) has only a UTC submit time, and is dated in this
 machine's zone with its offset written out. No second, UTC rendering of the
 date is added: for every evening email west of Greenwich it falls on the
@@ -196,8 +196,8 @@ The rest of this list is how Tesseract, the fallback, reads a page; PP-OCR
 asks its orientation classifier first and then runs the same confidence
 search ([OCR](ocr.md)).
 
-* A page is read as it came first, in grey: Tesseract binarises whatever it is
-  given, and grey is a third of the bytes to encode for every pass. A reading
+* A page is read as it came first, in gray: Tesseract binarizes whatever it is
+  given, and gray is a third of the bytes to encode for every pass. A reading
   of at least three words at a mean confidence of 75 or more is done — one
   recognition pass and no orientation detection — and so is a reading that
   found nothing, since a blank page, every other sheet of a duplex scan, is
@@ -303,7 +303,7 @@ implemented in Rust with no dependencies beyond the standard library.
 
 ### Budgets
 
-| Source size | Behaviour |
+| Source size | Behavior |
 | --- | --- |
 | ≤ 12,000 characters | passed through untouched |
 | > 12,000 characters | distilled to ≤ 12,000 characters |
@@ -341,7 +341,7 @@ that the prompt did not fit.
 
 The SECTIONS line that opens a condensed digest lists at most 40 headings in at
 most 1,500 characters, ending in ` | …` when cut. A table row is never a
-heading, however capitalised: a 600-row ledger used to put 600 of them there.
+heading, however capitalized: a 600-row ledger used to put 600 of them there.
 
 ## The prompt and the grammar
 
@@ -376,7 +376,7 @@ The goal is calibration, not timidity. A proposal goes to review only when a
 | Date | it is a real calendar date **and** is written, in some ordinary human form, in the document — `April 1, 2026`, `1st April 2026`, `01/04/2026`, `01.04.2026`, `4/1/26`, `01/04/26`, `01.04.26`, and their relatives, matched as whole tokens so `12/1/2026` never supports February 1. A two-digit year is read in either order; dotted or dashed, only padded, so a section number like `1.4.26` is never a date |
 | Type | at least 60% of its significant words appear in the document |
 | Party | the name appears in the document, verbatim or with punctuation disregarded (`Contoso Worldwide Inc` for a document that writes `Contoso Worldwide, Inc.`, and `&` read as `and`); the words themselves are never loosened. Two spellings of one name (`ACME CORP`, `Acme Corp.`) are one party, but a name is never merged into a longer one (`Acme`, `Acme Holdings`) |
-| Description | one sentence, 6–42 words, and every number and capitalised name in it appears in the document, allowing a possessive, a thousands separator, a hyphen the sentence added, or a date the document states written another way (`January 5, 2026` for `01/05/2026`) |
+| Description | one sentence, 6–42 words, and every number and capitalized name in it appears in the document, allowing a possessive, a thousands separator, a hyphen the sentence added, or a date the document states written another way (`January 5, 2026` for `01/05/2026`) |
 
 The date rule is deliberately about the *date*, not about the model's quoted
 line. Small models paraphrase their own quotes — answering
@@ -402,7 +402,7 @@ checks read the document around it:
   sets off the cited date (`the Master Services Agreement, as amended,
   effective June 2, 2023`) does not end it, while one followed by a clause
   of its own (`..., your employment will terminate effective`) does.
-* **A deadline.** When every statement of the chosen date is labelled a
+* **A deadline.** When every statement of the chosen date is labeled a
   deadline (`Due Date:`, `Payment due`, `Expires`, `Renewal Date`), the one
   date the document labels as its issue date (`Invoice Date:`, `Dated`, a
   bare `Date:` - not `Ship Date:` or `Order Date:`) replaces it; with none
@@ -436,7 +436,7 @@ specific type.
 
 Three things are then decided from the document rather than from the model,
 because a two-billion-parameter model is good at finding facts and poor at
-labelling them consistently:
+labeling them consistently:
 
 * **The date's role.** The wording in the ninety-odd characters before the
   validated date decides whether it is an effective, execution, invoice,
@@ -503,7 +503,7 @@ model's unverified reading. The analysis keeps the model's reply beside the
 validated facts for exactly that offer — a date the document never states
 verbatim is withheld from the name, not lost — and lists every date the
 document does state, so a document the model could not date is dated from
-its own page in a click, with the file's last-modified date as the labelled
+its own page in a click, with the file's last-modified date as the labeled
 last resort. A date printed only in numbers is listed when it can be read
 one way: `30/01/2026`, a year-first date, or `03/04/2026` in a document
 whose other numeric dates show which way round it writes them. One that
@@ -520,7 +520,7 @@ printed in capitals is title-cased for the name — `ORION GLASS STUDIO INC.`
 becomes `Orion Glass Studio Inc.` — when it has no lowercase letter and at
 least two words of four letters or more, so `IBM` and `KPMG LLP` stay as they
 are; company suffixes read as usual (`Inc`, `Corp`, `Ltd`, `GmbH`, while
-`LLC`, `LLP`, `PLC` stay in capitals), a word with a full stop is an
+`LLC`, `LLP`, `PLC` stay in capitals), a word with a period is an
 abbreviation (`No. 2`, `St. Louis`), common short words are cased (`Bank of
 New York`, `Wage and Tax Statement`), other words of three letters or fewer
 and vowel-less initialisms (`ABC`, `HSBC`) stay in capitals, and a word with
@@ -586,7 +586,7 @@ that finishes the earlier rename, the document is filed under the name that
 rename gave it, and an approval that asked for another name or sentence is
 refused with that name rather than reported as applied. A rename rolled back
 into review takes the approval off its proposal, and a document read again
-since its old rename was journalled stays in review when that rename is
+since its old rename was journaled stays in review when that rename is
 rolled back. Every file operation and the reconciliation after it run one at
 a time, so the recovery pass - every 65 seconds by the clock, however often
 new documents wake the scheduler - never reconciles an operation still in
@@ -596,6 +596,34 @@ or an undo is running waits for it and carries on, instead of leaving the
 backlog until the next wake. An undo that cannot reach the filed document -
 an offline share - says so; only a document the file system reports missing
 is called moved or deleted.
+
+A document Intern could not read is renamed where it lies, to
+`NEEDS REVIEW - <name>`, and its queue row - keyed by path - follows it. The
+rename and the row's update cannot be one step, so a `review_renames`
+journal, kept apart from the receipts, records the intent first: planned, then
+a no-replace rename, then the row's new path committed with the journal entry.
+A crash in between is settled from the disk on the next recovery pass - the
+document at the new name means the rename landed, still at the old one means
+nothing moved, and both names taken is settled by the bytes - and a document
+left in review without its mark is marked then. A rename that is refused (a
+held file, a folder that may not be written) moves nothing and is recorded as
+refused rather than retried for ever. Keep original takes the prefix off again
+with the same journal, completing the item in the same commit, and Retry -
+which fingerprints the file again, since removing a password changes it - and
+approval read and file the document from wherever its file now is. A marked
+document that is canceled, or fails after a retry, gets its own name back the
+same way, so clearing the history never leaves a file every scan skips: one
+whose name is refused back stays in the history and is tried again every
+fifteen minutes, keeping one refusal in the journal, and one whose marked file
+is gone - its folder can be read and the file is not in it - is given up. A
+folder that cannot be read (an offline share, an unmounted sync root) is not
+taken for a deleted file. Every scan
+and add skips the prefix, in any case. The intake watcher's claims are tied
+to the queue item each one handed over (`intake_claims`), so a claim follows
+its own document - renamed for review, given its name back as `name (2)`, or
+with a new upload arriving under its old name - and after a restart the
+watcher takes back its open claims on documents no longer where they were
+claimed, rather than leaving them open until they expire.
 
 A document that changed after it was read - signed, edited, saved over - is
 never filed under a name that described the earlier version: approving it
@@ -655,16 +683,16 @@ person changed their mind about the word, not about Intern - and restoring
 the document's own spelling retracts the rule. The whole memory is the list
 in Settings; nothing is learned that cannot be seen and forgotten there.
 
-### Your organisation
+### Your organization
 
 A firm's own name is on almost everything it files, so a name that carries
 every party says the firm over and over, and the Party layout files one
 client's documents under whichever side the model happened to name first.
-Settings takes the organisation's names, one per line, and the queue applies
+Settings takes the organization's names, one per line, and the queue applies
 them after house style (`own_names::counterparty_view`): when a document
-names the organisation and someone else, the organisation's parties are left
+names the organization and someone else, the organization's parties are left
 out of the name and the others keep their order, "between" becoming "with"
-when one is left. A document that names only the organisation keeps it - a
+when one is left. A document that names only the organization keeps it - a
 name with no party says less than one that names the firm. Matching is house
 style's key, plus a whole-word prefix either way round ("Contoso" is
 "Contoso Worldwide, Inc."), and an own name under four characters is ignored
@@ -802,7 +830,7 @@ Someone upgrading from the single-model build has the accurate model already:
 launch verifies it once (the earlier build's stamp vouches for nothing here)
 and opens the queue on it, with nothing downloaded; Settings offers the quick
 model, which is fetched only if they ask. **Choose existing model files**
-accepts either file or both, each recognised by its length and accepted only
+accepts either file or both, each recognized by its length and accepted only
 once its digest matches.
 
 The quick model is asked through the `bonsai_2` prompt profile
@@ -970,19 +998,78 @@ queue's fifteen-minute deadline rather than running on past it.
 
 Each failure is stored under a code that says what went wrong, and the code
 decides what happens next. A failure that would come out the same on a second
-attempt fails the document at once: a password-protected file, a file that is
+attempt settles the document at once: a password-protected file, a file that is
 not what its extension says, a document past the extraction limits or too long
-for the model, a damaged file the parser rejects, an internal failure on that
-one document, and a model refusal. Asking again would only re-read the file —
+for the model, a damaged file the parser rejects, and a model refusal. Each
+of these is the document's own problem by its nature, so it does not fail: it
+waits in review under its code (`UNREADABLE_CODES` in `intern-core`), and its
+file in the input folder is renamed in place to `NEEDS REVIEW - <name>` at
+once, so the folder shows it too.
+
+A reply that could not be used, an internal failure, a model time-out and a
+reader crash are different: from one document they look the same whether the
+document or the machine is at fault, and a later success only says the
+machine works now, not that it worked when the document failed. So Intern
+blames the document only for a failure that happened while the machine was
+known to be working. The rule, in plain words:
+
+- The first time a document fails this way, nothing is renamed and nothing is
+  counted against it. It goes back to wait "in doubt" (`doubted_documents`),
+  under its own name, behind every document that is not in doubt, and is not
+  tried again until the machine is shown to work.
+- The machine is shown to work when another document is read successfully.
+  A document the model reads clears doubts over the model. A reader crash is
+  doubted by the kind of file it crashed on (PDF, image, Word, spreadsheet,
+  email, text, ...), and only another document of the same kind read
+  successfully clears it: a reader that crashes on every PDF still reads a
+  text file. If nothing else is left to read, Intern runs its own self-test:
+  for the model, the same calibration document every model must read
+  correctly at setup; for the reader on text files, a small text file Intern
+  writes in its own data folder (if it cannot write it, the queue stops and
+  says that instead). Other kinds of file have no self-test: documents of a
+  kind the reader crashed on wait under their own names for a document of
+  that kind, several of them waiting stop the queue, and resuming gives each
+  one more attempt that proves nothing - failing again, it keeps waiting.
+- While a document waits in doubt, the window says why it waits ("Waiting to
+  be read again once Intern has shown it can read another document"), not
+  that it is in review.
+- Once the machine has been shown to work, each document in doubt gets one
+  more attempt. If it fails the same way again, the failure is its own: it
+  goes to review and its file is renamed, under the usual rules below. If it
+  is read, it goes on like any other document.
+- If the self-test fails too - or no model has loaded for it in the minutes
+  a switch between models may take - it is the machine: the queue stops and
+  says why, and the documents in doubt keep their names and wait.
+- A document in doubt that goes anywhere else - to review for another
+  reason, canceled, failed - is no longer in doubt, so a person's retry
+  starts it afresh.
+- Three different documents in a row failing the same way (unusable replies,
+  time-outs and reader crashes are each counted on their own, and a document
+  once however often it failed) stop the queue as well (`failure_runs`).
+  Resuming starts the count over; it does not clear any doubt.
+
+So an outage - a model that times out on everything, or answers garbage, or a
+reader that crashes - never renames anything, however often a person resumes
+the queue before it is fixed; once it is fixed, every document in doubt is read
+again and filed. A document still in review with its rename put off from an
+earlier build goes back to wait in doubt instead.
+
+Nothing is renamed outside the input folder - asked again when the rename is
+made, in case Settings moved it, and put off rather than decided when Settings
+cannot be read - and nothing admitted on Microsoft's word about its uploader: that proof names the
+file - its name in the library - and every later stage asks for it again, so a
+renamed file could never be retried, named or filed; such a document waits in
+review under its own name. Asking again would only re-read the file —
 thirty minutes of it, for a scan that hit the time limit — or re-send and
-re-bill the request. A worker crash, a failure the worker says may pass, and a
-model request that timed out or was called off get one more attempt. A failure
+re-bill the request. A failure the worker says may pass and a model request
+that was called off get one more attempt; a worker crash and a time-out wait in
+doubt as above. A failure
 that every following document would share pauses the queue and names the
 reason in the window: the hosted-model failures above, a local model server
 that cannot be started or recovered, and missing text-recognition files. A
-model reply that cannot be used fails that document; three documents in a row
-with such a reply pause the queue, since by then the model is the problem, and
-any document read successfully starts the count again. A document that meets
+model reply that cannot be used puts that document in doubt; three documents in
+a row with such a reply pause the queue, since by then the model is the
+problem, and any document read successfully starts the count again. A document that meets
 no model at all — the moment while Settings switches between the hosted and
 the local one, before the local server's start has begun — goes back to wait
 with nothing counted against it. A request that finds a start or a restart
@@ -1012,7 +1099,7 @@ with `SECRET_SERVICE_UNAVAILABLE`), never in the settings file, and never
 travels anywhere but the address
 that was configured — redirects are refused. Plain HTTP is accepted only to
 this machine, so a local server can be used without a certificate and a
-remote one cannot be used without one; the same judgement takes the machine's
+remote one cannot be used without one; the same judgment takes the machine's
 proxy out of the path for an address on this machine, because a proxy would
 otherwise receive in cleartext the key and the document text that plain HTTP
 was allowed for on the grounds that neither leaves the machine. A service on
@@ -1027,11 +1114,28 @@ do not have.
 
 ### The same document twice
 
-Exact duplicates are a hash comparison before analysis. The duplicates people
+Exact duplicates are a hash comparison before analysis. One that has an
+output folder to go to is staged as an approved copy - a record with no
+analysis, `copy_of` naming the original - and moved through the same
+journaled apply as any approval into the original's folder (or the output
+folder's root, for a teammate's filing or an original whose folder is not
+known), as `COPY - <the original's filed name>` with the duplicate's own
+extension and the usual ` (2)` on collision. Only a duplicate in the input
+folder is moved; if the output folder changed while a copy waited, it goes to
+the new output folder's root rather than recreating a folder of the old one. It is filed now when the queue
+is free and between documents otherwise, whatever automatic renaming says. A
+copy is not a filing of its own: no fingerprint, no description record, no
+shared filed marker, and the queue row's `copy_filing` mark keeps it out of
+every later duplicate lookup, so each copy is named after the original. A
+file already inside the output folder - the original itself, added again - is
+never moved as a copy of itself, and with no output folder a duplicate waits in
+review untouched. Undo puts a copy back and leaves it in review flagged
+`DUPLICATE`, where nothing files it again; Process anyway clears the mark and
+reads it. The duplicates people
 make are not exact: a second scan of the same page, a PDF exported twice from
 the same message, a copy saved again by a program that rewrote its metadata.
 So the engine also fingerprints everything the extractor read - a 64-bit
-simhash over five-character shingles of the normalised text, hashed with
+simhash over five-character shingles of the normalized text, hashed with
 FNV-1a spelled out in the crate so the value is identical on every machine
 and in every build, because the shared filed index carries it between
 teammates. Similar text gives similar bits; a second scan with a handful of
@@ -1159,9 +1263,11 @@ here, on the next retry, or on the next recovery pass - is reported the same
 way, because what is reported is read from the queue's own record of the
 operation rather than from whichever call happened to finish it.
 
-The mirror image is the *duplicate oracle*: before analysing a document the
+The mirror image is the *duplicate oracle*: before analyzing a document the
 queue checks its own history for the same content, then asks the oracle,
 which in the desktop app reads the shared folder's filed markers. Either
-answer routes the document to review as a duplicate, naming what the content
-was filed as and, for a teammate's filing, by which machine. Analysis never
-runs on a duplicate unless a person asks for it.
+answer files the document as a copy named after that filing (see "The same
+document twice"), or, with nowhere to file it, routes it to review as a
+duplicate, naming what the content was filed as and, for a teammate's filing,
+by which machine. Analysis never runs on a duplicate unless a person asks for
+it.

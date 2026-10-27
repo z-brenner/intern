@@ -11,7 +11,7 @@
 //! falls on the next day for every evening email west of Greenwich.
 //!
 //! An Outlook `.msg` is the same page built from MAPI properties. A message
-//! that travelled over SMTP keeps its transport headers, and their `Date`
+//! that traveled over SMTP keeps its transport headers, and their `Date`
 //! header is used verbatim. One that never did - a draft, a sent item -
 //! has only the submit time as a FILETIME, an instant with no zone, and is
 //! dated in this machine's zone with its offset written out, which is the
@@ -210,7 +210,7 @@ fn render_outlook(
     text
 }
 
-/// The `Date` line for an Outlook message: the `Date` header it travelled
+/// The `Date` line for an Outlook message: the `Date` header it traveled
 /// with, verbatim, or else the moment it was sent in `zone`.
 fn outlook_date(message: &msg_parser::Outlook, zone: &TimeZone) -> String {
     // The transport headers are an RFC 5322 header block. Reading them as one
@@ -1084,7 +1084,7 @@ mod tests {
         assert_eq!(html_to_text(html), "Dear Bob,\n\nFees & taxes are <due>.");
     }
 
-    /// A receipt's label and value sit in neighbouring cells. Run together
+    /// A receipt's label and value sit in neighboring cells. Run together
     /// they are `Invoice dateMarch 3, 2025`, a date nothing can find.
     #[test]
     fn table_cells_are_separated_and_rows_are_lines() {
@@ -1115,7 +1115,7 @@ mod tests {
 
     /// Transactional email - receipts, statements, notifications - wraps its
     /// whole body in one layout cell. The lines its headings, paragraphs and
-    /// `<br>`s give it are all it has for structure, and headings, labelled
+    /// `<br>`s give it are all it has for structure, and headings, labeled
     /// lines and the date index all read lines; only the breaks that would
     /// split one cell from the next are dropped.
     #[test]

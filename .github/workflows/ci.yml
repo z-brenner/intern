@@ -10,9 +10,9 @@ permissions:
   contents: read
 
 # One run per pull request (or branch) at a time. A new push to a pull request
-# makes its running checks obsolete, so they are cancelled rather than left to
+# makes its running checks obsolete, so they are canceled rather than left to
 # hold a Windows runner for half an hour. On main nothing in progress is
-# cancelled: a run always finishes, and of the pushes that land meanwhile only
+# canceled: a run always finishes, and of the pushes that land meanwhile only
 # the newest waits to run next. A release is still gated on its own commit by
 # the release workflow, whichever main runs were skipped.
 concurrency:
@@ -355,7 +355,7 @@ jobs:
           key: ${{ steps.assets-cache.outputs.cache-primary-key }}
       # A failed fetch still keeps what it managed to download, under a key of
       # its own: progress for the next run, never mistaken for a complete cache.
-      # Not a cancelled one. Cancelling can stop the script mid-write, before it
+      # Not a canceled one. Canceling can stop the script mid-write, before it
       # can discard a truncated download, and the next run would restore that
       # file, skip downloading it because it exists, fail its pinned size and
       # SHA-256, and save it again as the newest partial: every later run would

@@ -24,7 +24,7 @@ fn advance_to_ready(db: &QueueStore, id: i64) {
         .unwrap();
 }
 
-/// Enqueues `source` and completes it through a real journalled apply so the
+/// Enqueues `source` and completes it through a real journaled apply so the
 /// completed row carries an apply/complete receipt naming `destination`.
 fn complete_via_apply(db: &Arc<QueueStore>, source: &Path, destination: &Path) -> i64 {
     let hash = StdFileSystem.hash(source).unwrap();
@@ -810,7 +810,46 @@ fn find_completed_duplicate_reports_the_filed_name_and_skips_pending_or_undone_i
     );
 }
 
-/// An operation whose rename cannot land. The undo it refuses is journalled,
+/// A duplicate filed as a copy is the original's duplicate, never a filing
+/// of its own: the next duplicate is named after the original it repeats,
+/// not `COPY - COPY - ...`. And the original's full filed path is reported,
+/// so the copy can go in the same folder.
+#[test]
+fn a_copy_filing_never_answers_for_a_later_duplicate() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("queue.sqlite3");
+    let db = Arc::new(QueueStore::open(&path).unwrap());
+    let filed = temp.path().join("Filed").join("2026");
+    fs::create_dir_all(&filed).unwrap();
+    let original = temp.path().join("original.pdf");
+    fs::write(&original, b"same-content").unwrap();
+    let hash = StdFileSystem.hash(&original).unwrap();
+    let original_id = complete_via_apply(&db, &original, &filed.join("2026-01-02 Lease.pdf"));
+
+    let duplicate = temp.path().join("duplicate.pdf");
+    fs::write(&duplicate, b"same-content").unwrap();
+    let copy_id = complete_via_apply(&db, &duplicate, &filed.join("COPY - 2026-01-02 Lease.pdf"));
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE queue_items SET copy_filing = 1 WHERE id = ?1",
+            [copy_id],
+        )
+        .unwrap();
+    assert!(db.is_copy_filing(copy_id).unwrap());
+    assert!(!db.is_copy_filing(original_id).unwrap());
+
+    let incoming_key = source_path_key(&temp.path().join("incoming.pdf"));
+    let found = db
+        .find_completed_duplicate(&hash, &incoming_key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.queue_item_id, original_id);
+    assert_eq!(found.filed_as.as_deref(), Some("2026-01-02 Lease.pdf"));
+    assert_eq!(found.filed_path, Some(filed.join("2026-01-02 Lease.pdf")));
+}
+
+/// An operation whose rename cannot land. The undo it refuses is journaled,
 /// fails, and reconciles as rolled back - which leaves the item's newest
 /// receipt a rolled-back undo sitting on top of the apply that filed it.
 struct RenameRefusedFileSystem;
@@ -878,7 +917,7 @@ fn duplicate_report_names_the_applied_file_after_a_rolled_back_undo() {
     let filed = temp.path().join("2024 - Filed Agreement.pdf");
     let completed_id = complete_via_apply(&db, &original, &filed);
 
-    // An undo that cannot rename is journalled, fails, and reconciles as rolled
+    // An undo that cannot rename is journaled, fails, and reconciles as rolled
     // back. The content never moved: it is still at the filed name.
     db.begin_applying(completed_id, QueueStatus::Completed)
         .unwrap();

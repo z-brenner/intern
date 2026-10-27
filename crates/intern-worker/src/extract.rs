@@ -323,7 +323,7 @@ impl OcrResult {
 pub const CONFIDENT_READING: f32 = 75.0;
 
 /// Of two readings of the same page, the one to keep. A tie keeps the
-/// incumbent, so the orientation OSD chose wins by default and behaviour on a
+/// incumbent, so the orientation OSD chose wins by default and behavior on a
 /// blank page stays predictable.
 ///
 /// Orientation detection is trained on prose with ascenders and descenders.
@@ -862,7 +862,7 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
     // The render cap belongs to rendering. A large-format sheet - an A1
     // drawing, a plan set - is over it at 300 DPI while carrying a
     // perfectly good text layer, and failing the whole document over a
-    // page nobody was going to rasterise loses the document. A page that
+    // page nobody was going to rasterize loses the document. A page that
     // is too large to render also cannot be escalated to vision, but it
     // keeps its text: the page image is the optional part.
     let renderable = limits
@@ -1454,7 +1454,7 @@ impl ExtractedPage {
 
 /// What is left of a document's allowance for the pages it sends: its
 /// characters, as the worker counts them on the way out (see
-/// [`goes_out_whole`]), and the lines, table cells and labelled values its
+/// [`goes_out_whole`]), and the lines, table cells and labeled values its
 /// layouts may hold (see [`PageLayout::parts`]).
 ///
 /// A layout holds an object for every line, cell and value, and the
@@ -1797,11 +1797,11 @@ fn recognize_timed<O: OcrBackend + ?Sized>(
 ///
 /// Nothing reads the page image's pixels: its presence is what tells the
 /// engine a page could not be read. So it is a thumbnail - averaged down
-/// before it is turned or encoded, grey, and small enough that making it
+/// before it is turned or encoded, gray, and small enough that making it
 /// costs a few milliseconds instead of a full-page resample and encode.
 pub const PAGE_IMAGE_LONG_EDGE: u32 = 256;
 
-/// The page image for page `page_index`: a grey PNG thumbnail of the page,
+/// The page image for page `page_index`: a gray PNG thumbnail of the page,
 /// turned clockwise by `rotation_degrees`.
 pub fn page_image(
     page_index: usize,
@@ -1948,7 +1948,7 @@ fn office_error(error: anydoc::ConvertError) -> ExtractionError {
 ///
 /// Content of the same kind is a different matter. Word has saved RTF under
 /// `.doc` for decades, and a `.doc` that is really a Word 2007 package (or a
-/// `.pptx` that is really a 97-2003 deck) is a mislabelled file of exactly
+/// `.pptx` that is really a 97-2003 deck) is a mislabeled file of exactly
 /// the kind the extension promised. None of those reaches a reader without
 /// the caps it would otherwise have had, so they are read as what they are.
 fn expected_anydoc_format(path: &Path, bytes: &[u8]) -> Result<anydoc::Format, ExtractionError> {
@@ -1962,7 +1962,7 @@ fn expected_anydoc_format(path: &Path, bytes: &[u8]) -> Result<anydoc::Format, E
     })?;
     match anydoc::Format::from_bytes(bytes) {
         // Content that identifies as nothing at all - a container this
-        // version cannot recognise - is still handed to the parser the
+        // version cannot recognize - is still handed to the parser the
         // extension names, which reports what is actually wrong with it far
         // better than a routing refusal would.
         None => Ok(named),
@@ -2545,7 +2545,7 @@ impl TiffFormat {
 ///
 /// Every offset in a TIFF is from the start of the file, so pointing the
 /// header at another directory makes that frame the file's first image,
-/// and the decoder reads it exactly as it reads a first frame - colour,
+/// and the decoder reads it exactly as it reads a first frame - color,
 /// bit depth, compression and orientation included. The header is pointed
 /// there as the file is read, never on disk.
 fn decode_tiff_frame(
@@ -3050,7 +3050,7 @@ mod text_page_layouts {
         assert_eq!((native.width, native.height), (6120, 7920));
     }
 
-    /// An OCR reading whose lines were not analysed, with more lines of
+    /// An OCR reading whose lines were not analyzed, with more lines of
     /// text than a page's layout may hold, goes without a layout and keeps
     /// its text.
     #[test]

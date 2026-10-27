@@ -14,6 +14,16 @@ and folder identifiers come only from the versioned deployment resource
 bundled with the application. They are not settings and never cross the
 webview IPC boundary as sign-in or pairing inputs.
 
+Dropping a file on Intern's window (or Add files, Add folder, Send to > Intern)
+copies it into the local, synced `Inbox` folder; it never processes a file
+where it sits. OneDrive then uploads the copy as a new item under the
+signed-in account, which is a direct upload as far as SharePoint can tell, and
+the copy is admitted only by the checks below, like any other upload. Until
+then it is not claimed or queued, and the window says it is waiting for
+Microsoft rather than queued. This path has not been run against a live tenant
+yet; if OneDrive's upload of such a copy ever fails a check, the copy is held
+as unknown, never processed on weaker evidence.
+
 The bundled resource is currently disabled because real public identifiers
 have not been supplied. Microsoft connection, pairing, and protected-intake
 admission therefore fail closed with:

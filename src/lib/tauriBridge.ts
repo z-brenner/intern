@@ -11,7 +11,6 @@ import type {
   DesktopBridge,
   ExistingModelFiles,
   FileSelection,
-  FolderSelection,
   IntakeEventSource,
   LaunchReportSource,
   SelectionBoundary,
@@ -91,12 +90,18 @@ interface QueueItemDto {
   keptOriginal?: boolean;
   parked?: boolean;
   omittedParties?: string[];
+  copyOf?: string | null;
 }
 
 interface AddReportDto {
   added?: number;
   alreadyQueued?: number;
   skipped?: Array<{ name: string; code: string }>;
+  copied?: number;
+  held?: number;
+  heldReason?: string;
+  inPlace?: number;
+  inputFolder?: string;
 }
 
 interface HistoryEntryDto {
@@ -152,12 +157,15 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
     return items.map(normalizeItem);
   }
 
-  async addFiles(files: FileSelection[]): Promise<AddReport> {
-    return normalizeAddReport(await this.transport.invoke<AddReportDto | undefined>('queue_add_files', { files }));
+  // Paths only: the backend reads a folder itself, and the display names a
+  // picker or a drop carries are for the window, not for the copy.
+  async copyToInput(selection: SelectionResult): Promise<AddReport> {
+    const paths = [...(selection.files ?? []).map((file) => file.path), ...(selection.folder ? [selection.folder.path] : [])];
+    return normalizeAddReport(await this.transport.invoke<AddReportDto | undefined>('input_copy', { paths }));
   }
 
-  async addFolder(folder: FolderSelection): Promise<AddReport> {
-    return normalizeAddReport(await this.transport.invoke<AddReportDto | undefined>('queue_add_folder', { folder }));
+  async queueInputFolder(): Promise<AddReport> {
+    return normalizeAddReport(await this.transport.invoke<AddReportDto | undefined>('intake_queue_existing'));
   }
 
   pauseQueue(): Promise<void> { return this.transport.invoke('queue_pause'); }
@@ -238,8 +246,8 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
   }
 
   intakeFolderDocuments(path: string): Promise<number> { return this.transport.invoke('intake_folder_documents', { path }); }
-  createInboxFolder(root: string): Promise<string> { return this.transport.invoke('inbox_folder_create', { root }); }
-  createFiledFolder(intakeFolder: string): Promise<string> { return this.transport.invoke('filed_folder_create', { intakeFolder }); }
+  createInputFolder(root: string): Promise<string> { return this.transport.invoke('inbox_folder_create', { root }); }
+  createOutputFolder(intakeFolder: string): Promise<string> { return this.transport.invoke('filed_folder_create', { intakeFolder }); }
   openOneDrive(): Promise<void> { return this.transport.invoke('onedrive_open'); }
 
   descriptionsStatus(): Promise<DescriptionsStatus> { return this.transport.invoke('descriptions_status'); }
@@ -505,7 +513,7 @@ export function createTauriSelectionBoundary(transport: TauriTransport = default
     // `{ paths, position }` and nothing else. The `type: 'drop'` this used to
     // insist on is added only by that JS wrapper, which Intern does not use, so
     // every desktop drop was silently thrown away. A folder is passed on as a
-    // path like any file; queue_add_files expands directories itself.
+    // path like any file; input_copy expands directories itself.
     subscribeDrops: async (listener) => {
       const stop = await transport.listen<{ paths?: unknown } | null>('tauri://drag-drop', ({ payload }) => {
         const paths = stringPaths(payload?.paths);
@@ -581,6 +589,11 @@ function normalizeAddReport(report: AddReportDto | undefined): AddReport {
     added: report?.added ?? 0,
     alreadyQueued: report?.alreadyQueued ?? 0,
     skipped: (report?.skipped ?? []).map(({ name, code }) => ({ name, code })),
+    ...(typeof report?.copied === 'number' ? { copied: report.copied } : {}),
+    ...(report?.held ? { held: report.held } : {}),
+    ...(report?.heldReason ? { heldReason: report.heldReason } : {}),
+    ...(report?.inPlace ? { inPlace: report.inPlace } : {}),
+    ...(report?.inputFolder ? { inputFolder: report.inputFolder } : {}),
   };
 }
 
@@ -623,6 +636,7 @@ function normalizeItem(item: QueueItemDto): QueueItem {
     ...(item.nearDuplicateOf === undefined ? {} : { nearDuplicateOf: item.nearDuplicateOf }),
     ...(item.fileModifiedDate === undefined ? {} : { fileModifiedDate: item.fileModifiedDate }),
     ...(item.omittedParties?.length ? { omittedParties: [...item.omittedParties] } : {}),
+    ...(typeof item.copyOf === 'string' ? { copyOf: item.copyOf } : {}),
   };
 }
 
@@ -657,7 +671,7 @@ async function openDialog(transport: TauriTransport, directory: boolean): Promis
   return stringPaths(result);
 }
 
-/** Either local model, or both: each is recognised by its size. */
+/** Either local model, or both: each is recognized by its size. */
 async function openGgufDialog(transport: TauriTransport, title: string, filterName: string): Promise<string[]> {
   const result = await transport.invoke<unknown>('plugin:dialog|open', {
     options: {

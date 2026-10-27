@@ -314,7 +314,7 @@ production adapter.
     is none.
 
 Every test fixture is synthetic. Each follows the layout above, and the
-fixtures are labelled as synthetic in the code. The parser was also run once,
+fixtures are labeled as synthetic in the code. The parser was also run once,
 ad hoc, against this machine's real Personal `libraryScope` line. It parsed
 the line and produced the site and list IDs that `ClientPolicy.ini` records.
 

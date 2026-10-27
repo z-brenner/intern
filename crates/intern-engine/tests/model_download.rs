@@ -114,7 +114,7 @@ impl StallingServer {
             };
             let _ = read_request(&mut stream);
             if let StallPoint::DuringBody { total, prefix } = stall {
-                // This server exists to be cancelled mid-body, so the client
+                // This server exists to be canceled mid-body, so the client
                 // hanging up is the scenario under test, not a failure. Unwrapping
                 // these writes panicked the thread on a broken pipe, and the
                 // panic then propagated out of `join().unwrap()` in `Drop` - a
@@ -134,7 +134,7 @@ impl StallingServer {
                 // the download reported canceled or interrupted. Waiting for the
                 // peer removes the competitor instead of tuning the odds.
                 let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
-                // Outlast the cancelling thread's own ten-second deadline, so the
+                // Outlast the canceling thread's own ten-second deadline, so the
                 // socket closing can never be what ends the download.
                 let deadline = Instant::now() + Duration::from_secs(25);
                 let mut byte = [0_u8; 1];
@@ -236,7 +236,7 @@ impl FakeServer {
                 if let Ok(mut seen) = seen.lock() {
                     seen.push(read_request(&mut stream));
                 }
-                // A client that cancelled, or a queued response the test never
+                // A client that canceled, or a queued response the test never
                 // asks for, must not panic this thread; see the note in
                 // StallingServer for why a panic here aborts the whole binary.
                 let _ = stream.write_all(&response);
@@ -271,7 +271,7 @@ fn read_request(stream: &mut TcpStream) -> String {
     let mut request = String::new();
     loop {
         let mut line = String::new();
-        // A client that cancelled mid-request resets the connection; return what
+        // A client that canceled mid-request resets the connection; return what
         // arrived rather than panicking a helper thread.
         if reader.read_line(&mut line).is_err() {
             return request;
@@ -329,7 +329,7 @@ fn downloader(disk: u64) -> Downloader<ReqwestHttpTransport, FixedDisk> {
 /// download reported `DownloadInterrupted` instead of `DownloadCanceled`.
 ///
 /// The margins here are deliberately far larger than any plausible scheduling
-/// slip, because the cancelling thread gives itself ten seconds to notice the
+/// slip, because the canceling thread gives itself ten seconds to notice the
 /// partial file. Every competing deadline has to sit outside that window, or the
 /// test is only ever measuring which timer fired first.
 fn patient_downloader(disk: u64) -> Downloader<ReqwestHttpTransport, FixedDisk> {
@@ -706,7 +706,7 @@ fn resume_does_not_read_partial_body() {
     let directory = tempdir().unwrap();
     let partial = directory.path().join("model.gguf.partial");
     fs::write(&partial, &bytes[..split]).unwrap();
-    // Where the permission bits are honoured (not for root), a body nothing
+    // Where the permission bits are honored (not for root), a body nothing
     // may read until the download has begun: the resume must not need to.
     // Reading is given back at the first byte of progress, for the final
     // check of the whole file.

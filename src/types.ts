@@ -1,5 +1,5 @@
 export type QueueStatus = 'ready' | 'review' | 'processing' | 'waiting' | 'completed' | 'failed';
-export type QueueView = 'queue' | 'review' | 'completed';
+export type QueueView = 'queue' | 'completed';
 /** What a processing document is doing: reading its text, proposing a name, or being renamed. */
 export type ProcessingStage = 'reading' | 'naming' | 'filing';
 
@@ -53,7 +53,7 @@ export interface QueueItem {
   suggestedDate?: string;
   /** Every date the document states, in the order it states them, for a name that has none yet. */
   datesInDocument?: string[];
-  /** The file's own last-modified date, a labelled last resort when the document states none. */
+  /** The file's own last-modified date, a labeled last resort when the document states none. */
   fileModifiedDate?: string;
   /**
    * The reviewer's own spellings applied to this name. The evidence still
@@ -68,12 +68,19 @@ export interface QueueItem {
   nearDuplicateOf?: string;
   /**
    * Parties left out of the proposed name because they are the person's own
-   * organisation (Settings, "Your organisation's names"), as the document
+   * organization (Settings, "Your organization's names"), as the document
    * spells them. The evidence still shows them.
    */
   omittedParties?: string[];
   /** Which local model read the document. Absent for a hosted model and for older readings. */
   readBy?: ModelReading;
+  /**
+   * An exact duplicate filed, or staged to be filed, as a copy: the name of
+   * the document it repeats. A staged copy waits for nobody's decision - the
+   * queue files it under its COPY name when it is free - so it is neither
+   * offered for approval nor counted among the items to decide.
+   */
+  copyOf?: string;
 }
 
 /**
@@ -123,7 +130,7 @@ export interface AppSettings {
   destination: string;
   destinationLayout: DestinationLayout;
   /**
-   * The person's own organisation, one name per entry. A document that names
+   * The person's own organization, one name per entry. A document that names
    * it and someone else is named, and filed in the Party layout, by the
    * someone else. Absent from an older backend.
    */
@@ -253,7 +260,7 @@ export interface HistoryEntry {
 export type CloudProvider = 'onedrive_personal' | 'onedrive_business' | 'sharepoint' | 'network_share';
 
 /**
- * A folder recognised as living inside a OneDrive/SharePoint sync root, or
+ * A folder recognized as living inside a OneDrive/SharePoint sync root, or
  * reached over the network (a UNC path or a mapped drive).
  */
 export interface CloudLocation {
@@ -373,16 +380,35 @@ export interface LearnedRule extends HouseRule {
 }
 
 /**
- * What adding files or a folder did. A batch is never refused whole for one
- * bad file: what could be queued was, and every file left out is named with
- * the code of the reason.
+ * What adding files or a folder did. Adding copies them into the input
+ * folder; a batch is never refused whole for one bad file: what could be
+ * copied and queued was, and every file left out is named with the code of
+ * the reason.
  */
 export interface AddReport {
   /** Documents newly in the queue. */
   added: number;
-  /** Documents whose path already held these exact bytes in the queue. */
+  /** Documents the queue already had: the same file added again while its copy still waits, or one already in the input folder and queued. */
   alreadyQueued: number;
   skipped: SkippedDocument[];
+  /**
+   * Files copied into the input folder. Absent from a report that copied
+   * nothing by design - setup's "Process them too", which hands over what is
+   * already in the input folder.
+   */
+  copied?: number;
+  /**
+   * Copied but not in the queue yet: the verified team Inbox takes a file
+   * only once Microsoft confirms who uploaded it, which follows OneDrive's
+   * upload of the copy.
+   */
+  held?: number;
+  /** Why they are held: AWAITING_MICROSOFT until OneDrive has uploaded the copy and Microsoft can say who did. */
+  heldReason?: string;
+  /** Of `added`, how many were already in the input folder and were queued where they are rather than copied. */
+  inPlace?: number;
+  /** The input folder the files were copied into. */
+  inputFolder?: string;
 }
 
 /** A file an add left out: its name, and why (UNSUPPORTED_FORMAT, EMPTY_FILE, SOURCE_LOCKED, ...). */
