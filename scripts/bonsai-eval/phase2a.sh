@@ -14,7 +14,7 @@ H26=$S/build/prebuilt-prism-b10826-only-haswell
 P77=$S/build/prebuilt-prism-b10777/llama-prism-b10777-e3de715
 SRC=$S/build/prism-b10777-portable/bin
 for rep in 1 2 3; do
-  for sz in 2B 4B; do
+  for sz in 2B; do
     M=$C/Ternary-Bonsai-2-$sz-PQ2_0.gguf
     $SW $OUT X-$sz-b10777-prebuilt-rep$rep $P77 $M -p 512 -n 64 -t 2,4 -r 3
     $SW $OUT X-$sz-b10777-source-rep$rep $SRC $M -p 512 -n 64 -t 2,4 -r 3
