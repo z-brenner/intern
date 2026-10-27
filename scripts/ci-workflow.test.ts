@@ -127,6 +127,30 @@ describe('the Rust (Ubuntu) job', () => {
   });
 });
 
+describe('the Linux desktop job', () => {
+  it('builds the package from the pinned runtime and smoke-tests it installed, on Ubuntu 24.04', async () => {
+    const job = jobOf(await ci(), 'linux-desktop');
+    expect(job).toContain('runs-on: ubuntu-24.04');
+    expect(job).toContain('rustup default 1.88.0');
+    for (const library of ['libwebkit2gtk-4.1-dev', 'libayatana-appindicator3-dev', 'librsvg2-dev', 'xvfb', 'tesseract-ocr']) {
+      expect(job).toContain(library);
+    }
+    // The runtime's downloads are cached, keyed by the scripts and manifest that pin them.
+    expect(job).toContain("hashFiles('scripts/fetch-linux-assets.sh', 'scripts/fetch-ocr-runtime.sh', 'src-tauri/resources/runtime-assets.json')");
+
+    const order = [
+      'cargo build --locked -p intern-worker --release --features windows-native',
+      'scripts/fetch-linux-assets.sh "${{ runner.temp }}/intern-linux-assets-cache"',
+      'run: scripts/smoke-linux.sh\n',
+      'npm run tauri build -- --bundles deb -- --locked',
+      'sudo apt-get install -y ./target/release/bundle/deb/*.deb',
+      'scripts/smoke-linux.sh --runtime /usr/lib/Intern --app /usr/bin/intern',
+    ].map((command) => job.indexOf(command));
+    for (const position of order) expect(position).toBeGreaterThan(0);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+});
+
 describe('the Rust lock and format check', () => {
   // CI_RELEASE_DOCS-10: it used to regenerate the lock and format the tree,
   // and upload both, so it could never fail on either.

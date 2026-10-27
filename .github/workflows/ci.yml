@@ -175,6 +175,74 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace --all-targets
 
+  # The Linux package, built and checked the way someone on Ubuntu 24.04 gets
+  # it: the pinned runtime fetched and verified, the package-shaped runtime and
+  # worker smoke-tested, the .deb bundled and installed with apt so its
+  # dependencies are resolved for real, and the installed app started under
+  # Xvfb. See docs/linux.md.
+  linux-desktop:
+    name: Linux desktop package and smoke (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      INTERN_REQUIRE_GENERATED_FIXTURES: "1"
+      # As in the Rust (Ubuntu) job: no incremental state in the cached
+      # target directory.
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      # The webview, tray and SVG libraries the shell links; Xvfb, a D-Bus
+      # session and xwininfo for the app smoke; and Tesseract, which the
+      # package depends on rather than bundles.
+      - name: Install the desktop shell's build and smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb dbus x11-utils tesseract-ocr
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-linux-desktop-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      # The runtime's downloads, keyed by the scripts that hold the pins and
+      # the manifest the shared pins come from. Nothing restored is trusted for
+      # it: every download is checked against its pin again.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/intern-linux-assets-cache
+          key: linux-runtime-${{ runner.os }}-${{ hashFiles('scripts/fetch-linux-assets.sh', 'scripts/fetch-ocr-runtime.sh', 'src-tauri/resources/runtime-assets.json') }}
+      - run: npm ci
+      - run: npm run fixtures
+      - name: Build parser worker
+        run: cargo build --locked -p intern-worker --release --features windows-native
+      - name: Fetch and verify the pinned Linux runtime
+        run: scripts/fetch-linux-assets.sh "${{ runner.temp }}/intern-linux-assets-cache"
+      - name: Smoke the package-shaped runtime and worker
+        run: scripts/smoke-linux.sh
+      - run: npm run tauri build -- --bundles deb -- --locked
+      - name: Install the package and smoke the installed app under Xvfb
+        run: |
+          sudo apt-get install -y ./target/release/bundle/deb/*.deb
+          scripts/smoke-linux.sh --runtime /usr/lib/Intern --app /usr/bin/intern
+      - name: Upload Linux package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: intern-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          path: |
+            target/release/bundle/deb/*.deb
+            src-tauri/resources/runtime/runtime-inventory.json
+
   windows-release-gates:
     name: Windows Rust, assets, E2E, and NSIS
     runs-on: windows-latest
