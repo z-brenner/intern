@@ -39,6 +39,17 @@ describe('the update settings', () => {
     expect((await bridge.getSettings()).skipUpdateChecks).toBe(false);
   });
 
+  // A Linux package is updated by its package manager, not by Intern, and
+  // Settings says so rather than offering an update that cannot come.
+  it('says a Linux package is updated through its package', async () => {
+    render(<App bridge={createInMemoryBridge({ update: { state: 'unsupported', reason: 'package' } })} />);
+    const dialog = await openSettings();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Check for updates' }));
+
+    expect(await within(dialog).findByRole('status', { name: 'Update status' })).toHaveTextContent('Intern on Linux does not update itself. Install the newer release\'s package to update it.');
+    expect(within(dialog).queryByRole('button', { name: /^Install / })).not.toBeInTheDocument();
+  });
+
   // Installing closes Intern for the installer. A rename part-way through its
   // move cannot be canceled, so Install waits for it rather than cutting it off.
   it('install_disabled_while_applying: in the banner and in Settings, with the reason shown', async () => {

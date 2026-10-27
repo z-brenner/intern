@@ -13,6 +13,9 @@ function recording() {
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
   const transport: TauriTransport = {
     invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+      // A shell that can update itself, asked before every check; what these
+      // tests watch is what the install tells the backend.
+      if (command === 'updates_supported') return true as T;
       calls.push({ command, args });
       return undefined as T;
     },

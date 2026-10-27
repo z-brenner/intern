@@ -2342,6 +2342,15 @@ struct UpdateRelaunch {
     at: i64,
 }
 
+/// Whether this build can update itself. Signed updates are published for
+/// Windows alone: a Linux package is updated by installing the next release's
+/// package, and the updater is not registered there (lib.rs), so the window
+/// says so instead of asking a release manifest that names no Linux build.
+#[tauri::command]
+pub fn updates_supported() -> bool {
+    !cfg!(target_os = "linux")
+}
+
 /// Records, before an update installs, that the next launch is the
 /// installer's relaunch of this one - or, with `expected` false, that the
 /// install did not go ahead after all.

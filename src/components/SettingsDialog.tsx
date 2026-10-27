@@ -703,7 +703,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         <label className="check-label"><input type="checkbox" checked={!next.skipUpdateChecks} onChange={(event) => setNext({ ...next, skipUpdateChecks: !event.target.checked })} />Check for updates automatically (when Intern starts and every 6 hours)</label>
         <p className="check-hint">{next.skipUpdateChecks ? 'Off: Intern asks only when you press Check for updates.' : 'Turn this off and Intern asks only when you press Check for updates.'}</p>
         {status?.state === 'current' && <p role="status" aria-label="Update status" aria-live="polite">Intern {status.currentVersion} is the latest release.</p>}
-        {status?.state === 'unsupported' && <p role="status" aria-label="Update status" aria-live="polite">Updates are available in the installed desktop application.</p>}
+        {status?.state === 'unsupported' && <p role="status" aria-label="Update status" aria-live="polite">{status.reason === 'package' ? 'Intern on Linux does not update itself. Install the newer release\'s package to update it.' : 'Updates are available in the installed desktop application.'}</p>}
         {status?.state === 'available' && <p role="status" aria-label="Update status" aria-live="polite">Version {status.version} is available. You have {status.currentVersion}.</p>}
         {updateError && <p className="form-error" role="alert">{updateError}</p>}
         <div className="update-actions">
