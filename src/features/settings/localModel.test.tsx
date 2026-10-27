@@ -100,6 +100,20 @@ describe('the local model setting', () => {
   });
 });
 
+describe('a model whose runtime would not start', () => {
+  it('says why and offers to try again rather than to download it again', async () => {
+    const bridge = createInMemoryBridge({ accurate: { state: 'failed', error: 'MODEL_SERVER_START_FAILED' } });
+    const startModelDownload = vi.fn(bridge.startModelDownload);
+    render(<App bridge={{ ...bridge, startModelDownload }} />);
+    const dialog = await openSettings();
+    const accurate = within(dialog).getByRole('listitem', { name: 'Qwen3.5 2B' });
+    expect(accurate).toHaveTextContent(/runtime would not start on this computer/);
+    expect(within(accurate).queryByRole('button', { name: 'Download again' })).not.toBeInTheDocument();
+    fireEvent.click(within(accurate).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(startModelDownload).toHaveBeenCalledWith('accurate'));
+  });
+});
+
 describe('the accurate model arriving behind the window', () => {
   it('is one quiet line on the main screen while it downloads, and nothing after', async () => {
     const setup = arriving();

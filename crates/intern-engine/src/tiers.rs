@@ -123,6 +123,20 @@ pub const fn resident_estimate(tier: ModelTier) -> u64 {
     }
 }
 
+/// What unloading `tier`'s model gives back to [`available_memory_bytes`],
+/// for a model whose weights file is `model_file_bytes` long.
+///
+/// Not the whole [`resident_estimate`]: llama-server maps the GGUF, and the
+/// mapped weights are clean file-backed pages that `MemAvailable` on Linux,
+/// and the available physical memory on Windows (which counts the standby
+/// list), already report as reclaimable. Crediting them again counted them
+/// twice, so a loaded quick model could make the accurate one look as if it
+/// fit on a machine that cannot hold it. Only the rest - the context, the
+/// compute buffers, any repacked weights - comes back on unload.
+pub const fn unload_gives_back(tier: ModelTier, model_file_bytes: u64) -> u64 {
+    resident_estimate(tier).saturating_sub(model_file_bytes)
+}
+
 /// llama-server flags for one tier alone, added after the ones every launch
 /// sets ([`crate::server::LlamaServer::arguments_for`]). Empty until the
 /// benchmarks show a flag that helps one model and not the other: this is the
@@ -652,6 +666,18 @@ mod tests {
         for tier in ModelTier::ALL {
             assert!(min_available_for(tier) >= resident_estimate(tier) + WORKER_PEAK + HEADROOM);
         }
+    }
+
+    /// The mapped weights are counted as available already, so only the
+    /// rest of a loaded model comes back on unload - never less than nothing.
+    #[test]
+    fn unloading_gives_back_only_what_is_not_the_mapped_file() {
+        assert_eq!(unload_gives_back(F, 0), resident_estimate(F));
+        assert_eq!(
+            unload_gives_back(A, 1_280_835_840),
+            resident_estimate(A) - 1_280_835_840
+        );
+        assert_eq!(unload_gives_back(F, u64::MAX), 0);
     }
 
     #[test]

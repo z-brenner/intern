@@ -55,8 +55,17 @@ function TierLine({ tier, busy, onStart, onPause }: { tier: TierSetup; busy: boo
       : describeSetupError(tier.error)}</p>}
     {tier.state === 'downloading' && <button type="button" disabled={busy} onClick={onPause}>Pause download</button>}
     {tier.state === 'required' && <button type="button" disabled={busy} onClick={onStart}>{started ? 'Resume download' : downloadLabel(tier)}</button>}
-    {tier.state === 'failed' && <button type="button" disabled={busy} onClick={onStart}>Download again</button>}
+    {tier.state === 'failed' && <button type="button" disabled={busy} onClick={onStart}>{startFailure(tier.error) ? 'Try again' : 'Download again'}</button>}
   </li>;
+}
+
+/**
+ * A model whose file passed its checks but whose runtime would not start or
+ * answer: fetching it again changes nothing, so the action is to try again -
+ * after closing other programs, or once security software lets it run.
+ */
+function startFailure(error: string | null | undefined): boolean {
+  return error === 'MODEL_SERVER_START_FAILED' || error === 'MODEL_SERVER_UNHEALTHY';
 }
 
 /**

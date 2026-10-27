@@ -594,6 +594,15 @@ struct RuntimeModel {
     /// and not yet read again. Set at launch - the queue may hold readings
     /// from an earlier session - and by every provisional reading.
     provisional_pending: AtomicBool,
+    /// There is evidence the accurate model can read now: it was just
+    /// verified - downloaded, installed, or checked at launch - or it just
+    /// read a document. Provisional readings are sent back only on such
+    /// evidence, never on a memory snapshot alone: a snapshot that says the
+    /// accurate model fits, followed by re-reads that find it does not after
+    /// all, would make them provisional again and send them back on the next
+    /// tick - the same documents extracted and read over and over. Spent by
+    /// the upgrade it allows.
+    upgrade_armed: AtomicBool,
     /// Told when a tier's verdict changes outside a setup operation: a model
     /// that failed its self-test the first time a document loaded it.
     on_change: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
@@ -649,6 +658,7 @@ impl RuntimeModel {
             last_tier: Mutex::new(None),
             last_used: Mutex::new(None),
             provisional_pending: AtomicBool::new(true),
+            upgrade_armed: AtomicBool::new(false),
             on_change: Mutex::new(None),
         }
     }
@@ -765,6 +775,62 @@ impl RuntimeModel {
         self.notify();
     }
 
+    /// Sets aside, for this session, a tier whose server would not start,
+    /// and says whether another installed tier can read in its place.
+    ///
+    /// A server that will not start - a CPU feature the build needs, a
+    /// runtime file security software quarantined, a model the runtime
+    /// cannot load - fails the same way on the next attempt, and each attempt
+    /// may wait the whole start-up timeout. So it is not tried again this
+    /// session unless someone asks: Settings' Try again
+    /// ([`RuntimeModel::retry_tier`]), a fresh download or install of it
+    /// ([`RuntimeModel::remember_verified`]), or the next launch. A start
+    /// refused because the file is not one this session verified is not the
+    /// server's fault and sets nothing aside. With no other model to fall
+    /// back to, nothing is set aside either: the queue keeps reporting the
+    /// local model as not ready, as it always has.
+    fn set_aside_after_start_failure(&self, tier: ModelTier, error: &CommandError) -> bool {
+        if error.code == "MODEL_NOT_READY"
+            || !self
+                .plannable_tiers()
+                .into_iter()
+                .any(|other| other != tier)
+        {
+            return false;
+        }
+        self.set_failure(tier, error.code.clone());
+        true
+    }
+
+    /// Whether a failure code set a tier aside because its server would not
+    /// start, rather than for its file or its self-test.
+    fn is_start_failure(code: &str) -> bool {
+        !matches!(
+            code,
+            "MODEL_FILE_INVALID" | "MODEL_SELF_TEST_FAILED" | "MODEL_MANIFEST_INVALID"
+        )
+    }
+
+    /// Lets a tier set aside after its server would not start be tried
+    /// again, keeping what this session verified of its file. A tier set
+    /// aside for its file or its self-test is not retried this way: that is
+    /// what downloading it again is for.
+    fn retry_tier(&self, tier: ModelTier) -> bool {
+        let retried = {
+            let mut checks = self.checks();
+            let check = checks.entry(tier).or_default();
+            let start_failure = check.failure.as_deref().is_some_and(Self::is_start_failure);
+            if start_failure {
+                check.failure = None;
+            }
+            start_failure
+        };
+        if retried {
+            self.notify();
+        }
+        retried
+    }
+
     fn notify(&self) {
         let listener = self
             .on_change
@@ -804,11 +870,15 @@ impl RuntimeModel {
     }
 
     /// What reads the next document, given what Settings asks for, what is
-    /// installed and checked, and the memory free. A loaded model's own
-    /// memory counts as free: unloading it to load another gives it back.
+    /// installed and checked, and the memory free. What unloading the loaded
+    /// model would give back counts as free - its context and buffers, not
+    /// its mapped weights, which the machine already reports as reclaimable
+    /// ([`tiers::unload_gives_back`]).
     fn plan(&self) -> Option<TierPlan> {
         let available = (self.senses.available_memory)().map(|available| {
-            available.saturating_add(self.loaded_tier().map_or(0, tiers::resident_estimate))
+            available.saturating_add(self.loaded_tier().map_or(0, |tier| {
+                tiers::unload_gives_back(tier, self.tier_file(tier).map_or(0, |file| file.size))
+            }))
         });
         tiers::plan_with(
             (self.senses.preference)(),
@@ -833,6 +903,9 @@ impl RuntimeModel {
         });
         if let Some(state) = state {
             self.stamp_tier(tier, &state, false);
+        }
+        if tier == ModelTier::Accurate {
+            self.upgrade_armed.store(true, Ordering::SeqCst);
         }
         self.notify();
     }
@@ -1110,9 +1183,15 @@ impl RuntimeModel {
         }
         let mut first_error = None;
         for tier in self.installed_tiers_quick() {
-            if let Err(error) = self.verify_tier(tier) {
-                self.set_failure(tier, error.code.clone());
-                first_error.get_or_insert(error);
+            match self.verify_tier(tier) {
+                Ok(()) if tier == ModelTier::Accurate => {
+                    self.upgrade_armed.store(true, Ordering::SeqCst);
+                }
+                Ok(()) => {}
+                Err(error) => {
+                    self.set_failure(tier, error.code.clone());
+                    first_error.get_or_insert(error);
+                }
             }
             if cancellation.is_canceled() {
                 return Err(setup_canceled_error());
@@ -1127,14 +1206,23 @@ impl RuntimeModel {
             };
             let tier = plan.first;
             let stamped = self.stamped(tier) == Some(true);
-            // A model the stamp vouched for that will not start is checked in
-            // full next time, in case the file is what is wrong with it.
-            if self
-                .start(&lifecycle, tier)
-                .inspect_err(|_| self.unstamp_tier(tier))?
-                == Launch::Held
-            {
-                return Ok(());
+            match self.start(&lifecycle, tier) {
+                Ok(Launch::Held) => return Ok(()),
+                Ok(Launch::Started) => {}
+                Err(error) => {
+                    // A model the stamp vouched for that will not start is
+                    // checked in full next time, in case the file is what is
+                    // wrong with it. Meanwhile it is set aside, and the other
+                    // installed model, if there is one, starts in its place:
+                    // a launch with one model that will not start used to
+                    // leave setup failed and the queue closed beside a model
+                    // that would have.
+                    self.unstamp_tier(tier);
+                    if !self.set_aside_after_start_failure(tier, &error) {
+                        return Err(error);
+                    }
+                    continue;
+                }
             }
             if stamped {
                 if cancellation.is_canceled() {
@@ -1164,9 +1252,10 @@ impl RuntimeModel {
                         return Err(error);
                     }
                     self.set_failure(tier, error.code.clone());
-                    // The fast model is what makes Intern usable at all; an
-                    // accurate one that fails leaves it to the fast one.
-                    if tier == ModelTier::Fast || !self.plannable(ModelTier::Fast) {
+                    // Either model that fails leaves the reading to the
+                    // other, when there is one; with none left, setup says
+                    // why.
+                    if self.plannable_tiers().is_empty() {
                         return Err(error);
                     }
                 }
@@ -1383,7 +1472,14 @@ impl RuntimeModel {
                     error.code
                 );
                 self.unstamp_tier(tier);
-                return Err(not_ready());
+                // Set aside, the document is planned again onto the other
+                // model; left in place, every document would wait up to
+                // three minutes for this one to fail to start again.
+                return Err(if self.set_aside_after_start_failure(tier, &error) {
+                    ReadFailure::Unusable
+                } else {
+                    not_ready()
+                });
             }
         }
         if vouched {
@@ -1510,12 +1606,16 @@ impl RuntimeModel {
     }
 
     /// Whether the readings the fast model made in the accurate one's place
-    /// should be read again now: some may be waiting, and the next document
-    /// would not need a stand-in - the accurate model has arrived, or memory
-    /// has come back. Says so once for each such moment;
-    /// [`RuntimeModel::provisional_reread_failed`] asks for it again.
+    /// should be read again now: some may be waiting, there is evidence the
+    /// accurate model can read ([`RuntimeModel::upgrade_armed`]), and the next
+    /// document would not need a stand-in. Says so once for each such
+    /// moment, spending the evidence; [`RuntimeModel::provisional_reread_failed`]
+    /// asks for it again.
     fn take_provisional_upgrade(&self) -> bool {
-        if !self.provisional_pending.load(Ordering::SeqCst) || self.is_held() {
+        if !self.provisional_pending.load(Ordering::SeqCst)
+            || !self.upgrade_armed.load(Ordering::SeqCst)
+            || self.is_held()
+        {
             return false;
         }
         // Only a plan that reaches the accurate model reads them any
@@ -1524,6 +1624,7 @@ impl RuntimeModel {
             Some(plan)
                 if !plan.provisional && (plan.first == ModelTier::Accurate || plan.escalate) =>
             {
+                self.upgrade_armed.store(false, Ordering::SeqCst);
                 self.provisional_pending.swap(false, Ordering::SeqCst)
             }
             _ => false,
@@ -1532,6 +1633,7 @@ impl RuntimeModel {
 
     fn provisional_reread_failed(&self) {
         self.provisional_pending.store(true, Ordering::SeqCst);
+        self.upgrade_armed.store(true, Ordering::SeqCst);
     }
 }
 
@@ -1627,13 +1729,17 @@ impl AnalyzerBoundary for RuntimeModel {
                 Err(_) => reading.escalation_failed = true,
             }
         }
-        // The quick model's reading stands: a person checks it, or the
-        // accurate model reads it again once it can - never filed on its
-        // own, whatever validation made of it, and whatever was asked for.
+        // The quick model's reading stands for a person to check - never
+        // filed on its own, whatever validation made of it, and whatever was
+        // asked for. Whether it is also read again by the accurate model is
+        // the plan's to say: a stand-in's is; one asked for by name is not.
         if reading.tier == ModelTier::Fast {
             tiers::hold_fast_reading(&mut analysis);
-            reading.provisional = true;
-            self.provisional_pending.store(true, Ordering::SeqCst);
+        }
+        // Read by the accurate model: it can read now, which is the evidence
+        // the provisional readings wait for.
+        if reading.tier == ModelTier::Accurate {
+            self.upgrade_armed.store(true, Ordering::SeqCst);
         }
         analysis.telemetry.read_by = Some(reading);
         Ok(analysis)
@@ -1771,16 +1877,13 @@ struct SetupManager {
     /// The setup operation the window waits on: the first model's download
     /// or install, and starting and verifying what is installed.
     operation: SetupOperationGate,
-    /// The download of a model Intern can work without - the accurate one -
-    /// behind the window, so it never makes a person wait or holds up a
-    /// change in Settings.
+    /// A model's download behind the window - the accurate one after a new
+    /// install's first model, or either one asked for in Settings - so it
+    /// never makes a person wait or holds up a change in Settings.
     background: SetupOperationGate,
     /// The tier `background` is downloading.
     background_tier: Mutex<Option<ModelTier>>,
     background_throttle: Mutex<ProgressThrottle>,
-    /// The person paused the background download: nothing resumes it on its
-    /// own again this session.
-    background_paused: AtomicBool,
     scheduler: Mutex<Option<std::sync::mpsc::Sender<SchedulerMessage>>>,
     /// Whether the queue may run: the local model is ready, or a hosted one
     /// is chosen and configured. The scheduler reads this.
@@ -1850,7 +1953,6 @@ impl SetupManager {
             background: SetupOperationGate::default(),
             background_tier: Mutex::new(None),
             background_throttle: Mutex::new(ProgressThrottle::new()),
-            background_paused: AtomicBool::new(false),
             scheduler: Mutex::new(None),
             model_ready: Arc::new(AtomicBool::new(installed)),
             local_ready: AtomicBool::new(installed),
@@ -1965,7 +2067,15 @@ impl SetupManager {
     fn start_tier(self: &Arc<Self>, tier: Option<ModelTier>) -> Result<(), CommandError> {
         match tier {
             Some(tier) if self.setup_complete() => {
-                self.background_paused.store(false, Ordering::SeqCst);
+                // A model whose server would not start is tried again as it
+                // is: its file passed its checks, and fetching it again would
+                // change nothing.
+                if self.runtime.tier_installed_quick(tier) && self.runtime.retry_tier(tier) {
+                    self.republish();
+                    self.wake_scheduler();
+                    return Ok(());
+                }
+                self.clear_paused(tier);
                 self.start_background(tier)
             }
             _ => self.start(),
@@ -2160,7 +2270,7 @@ impl SetupManager {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match tier {
             Some(tier) if in_background == Some(tier) => {
-                self.background_paused.store(true, Ordering::SeqCst);
+                self.mark_paused(tier);
                 self.background.cancel();
                 Ok(())
             }
@@ -2236,9 +2346,61 @@ impl SetupManager {
     fn start_remaining(self: &Arc<Self>) {
         for tier in ModelTier::ALL {
             if tier != FIRST_USE_TIER && !self.runtime.tier_installed_quick(tier) {
+                self.clear_paused(tier);
                 let _ = self.start_background(tier);
             }
         }
+    }
+
+    /// Where a paused download says so: beside its partial file in the
+    /// model folder, so the pause outlasts a restart. Someone who paused a
+    /// download on a metered connection meant it, and the next launch used
+    /// to resume it.
+    fn pause_marker(&self, tier: ModelTier) -> Option<PathBuf> {
+        self.runtime.tier_file(tier).map(|file| {
+            self.runtime
+                .model_directory
+                .join(format!("{}.paused", file.name))
+        })
+    }
+
+    fn mark_paused(&self, tier: ModelTier) {
+        if let Some(marker) = self.pause_marker(tier) {
+            let _ = std::fs::create_dir_all(&self.runtime.model_directory);
+            let _ = std::fs::write(marker, b"paused by the person\n");
+        }
+    }
+
+    /// Resume, Download again, a fresh setup Download, and a finished
+    /// download all end the pause.
+    fn clear_paused(&self, tier: ModelTier) {
+        if let Some(marker) = self.pause_marker(tier) {
+            let _ = std::fs::remove_file(marker);
+        }
+    }
+
+    fn is_paused(&self, tier: ModelTier) -> bool {
+        self.pause_marker(tier)
+            .is_some_and(|marker| marker.is_file())
+    }
+
+    /// The downloads a tick resumes on its own: ones the person started -
+    /// with a partial file to resume - and did not pause, of either model;
+    /// the accurate one not when they asked for the fast model only.
+    fn tiers_to_resume(&self, settings: &AppSettings) -> Vec<ModelTier> {
+        if settings.model_source != ModelSource::Local || !self.setup_complete() {
+            return Vec::new();
+        }
+        ModelTier::ALL
+            .into_iter()
+            .filter(|tier| {
+                (*tier == ModelTier::Fast || settings.model_preference != ModelPreference::Fast)
+                    && !self.is_paused(*tier)
+                    && !self.runtime.tier_installed_quick(*tier)
+                    && partial_bytes(&self.runtime, *tier) > 0
+                    && self.tier_state(*tier) == Some(SetupStatus::Required)
+            })
+            .collect()
     }
 
     /// Downloads `tier`'s model behind the window, with the same resumable,
@@ -2270,7 +2432,10 @@ impl SetupManager {
                 // A model set aside after its self-test passed its digest:
                 // the check would only accept it again. "Download again"
                 // means what it says.
-                if manager.runtime.tier_failure(tier).is_some()
+                if manager
+                    .runtime
+                    .tier_failure(tier)
+                    .is_some_and(|code| !RuntimeModel::is_start_failure(&code))
                     && manager.runtime.tier_installed_quick(tier)
                 {
                     let _ = std::fs::remove_file(directory.join(&file.name));
@@ -2296,6 +2461,7 @@ impl SetupManager {
                 let completed = partial_bytes(&manager.runtime, tier);
                 match result {
                     Ok(_) => {
+                        manager.clear_paused(tier);
                         manager.runtime.remember_verified(tier);
                         manager.set_tier(tier, SetupStatus::Ready, file.size, None);
                     }
@@ -2350,18 +2516,8 @@ impl SetupManager {
         if settings.model_source != ModelSource::Local {
             return;
         }
-        if !self.background_paused.load(Ordering::SeqCst) && self.setup_complete() {
-            for tier in ModelTier::ALL {
-                let wanted =
-                    tier == ModelTier::Fast || settings.model_preference != ModelPreference::Fast;
-                let resumable = wanted
-                    && !self.runtime.tier_installed_quick(tier)
-                    && partial_bytes(&self.runtime, tier) > 0
-                    && self.tier_state(tier) == Some(SetupStatus::Required);
-                if resumable {
-                    let _ = self.start_background(tier);
-                }
-            }
+        for tier in self.tiers_to_resume(settings) {
+            let _ = self.start_background(tier);
         }
         if self.runtime.take_provisional_upgrade() {
             match pipeline.reanalyze_provisional() {
@@ -7295,6 +7451,11 @@ mod runtime_tests {
         stop_gate: Mutex<Option<Arc<Gate>>>,
         /// When set, a launch waits here until the test opens it.
         launch_gate: Mutex<Option<Arc<Gate>>>,
+        /// A tier whose server will not start, as a missing CPU feature or a
+        /// quarantined runtime file makes it.
+        refuse_launch: Mutex<Option<ModelTier>>,
+        /// How many launches were refused that way.
+        refused: AtomicUsize,
     }
 
     impl Rig {
@@ -7312,6 +7473,8 @@ mod runtime_tests {
                 in_flight: (Mutex::new(false), Condvar::new()),
                 stop_gate: Mutex::new(None),
                 launch_gate: Mutex::new(None),
+                refuse_launch: Mutex::new(None),
+                refused: AtomicUsize::new(0),
             })
         }
 
@@ -7451,6 +7614,13 @@ mod runtime_tests {
             let gate = self.rig.launch_gate.lock().unwrap().clone();
             if let Some(gate) = gate {
                 gate.pass();
+            }
+            if *self.rig.refuse_launch.lock().unwrap() == Some(tier) {
+                self.rig.refused.fetch_add(1, Ordering::SeqCst);
+                return Err(CommandError {
+                    code: "MODEL_SERVER_START_FAILED".into(),
+                    message: "local model server could not be started".into(),
+                });
             }
             self.rig.launched.lock().unwrap().push(tier);
             self.rig.launches.fetch_add(1, Ordering::SeqCst);
@@ -8751,9 +8921,12 @@ mod runtime_tests {
         let fast = runtime.analyze(&probe(), "pdf", &[]).unwrap();
         let reading = read_by(&fast);
         // Asked for by name, the quick model's reading is still held for a
-        // person; it is not read again while the quick model is what is
-        // asked for.
-        assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
+        // person, but it stands in for nothing: it is not provisional, and
+        // nothing promises to read it again.
+        assert_eq!(
+            (reading.tier, reading.provisional),
+            (ModelTier::Fast, false)
+        );
         assert_eq!(fast.status, intern_engine::ProposalStatus::NeedsReview);
         assert!(!runtime.take_provisional_upgrade());
 
@@ -8796,10 +8969,205 @@ mod runtime_tests {
         // Loaded, it holds what it holds: the machine reports that much less
         // free, and the model is still the one that fits.
         world.memory(Some(
-            MIN_AVAILABLE_FOR_ACCURATE - tiers::resident_estimate(ModelTier::Accurate) + 1,
+            MIN_AVAILABLE_FOR_ACCURATE
+                - tiers::unload_gives_back(ModelTier::Accurate, ACCURATE_BYTES.len() as u64)
+                + 1,
         ));
         runtime.analyze(&probe(), "pdf", &[]).unwrap();
         assert_eq!(launched(&rig), [ModelTier::Fast, ModelTier::Accurate]);
+    }
+
+    /// A loaded quick model's mapped weights are already counted as
+    /// available by the machine, so planning credits back only the rest of
+    /// what unloading it would free. Counting the whole resident set made the
+    /// accurate model look as if it fit where it does not.
+    #[test]
+    fn a_loaded_model_is_credited_only_what_unloading_it_frees() {
+        let install = Install::new("tier-credit");
+        install.install_accurate();
+        let rig = Rig::new();
+        let world = World::new();
+        // Enough only if the quick model's mapped file counted twice.
+        world.memory(Some(
+            MIN_AVAILABLE_FOR_ACCURATE - tiers::resident_estimate(ModelTier::Fast) + 10,
+        ));
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        verified(&runtime);
+        assert_eq!(launched(&rig), [ModelTier::Fast]);
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
+        assert_eq!(launched(&rig), [ModelTier::Fast], "never swapped");
+    }
+
+    /// Provisional readings go back only on evidence that the accurate model
+    /// can read - it was just verified, or it just read something - never on
+    /// a memory snapshot alone. Otherwise a snapshot that says it fits, then
+    /// re-reads that find it does not after all, made them provisional again
+    /// for the next tick to send back: the same documents read over and over.
+    #[test]
+    fn provisional_readings_are_not_sent_back_round_and_round() {
+        let install = Install::new("tier-no-loop");
+        install.install_accurate();
+        let rig = Rig::new();
+        let world = World::new();
+        let short =
+            Some(MIN_AVAILABLE_FOR_ACCURATE - tiers::resident_estimate(ModelTier::Fast) - 1);
+        let plenty = Some(16 * 1024 * 1024 * 1024);
+        world.memory(short);
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        // Verified at launch: evidence the accurate model can read.
+        verified(&runtime);
+        runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        assert!(!runtime.take_provisional_upgrade(), "memory is short");
+        world.memory(plenty);
+        assert!(runtime.take_provisional_upgrade(), "the evidence, and room");
+
+        // The re-reads find memory short again and fall back to the stand-in.
+        world.memory(short);
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert!(reading.provisional);
+        // A snapshot that says there is room is not evidence on its own.
+        world.memory(plenty);
+        for _ in 0..5 {
+            assert!(!runtime.take_provisional_upgrade(), "no loop");
+        }
+
+        // The accurate model reading a document is.
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!(reading.tier, ModelTier::Accurate);
+        assert!(runtime.take_provisional_upgrade());
+        assert!(!runtime.take_provisional_upgrade(), "spent");
+    }
+
+    /// The accurate model's server will not start at launch: it is set aside
+    /// with why, the quick model starts in its place and the queue opens,
+    /// and no later document waits for the accurate one to fail again -
+    /// until Settings' Try again.
+    #[test]
+    fn a_model_whose_server_will_not_start_at_launch_leaves_the_other_reading() {
+        let install = Install::new("tier-start-launch");
+        install.install_accurate();
+        let rig = Rig::new();
+        *rig.refuse_launch.lock().unwrap() = Some(ModelTier::Accurate);
+        let runtime = install.runtime(&rig, "1.0.0");
+        let (setup, _states) = manager(&runtime, ModelSource::Local);
+        settle(&setup);
+        assert_eq!(launched(&rig), [ModelTier::Fast]);
+        assert_eq!(rig.refused.load(Ordering::SeqCst), 1);
+        assert!(setup.model_ready.load(Ordering::SeqCst), "the queue opens");
+        let state = setup.get().unwrap();
+        assert_eq!(state.state, SetupStatus::Ready);
+        let accurate = state
+            .tiers
+            .iter()
+            .find(|tier| tier.tier == ModelTier::Accurate)
+            .unwrap();
+        assert_eq!(
+            (accurate.state, accurate.error.as_deref()),
+            (SetupStatus::Failed, Some("MODEL_SERVER_START_FAILED"))
+        );
+
+        for _ in 0..3 {
+            let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+            assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
+        }
+        assert_eq!(rig.refused.load(Ordering::SeqCst), 1, "not tried again");
+
+        // Try again, once it would start: the file is not fetched again, and
+        // the next document is the accurate model's.
+        *rig.refuse_launch.lock().unwrap() = None;
+        setup.start_tier(Some(ModelTier::Accurate)).unwrap();
+        assert!(setup.background.begin().is_ok(), "no download began");
+        setup.background.finish();
+        assert_eq!(runtime.tier_failure(ModelTier::Accurate), None);
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!(reading.tier, ModelTier::Accurate);
+    }
+
+    /// The same when a document is what asks for the model: the server that
+    /// will not start is set aside and the document read by the other one,
+    /// not handed back to wait for the same failure on every pass.
+    #[test]
+    fn a_model_whose_server_will_not_start_for_a_document_leaves_the_other_reading() {
+        let install = Install::new("tier-start-ensure");
+        install.install_accurate();
+        let rig = Rig::new();
+        let world = World::new();
+        world.prefer(ModelPreference::Fast);
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        verified(&runtime);
+        world.prefer(ModelPreference::Accurate);
+        *rig.refuse_launch.lock().unwrap() = Some(ModelTier::Accurate);
+
+        let analysis = runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        let reading = read_by(&analysis);
+        assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
+        assert_eq!(analysis.status, intern_engine::ProposalStatus::NeedsReview);
+        runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        assert_eq!(rig.refused.load(Ordering::SeqCst), 1, "not tried again");
+        assert_eq!(
+            runtime.tier_failure(ModelTier::Accurate).as_deref(),
+            Some("MODEL_SERVER_START_FAILED")
+        );
+        assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1);
+    }
+
+    /// With no other model to fall back to, a server that will not start is
+    /// what it always was: setup reports it, and nothing is set aside.
+    #[test]
+    fn a_lone_model_whose_server_will_not_start_fails_setup_as_before() {
+        let install = Install::new("tier-start-alone");
+        let rig = Rig::new();
+        *rig.refuse_launch.lock().unwrap() = Some(ModelTier::Fast);
+        let runtime = install.runtime(&rig, "1.0.0");
+        let error = runtime
+            .start_verified(&CancellationToken::new())
+            .unwrap_err();
+        assert_eq!(error.code, "MODEL_SERVER_START_FAILED");
+        assert_eq!(runtime.tier_failure(ModelTier::Fast), None);
+        assert_eq!(
+            runtime.analyze(&probe(), "pdf", &[]).unwrap_err(),
+            ModelFailure::retryable("MODEL_NOT_READY")
+        );
+    }
+
+    /// A paused download stays paused across a restart: the pause is marked
+    /// beside the partial file, and Resume, Download again, or finishing it
+    /// clears the mark.
+    #[test]
+    fn a_paused_download_is_not_resumed_by_the_next_launch() {
+        let install = Install::new("tier-pause");
+        let partial = install.root.join("models").join("accurate.gguf.partial");
+        std::fs::write(&partial, &ACCURATE_BYTES[..4]).unwrap();
+        let settings = intern_queue::AppSettings::default();
+        let runtime = install.runtime(&Rig::new(), "1.0.0");
+        let setup = SetupManager::new(Box::new(|_: &SetupStateDto| {}), Arc::clone(&runtime));
+        assert_eq!(setup.tiers_to_resume(&settings), [ModelTier::Accurate]);
+
+        // The person pauses it while it downloads behind the window.
+        let _token = setup.background.begin().unwrap();
+        *setup.background_tier.lock().unwrap() = Some(ModelTier::Accurate);
+        setup.cancel_tier(Some(ModelTier::Accurate)).unwrap();
+        *setup.background_tier.lock().unwrap() = None;
+        setup.background.finish();
+        assert!(
+            install
+                .root
+                .join("models")
+                .join("accurate.gguf.paused")
+                .is_file()
+        );
+
+        // The next launch: a fresh manager over the same folder.
+        let relaunched = SetupManager::new(
+            Box::new(|_: &SetupStateDto| {}),
+            install.runtime(&Rig::new(), "1.0.0"),
+        );
+        assert!(relaunched.tiers_to_resume(&settings).is_empty());
+
+        // Resume ends the pause.
+        relaunched.clear_paused(ModelTier::Accurate);
+        assert_eq!(relaunched.tiers_to_resume(&settings), [ModelTier::Accurate]);
     }
 
     /// The accurate model's digest passed but it fails its self-test the
