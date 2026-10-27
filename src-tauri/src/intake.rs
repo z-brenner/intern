@@ -12,7 +12,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use intern_core::{ErrorCode, OperationDirection, OperationReceipt, OperationStage, QueueStatus};
+use intern_core::{
+    ErrorCode, OperationDirection, OperationReceipt, OperationStage, QueueStatus, source_path_key,
+};
 use intern_engine::fingerprint::NEAR_DUPLICATE_DISTANCE;
 use intern_intake::{
     CloudLocation, CloudProviderKind, CloudRoot, DescriptionLedger, DoneOutcome, FiledIndex,
@@ -418,7 +420,7 @@ fn withdrawn(status: QueueStatus, error_code: Option<ErrorCode>) -> bool {
 /// document the watcher withdrew returns its canceled row, which is queued
 /// again: otherwise re-admission would never run it. A row a person canceled,
 /// and every other row, is left as it is.
-fn enqueue_for_intake(pipeline: &Pipeline, paths: &[PathBuf]) -> Result<(), String> {
+fn enqueue_for_intake(pipeline: &Pipeline, paths: &[PathBuf]) -> Result<Vec<i64>, String> {
     let mut canonical = Vec::with_capacity(paths.len());
     for path in paths {
         canonical.push(canonical_file(path).map_err(|error| error.code)?);
@@ -432,7 +434,72 @@ fn enqueue_for_intake(pipeline: &Pipeline, paths: &[PathBuf]) -> Result<(), Stri
     {
         pipeline.retry(item.id).map_err(|error| error.code)?;
     }
+    Ok(items.iter().map(|item| item.id).collect())
+}
+
+/// Hands over the document a claim keyed `key` holds, and ties the claim to
+/// the item the queue returns, so everything asked about the claim later
+/// is answered for that item (see `claim_item_state`).
+fn enqueue_claimed_for_intake(pipeline: &Pipeline, key: &str, path: &Path) -> Result<(), String> {
+    for id in enqueue_for_intake(pipeline, &[path.to_path_buf()])? {
+        pipeline
+            .record_intake_claim(key, id)
+            .map_err(|error| error.code)?;
+    }
     Ok(())
+}
+
+/// What became of the item a claim handed over.
+///
+/// The claim follows its own item, not whatever is newest at the path it
+/// names: the document can leave that path - renamed `NEEDS REVIEW - ...`
+/// where it lies because it could not be read, or given its name back as
+/// `name (2)` - and a new upload can arrive under it, and neither may settle
+/// the other's claim. A claim taken before claims were tied to items falls
+/// back to the path.
+fn claim_item_state(pipeline: &Pipeline, key: &str, path: &Path) -> ItemState {
+    match pipeline.find_by_intake_claim(key) {
+        Ok(Some(Some(item))) => match screen_lookup(Ok(Some(item))) {
+            Ok(Some(item)) => pipeline_item_fate(&item),
+            Ok(None) => ItemState::Unknown,
+            Err(state) => state,
+        },
+        // Tied to an item that is gone: removed, or cleared with the history.
+        Ok(Some(None)) => ItemState::Unknown,
+        Ok(None) => intake_item_state(pipeline, path),
+        Err(_) => ItemState::Unavailable,
+    }
+}
+
+/// Withdraws the item a claim handed over, when it is still at the path the
+/// claim names; a claim taken before claims were tied falls back to the
+/// path. See `withdraw_for_intake`.
+fn withdraw_claim_for_intake(pipeline: &Pipeline, key: &str, path: &Path) {
+    match pipeline.find_by_intake_claim(key) {
+        Ok(Some(Some(item))) => {
+            let at_path = source_path_key(&item.source_path) == source_path_key(path)
+                || canonical_file(path).is_ok_and(|canonical| {
+                    source_path_key(&canonical) == source_path_key(&item.source_path)
+                });
+            if at_path && item.status != QueueStatus::Canceled {
+                let _ = pipeline.withdraw(item.id);
+            }
+        }
+        Ok(Some(None)) | Err(_) => {}
+        Ok(None) => withdraw_for_intake(pipeline, path),
+    }
+}
+
+/// Runs the failed item a claim handed over again in place. See
+/// `retry_failed`.
+fn retry_claim_failed(pipeline: &Pipeline, key: &str, path: &Path) -> bool {
+    match pipeline.find_by_intake_claim(key) {
+        Ok(Some(Some(item))) if item.status == QueueStatus::Failed => {
+            pipeline.retry(item.id).is_ok()
+        }
+        Ok(None) => retry_failed(pipeline, path),
+        _ => false,
+    }
 }
 
 /// What the queue knows about the document at `path`, for the watcher.
@@ -539,6 +606,28 @@ impl IntakeHost for PipelineIntakeHost {
         enqueue_for_intake(&self.pipeline, paths)?;
         self.wake_scheduler();
         Ok(())
+    }
+
+    fn enqueue_claimed(&self, key: &str, path: &Path) -> Result<(), String> {
+        enqueue_claimed_for_intake(&self.pipeline, key, path)?;
+        self.wake_scheduler();
+        Ok(())
+    }
+
+    fn claim_state(&self, key: &str, path: &Path) -> ItemState {
+        claim_item_state(&self.pipeline, key, path)
+    }
+
+    fn abandon_claim(&self, key: &str, path: &Path) {
+        withdraw_claim_for_intake(&self.pipeline, key, path);
+    }
+
+    fn retry_claim(&self, key: &str, path: &Path) -> bool {
+        let retried = retry_claim_failed(&self.pipeline, key, path);
+        if retried {
+            self.wake_scheduler();
+        }
+        retried
     }
 
     fn item_state(&self, path: &Path) -> ItemState {
@@ -1105,7 +1194,8 @@ mod watcher_host_tests {
     };
 
     use super::{
-        enqueue_for_intake, intake_item_state, retry_failed, screen_lookup, withdraw_for_intake,
+        claim_item_state, enqueue_claimed_for_intake, enqueue_for_intake, intake_item_state,
+        retry_failed, screen_lookup, withdraw_claim_for_intake, withdraw_for_intake,
     };
 
     /// An extractor that can read nothing, so every document fails.
@@ -1405,6 +1495,80 @@ mod watcher_host_tests {
         }
     }
 
+    /// A claim follows the item it handed over: the item renamed for review
+    /// still answers for it, a new upload under the same name never does,
+    /// and the claim is never used to withdraw the new upload.
+    #[test]
+    fn a_claim_follows_its_own_item_not_the_path() {
+        let (dir, _) = queue("claim-follows");
+        let pipeline = Pipeline::with_local_files(
+            dir.join("queue.sqlite3"),
+            Arc::new(Locked),
+            Arc::new(NeverAnalyze),
+            Arc::new(NoEvents),
+            settings_watching(&dir),
+        )
+        .unwrap();
+        let document = dir.join("locked.pdf");
+        fs::write(&document, b"an encrypted document").unwrap();
+        enqueue_claimed_for_intake(&pipeline, "first-claim", &document).unwrap();
+        pipeline.run_next().unwrap();
+        assert!(dir.join("NEEDS REVIEW - locked.pdf").exists());
+        assert_eq!(
+            claim_item_state(&pipeline, "first-claim", &document),
+            ItemState::NeedsReview
+        );
+
+        // A new upload under the old name.
+        fs::write(&document, b"another document entirely").unwrap();
+        enqueue_claimed_for_intake(&pipeline, "second-claim", &document).unwrap();
+        assert_eq!(
+            claim_item_state(&pipeline, "second-claim", &document),
+            ItemState::Active
+        );
+        assert_eq!(
+            claim_item_state(&pipeline, "first-claim", &document),
+            ItemState::NeedsReview,
+            "the new upload does not answer for the first claim"
+        );
+        withdraw_claim_for_intake(&pipeline, "first-claim", &document);
+        assert_eq!(
+            claim_item_state(&pipeline, "second-claim", &document),
+            ItemState::Active,
+            "giving up the first claim withdraws nothing of the second"
+        );
+
+        let first = pipeline
+            .find_by_source_path(&dir.join("NEEDS REVIEW - locked.pdf"))
+            .unwrap()
+            .unwrap();
+        pipeline.remove(first.id, false).unwrap();
+        assert_eq!(
+            claim_item_state(&pipeline, "first-claim", &document),
+            ItemState::Unknown
+        );
+        assert_eq!(
+            claim_item_state(&pipeline, "never-recorded", &dir.join("x.pdf")),
+            ItemState::Unknown
+        );
+
+        drop(pipeline);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// Settings watching `dir` as the input folder, as folder setup saves
+    /// them: Intern renames and moves only what is in the input folder.
+    fn settings_watching(dir: &Path) -> SettingsStore {
+        let store = SettingsStore::new(dir.join("settings.json"));
+        store
+            .save(&intern_queue::AppSettings {
+                intake_folder: dir.to_string_lossy().into_owned(),
+                ..intern_queue::AppSettings::default()
+            })
+            .unwrap();
+        store
+    }
+
     /// The watcher holds its claim on the name a document arrived under. A
     /// document renamed NEEDS REVIEW for being unreadable is still found by
     /// that name and reads as waiting for review, giving the claim up never
@@ -1417,7 +1581,7 @@ mod watcher_host_tests {
             Arc::new(Locked),
             Arc::new(NeverAnalyze),
             Arc::new(NoEvents),
-            SettingsStore::new(dir.join("settings.json")),
+            settings_watching(&dir),
         )
         .unwrap();
         let document = dir.join("locked.pdf");

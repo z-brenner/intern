@@ -490,6 +490,45 @@ impl ClaimStore {
         }
     }
 
+    /// This machine's open claims whose document is no longer in the folder
+    /// as it was claimed, with the path the claim names: claims a restart
+    /// left with nobody holding them. A claimed document that is still in
+    /// place is picked up again when a scan sees it; one renamed away - a
+    /// document waiting in review under a NEEDS REVIEW name - or deleted
+    /// while Intern was off is never seen at its key again, and its claim
+    /// sat open until it expired a month later. A claim whose facts do not
+    /// make its key, or whose path would lead out of the folder, names
+    /// nothing and is left alone.
+    pub fn own_open_claims_out_of_place(&self) -> Vec<(ClaimInfo, PathBuf)> {
+        let Ok(entries) = fs::read_dir(self.root.join("claims")) else {
+            return Vec::new();
+        };
+        let Some(folder) = self.root.parent() else {
+            return Vec::new();
+        };
+        let mut claims = Vec::new();
+        for entry in entries.flatten() {
+            let Stored::Parsed(claim) = load::<ClaimInfo>(&entry.path()) else {
+                continue;
+            };
+            let relative = Path::new(&claim.relative_path);
+            if claim.machine_id != self.identity.id
+                || claim.state != ClaimState::Claimed
+                || stem_of(&entry.path()) != Some(claim.key.as_str())
+                || document_key(&claim.relative_path, claim.size, claim.modified_at) != claim.key
+                || !relative
+                    .components()
+                    .all(|component| matches!(component, Component::Normal(_)))
+                || self.still_in_place(&claim)
+            {
+                continue;
+            }
+            let path = folder.join(relative);
+            claims.push((claim, path));
+        }
+        claims
+    }
+
     /// How long this machine has watched one claim's heartbeat stand still.
     ///
     /// A heartbeat is stamped from its owner's clock, so a machine running

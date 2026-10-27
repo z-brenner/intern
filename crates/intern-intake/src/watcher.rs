@@ -168,6 +168,9 @@ struct ScanState {
     /// The verdict that holds each held document, by key, as the last full
     /// scan heard it. A rescan while files settle reuses it.
     held: HashMap<String, IntakeAdmission>,
+    /// Whether this run has taken back the open claims of documents no
+    /// longer where they were claimed (see `adopt_out_of_place`).
+    adopted: bool,
 }
 
 impl ScanState {
@@ -279,6 +282,7 @@ fn scan_once(
         seen_live,
         enqueue_failures,
         held,
+        adopted,
     } = state;
     if store.is_none() {
         match ClaimStore::with_clock(&config.intake_root, identity.clone(), clock.clone()) {
@@ -343,6 +347,10 @@ fn scan_once(
             break;
         }
         scanner.process_file(facts);
+    }
+    if !interrupted && !*adopted {
+        scanner.adopt_out_of_place();
+        *adopted = true;
     }
     scanner.finish_unseen_owned();
     // A refused document that is gone, or changed into a new key, starts
@@ -618,7 +626,7 @@ impl Scanner<'_> {
                     // owns the surviving claim keeps the document.
                     return;
                 }
-                match self.host.enqueue(&[path.to_path_buf()]) {
+                match self.host.enqueue_claimed(key, path) {
                     Ok(()) => {
                         self.enqueue_failures.remove(key);
                         self.owned.insert(key.to_string(), path.to_path_buf());
@@ -712,7 +720,7 @@ impl Scanner<'_> {
     /// an item still at the path it is asked about, so giving up such a
     /// claim never cancels the document in review.
     fn manage_owned(&mut self, key: &str, path: &Path, file_present: bool) {
-        match self.host.item_state(path) {
+        match self.host.claim_state(key, path) {
             ItemState::Active | ItemState::NeedsReview => {
                 self.seen_live.insert(key.to_owned());
                 self.keep(key, path);
@@ -754,7 +762,7 @@ impl Scanner<'_> {
     fn abandon(&mut self, key: &str, path: &Path) {
         self.owned.remove(key);
         self.seen_live.remove(key);
-        self.host.abandon(path);
+        self.host.abandon_claim(key, path);
     }
 
     /// A document that failed while its bytes were still in the cloud has not
@@ -808,7 +816,7 @@ impl Scanner<'_> {
     /// that cannot retry, gets the claim released as before.
     fn forgive(&mut self, key: &str, path: &Path) {
         self.awaiting_hydration.remove(key);
-        if self.visited.contains(key) && self.host.retry(path) {
+        if self.visited.contains(key) && self.host.retry_claim(key, path) {
             self.keep(key, path);
             return;
         }
@@ -823,6 +831,24 @@ impl Scanner<'_> {
                 self.status.processed_here += 1;
             }
             Err(error) => self.status.error = Some(format!("CLAIM_UPDATE_FAILED: {error}")),
+        }
+    }
+
+    /// Takes back this machine's open claims whose document is no longer
+    /// where it was claimed, once per run, so their fate is followed like
+    /// that of any claim held since it was taken.
+    ///
+    /// A run holds what it claims only in memory. A claimed document still
+    /// in place is picked up again when a scan sees it, but one renamed
+    /// `NEEDS REVIEW - ...` because it could not be read is never seen at its
+    /// key again, so after a restart its claim was neither renewed nor
+    /// closed - not when a person filed the document, not when they removed
+    /// it - until it expired. Adopted here, it is followed through the host
+    /// like any other: kept while the document waits for review, closed on
+    /// its fate.
+    fn adopt_out_of_place(&mut self) {
+        for (claim, path) in self.store.own_open_claims_out_of_place() {
+            self.owned.entry(claim.key).or_insert(path);
         }
     }
 

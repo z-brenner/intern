@@ -137,6 +137,29 @@ pub trait IntakeHost: Send + Sync {
         false
     }
     fn status_changed(&self, status: &IntakeStatus);
+
+    /// [`Self::enqueue`] for one document a claim keyed `key` holds, so the
+    /// host can tie the claim to the item it hands over. Everything the
+    /// watcher later asks about that claim goes through the methods below,
+    /// and a host that keeps the tie answers for that item, not for
+    /// whatever is newest at the path: the path can come to hold another
+    /// document, and the document can leave the path - renamed
+    /// `NEEDS REVIEW - ...` where it lies - while its claim stays open.
+    fn enqueue_claimed(&self, _key: &str, path: &Path) -> Result<(), String> {
+        self.enqueue(&[path.to_path_buf()])
+    }
+    /// [`Self::item_state`] for the item a claim handed over.
+    fn claim_state(&self, _key: &str, path: &Path) -> ItemState {
+        self.item_state(path)
+    }
+    /// [`Self::abandon`] for the item a claim handed over.
+    fn abandon_claim(&self, _key: &str, path: &Path) {
+        self.abandon(path);
+    }
+    /// [`Self::retry`] for the item a claim handed over.
+    fn retry_claim(&self, _key: &str, path: &Path) -> bool {
+        self.retry(path)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
