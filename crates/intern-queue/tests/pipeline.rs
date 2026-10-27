@@ -1049,10 +1049,13 @@ fn three_consecutive_invalid_replies_pause_but_a_success_resets() {
     assert!(paused);
     assert_eq!(reason.as_deref(), Some("MODEL_OUTPUT_INVALID"));
     assert_eq!(calls, 3);
-    assert!(items[..3].iter().all(|item| {
-        item.status == QueueStatus::NeedsReview
-            && item.error_code == Some(ErrorCode::ModelOutputInvalid)
-    }));
+    // The run was the model's, not the documents': all three wait to be
+    // read again once the queue is resumed, with nothing counted.
+    assert!(
+        items[..3]
+            .iter()
+            .all(|item| { item.status == QueueStatus::Queued && item.processing_failures == 0 })
+    );
     assert_eq!(items[3].status, QueueStatus::Queued);
 }
 

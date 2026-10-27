@@ -59,6 +59,11 @@ pub enum ReviewRenamePurpose {
     /// That prefix taken off again, when a person keeps the document's own
     /// name. Committing it completes the item as kept.
     Restore,
+    /// That prefix taken off again because the item was canceled or failed:
+    /// the row may be cleared away with the history, and a file still named
+    /// for review with no row behind it would be skipped by every scan for
+    /// good. Committing it moves the row and nothing else.
+    Unmark,
 }
 
 impl ReviewRenamePurpose {
@@ -66,6 +71,7 @@ impl ReviewRenamePurpose {
         match self {
             Self::Mark => "mark",
             Self::Restore => "restore",
+            Self::Unmark => "unmark",
         }
     }
 
@@ -73,9 +79,34 @@ impl ReviewRenamePurpose {
         match value {
             "mark" => Some(Self::Mark),
             "restore" => Some(Self::Restore),
+            "unmark" => Some(Self::Unmark),
             _ => None,
         }
     }
+}
+
+/// Whether the file of a document going to review because it could not be
+/// read is renamed `NEEDS REVIEW - ...`, decided when it goes there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewMark {
+    /// Rename it now: the reason is the document's own by its nature - a
+    /// password, a file that is not what it says, one too large, a parse
+    /// failure, a refusal.
+    Now,
+    /// Not yet: the reason - a reply that could not be used, a time limit, a
+    /// crash, an internal failure - is just as often the model's or the
+    /// reader's as the document's. It is renamed once a later document is
+    /// read successfully, which proves the machine is fine; a run of such
+    /// failures that stops the queue puts it back to wait instead.
+    Defer,
+    /// Never: the document is not in the input folder, or it was admitted on
+    /// a proof (Microsoft's word on its uploader) that names it by its file
+    /// name, which a rename would break for good.
+    Never,
+    /// Never renamed, as for `Never`, but the reason is one that could as
+    /// well be the machine's, as for `Defer`: a run of such failures that
+    /// stops the queue still puts the document back to wait.
+    Hold,
 }
 
 /// How far a rename in place got.
@@ -92,6 +123,16 @@ pub enum ReviewRenameStage {
     /// The rename was tried and refused - a held file, a folder that may not
     /// be written - and nothing moved. Not tried again on its own.
     Failed,
+    /// A mark decided against for good ([`ReviewMark::Never`]): nothing is
+    /// renamed, and recovery does not make up for it.
+    Skipped,
+    /// A mark put off ([`ReviewMark::Defer`]) until a later document is read
+    /// successfully.
+    Deferred,
+    /// No mark, and a failure not yet proven the document's own
+    /// ([`ReviewMark::Hold`]); becomes `Skipped` once a later document is
+    /// read successfully.
+    Held,
 }
 
 impl ReviewRenameStage {
@@ -101,6 +142,9 @@ impl ReviewRenameStage {
             Self::Complete => "complete",
             Self::RolledBack => "rolled_back",
             Self::Failed => "failed",
+            Self::Skipped => "skipped",
+            Self::Deferred => "deferred",
+            Self::Held => "held",
         }
     }
 
@@ -110,6 +154,9 @@ impl ReviewRenameStage {
             "complete" => Some(Self::Complete),
             "rolled_back" => Some(Self::RolledBack),
             "failed" => Some(Self::Failed),
+            "skipped" => Some(Self::Skipped),
+            "deferred" => Some(Self::Deferred),
+            "held" => Some(Self::Held),
             _ => None,
         }
     }
@@ -291,7 +338,17 @@ impl QueueStore {
                  CREATE INDEX IF NOT EXISTS review_renames_by_origin
                    ON review_renames(from_path_key);
                  CREATE UNIQUE INDEX IF NOT EXISTS one_planned_review_rename
-                   ON review_renames(queue_item_id) WHERE stage = 'planned';",
+                   ON review_renames(queue_item_id) WHERE stage = 'planned';
+                 -- Which queue item each intake claim handed over, so the
+                 -- claim follows that item and not whatever is newest at the
+                 -- path it names. Kept when the item goes, with no item, so
+                 -- a removed document reads as removed rather than as the
+                 -- next document to arrive under its name.
+                 CREATE TABLE IF NOT EXISTS intake_claims (
+                   claim_key TEXT PRIMARY KEY,
+                   queue_item_id INTEGER REFERENCES queue_items(id) ON DELETE SET NULL,
+                   created_at INTEGER NOT NULL
+                 );",
             )
             .map_err(InternError::from)?;
         let session_id = new_session_id();
@@ -649,24 +706,48 @@ impl QueueStore {
     /// the code as well as the status, as `retry_duplicate` does, and a name
     /// typed for the document earlier goes with the failure.
     ///
+    /// `new_hash` is the file's fingerprint now, when it is not the one
+    /// stored, exactly as for `requeue_for_analysis`: "remove the password
+    /// and retry" means the bytes changed, and the rename after the new
+    /// reading is checked against the file as it is. A mark that was put off
+    /// or decided against goes too; the next failure decides again.
+    ///
     /// [`UNREADABLE_CODES`]: crate::UNREADABLE_CODES
-    pub fn retry_unreadable(&self, id: i64) -> InternResult<QueueItem> {
+    pub fn retry_unreadable(&self, id: i64, new_hash: Option<&str>) -> InternResult<QueueItem> {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(InternError::from)?;
-        let changed = transaction
-            .execute(
-                &format!(
-                    "UPDATE queue_items
-             SET status = 'queued', processing_failures = 0, error_code = NULL,
+        let changed = match transaction.execute(
+            &format!(
+                "UPDATE queue_items
+             SET status = 'queued', source_hash = COALESCE(?3, source_hash),
+                 processing_failures = 0, error_code = NULL,
                  owner_session = NULL, lease_expires_at = NULL,
                  previous_status = NULL, active_receipt_id = NULL,
                  reconciliation_receipt_id = NULL, updated_at = ?1
              WHERE id = ?2 AND status = 'needs_review' AND error_code IN ({})",
-                    unreadable_codes_sql()
-                ),
-                params![now(), id],
+                unreadable_codes_sql()
+            ),
+            params![now(), id, new_hash],
+        ) {
+            Ok(changed) => changed,
+            Err(rusqlite::Error::SqliteFailure(failure, _))
+                if failure.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+            {
+                transaction.rollback().map_err(InternError::from)?;
+                return Err(InternError::new(
+                    ErrorCode::Duplicate,
+                    "this version of the file is already in the queue",
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        transaction
+            .execute(
+                "DELETE FROM review_renames
+                 WHERE queue_item_id = ?1 AND stage IN ('deferred', 'skipped', 'held')",
+                params![id],
             )
             .map_err(InternError::from)?;
         if changed != 1 {
@@ -1505,22 +1586,193 @@ impl QueueStore {
             .collect::<Vec<_>>()
             .join(", ");
         let connection = self.lock()?;
-        connection
+        // Two indexed lookups rather than one query with an OR across two
+        // tables, which SQLite answers by scanning the queue: the newest row
+        // at the path, and the newest row whose file was marked away from
+        // it. The newer of the two is the path's current fate.
+        let at_path = connection
             .query_row(
-                &queue_select(&format!(
-                    "WHERE source_path_key IN ({placeholders})
-                        OR id IN (
-                          SELECT queue_item_id FROM review_renames
-                          WHERE purpose = 'mark' AND stage = 'complete'
-                            AND from_path_key IN ({placeholders})
-                        )
-                     ORDER BY id DESC LIMIT 1"
-                )),
+                &format!(
+                    "SELECT MAX(id) FROM queue_items WHERE source_path_key IN ({placeholders})"
+                ),
                 rusqlite::params_from_iter(keys.iter()),
-                row_to_item,
+                |row| row.get::<_, Option<i64>>(0),
             )
+            .map_err(InternError::from)?;
+        let marked_away = connection
+            .query_row(
+                &format!(
+                    "SELECT MAX(queue_item_id) FROM review_renames
+                     WHERE from_path_key IN ({placeholders})
+                       AND purpose = 'mark' AND stage = 'complete'"
+                ),
+                rusqlite::params_from_iter(keys.iter()),
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .map_err(InternError::from)?;
+        let Some(id) = at_path.max(marked_away) else {
+            return Ok(None);
+        };
+        connection
+            .query_row(&queue_select("WHERE id = ?1"), params![id], row_to_item)
             .optional()
             .map_err(InternError::from)
+    }
+
+    /// Records which queue item a claim of the intake watcher handed over,
+    /// so the claim follows that item rather than whichever row is newest at
+    /// the path it names. A path can come to hold another document - a new
+    /// upload under the same name while the first waits in review under a
+    /// NEEDS REVIEW name - and the claim on the first must never be settled
+    /// by the second. Handing the same claim over again points it at the row
+    /// the queue returned.
+    pub fn record_intake_claim(&self, claim_key: &str, id: i64) -> InternResult<()> {
+        let connection = self.lock()?;
+        connection
+            .execute(
+                "INSERT INTO intake_claims(claim_key, queue_item_id, created_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(claim_key) DO UPDATE SET queue_item_id = excluded.queue_item_id",
+                params![claim_key, id, now()],
+            )
+            .map_err(InternError::from)?;
+        Ok(())
+    }
+
+    /// The item a claim handed over: `None` when the claim was never
+    /// recorded (one taken before claims were recorded), `Some(None)` when
+    /// it was and the item is gone - removed from the queue, or cleared with
+    /// the history - and `Some(Some(item))` otherwise.
+    pub fn find_by_intake_claim(&self, claim_key: &str) -> InternResult<Option<Option<QueueItem>>> {
+        let connection = self.lock()?;
+        let Some(id) = connection
+            .query_row(
+                "SELECT queue_item_id FROM intake_claims WHERE claim_key = ?1",
+                params![claim_key],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .optional()
+            .map_err(InternError::from)?
+        else {
+            return Ok(None);
+        };
+        let Some(id) = id else {
+            return Ok(Some(None));
+        };
+        Ok(Some(
+            connection
+                .query_row(&queue_select("WHERE id = ?1"), params![id], read_item)
+                .optional()
+                .map_err(InternError::from)?
+                .flatten(),
+        ))
+    }
+
+    /// Settles every mark that was put off ([`ReviewMark::Defer`]): a
+    /// document was read successfully since, so whatever made them fail was
+    /// theirs, not the machine's. Returns the items still waiting in review
+    /// under an unreadable code, whose files are now to be marked.
+    pub fn promote_deferred_marks(&self) -> InternResult<Vec<i64>> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(InternError::from)?;
+        let ids = {
+            let mut statement = transaction
+                .prepare(&format!(
+                    "SELECT DISTINCT renames.queue_item_id
+                     FROM review_renames renames
+                     JOIN queue_items items ON items.id = renames.queue_item_id
+                     WHERE renames.stage = 'deferred' AND items.status = 'needs_review'
+                       AND items.error_code IN ({})
+                     ORDER BY renames.queue_item_id",
+                    unreadable_codes_sql()
+                ))
+                .map_err(InternError::from)?;
+            statement
+                .query_map([], |row| row.get::<_, i64>(0))
+                .map_err(InternError::from)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(InternError::from)?
+        };
+        transaction
+            .execute("DELETE FROM review_renames WHERE stage = 'deferred'", [])
+            .map_err(InternError::from)?;
+        // Proven the documents' own as well, and never to be marked.
+        transaction
+            .execute(
+                "UPDATE review_renames SET stage = 'skipped', updated_at = ?1 WHERE stage = 'held'",
+                params![now()],
+            )
+            .map_err(InternError::from)?;
+        transaction.commit().map_err(InternError::from)?;
+        Ok(ids)
+    }
+
+    /// Puts every document whose mark was put off back in the queue, for a
+    /// run of failures that stopped it: the machine, not those documents,
+    /// was the likely problem, so they wait to be read again once the queue
+    /// is resumed, under their own names and with nothing counted against
+    /// them. Returns how many went back.
+    pub fn requeue_deferred_reviews(&self) -> InternResult<usize> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(InternError::from)?;
+        let requeued = transaction
+            .execute(
+                &format!(
+                    "UPDATE queue_items
+                     SET status = 'queued', processing_failures = 0, error_code = NULL,
+                         owner_session = NULL, lease_expires_at = NULL, updated_at = ?1
+                     WHERE status = 'needs_review' AND error_code IN ({})
+                       AND id IN (
+                         SELECT queue_item_id FROM review_renames WHERE stage IN ('deferred', 'held')
+                       )
+                       AND NOT EXISTS (SELECT 1 FROM proposals WHERE queue_item_id = queue_items.id)",
+                    unreadable_codes_sql()
+                ),
+                params![now()],
+            )
+            .map_err(InternError::from)?;
+        transaction
+            .execute(
+                "DELETE FROM review_renames WHERE stage IN ('deferred', 'held')",
+                [],
+            )
+            .map_err(InternError::from)?;
+        transaction.commit().map_err(InternError::from)?;
+        Ok(requeued)
+    }
+
+    /// Items that were canceled or failed while their file still carries
+    /// the mark Intern gave it, and must get their own name back before the
+    /// row can be cleared away with the history.
+    pub fn marked_but_settled(&self) -> InternResult<Vec<QueueItem>> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare(&queue_select(
+                "WHERE status IN ('failed', 'canceled')
+                   AND EXISTS (
+                     SELECT 1 FROM review_renames
+                     WHERE review_renames.queue_item_id = queue_items.id
+                       AND review_renames.purpose = 'mark'
+                       AND review_renames.stage = 'complete'
+                       AND review_renames.to_path_key = queue_items.source_path_key
+                   )
+                 ORDER BY id",
+            ))
+            .map_err(InternError::from)?;
+        let rows = statement
+            .query_map([], read_item)
+            .map_err(InternError::from)?;
+        let mut items = Vec::new();
+        for row in rows {
+            if let Some(item) = row.map_err(InternError::from)? {
+                items.push(item);
+            }
+        }
+        Ok(items)
     }
 
     /// Whether a queue row already holds `path` with these exact bytes: a
@@ -1566,6 +1818,7 @@ impl QueueStore {
                 unreadable_codes_sql()
             ),
             ReviewRenamePurpose::Restore => "status IN ('ready', 'needs_review')".to_owned(),
+            ReviewRenamePurpose::Unmark => "status IN ('failed', 'canceled')".to_owned(),
         };
         let mut connection = self.lock()?;
         let transaction = connection
@@ -1750,6 +2003,23 @@ impl QueueStore {
                 params![id],
             )?
             .pop())
+    }
+
+    /// Whether the item's mark was decided against or put off: its newest
+    /// mark entry moves nothing and says so.
+    pub fn review_mark_withheld(&self, id: i64) -> InternResult<bool> {
+        let connection = self.lock()?;
+        Ok(connection
+            .query_row(
+                "SELECT stage FROM review_renames
+                 WHERE queue_item_id = ?1 AND purpose = 'mark'
+                 ORDER BY id DESC LIMIT 1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(InternError::from)?
+            .is_some_and(|stage| matches!(stage.as_str(), "deferred" | "skipped" | "held")))
     }
 
     /// Items in review under an unreadable code whose file was never marked:
@@ -1999,12 +2269,13 @@ impl QueueStore {
     /// a parser that crashed on it both times, a model that timed out on it
     /// both times - but may pass on a second attempt. The first attempt is
     /// counted and queued as before; the second hands the document to a
-    /// person rather than leaving it failed behind the rest.
+    /// person rather than leaving it failed behind the rest, with `mark`
+    /// deciding whether its file is renamed for it (see [`ReviewMark`]).
     pub fn record_retryable_failure(
         &self,
         id: i64,
         error: ErrorCode,
-        review_when_exhausted: Option<ErrorCode>,
+        review_when_exhausted: Option<(ErrorCode, ReviewMark)>,
     ) -> InternResult<QueueStatus> {
         let mut connection = self.lock()?;
         let transaction = connection
@@ -2026,10 +2297,10 @@ impl QueueStore {
                 )
             })?
             + 1;
-        let (status, error) = match (failures >= 2, review_when_exhausted) {
-            (true, Some(review)) => (QueueStatus::NeedsReview, review),
-            (true, None) => (QueueStatus::Failed, error),
-            (false, _) => (QueueStatus::Queued, error),
+        let (status, error, mark) = match (failures >= 2, review_when_exhausted) {
+            (true, Some((review, mark))) => (QueueStatus::NeedsReview, review, Some(mark)),
+            (true, None) => (QueueStatus::Failed, error, None),
+            (false, _) => (QueueStatus::Queued, error, None),
         };
         transaction
             .execute(
@@ -2047,6 +2318,9 @@ impl QueueStore {
                 ],
             )
             .map_err(InternError::from)?;
+        if let Some(mark) = mark {
+            note_review_mark(&transaction, id, mark)?;
+        }
         transaction.commit().map_err(InternError::from)?;
         Ok(status)
     }
@@ -2061,7 +2335,7 @@ impl QueueStore {
     /// least the automatic-retry limit so the row reads like any other
     /// document that has used its attempts.
     pub fn record_terminal_failure(&self, id: i64, error: ErrorCode) -> InternResult<()> {
-        self.record_terminal(id, QueueStatus::Failed, error)
+        self.record_terminal(id, QueueStatus::Failed, error, None)
     }
 
     /// Hands owned processing work to a person at once, for a document
@@ -2069,14 +2343,31 @@ impl QueueStore {
     /// [`crate::UNREADABLE_CODES`]): the same accounting as
     /// [`Self::record_terminal_failure`], with the document left in review -
     /// in the queue, where it can be retried, named by hand, kept or
-    /// removed - instead of failed.
-    pub fn record_unreadable(&self, id: i64, error: ErrorCode) -> InternResult<()> {
-        self.record_terminal(id, QueueStatus::NeedsReview, error)
+    /// removed - instead of failed. `mark` says whether its file is renamed
+    /// for it, now, later, or never; a decision other than now is recorded
+    /// in the same transaction, so recovery never makes a mark that was
+    /// decided against or put off.
+    pub fn record_unreadable(
+        &self,
+        id: i64,
+        error: ErrorCode,
+        mark: ReviewMark,
+    ) -> InternResult<()> {
+        self.record_terminal(id, QueueStatus::NeedsReview, error, Some(mark))
     }
 
-    fn record_terminal(&self, id: i64, status: QueueStatus, error: ErrorCode) -> InternResult<()> {
-        let connection = self.lock()?;
-        let changed = connection
+    fn record_terminal(
+        &self,
+        id: i64,
+        status: QueueStatus,
+        error: ErrorCode,
+        mark: Option<ReviewMark>,
+    ) -> InternResult<()> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(InternError::from)?;
+        let changed = transaction
             .execute(
                 "UPDATE queue_items
              SET status = ?1, processing_failures = MAX(processing_failures + 1, 2),
@@ -2087,12 +2378,16 @@ impl QueueStore {
             )
             .map_err(InternError::from)?;
         if changed != 1 {
+            transaction.rollback().map_err(InternError::from)?;
             return Err(InternError::new(
                 ErrorCode::StateConflict,
                 "item is not owned processing work",
             ));
         }
-        Ok(())
+        if let Some(mark) = mark {
+            note_review_mark(&transaction, id, mark)?;
+        }
+        transaction.commit().map_err(InternError::from)
     }
 
     pub(crate) fn create_receipt(
@@ -2643,6 +2938,32 @@ fn migrate_legacy_schema(connection: &mut Connection) -> InternResult<()> {
         )
         .map_err(InternError::from)?;
     transaction.commit().map_err(InternError::from)
+}
+
+/// Records a decision not to mark a document now - put off, or decided
+/// against - as a journal entry that moves nothing, so recovery, which marks
+/// a document in review that has no mark at all, leaves it alone. A
+/// decision to mark now records nothing here: the mark journals itself.
+fn note_review_mark(connection: &Connection, id: i64, mark: ReviewMark) -> InternResult<()> {
+    let stage = match mark {
+        ReviewMark::Now => return Ok(()),
+        ReviewMark::Defer => ReviewRenameStage::Deferred,
+        ReviewMark::Never => ReviewRenameStage::Skipped,
+        ReviewMark::Hold => ReviewRenameStage::Held,
+    };
+    connection
+        .execute(
+            "INSERT INTO review_renames(
+               queue_item_id, purpose, from_path, from_path_key, to_path, to_path_key,
+               stage, created_at, updated_at
+             )
+             SELECT id, 'mark', source_path, source_path_key, source_path, source_path_key,
+                    ?2, ?3, ?3
+             FROM queue_items WHERE id = ?1",
+            params![id, stage.as_db(), now()],
+        )
+        .map_err(InternError::from)?;
+    Ok(())
 }
 
 fn column_exists(connection: &Connection, table: &str, column: &str) -> InternResult<bool> {

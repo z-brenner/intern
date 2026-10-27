@@ -12,8 +12,8 @@ use std::{
 };
 
 use intern_core::{
-    ErrorCode, FileApplier, FileSystem, LockedFile, QueueStatus, QueueStore, ReviewRenamePurpose,
-    ReviewRenameStage, StdFileSystem, source_path_key,
+    ErrorCode, FileApplier, FileSystem, LockedFile, QueueStatus, QueueStore, ReviewMark,
+    ReviewRenamePurpose, ReviewRenameStage, StdFileSystem, source_path_key,
 };
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -30,7 +30,9 @@ fn unreadable(store: &QueueStore, folder: &Path, name: &str, code: ErrorCode) ->
     let hash = StdFileSystem.hash(&path).unwrap();
     let item = store.enqueue(&path, &hash).unwrap();
     assert_eq!(store.claim_next().unwrap().unwrap().id, item.id);
-    store.record_unreadable(item.id, code).unwrap();
+    store
+        .record_unreadable(item.id, code, ReviewMark::Now)
+        .unwrap();
     (item.id, path)
 }
 
@@ -475,7 +477,7 @@ fn a_plan_is_refused_once_the_document_moved_on() {
     let store = Arc::new(QueueStore::open(database(&temp)).unwrap());
     let folder = inbox(&temp);
     let (id, original) = unreadable(&store, &folder, "scan.pdf", ErrorCode::PasswordProtected);
-    store.retry_unreadable(id).unwrap();
+    store.retry_unreadable(id, None).unwrap();
     let error = store
         .plan_review_rename(
             id,
@@ -532,7 +534,7 @@ fn a_failure_that_uses_up_its_attempts_goes_to_review_only_when_asked() {
             .record_retryable_failure(
                 crashed.id,
                 ErrorCode::IoError,
-                Some(ErrorCode::ExtractionFailed),
+                Some((ErrorCode::ExtractionFailed, ReviewMark::Defer)),
             )
             .unwrap();
     }
@@ -552,9 +554,206 @@ fn a_failure_that_uses_up_its_attempts_goes_to_review_only_when_asked() {
     assert_eq!(item.error_code, Some(ErrorCode::IoError));
 
     // Retry takes an unreadable document back to the queue, and nothing else.
-    assert!(store.retry_unreadable(busy.id).is_err());
-    let retried = store.retry_unreadable(crashed.id).unwrap();
+    assert!(store.retry_unreadable(busy.id, None).is_err());
+    let retried = store.retry_unreadable(crashed.id, None).unwrap();
     assert_eq!(retried.status, QueueStatus::Queued);
     assert_eq!(retried.error_code, None);
     assert_eq!(retried.processing_failures, 0);
+}
+
+/// The crash after keep-original was journaled, with the marked file since
+/// gone and a new upload under the document's own name. The name being
+/// free of the marked file is no proof the restore landed: only the
+/// document's bytes at its own name are, and a stranger's are not.
+#[test]
+fn a_restore_is_not_taken_as_landed_on_a_strangers_file() {
+    let temp = TempDir::new().unwrap();
+    let folder = inbox(&temp);
+    let marked = folder.join("NEEDS REVIEW - scan.pdf");
+    let (id, original) = {
+        let store = Arc::new(QueueStore::open(database(&temp)).unwrap());
+        let (id, original) = unreadable(&store, &folder, "scan.pdf", ErrorCode::ExtractionFailed);
+        FileApplier::local(Arc::clone(&store))
+            .mark_for_review(id)
+            .unwrap();
+        store
+            .plan_review_rename(id, ReviewRenamePurpose::Restore, &marked, &original)
+            .unwrap();
+        (id, original)
+    };
+    fs::remove_file(&marked).unwrap();
+    fs::write(&original, b"a stranger's upload").unwrap();
+
+    let store = Arc::new(QueueStore::open(database(&temp)).unwrap());
+    FileApplier::local(Arc::clone(&store))
+        .reconcile_review_renames()
+        .unwrap();
+
+    let item = row(&store, id);
+    assert_eq!(item.status, QueueStatus::NeedsReview, "nothing was kept");
+    assert_eq!(item.source_path, marked);
+}
+
+/// A document that was marked and then canceled, or failed after a retry,
+/// can be cleared away with the history; its file gets its own name back
+/// first, or it would be skipped by every scan with no row behind it.
+#[test]
+fn a_marked_document_that_is_canceled_or_fails_gets_its_name_back() {
+    let temp = TempDir::new().unwrap();
+    let store = Arc::new(QueueStore::open(database(&temp)).unwrap());
+    let folder = inbox(&temp);
+    let applier = FileApplier::local(Arc::clone(&store));
+    let (canceled, canceled_path) = unreadable(
+        &store,
+        &folder,
+        "canceled.pdf",
+        ErrorCode::PasswordProtected,
+    );
+    applier.mark_for_review(canceled).unwrap().unwrap();
+    store
+        .transition(
+            canceled,
+            QueueStatus::NeedsReview,
+            QueueStatus::Canceled,
+            None,
+        )
+        .unwrap();
+    // Asked about a document still in review, nothing is taken back.
+    let (waiting, _) = unreadable(&store, &folder, "waiting.pdf", ErrorCode::PasswordProtected);
+    let waiting_marked = applier.mark_for_review(waiting).unwrap().unwrap();
+    assert!(applier.unmark_settled(waiting).unwrap().is_none());
+
+    let unmarked = applier.unmark_settled(canceled).unwrap().unwrap();
+    assert_eq!(unmarked.status, QueueStatus::Canceled);
+    assert_eq!(unmarked.source_path, canceled_path);
+    assert!(canceled_path.exists());
+    assert!(waiting_marked.exists());
+
+    // A failure the crash left marked is taken back by recovery.
+    let (failed, failed_path) =
+        unreadable(&store, &folder, "failed.pdf", ErrorCode::PasswordProtected);
+    applier.mark_for_review(failed).unwrap().unwrap();
+    store.retry_unreadable(failed, None).unwrap();
+    for _ in 0..2 {
+        assert_eq!(store.claim_next().unwrap().unwrap().id, failed);
+        store
+            .record_processing_failure(failed, ErrorCode::IoError)
+            .unwrap();
+    }
+    assert_eq!(row(&store, failed).status, QueueStatus::Failed);
+    applier.reconcile_review_renames().unwrap();
+    assert_eq!(row(&store, failed).source_path, failed_path);
+    assert!(failed_path.exists());
+    assert_eq!(row(&store, waiting).source_path, waiting_marked);
+}
+
+/// A mark decided against, or put off, is recorded with the review, so
+/// recovery - which marks any document in review that has no mark at all -
+/// never makes it.
+#[test]
+fn a_mark_put_off_or_decided_against_is_never_made_by_recovery() {
+    let temp = TempDir::new().unwrap();
+    let store = Arc::new(QueueStore::open(database(&temp)).unwrap());
+    let folder = inbox(&temp);
+    let mut ids = Vec::new();
+    for (name, mark) in [
+        ("never.pdf", ReviewMark::Never),
+        ("later.pdf", ReviewMark::Defer),
+    ] {
+        let path = folder.join(name);
+        fs::write(&path, name).unwrap();
+        let item = store.enqueue(&path, name).unwrap();
+        assert_eq!(store.claim_next().unwrap().unwrap().id, item.id);
+        store
+            .record_unreadable(item.id, ErrorCode::ModelOutputInvalid, mark)
+            .unwrap();
+        ids.push((item.id, path));
+    }
+    let applier = FileApplier::local(Arc::clone(&store));
+    applier.reconcile_review_renames().unwrap();
+    for (id, path) in &ids {
+        assert_eq!(&row(&store, *id).source_path, path);
+        assert!(path.exists());
+    }
+
+    // A later success proves the put-off one was the document's problem.
+    assert_eq!(store.promote_deferred_marks().unwrap(), vec![ids[1].0]);
+    assert!(store.promote_deferred_marks().unwrap().is_empty());
+    applier.reconcile_review_renames().unwrap();
+    assert_eq!(
+        row(&store, ids[1].0).source_path,
+        folder.join("NEEDS REVIEW - later.pdf")
+    );
+    assert_eq!(row(&store, ids[0].0).source_path, ids[0].1);
+}
+
+/// A run of failures that stops the queue puts the documents whose marks
+/// were put off back to wait, under their own names, with nothing counted.
+#[test]
+fn a_run_that_stops_the_queue_requeues_the_put_off_documents() {
+    let temp = TempDir::new().unwrap();
+    let store = QueueStore::open(database(&temp)).unwrap();
+    let put_off = store.enqueue(Path::new("/in/a.pdf"), "a").unwrap();
+    let decided = store.enqueue(Path::new("/in/b.pdf"), "b").unwrap();
+    for (item, mark) in [(&put_off, ReviewMark::Defer), (&decided, ReviewMark::Now)] {
+        assert_eq!(store.claim_next().unwrap().unwrap().id, item.id);
+        store
+            .record_unreadable(item.id, ErrorCode::ModelOutputInvalid, mark)
+            .unwrap();
+    }
+    assert_eq!(store.requeue_deferred_reviews().unwrap(), 1);
+    let requeued = row(&store, put_off.id);
+    assert_eq!(requeued.status, QueueStatus::Queued);
+    assert_eq!(requeued.error_code, None);
+    assert_eq!(requeued.processing_failures, 0);
+    assert_eq!(row(&store, decided.id).status, QueueStatus::NeedsReview);
+    assert!(store.promote_deferred_marks().unwrap().is_empty());
+}
+
+/// Retry after the person fixed the file - removed the password, saved it
+/// again - reads the file as it is, under its new fingerprint.
+#[test]
+fn a_retry_takes_the_files_fingerprint_now() {
+    let temp = TempDir::new().unwrap();
+    let store = QueueStore::open(database(&temp)).unwrap();
+    let folder = inbox(&temp);
+    let (id, _) = unreadable(&store, &folder, "scan.pdf", ErrorCode::PasswordProtected);
+    let retried = store.retry_unreadable(id, Some("after-the-fix")).unwrap();
+    assert_eq!(retried.source_hash, "after-the-fix");
+}
+
+/// A claim follows the item it handed over, not the path: a second document
+/// arriving under the same name never answers for the first, and a removed
+/// item reads as gone.
+#[test]
+fn an_intake_claim_follows_its_own_item() {
+    let temp = TempDir::new().unwrap();
+    let store = QueueStore::open(database(&temp)).unwrap();
+    assert_eq!(store.find_by_intake_claim("first").unwrap(), None);
+    let first = store.enqueue(Path::new("/in/a.pdf"), "a").unwrap();
+    store.record_intake_claim("first", first.id).unwrap();
+    let second = store.enqueue(Path::new("/in/a.pdf"), "a-again").unwrap();
+    store.record_intake_claim("second", second.id).unwrap();
+
+    assert_eq!(
+        store
+            .find_by_intake_claim("first")
+            .unwrap()
+            .unwrap()
+            .map(|item| item.id),
+        Some(first.id)
+    );
+    let connection = Connection::open(database(&temp)).unwrap();
+    connection
+        .execute("DELETE FROM queue_items WHERE id = ?1", [first.id])
+        .unwrap();
+    assert_eq!(store.find_by_intake_claim("first").unwrap(), Some(None));
+    assert_eq!(
+        store
+            .find_by_intake_claim("second")
+            .unwrap()
+            .unwrap()
+            .map(|item| item.id),
+        Some(second.id)
+    );
 }

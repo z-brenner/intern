@@ -9,7 +9,8 @@ use std::{
 
 use intern_core::{
     ErrorCode, FileApplier, FileSystem, InternError, OperationDirection, OperationReceipt,
-    OperationStage, QueueItem, QueueStatus, QueueStore, StdFileSystem, copy_name, source_path_key,
+    OperationStage, QueueItem, QueueStatus, QueueStore, ReviewMark, StdFileSystem, copy_name,
+    source_path_key,
 };
 use intern_engine::{
     DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
@@ -305,6 +306,11 @@ pub trait FileActions: Send + Sync {
     fn reconcile_review_renames(&self) -> PipelineResult<()> {
         Ok(())
     }
+    /// Gives a canceled or failed item's file its own name back, when it
+    /// carries a NEEDS REVIEW mark Intern made.
+    fn unmark_settled(&self, _item_id: i64) -> PipelineResult<()> {
+        Ok(())
+    }
 }
 
 pub struct CoreFileActions {
@@ -412,6 +418,13 @@ impl FileActions for CoreFileActions {
     fn reconcile_review_renames(&self) -> PipelineResult<()> {
         self.applier
             .reconcile_review_renames()
+            .map(drop)
+            .map_err(Into::into)
+    }
+
+    fn unmark_settled(&self, item_id: i64) -> PipelineResult<()> {
+        self.applier
+            .unmark_settled(item_id)
             .map(drop)
             .map_err(Into::into)
     }
@@ -774,6 +787,12 @@ pub struct Pipeline {
     /// Documents in a row whose model reply could not be used. One such
     /// reply is that document's problem; several in a row is the model's.
     consecutive_unreadable_replies: AtomicU32,
+    /// Model requests in a row that ran out of time. One slow document is
+    /// its own problem; several in a row is the model's.
+    consecutive_timeouts: AtomicU32,
+    /// Reader crashes in a row. One document that crashes the parser is that
+    /// document's problem; a reader that crashes on everything is broken.
+    consecutive_crashes: AtomicU32,
     /// When a document first found no model loaded to ask, in the current
     /// run of such documents; `None` once a model has answered since.
     model_missing_since: Mutex<Option<std::time::Instant>>,
@@ -897,6 +916,8 @@ impl Pipeline {
             paused: AtomicBool::new(false),
             pause_reason: Mutex::new(None),
             consecutive_unreadable_replies: AtomicU32::new(0),
+            consecutive_timeouts: AtomicU32::new(0),
+            consecutive_crashes: AtomicU32::new(0),
             model_missing_since: Mutex::new(None),
             model_missing_grace: MODEL_MISSING_GRACE,
             active_item: AtomicI64::new(0),
@@ -1153,7 +1174,10 @@ impl Pipeline {
             return None;
         }
         let root = PathBuf::from(root);
-        if is_within(&item.source_path, &root)
+        // Only what was put in the input folder is moved on Intern's own
+        // initiative; a duplicate added from anywhere else waits in review.
+        if !self.in_input_folder(&item.source_path)
+            || is_within(&item.source_path, &root)
             || original
                 .filed_path
                 .as_deref()
@@ -1200,7 +1224,23 @@ impl Pipeline {
             }
             return Err(error);
         }
-        if let Err(error) = fs::create_dir_all(&copy.folder) {
+        // The folder was chosen when the copy was staged, and the output
+        // folder may have changed while it waited: a folder no longer inside
+        // it is not recreated, and the copy goes to the root of the output
+        // folder as it is now. With none set any more, there is nowhere to
+        // file it, and it waits in review as a duplicate.
+        let root = self.settings.load()?.destination.trim().to_owned();
+        if root.is_empty() {
+            let _ = self.repository.abandon_copy(item.id);
+            self.events.queue_changed();
+            return Ok(());
+        }
+        let folder = if is_within(&copy.folder, Path::new(&root)) {
+            copy.folder.clone()
+        } else {
+            PathBuf::from(&root)
+        };
+        if let Err(error) = fs::create_dir_all(&folder) {
             let _ = self.repository.abandon_copy(item.id);
             self.events.queue_changed();
             return Err(PipelineError::new(
@@ -1208,7 +1248,7 @@ impl Pipeline {
                 format!("the destination folder could not be created ({error})"),
             ));
         }
-        let destination = copy.folder.join(&record.filename);
+        let destination = folder.join(&record.filename);
         let applied = {
             let _files = self.hold_file_ops();
             let applied = self.files.apply(item, &destination);
@@ -1533,6 +1573,7 @@ impl Pipeline {
                     return Ok(true);
                 }
                 let code = extraction_error_code(&error.code, error.retryable);
+                let verified = extraction_evidence.verified_hash().is_some();
                 // A failure the worker calls permanent - a password, a file
                 // that is not what its name says, a document past the limits
                 // - reads the same on every attempt, and a second attempt
@@ -1542,11 +1583,14 @@ impl Pipeline {
                 // still gets its second attempt.
                 if !error.retryable && !error.crashed && code != ErrorCode::IoError {
                     if code.marks_unreadable() {
-                        // The document's own problem: it waits in review,
-                        // renamed so the input folder says so too.
-                        self.hold_unreadable(item.id, code)?;
+                        // The document's own problem, by its nature: it
+                        // waits in review, renamed so the input folder says
+                        // so too.
+                        let mark = self.review_mark(&item, verified, true);
+                        self.hold_unreadable(item.id, code, mark)?;
                     } else {
                         self.store.record_terminal_failure(item.id, code)?;
+                        self.unmark_if_marked(item.id);
                     }
                     // Without the text-recognition files every document that
                     // needs them fails the same way, so the queue stops and
@@ -1561,19 +1605,37 @@ impl Pipeline {
                     && item.processing_failures == 0
                     && self.worker.restart().is_err();
                 // A parser that crashed on this document on both attempts
-                // could not read it, and that is the document's problem as
-                // much as a parse failure is: it waits in review. Any other
-                // failure that may pass - the worker's own reading of the
-                // file, a placeholder whose content is still in the cloud,
-                // a busy worker - fails as before; the intake watcher hands
-                // such a document over again once its content arrives.
-                let review_when_exhausted = error.crashed.then_some(ErrorCode::ExtractionFailed);
-                if self
+                // could not read it: it waits in review. A crash is as often
+                // the reader's fault as the document's, so its file is not
+                // renamed until a later document is read successfully, and
+                // a reader that crashes on several documents in a row stops
+                // the queue instead (below). Any other failure that may pass
+                // - the worker's own reading of the file, a placeholder whose
+                // content is still in the cloud, a busy worker - fails as
+                // before; the intake watcher hands such a document over
+                // again once its content arrives.
+                let review_when_exhausted = error.crashed.then(|| {
+                    (
+                        ErrorCode::ExtractionFailed,
+                        self.review_mark(&item, verified, false),
+                    )
+                });
+                match self
                     .store
                     .record_retryable_failure(item.id, code, review_when_exhausted)?
-                    == QueueStatus::NeedsReview
                 {
-                    self.mark_unreadable(item.id);
+                    QueueStatus::NeedsReview => self.mark_unreadable(item.id),
+                    QueueStatus::Failed => self.unmark_if_marked(item.id),
+                    _ => {}
+                }
+                if error.crashed
+                    && self
+                        .consecutive_crashes
+                        .fetch_add(1, Ordering::SeqCst)
+                        .saturating_add(1)
+                        >= CRASHES_BEFORE_PAUSE
+                {
+                    self.pause_for_streak(READER_CRASHED);
                 }
                 // A worker that will not come back cannot read this
                 // document on a second attempt either, so the failure is
@@ -1584,11 +1646,14 @@ impl Pipeline {
                 // and leave that one extracting under nobody's lease.
                 if restart_failed {
                     self.repository.record_recovered_failure(item.id)?;
+                    self.unmark_if_marked(item.id);
                 }
                 self.events.queue_changed();
                 return Ok(true);
             }
         };
+        // The reader read a document, so it is not crashing on everything.
+        self.consecutive_crashes.store(0, Ordering::SeqCst);
         self.ensure_lease(&lease)?;
         if self.paused.load(Ordering::SeqCst) {
             lease.stop_and_check()?;
@@ -1640,7 +1705,12 @@ impl Pipeline {
             Ok(analysis) => {
                 self.consecutive_unreadable_replies
                     .store(0, Ordering::SeqCst);
+                self.consecutive_timeouts.store(0, Ordering::SeqCst);
                 self.forget_missing_model();
+                // A document read successfully proves the model and the
+                // reader are working, so the documents whose marks were put
+                // off failed for reasons of their own: mark them now.
+                self.promote_deferred_marks();
                 analysis
             }
             Err(error) => {
@@ -1708,8 +1778,19 @@ impl Pipeline {
                         // document, and from a hosted model bills for it
                         // again, so it is settled now and the queue moves
                         // on: in review, for a person to retry, name by
-                        // hand, keep or remove.
-                        self.hold_unreadable(item.id, code)?;
+                        // hand, keep or remove. A refusal or a document too
+                        // large is the document's own by its nature, and is
+                        // marked at once; a reply that could not be used, or
+                        // an internal failure, can as well be the model's, and
+                        // waits for a later success before it is.
+                        let by_nature =
+                            !is_unreadable_reply(&error.code) && code != ErrorCode::AnalysisFailed;
+                        let mark = self.review_mark(
+                            &item,
+                            extraction_evidence.verified_hash().is_some(),
+                            by_nature,
+                        );
+                        self.hold_unreadable(item.id, code, mark)?;
                         if is_unreadable_reply(&error.code) {
                             // One reply that cannot be used is that
                             // document's problem. Several documents in a row
@@ -1724,7 +1805,7 @@ impl Pipeline {
                                 .fetch_add(1, Ordering::SeqCst)
                                 .saturating_add(1);
                             if streak >= UNREADABLE_REPLIES_BEFORE_PAUSE {
-                                self.pause_for(pause_reason_code(&error.code, code));
+                                self.pause_for_streak(pause_reason_code(&error.code, code));
                             }
                         }
                     }
@@ -1735,26 +1816,53 @@ impl Pipeline {
                         // rather than fail the backlog one item at a time.
                         // The document keeps its second attempt for when the
                         // queue is resumed.
-                        self.store.record_processing_failure(item.id, code)?;
+                        if self.store.record_processing_failure(item.id, code)?
+                            == QueueStatus::Failed
+                        {
+                            self.unmark_if_marked(item.id);
+                        }
                         self.pause_for(pause_reason_code(&error.code, code));
                     }
                     ModelFailureAction::Retry => {
                         // A model that ran out of time on this document
                         // twice could not finish it, and the next document
                         // is no reason to think otherwise: it waits in
-                        // review. Every other failure here - an unhealthy
-                        // server, a rejected request, settings that could
-                        // not be read - is this computer's, and fails as it
-                        // always did once the second attempt is used.
-                        let review_when_exhausted =
-                            (error.code == "MODEL_TIMEOUT").then_some(ErrorCode::ModelFailed);
-                        if self.store.record_retryable_failure(
+                        // review, its mark put off until a later document is
+                        // read, since a model that is too slow for everything
+                        // looks the same from one document - and several
+                        // time-outs in a row stop the queue instead. Every
+                        // other failure here - an unhealthy server, a
+                        // rejected request, settings that could not be read
+                        // - is this computer's, and fails as it always did
+                        // once the second attempt is used.
+                        let timed_out = error.code == "MODEL_TIMEOUT";
+                        let review_when_exhausted = timed_out.then(|| {
+                            (
+                                ErrorCode::ModelFailed,
+                                self.review_mark(
+                                    &item,
+                                    extraction_evidence.verified_hash().is_some(),
+                                    false,
+                                ),
+                            )
+                        });
+                        match self.store.record_retryable_failure(
                             item.id,
                             code,
                             review_when_exhausted,
-                        )? == QueueStatus::NeedsReview
+                        )? {
+                            QueueStatus::NeedsReview => self.mark_unreadable(item.id),
+                            QueueStatus::Failed => self.unmark_if_marked(item.id),
+                            _ => {}
+                        }
+                        if timed_out
+                            && self
+                                .consecutive_timeouts
+                                .fetch_add(1, Ordering::SeqCst)
+                                .saturating_add(1)
+                                >= TIMEOUTS_BEFORE_PAUSE
                         {
-                            self.mark_unreadable(item.id);
+                            self.pause_for_streak(ErrorCode::ModelFailed.as_str());
                         }
                     }
                 }
@@ -2318,10 +2426,21 @@ impl Pipeline {
         settings: &AppSettings,
     ) -> PipelineResult<()> {
         if let Err(error) = self.authorize_item(item, AdmissionStage::Apply) {
-            if !error.is_retryable() {
+            if !error.is_retryable()
+                && self
+                    .repository
+                    .mark_needs_review(item.id, "UPLOADER_UNVERIFIED")
+                    .is_err()
+            {
+                // The record could not be put in review - none to update, or
+                // the database refused - and a ready row is what the
+                // scheduler files from. The row alone goes to review, so the
+                // denial is never retried as an approval on every pass.
                 let _ = self
                     .repository
-                    .mark_needs_review(item.id, "UPLOADER_UNVERIFIED");
+                    .hold_row_for_review(item.id, ErrorCode::UploaderUnverified);
+            }
+            if !error.is_retryable() {
                 self.events.queue_changed();
             }
             return Err(error);
@@ -2505,10 +2624,79 @@ impl Pipeline {
     /// journal, so a crash between the two leaves a document in review that
     /// recovery marks (see `FileApplier::reconcile_review_renames`), never a
     /// renamed file the queue has lost.
-    fn hold_unreadable(&self, item_id: i64, code: ErrorCode) -> PipelineResult<()> {
-        self.store.record_unreadable(item_id, code)?;
+    fn hold_unreadable(
+        &self,
+        item_id: i64,
+        code: ErrorCode,
+        mark: ReviewMark,
+    ) -> PipelineResult<()> {
+        self.store.record_unreadable(item_id, code, mark)?;
         self.mark_unreadable(item_id);
         Ok(())
+    }
+
+    /// Whether, and when, the file of a document going to review because it
+    /// could not be read is renamed `NEEDS REVIEW - ...` (see [`ReviewMark`]).
+    ///
+    /// Never for a document admitted on Microsoft's word about its uploader
+    /// (`verified`): that proof names the file - its name in the library,
+    /// and a creation time equal to its last change - and every later stage
+    /// asks for it again, so a renamed file could never be retried, named or
+    /// filed. Such a document waits in review under its own name. Never,
+    /// either, for a file outside the input folder: Intern renames only
+    /// what was put there for it. Otherwise now when the reason is the
+    /// document's own by its nature (`by_nature`), and later when it could
+    /// as well be the machine's.
+    fn review_mark(&self, item: &QueueItem, verified: bool, by_nature: bool) -> ReviewMark {
+        let never = verified || !self.in_input_folder(&item.source_path);
+        match (by_nature, never) {
+            (true, false) => ReviewMark::Now,
+            (true, true) => ReviewMark::Never,
+            (false, false) => ReviewMark::Defer,
+            // Not renamed, but still one of a run that may stop the queue.
+            (false, true) => ReviewMark::Hold,
+        }
+    }
+
+    /// Whether `path` is inside the input folder Settings names. Intern
+    /// renames and moves on its own only what was put there for it.
+    fn in_input_folder(&self, path: &Path) -> bool {
+        self.settings.load().is_ok_and(|settings| {
+            let folder = settings.intake_folder.trim();
+            !folder.is_empty() && is_within(path, Path::new(folder))
+        })
+    }
+
+    /// Marks the documents whose marks were put off, now that a document
+    /// was read successfully. The decisions are settled first, so a crash
+    /// in between leaves documents recovery marks.
+    fn promote_deferred_marks(&self) {
+        if let Ok(ids) = self.store.promote_deferred_marks() {
+            for id in ids {
+                self.mark_unreadable(id);
+            }
+        }
+    }
+
+    /// Stops the queue for a run of failures that is the machine's rather
+    /// than any one document's - replies that could not be used, time-outs,
+    /// reader crashes - and puts the documents of that run whose marks were
+    /// put off back to wait, under their own names and with nothing counted
+    /// against them. Sent to review, they would wait there for a person over
+    /// a fault that is fixed by resuming; renamed, their names would say so
+    /// in the input folder too.
+    fn pause_for_streak(&self, reason: &str) {
+        self.pause_for(reason);
+        let _ = self.store.requeue_deferred_reviews();
+    }
+
+    /// Gives a canceled or failed item's file its own name back when Intern
+    /// marked it, so the row can be cleared away with the history without
+    /// leaving a file every scan skips. A rename that is refused stays for
+    /// the recovery pass to try again.
+    fn unmark_if_marked(&self, item_id: i64) {
+        let _files = self.hold_file_ops();
+        let _ = self.files.unmark_settled(item_id);
     }
 
     /// Renames an unreadable document's file, under the hold every file
@@ -2808,6 +2996,9 @@ impl Pipeline {
                 _ => {}
             }
         }
+        // A canceled row can be cleared away with the history, so a file
+        // Intern marked gets its own name back now.
+        self.unmark_if_marked(id);
         self.events.queue_changed();
         Ok(())
     }
@@ -2853,10 +3044,15 @@ impl Pipeline {
             // now. It is read from wherever its file is - under its
             // NEEDS REVIEW name, once it has one - and taken back to the
             // queue under the file hold, so a rename of it still in flight
-            // finishes before it is read.
+            // finishes before it is read. It is fingerprinted again as it
+            // is now: removing a password changes the file, and the rename
+            // after the new reading is checked against that.
             {
                 let _files = self.hold_file_ops();
-                self.store.retry_unreadable(id)?;
+                let current = self.find_item(id)?;
+                let fingerprint = self.files.fingerprint(&current.source_path)?;
+                let new_hash = (fingerprint != current.source_hash).then_some(fingerprint.as_str());
+                self.store.retry_unreadable(id, new_hash)?;
             }
             self.events.queue_changed();
             return Ok(());
@@ -2923,6 +3119,18 @@ impl Pipeline {
     }
 
     pub fn approve(&self, id: i64, filename: &str, description: &str) -> PipelineResult<()> {
+        // Applying a staged copy under its own COPY name is filing it: it was
+        // never going to be named by anyone, and its name carries no date.
+        if let Some(record) = self
+            .repository
+            .load_proposal(id)?
+            .filter(|record| record.copy_of.is_some() && record.filename == filename.trim())
+        {
+            let item = self.find_item(id)?;
+            if item.status == QueueStatus::Ready && record.approved {
+                return self.apply_copy(&item, &record);
+            }
+        }
         let filename = validate_leaf_filename(filename)?;
         if leading_date(&filename).is_none() {
             return Err(PipelineError::new(
@@ -3303,8 +3511,35 @@ impl Pipeline {
             }
             self.report_settled(id);
         }
+        // Rows this pass failed after their file was marked, or that a
+        // crash left so: their files get their own names back.
+        if let Ok(settled) = self.store.marked_but_settled() {
+            for item in settled {
+                self.unmark_if_marked(item.id);
+            }
+        }
         self.events.queue_changed();
         Ok(())
+    }
+
+    /// Records which item a claim of the intake watcher handed over (see
+    /// `QueueStore::record_intake_claim`).
+    pub fn record_intake_claim(&self, claim_key: &str, item_id: i64) -> PipelineResult<()> {
+        Ok(self.store.record_intake_claim(claim_key, item_id)?)
+    }
+
+    /// The item a claim handed over, with its proposal and receipts:
+    /// `None` for a claim never recorded, `Some(None)` for one whose item is
+    /// gone.
+    pub fn find_by_intake_claim(
+        &self,
+        claim_key: &str,
+    ) -> PipelineResult<Option<Option<PipelineItem>>> {
+        match self.store.find_by_intake_claim(claim_key)? {
+            None => Ok(None),
+            Some(None) => Ok(Some(None)),
+            Some(Some(item)) => Ok(Some(Some(self.pipeline_item(item)?))),
+        }
     }
 }
 
@@ -3832,6 +4067,20 @@ impl PipelineRepository {
         self.put_in_review_as(id, Some(UNDONE), QueueStatus::Ready, Some("DUPLICATE"))
     }
 
+    /// Puts a ready row in review under `code` without touching its record:
+    /// the fallback when the record itself cannot be updated.
+    fn hold_row_for_review(&self, id: i64, code: ErrorCode) -> PipelineResult<()> {
+        self.lock()?
+            .execute(
+                "UPDATE queue_items SET status = 'needs_review', error_code = ?2,
+                     updated_at = unixepoch()
+                 WHERE id = ?1 AND status = 'ready'",
+                params![id, code.as_str()],
+            )
+            .map_err(database_error)?;
+        Ok(())
+    }
+
     /// Gives a document Intern could not read the empty record a typed name
     /// is approved into. Nothing is replaced: a record already there - a
     /// name typed before - is the one approved.
@@ -4236,6 +4485,18 @@ fn model_error_code(error: &ModelFailure) -> ErrorCode {
 /// used before the queue stops to say the model itself is the problem.
 const UNREADABLE_REPLIES_BEFORE_PAUSE: u32 = 3;
 
+/// How many model requests in a row may run out of time before the queue
+/// stops to say the model is too slow for anything.
+const TIMEOUTS_BEFORE_PAUSE: u32 = 3;
+
+/// How many reader crashes in a row stop the queue: the reader, not the
+/// documents, is broken.
+const CRASHES_BEFORE_PAUSE: u32 = 3;
+
+/// The reason the queue stopped for a run of reader crashes, as the window
+/// names it.
+pub const READER_CRASHED: &str = "READER_CRASHED";
+
 /// How long documents may keep finding no model loaded before the queue
 /// stops for it. A request that meets a start or a restart under way waits
 /// for it in the app's model, so the only empty slot that fills on its own
@@ -4377,7 +4638,10 @@ struct DuplicateOriginal {
 
 /// Whether `path` is `root` or inside it, as written or once both resolve.
 fn is_within(path: &Path, root: &Path) -> bool {
+    let (path_key, root_key) = (source_path_key(path), source_path_key(root));
     path.starts_with(root)
+        || (!root_key.is_empty()
+            && (path_key == root_key || path_key.starts_with(&format!("{root_key}\\"))))
         || matches!(
             (fs::canonicalize(path), fs::canonicalize(root)),
             (Ok(path), Ok(root)) if path.starts_with(&root)

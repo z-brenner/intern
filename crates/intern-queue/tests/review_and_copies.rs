@@ -21,6 +21,7 @@ use intern_engine::{
     fingerprint, validate,
 };
 use intern_queue::{
+    AdmissionEvidence, AdmissionGuard, AdmissionStage,
     paths::canonical_file,
     pipeline::{
         AnalyzerBoundary, DuplicateOracle, EXACT_COPY, FiledDocument, FilingSink, KnownFiling,
@@ -192,6 +193,16 @@ impl Rig {
         configure: impl FnOnce(&mut AppSettings),
         oracle: Option<Arc<dyn DuplicateOracle>>,
     ) -> Rig {
+        Self::build(worker, model, configure, oracle, None)
+    }
+
+    fn build(
+        worker: Vec<Result<DocumentSource, WorkerFailure>>,
+        model: Vec<Result<ModelProposal, ModelFailure>>,
+        configure: impl FnOnce(&mut AppSettings),
+        oracle: Option<Arc<dyn DuplicateOracle>>,
+        guard: Option<Arc<dyn AdmissionGuard>>,
+    ) -> Rig {
         let temp = tempdir().unwrap();
         let inbox = temp.path().join("Inbox");
         let filed = temp.path().join("Filed");
@@ -201,6 +212,8 @@ impl Rig {
         let filed = filed.canonicalize().unwrap();
         let mut settings = AppSettings {
             destination: filed.to_string_lossy().into_owned(),
+            intake_folder: inbox.to_string_lossy().into_owned(),
+            intake_enabled: true,
             automatic_rename: true,
             ..AppSettings::default()
         };
@@ -221,6 +234,9 @@ impl Rig {
         .with_filing_sink(filings.clone());
         if let Some(oracle) = oracle {
             pipeline = pipeline.with_duplicate_oracle(oracle);
+        }
+        if let Some(guard) = guard {
+            pipeline = pipeline.with_admission_guard(guard);
         }
         Rig {
             temp,
@@ -288,8 +304,11 @@ fn names_in(folder: &Path) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 /// Every reason that is the document's own leaves it in the queue, in
-/// review under that reason, with its file renamed where it lies - and the
-/// queue goes on to the next document.
+/// review under that reason. A reason that is the document's by its nature
+/// renames its file where it lies at once; one that could as well be the
+/// model's (a reply that could not be used, an internal failure) renames it
+/// only once a later document is read successfully. The queue goes on to the
+/// next document either way.
 #[test]
 fn a_document_that_cannot_be_read_waits_in_review_under_a_needs_review_name() {
     let extraction = [
@@ -304,35 +323,29 @@ fn a_document_that_cannot_be_read_waits_in_review_under_a_needs_review_name() {
         ("MODEL_INPUT_TOO_LARGE", ErrorCode::DocumentTooLarge),
         ("ANALYSIS_FAILED", ErrorCode::AnalysisFailed),
     ];
-    let mut reads = extraction
+    let reads = extraction
         .iter()
         .map(|(code, _)| Err(WorkerFailure::reported(*code, "the worker's words", false)))
         .collect::<Vec<_>>();
-    reads.extend(model.iter().map(|_| Ok(parsed(READABLE))));
-    let mut replies = model
+    let replies = model
         .iter()
         .map(|(code, _)| Err(ModelFailure::fatal(*code)))
         .collect::<Vec<_>>();
-    // A reply that could not be used, then one that could: the row of
-    // unusable replies is broken before it can stop the queue.
-    replies.insert(2, Ok(proposal()));
     let rig = Rig::new(reads, replies, |settings| settings.automatic_rename = false);
-    let mut ids = Vec::new();
-    for index in 0..extraction.len() + model.len() {
-        ids.push(rig.add(&rig.drop_in(
-            &format!("doc-{index}.pdf"),
-            format!("doc {index}").as_bytes(),
-        )));
-        if index == extraction.len() + 1 {
-            ids.push(rig.add(&rig.drop_in("fine.pdf", b"a fine document")));
-        }
-    }
+    let ids = (0..extraction.len() + model.len())
+        .map(|index| {
+            rig.add(&rig.drop_in(
+                &format!("doc-{index}.pdf"),
+                format!("doc {index}").as_bytes(),
+            ))
+        })
+        .collect::<Vec<_>>();
 
     rig.pipeline.run_until_idle().unwrap();
 
     assert!(!rig.pipeline.is_paused());
-    let fine = ids.remove(extraction.len() + 2);
-    assert_eq!(rig.item(fine).status, QueueStatus::Ready);
+    let marked_now =
+        |index: usize| index < extraction.len() || matches!(index - extraction.len(), 0 | 2);
     for ((index, id), (code, expected)) in ids
         .iter()
         .enumerate()
@@ -342,13 +355,24 @@ fn a_document_that_cannot_be_read_waits_in_review_under_a_needs_review_name() {
         assert_eq!(item.status, QueueStatus::NeedsReview, "{code}");
         assert_eq!(item.error_code, Some(*expected), "{code}");
         assert!(item.proposal.is_none(), "{code}");
+        let name = if marked_now(index) {
+            format!("NEEDS REVIEW - doc-{index}.pdf")
+        } else {
+            format!("doc-{index}.pdf")
+        };
+        assert_eq!(item.source_path, rig.inbox.join(&name), "{code}");
+        assert!(rig.inbox.join(&name).exists(), "{code}");
+    }
+
+    // A document read successfully proves the model works: the two whose
+    // marks were put off were their own problem after all.
+    let fine = rig.add(&rig.drop_in("fine.pdf", b"a fine document"));
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(rig.item(fine).status, QueueStatus::Ready);
+    for index in [extraction.len() + 1, extraction.len() + 3] {
         let marked = rig.inbox.join(format!("NEEDS REVIEW - doc-{index}.pdf"));
-        assert_eq!(item.source_path, marked, "{code}");
-        assert!(marked.exists(), "{code}");
-        assert!(
-            !rig.inbox.join(format!("doc-{index}.pdf")).exists(),
-            "{code}"
-        );
+        assert_eq!(rig.item(ids[index]).source_path, marked);
+        assert!(marked.exists());
     }
 }
 
@@ -399,7 +423,9 @@ fn machine_problems_fail_or_pause_and_rename_nothing() {
 
 /// Two attempts that each fail in a way that may pass - a parser crash, a
 /// model running out of time - are the document's problem once both are
-/// used: it waits in review rather than failing.
+/// used: it waits in review rather than failing. Whether it was the
+/// document's or the machine's shows only when a later document is read, so
+/// the file keeps its name until then.
 #[test]
 fn a_document_that_crashes_the_parser_or_times_out_twice_goes_to_review() {
     let rig = Rig::new(
@@ -420,17 +446,27 @@ fn a_document_that_crashes_the_parser_or_times_out_twice_goes_to_review() {
 
     rig.pipeline.run_until_idle().unwrap();
 
-    let crashing = rig.item(crashing);
-    assert_eq!(crashing.status, QueueStatus::NeedsReview);
-    assert_eq!(crashing.error_code, Some(ErrorCode::ExtractionFailed));
+    assert!(!rig.pipeline.is_paused(), "two in a row is not a run");
+    let item = rig.item(crashing);
+    assert_eq!(item.status, QueueStatus::NeedsReview);
+    assert_eq!(item.error_code, Some(ErrorCode::ExtractionFailed));
+    assert_eq!(item.source_path, rig.inbox.join("crashes.pdf"));
+    let item = rig.item(slow);
+    assert_eq!(item.status, QueueStatus::NeedsReview);
+    assert_eq!(item.error_code, Some(ErrorCode::ModelFailed));
+    assert_eq!(item.source_path, rig.inbox.join("slow.pdf"));
+
+    let fine = rig.add(&rig.drop_in("fine.pdf", b"a fine document"));
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(rig.item(fine).status, QueueStatus::Completed);
     assert_eq!(
-        crashing.source_path,
+        rig.item(crashing).source_path,
         rig.inbox.join("NEEDS REVIEW - crashes.pdf")
     );
-    let slow = rig.item(slow);
-    assert_eq!(slow.status, QueueStatus::NeedsReview);
-    assert_eq!(slow.error_code, Some(ErrorCode::ModelFailed));
-    assert_eq!(slow.source_path, rig.inbox.join("NEEDS REVIEW - slow.pdf"));
+    assert_eq!(
+        rig.item(slow).source_path,
+        rig.inbox.join("NEEDS REVIEW - slow.pdf")
+    );
 }
 
 /// Retry reads the renamed file again. Read successfully this time, it is
@@ -581,7 +617,11 @@ fn recovery_renames_a_document_left_in_review_without_its_mark() {
         let item = store.enqueue(&path, "hash-of-the-scan").unwrap();
         store.claim_next().unwrap().unwrap();
         store
-            .record_unreadable(item.id, ErrorCode::PasswordProtected)
+            .record_unreadable(
+                item.id,
+                ErrorCode::PasswordProtected,
+                intern_core::ReviewMark::Now,
+            )
             .unwrap();
     }
 
@@ -844,4 +884,353 @@ fn naming_an_undone_copy_files_it_as_a_document_of_its_own() {
     assert!(record.copy_of.is_none());
     assert!(record.manual);
     assert_eq!(rig.filings.filed.lock().unwrap().len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// What a review rename must never do
+// ---------------------------------------------------------------------------
+
+/// Replies that cannot be used, several in a row, are the model's problem:
+/// the queue stops, and the documents of that run go back to wait under
+/// their own names - nothing renamed, nothing counted - and resuming the
+/// queue reads them again. A resume that meets a still broken model renames
+/// nothing either.
+#[test]
+fn a_run_of_unusable_replies_stops_the_queue_and_renames_nothing() {
+    let invalid = || Err(ModelFailure::fatal("MODEL_RESPONSE_INVALID"));
+    let rig = Rig::new(
+        vec![],
+        // Three in a row, and one more after the first resume.
+        vec![invalid(), invalid(), invalid(), invalid()],
+        |_| {},
+    );
+    let ids = (0..5)
+        .map(|index| {
+            rig.add(&rig.drop_in(&format!("d{index}.pdf"), format!("doc {index}").as_bytes()))
+        })
+        .collect::<Vec<_>>();
+
+    rig.pipeline.run_until_idle().unwrap();
+
+    assert!(rig.pipeline.is_paused());
+    assert_eq!(
+        rig.pipeline.pause_reason().as_deref(),
+        Some("MODEL_OUTPUT_INVALID")
+    );
+    assert_eq!(
+        rig.inbox_names(),
+        vec!["d0.pdf", "d1.pdf", "d2.pdf", "d3.pdf", "d4.pdf"]
+    );
+    for id in &ids {
+        let item = rig.item(*id);
+        assert_eq!(
+            item.status,
+            QueueStatus::Queued,
+            "the run waits to be read again"
+        );
+        assert_eq!(item.processing_failures, 0);
+    }
+
+    // Still broken after a resume: the next unusable reply stops it again,
+    // and still nothing is renamed.
+    rig.pipeline.resume();
+    rig.pipeline.run_until_idle().unwrap();
+    assert!(rig.pipeline.is_paused());
+    assert_eq!(
+        rig.inbox_names(),
+        vec!["d0.pdf", "d1.pdf", "d2.pdf", "d3.pdf", "d4.pdf"]
+    );
+
+    // Working again: everything is read.
+    rig.pipeline.resume();
+    rig.pipeline.run_until_idle().unwrap();
+    for id in &ids {
+        assert_eq!(rig.item(*id).status, QueueStatus::Completed);
+    }
+}
+
+/// A model too slow for anything times out on every document. It used to
+/// send each to review renamed, one after another, through the whole
+/// backlog; several time-outs in a row stop the queue instead.
+#[test]
+fn a_run_of_time_outs_stops_the_queue_and_renames_nothing() {
+    let rig = Rig::new(
+        vec![],
+        (0..8)
+            .map(|_| Err(ModelFailure::fatal("MODEL_TIMEOUT")))
+            .collect(),
+        |_| {},
+    );
+    let ids = (0..3)
+        .map(|index| {
+            rig.add(&rig.drop_in(&format!("t{index}.pdf"), format!("doc {index}").as_bytes()))
+        })
+        .collect::<Vec<_>>();
+
+    rig.pipeline.run_until_idle().unwrap();
+
+    assert!(rig.pipeline.is_paused());
+    assert_eq!(rig.pipeline.pause_reason().as_deref(), Some("MODEL_FAILED"));
+    assert_eq!(rig.inbox_names(), vec!["t0.pdf", "t1.pdf", "t2.pdf"]);
+    for id in &ids {
+        assert_eq!(rig.item(*id).status, QueueStatus::Queued);
+    }
+}
+
+/// A reader that crashes on every document is broken, not the documents.
+#[test]
+fn a_run_of_reader_crashes_stops_the_queue_and_renames_nothing() {
+    let rig = Rig::new(
+        (0..8).map(|_| Err(WorkerFailure::crashed())).collect(),
+        vec![],
+        |_| {},
+    );
+    let ids = (0..3)
+        .map(|index| {
+            rig.add(&rig.drop_in(&format!("c{index}.pdf"), format!("doc {index}").as_bytes()))
+        })
+        .collect::<Vec<_>>();
+
+    rig.pipeline.run_until_idle().unwrap();
+
+    assert!(rig.pipeline.is_paused());
+    assert_eq!(
+        rig.pipeline.pause_reason().as_deref(),
+        Some("READER_CRASHED")
+    );
+    assert_eq!(rig.inbox_names(), vec!["c0.pdf", "c1.pdf", "c2.pdf"]);
+    for id in &ids {
+        assert_eq!(rig.item(*id).status, QueueStatus::Queued);
+    }
+}
+
+/// "Remove the password and retry": the file the person saved again is read
+/// and filed as it is now, not refused as changed since it was read.
+#[test]
+fn a_document_fixed_and_retried_is_read_and_filed_as_it_is_now() {
+    let rig = Rig::new(
+        vec![Err(WorkerFailure::reported(
+            "PASSWORD_PROTECTED",
+            "encrypted",
+            false,
+        ))],
+        vec![],
+        |_| {},
+    );
+    let id = rig.add(&rig.drop_in("locked.pdf", b"was locked"));
+    rig.pipeline.run_until_idle().unwrap();
+    let marked = rig.inbox.join("NEEDS REVIEW - locked.pdf");
+    assert_eq!(rig.item(id).source_path, marked);
+    fs::write(&marked, b"password removed, saved again").unwrap();
+
+    rig.pipeline.retry(id).unwrap();
+    rig.pipeline.run_until_idle().unwrap();
+
+    let item = rig.item(id);
+    assert_eq!(
+        item.status,
+        QueueStatus::Completed,
+        "{:?}",
+        item.proposal.map(|p| p.reasons)
+    );
+    assert!(rig.filed_name(id).starts_with("2024-04-12 "));
+    assert!(rig.inbox_names().is_empty());
+}
+
+/// A canceled document can be cleared away with the history, and so can one
+/// that failed after a retry; a file left named for review behind either
+/// would be skipped by every scan for good. Each gets its own name back.
+#[test]
+fn a_marked_document_canceled_or_failed_gets_its_name_back() {
+    let rig = Rig::new(
+        vec![
+            Err(WorkerFailure::reported(
+                "PASSWORD_PROTECTED",
+                "encrypted",
+                false,
+            )),
+            Err(WorkerFailure::reported(
+                "PASSWORD_PROTECTED",
+                "encrypted",
+                false,
+            )),
+            Err(WorkerFailure::reported("PARSE_FAILED", "read failed", true)),
+            Err(WorkerFailure::reported("PARSE_FAILED", "read failed", true)),
+        ],
+        vec![],
+        |_| {},
+    );
+    let canceled = rig.add(&rig.drop_in("canceled.pdf", b"canceled"));
+    let failed = rig.add(&rig.drop_in("failed.pdf", b"failed"));
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(
+        rig.inbox_names(),
+        vec!["NEEDS REVIEW - canceled.pdf", "NEEDS REVIEW - failed.pdf"]
+    );
+
+    rig.pipeline.cancel(canceled).unwrap();
+    rig.pipeline.retry(failed).unwrap();
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(rig.item(failed).status, QueueStatus::Failed);
+    assert_eq!(rig.pipeline.clear_history().unwrap(), 2);
+
+    assert!(rig.pipeline.list().unwrap().is_empty());
+    assert_eq!(rig.inbox_names(), vec!["canceled.pdf", "failed.pdf"]);
+}
+
+/// Admits a document only on a proof that names its file, the way
+/// Microsoft's word on an uploader does: a file renamed since is unknown.
+struct NamedProof {
+    snapshots: intern_core::PrivateSnapshotDirectory,
+}
+
+impl AdmissionGuard for NamedProof {
+    fn authorize(
+        &self,
+        path: &Path,
+        _stage: AdmissionStage,
+    ) -> Result<AdmissionEvidence, intern_queue::PipelineError> {
+        let name = path.file_name().unwrap().to_string_lossy();
+        if intern_core::is_needs_review_name(&name) {
+            return Err(intern_queue::PipelineError::new(
+                "UPLOADER_UNVERIFIED",
+                "the library has no file by this name",
+            ));
+        }
+        let bytes = fs::read(path)
+            .map_err(|_| intern_queue::PipelineError::new("UPLOADER_UNVERIFIED", "unreadable"))?;
+        let mut writer = self
+            .snapshots
+            .create_for_supported_extension("pdf")
+            .unwrap();
+        std::io::Write::write_all(&mut writer, &bytes).unwrap();
+        let snapshot = writer.finish().unwrap();
+        let hash = intern_core::FileSystem::hash(&intern_core::StdFileSystem, path).unwrap();
+        Ok(AdmissionEvidence::verified_snapshot(hash, snapshot))
+    }
+}
+
+/// A document admitted on such a proof waits in review under its own name:
+/// renamed, it could never be proven again - not retried, not named by
+/// hand, not filed.
+#[test]
+fn a_document_admitted_on_a_proof_of_its_name_is_never_renamed() {
+    let temp = tempdir().unwrap();
+    let guard = Arc::new(NamedProof {
+        snapshots: intern_core::PrivateSnapshotDirectory::new(temp.path().join("snapshots"))
+            .unwrap(),
+    });
+    let rig = Rig::build(
+        vec![Err(WorkerFailure::reported(
+            "PASSWORD_PROTECTED",
+            "encrypted",
+            false,
+        ))],
+        vec![],
+        |_| {},
+        None,
+        Some(guard),
+    );
+    let path = rig.drop_in("locked.pdf", b"was locked");
+    let id = rig.add(&path);
+    rig.pipeline.run_until_idle().unwrap();
+
+    let item = rig.item(id);
+    assert_eq!(item.status, QueueStatus::NeedsReview);
+    assert_eq!(item.error_code, Some(ErrorCode::PasswordProtected));
+    assert_eq!(item.source_path, path);
+    rig.pipeline.recover().unwrap();
+    assert_eq!(
+        rig.inbox_names(),
+        vec!["locked.pdf"],
+        "not even on recovery"
+    );
+
+    rig.pipeline
+        .approve(id, "2026-01-02 Lease.pdf", "Named by hand.")
+        .unwrap();
+    assert_eq!(rig.item(id).status, QueueStatus::Completed);
+    assert_eq!(rig.filed_name(id), "2026-01-02 Lease.pdf");
+}
+
+/// Intern renames and moves on its own only what was put in the input
+/// folder: a document added from anywhere else that cannot be read waits in
+/// review under its own name, and a duplicate of a filed one waits in review
+/// where it is.
+#[test]
+fn nothing_outside_the_input_folder_is_renamed_or_moved() {
+    let rig = Rig::new(
+        vec![Err(WorkerFailure::reported(
+            "PASSWORD_PROTECTED",
+            "encrypted",
+            false,
+        ))],
+        vec![],
+        |_| {},
+    );
+    let elsewhere = rig.temp.path().join("Desktop");
+    fs::create_dir_all(&elsewhere).unwrap();
+    let locked = elsewhere.join("locked.pdf");
+    fs::write(&locked, b"was locked").unwrap();
+    let id = rig.add(&locked.canonicalize().unwrap());
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(rig.item(id).status, QueueStatus::NeedsReview);
+    assert!(locked.exists());
+    rig.pipeline.recover().unwrap();
+    assert!(locked.exists());
+
+    file_the_original(&rig);
+    let copy = elsewhere.join("agreement copy.pdf");
+    fs::write(&copy, b"the agreement's bytes").unwrap();
+    let id = rig.add(&copy.canonicalize().unwrap());
+    assert_eq!(rig.item(id).status, QueueStatus::NeedsReview);
+    assert_eq!(rig.item(id).error_code, Some(ErrorCode::Duplicate));
+    assert!(copy.exists());
+}
+
+/// A staged copy applied under its own name is filed as the copy it is,
+/// not refused for a name without a date.
+#[test]
+fn applying_a_staged_copy_under_its_name_files_it() {
+    let rig = Rig::new(vec![], vec![], |_| {});
+    let (_, original) = file_the_original(&rig);
+    rig.pipeline.pause();
+    let id = rig.add(&rig.drop_in("copy.pdf", b"the agreement's bytes"));
+    let copy = format!("COPY - {original}");
+    assert_eq!(rig.item(id).proposal.unwrap().filename, copy);
+
+    rig.pipeline.approve(id, &copy, "").unwrap();
+
+    assert_eq!(rig.item(id).status, QueueStatus::Completed);
+    assert!(rig.filed.join(&copy).exists());
+}
+
+/// A copy staged before the output folder changed goes to the new output
+/// folder, not to a folder of the old one, recreated.
+#[test]
+fn a_staged_copy_follows_a_changed_output_folder() {
+    let rig = Rig::new(vec![], vec![], |settings| {
+        settings.destination_layout = DestinationLayout::Year;
+    });
+    let (_, original) = file_the_original(&rig);
+    rig.pipeline.pause();
+    let id = rig.add(&rig.drop_in("copy.pdf", b"the agreement's bytes"));
+    let moved = rig.temp.path().join("Archive");
+    fs::create_dir_all(&moved).unwrap();
+    let moved = moved.canonicalize().unwrap();
+    let settings = SettingsStore::new(rig.temp.path().join("settings.json"));
+    let mut saved = settings.load().unwrap();
+    saved.destination = moved.to_string_lossy().into_owned();
+    settings.save(&saved).unwrap();
+    fs::remove_dir_all(rig.filed.join("2024")).unwrap();
+
+    rig.pipeline.resume();
+    rig.pipeline.run_until_idle().unwrap();
+
+    assert_eq!(rig.item(id).status, QueueStatus::Completed);
+    assert!(moved.join(format!("COPY - {original}")).exists());
+    assert!(
+        !rig.filed.join("2024").exists(),
+        "the old folder is not recreated"
+    );
 }

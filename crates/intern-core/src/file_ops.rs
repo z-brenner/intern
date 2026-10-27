@@ -1505,13 +1505,15 @@ impl FileApplier {
     /// name already taken - on disk, or by another row with these bytes -
     /// takes the next ` (2)`. A rename that is refused moves nothing and is
     /// recorded as refused; the document still waits in review under its
-    /// own name.
+    /// own name. A mark decided against, or put off until a later document
+    /// is read, is not made (see [`crate::ReviewMark`]).
     pub fn mark_for_review(&self, queue_item_id: i64) -> InternResult<Option<PathBuf>> {
         let Some(item) = self.store.get(queue_item_id)? else {
             return Ok(None);
         };
         if item.status != QueueStatus::NeedsReview
             || !item.error_code.is_some_and(ErrorCode::marks_unreadable)
+            || self.store.review_mark_withheld(queue_item_id)?
         {
             return Ok(None);
         }
@@ -1541,6 +1543,29 @@ impl FileApplier {
     /// under it. `None` when the file carries no mark Intern made: its name
     /// is the person's, and keeping it is not a rename.
     pub fn restore_from_review(&self, queue_item_id: i64) -> InternResult<Option<QueueItem>> {
+        self.take_back_mark(queue_item_id, ReviewRenamePurpose::Restore)
+    }
+
+    /// Takes back the mark of an item that was canceled or failed, so its
+    /// file has its own name again before the row can be cleared away with
+    /// the history: a file still named `NEEDS REVIEW - ...` with no row
+    /// behind it would be skipped by every scan for good. `None` when the
+    /// file carries no mark Intern made, or the item is in another state.
+    pub fn unmark_settled(&self, queue_item_id: i64) -> InternResult<Option<QueueItem>> {
+        let Some(item) = self.store.get(queue_item_id)? else {
+            return Ok(None);
+        };
+        if !matches!(item.status, QueueStatus::Failed | QueueStatus::Canceled) {
+            return Ok(None);
+        }
+        self.take_back_mark(queue_item_id, ReviewRenamePurpose::Unmark)
+    }
+
+    fn take_back_mark(
+        &self,
+        queue_item_id: i64,
+        purpose: ReviewRenamePurpose,
+    ) -> InternResult<Option<QueueItem>> {
         let Some(item) = self.store.get(queue_item_id)? else {
             return Ok(None);
         };
@@ -1554,12 +1579,9 @@ impl FileApplier {
             &item.source_path.with_file_name(original),
             &item.source_hash,
         )?;
-        let plan = self.store.plan_review_rename(
-            item.id,
-            ReviewRenamePurpose::Restore,
-            &item.source_path,
-            &target,
-        )?;
+        let plan = self
+            .store
+            .plan_review_rename(item.id, purpose, &item.source_path, &target)?;
         self.carry_out_review_rename(&plan).map(Some)
     }
 
@@ -1591,6 +1613,11 @@ impl FileApplier {
             // One file that will not be renamed is no reason to leave the
             // rest unmarked; it is recorded as refused and not tried again.
             let _ = self.mark_for_review(item.id);
+        }
+        // An item canceled or failed between its mark and the name coming
+        // back - a crash in that moment - gets its own name back now.
+        for item in self.store.marked_but_settled()? {
+            let _ = self.unmark_settled(item.id);
         }
         Ok(settled)
     }
@@ -1630,18 +1657,20 @@ impl FileApplier {
     fn review_rename_landed(&self, plan: &ReviewRename) -> bool {
         let at_old = self.filesystem.exists(&plan.from);
         let at_new = self.filesystem.exists(&plan.to);
+        let is_document = |path: &Path| {
+            self.lock_retry
+                .run(|| self.filesystem.hash(path))
+                .is_ok_and(|hash| hash == plan.source_hash)
+        };
         match (at_old, at_new) {
-            // Nothing else writes a name Intern chose a moment ago, so the
-            // file there is the one that left the old name.
-            (false, true) => true,
-            (true, true) => {
-                let is_document = |path: &Path| {
-                    self.lock_retry
-                        .run(|| self.filesystem.hash(path))
-                        .is_ok_and(|hash| hash == plan.source_hash)
-                };
-                !is_document(&plan.from) && is_document(&plan.to)
-            }
+            // Nothing else writes a NEEDS REVIEW name Intern chose a moment
+            // ago, so the file there is the one that left the old name.
+            (false, true) if plan.purpose == ReviewRenamePurpose::Mark => true,
+            // Taking a mark back aims at the document's own name, which a
+            // new upload can take at any moment; only the document's bytes
+            // there say the rename landed.
+            (false, true) => is_document(&plan.to),
+            (true, true) => !is_document(&plan.from) && is_document(&plan.to),
             _ => false,
         }
     }

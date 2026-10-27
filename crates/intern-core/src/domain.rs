@@ -53,21 +53,19 @@ impl QueueStatus {
             (self, next),
             // Queued → NeedsReview lets ingestion flag an item before any
             // processing starts (e.g. its content is already filed as a
-            // completed duplicate).
-            (Self::Queued, Self::Canceled | Self::NeedsReview)
-                | (
-                    Self::Extracting,
-                    Self::Analyzing
-                        | Self::NeedsReview
-                        | Self::Queued
-                        | Self::Failed
-                        | Self::Canceled
-                )
-                | (
-                    Self::Analyzing,
-                    Self::Ready | Self::NeedsReview | Self::Queued | Self::Failed | Self::Canceled
-                )
-                | (Self::Ready, Self::Canceled)
+            // completed duplicate), and Queued → Ready stages an exact
+            // duplicate as an approved copy of that filing, to be moved into
+            // the output folder without ever being read.
+            (
+                Self::Queued,
+                Self::Canceled | Self::NeedsReview | Self::Ready
+            ) | (
+                Self::Extracting,
+                Self::Analyzing | Self::NeedsReview | Self::Queued | Self::Failed | Self::Canceled
+            ) | (
+                Self::Analyzing,
+                Self::Ready | Self::NeedsReview | Self::Queued | Self::Failed | Self::Canceled
+            ) | (Self::Ready, Self::Canceled)
                 | (Self::NeedsReview, Self::Ready | Self::Canceled)
         )
     }
@@ -78,10 +76,12 @@ mod tests {
     use super::QueueStatus;
 
     #[test]
-    fn queued_may_be_flagged_for_review_before_processing_but_not_finished() {
+    fn queued_may_be_flagged_or_staged_as_a_copy_before_processing_but_not_finished() {
         assert!(QueueStatus::Queued.can_transition_to(QueueStatus::NeedsReview));
-        assert!(!QueueStatus::Queued.can_transition_to(QueueStatus::Ready));
+        // An exact duplicate staged to be filed as a copy of the original.
+        assert!(QueueStatus::Queued.can_transition_to(QueueStatus::Ready));
         assert!(!QueueStatus::Queued.can_transition_to(QueueStatus::Completed));
+        assert!(!QueueStatus::Queued.can_transition_to(QueueStatus::Applying));
     }
 }
 
