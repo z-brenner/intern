@@ -33,14 +33,14 @@ inference fallback. This is the complete list of what Intern sends anywhere:
 
 | Request | When | What it carries |
 | --- | --- | --- |
-| Model download | Once, when you start it (or never, if you choose existing model files) | A request for the pinned model file. Nothing about the machine or its documents. |
+| Model download | Once, when you start it (or never, if you choose existing model files) | A request for each pinned model file. Nothing about the machine or its documents. |
 | Update check | When Intern starts, every 6 hours while it runs, and when you press **Check for updates**. The automatic check can be switched off in Settings. | A request for the GitHub release manifest. Nothing about the machine or its documents. |
 | Hosted model | Only if you turn it on, under your own API key | The condensed text of each document, to the service you name. |
 | Microsoft sign-in and Graph (`login.microsoftonline.com`, `graph.microsoft.com`) | Only in a build an administrator provisioned for the SharePoint deployment | Sign-in and its renewal, then account and file metadata for upload verification, never document content. The build published here has none. |
 
 The first two are all a default install ever sends, and neither carries
-document information. The model file is 1.19 GiB, the text model and nothing
-else. The update check asks only "is there a newer, signed build"; untick
+document information. The model files are 0.48 GiB and 1.07 GiB, two text
+models and nothing else. The update check asks only "is there a newer, signed build"; untick
 **Check for updates automatically** in Settings and only the button asks. A
 found update is never installed by the check itself: installing is always a
 separate, explicit click, and only ever happens if the update is signed by this
@@ -106,11 +106,26 @@ as the installer, so whoever could replace one could replace both. The
 attestation is the part that establishes where the file came from.
 
 On first launch Intern shows a setup screen and asks to download the one thing
-the installer deliberately leaves out: the pinned model file, 1.19 GiB. That
-download is resumable, it transfers no document information, and the file becomes active only after its exact length and SHA-256 match the manifest
-built into the installer. If you already have the file, **Choose existing model
-files** points Intern at it and skips the download. Nothing else needs
-installing — PDF text extraction, OCR, and inference all ship inside the app.
+the installer deliberately leaves out: the local model. There are two. Setup
+fetches the fast one, Bonsai 2 2B (0.48 GiB), and opens the queue as soon as it
+has passed its checks; the more accurate Bonsai 2 4B (1.07 GiB) then downloads
+in the background while you work, and the window says so in one quiet line.
+Both downloads are resumable, they transfer no document information, and a
+file becomes active only after its exact length and SHA-256 match the manifest
+built into the installer. If you already have the files, **Choose existing
+model files** points Intern at either or both and skips those downloads. Nothing
+else needs installing — PDF text extraction, OCR, and inference all ship inside
+the app. Upgrading from a build that used Qwen3.5-2B, setup asks for the new
+model once, and removes the old 1.19 GiB file only when it is exactly the file
+that build installed.
+
+**Settings > Model** chooses which local model reads: **Automatic**
+(recommended) reads with the accurate model when the computer has the memory to
+spare and the fast one when it does not; **Most accurate** and **Fastest** say
+what they are. A reading the fast model made standing in for the accurate one
+is marked provisional in the review panel and read again once the accurate
+model can, unless you have already acted on it. One model is loaded at a time,
+and it is unloaded after ten minutes without a document.
 
 Then drag documents or a folder onto the window — PDFs, Word documents
 (`.docx`, `.doc`, `.rtf`, `.odt`), Excel workbooks and exports (`.xlsx`,
