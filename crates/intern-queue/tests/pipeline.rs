@@ -6514,6 +6514,52 @@ impl AnalyzerBoundary for TieredModel {
 /// rename filed, a name kept, a rename taken back, and an approval still
 /// waiting for the queue are all a person's decision and are left alone; so
 /// is a reading the accurate model made, and a document whose file is gone.
+/// A document sent back to be read again has gone back, whatever happens
+/// to the fingerprint its earlier reading left: forgetting it cannot fail the
+/// pass, and the window always hears that documents moved.
+#[test]
+fn provisional_readings_go_back_and_are_announced_even_when_a_fingerprint_cannot_be_forgotten() {
+    let temp = tempdir().unwrap();
+    let paths = ["one.pdf", "two.pdf"].map(|name| source(temp.path(), name));
+    let worker = Arc::new(FakeWorker::new(
+        (0..4).map(|_| Ok(parsed(SIGNED_AGREEMENT))).collect(),
+    ));
+    let model = Arc::new(TieredModel {
+        provisional: AtomicBool::new(true),
+        calls: AtomicUsize::new(0),
+    });
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    let events = Arc::new(RecordingEvents::default());
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        Arc::clone(&model) as Arc<dyn AnalyzerBoundary>,
+        Arc::clone(&events) as Arc<dyn PipelineEventSink>,
+        settings,
+    )
+    .unwrap();
+    let ids = pipeline
+        .enqueue_files(&paths)
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    // Nothing can be forgotten: every delete from the table fails.
+    Connection::open(temp.path().join("queue.sqlite3"))
+        .unwrap()
+        .execute_batch("DROP TABLE fingerprints;")
+        .unwrap();
+    let before = events.changed.load(Ordering::SeqCst);
+
+    assert_eq!(pipeline.reanalyze_provisional().unwrap(), 2);
+    for id in &ids {
+        assert_eq!(status_of(&pipeline, *id), QueueStatus::Queued);
+    }
+    assert!(events.changed.load(Ordering::SeqCst) > before, "announced");
+}
+
 #[test]
 fn provisional_readings_nobody_acted_on_are_read_again_and_nothing_else_is() {
     let temp = tempdir().unwrap();

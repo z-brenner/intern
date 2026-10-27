@@ -2470,7 +2470,11 @@ impl Pipeline {
         let fingerprint = self.files.fingerprint(&item.source_path)?;
         let new_hash = (fingerprint != item.source_hash).then_some(fingerprint.as_str());
         self.store.requeue_for_analysis(id, item.status, new_hash)?;
-        self.repository.forget_fingerprint(id)?;
+        // The document has gone back already: a fingerprint left behind is
+        // the earlier reading's, which the next one replaces and near-
+        // duplicate matching never compares with its own item. Failing here
+        // only kept the window from hearing that the document moved.
+        let _ = self.repository.forget_fingerprint(id);
         self.events.queue_changed();
         Ok(())
     }
@@ -2495,6 +2499,18 @@ impl Pipeline {
     /// document whose file is gone is left for its person, as it was.
     pub fn reanalyze_provisional(&self) -> PipelineResult<usize> {
         let mut requeued = 0;
+        let result = self.requeue_provisional(&mut requeued);
+        // Whatever stopped the pass, the window hears about every document
+        // that did go back.
+        if requeued > 0 {
+            self.events.queue_changed();
+        }
+        result.map(|()| requeued)
+    }
+
+    /// [`Pipeline::reanalyze_provisional`]'s pass, counting into `requeued`
+    /// as it goes so a failure part-way loses no count.
+    fn requeue_provisional(&self, requeued: &mut usize) -> PipelineResult<()> {
         for item in self.store.list()? {
             if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready) {
                 continue;
@@ -2524,8 +2540,10 @@ impl Pipeline {
                     });
             match moved {
                 Ok(Some(_)) => {
-                    self.repository.forget_fingerprint(item.id)?;
-                    requeued += 1;
+                    // As Re-analyze: the document has gone back, and a
+                    // fingerprint left behind is harmless.
+                    let _ = self.repository.forget_fingerprint(item.id);
+                    *requeued += 1;
                 }
                 // Declined, or no longer this document's to move: a rename
                 // left unsettled, the same version of the file queued again,
@@ -2541,10 +2559,7 @@ impl Pipeline {
                 Err(error) => return Err(error.into()),
             }
         }
-        if requeued > 0 {
-            self.events.queue_changed();
-        }
-        Ok(requeued)
+        Ok(())
     }
 
     /// Takes an item out of the queue, with its proposal and receipts.
