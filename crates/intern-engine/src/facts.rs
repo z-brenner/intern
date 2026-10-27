@@ -427,6 +427,20 @@ pub fn validate_facts_at(
     if !type_supported {
         push(&mut reasons, ReviewReason::TypeUnsupported);
     }
+    // "Never 'Document', 'Agreement' or 'Letter' alone", as the prompt
+    // says: a bare generic word that no title of the document completed
+    // (read_type has tried) names no kind a person could file by, so the
+    // name waits for a person rather than being filed. Ported from #26.
+    // On InternBench it holds agreement-two-column-footnotes, typed
+    // "Agreement" under the title "SEED PRODUCTION AND SUPPLY AGREEMENT",
+    // for review instead of filing a wrong name: a deliberate trade, since
+    // the gold expects that document ready under its full title.
+    if document_type
+        .as_deref()
+        .is_some_and(|value| matches!(normalize(value).trim(), "letter" | "document" | "agreement"))
+    {
+        push(&mut reasons, ReviewReason::TypeMissing);
+    }
     if document_type.is_none() {
         match title_of(scope) {
             Some((inferred, line)) => {
@@ -4049,6 +4063,65 @@ PELLWORTH COUNTY WATER AUTHORITY\nBy:\nName: Barnaby Quist\nTitle: General Manag
             outcome.proposal.document_date.as_deref(),
             Some("2026-08-18")
         );
+    }
+
+    /// "Never Letter alone": a bare generic word is no type a person could
+    /// file by, and goes to review.
+    #[test]
+    fn a_bare_letter_is_no_type() {
+        let index = index_of(
+            "January 9, 2026\n\nSilverbirch Ceramics Inc.\n\nThis letter confirms our engagement.\n\n\
+             Halloran Ostrowski CPAs LLP",
+        );
+        let facts = ModelFacts {
+            document_type: Some("Letter".into()),
+            type_evidence: vec![id_of(&index, "This letter")],
+            document_date: Some("2026-01-09".into()),
+            date_evidence: vec![id_of(&index, "January 9")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
+        assert_ne!(outcome.status, ProposalStatus::Ready);
+    }
+
+    /// InternBench's agreement-two-column-footnotes, as Qwen3.5-2B read it:
+    /// typed "Agreement", citing a title the type reader cannot complete
+    /// past its "AND". A bare "Agreement" is not filed; it waits for a
+    /// person.
+    #[test]
+    fn a_bare_agreement_under_a_longer_title_goes_to_review() {
+        let index = index_of(
+            "SEED PRODUCTION AND SUPPLY AGREEMENT\n\n\
+             This Seed Production and Supply Agreement (this \"Agreement\") is dated as of March 2, 2026 \
+             and is made between\nLarkhaven Seed Company, a Nebraska corporation (\"Company\"), and \
+             Prairie Wren Growers Cooperative, an Iowa cooperative\nassociation (\"Grower\").\n\n\
+             Counties, Iowa. The parties agree as follows:",
+        );
+        let line = id_of(&index, "This Seed");
+        let facts = ModelFacts {
+            document_type: Some("Agreement".into()),
+            type_evidence: vec![id_of(&index, "SEED PRODUCTION")],
+            document_date: Some("2026-03-02".into()),
+            date_role: Some(DateRole::Execution),
+            date_evidence: vec![line.clone()],
+            parties: vec![
+                party(
+                    "Larkhaven Seed Company",
+                    Some(PartyRole::Recipient),
+                    &[line.clone()],
+                ),
+                party(
+                    "Prairie Wren Growers Cooperative",
+                    Some(PartyRole::Sender),
+                    &[line],
+                ),
+            ],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(outcome.reasons, vec![ReviewReason::TypeMissing]);
+        assert_ne!(outcome.status, ProposalStatus::Ready);
     }
 
     const SOW_UNDER_MSA: &str = "STATEMENT OF WORK NO. 7\n\n\
