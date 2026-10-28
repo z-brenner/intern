@@ -15,7 +15,8 @@ Qwen3.5-2B as the model that names documents, and can d1-2B make the pipeline be
 2. **d1-2B is the interesting one, as a check, not a namer.** Asked one yes/no question
    about each name Qwen marked ready - "Is <party> the main organization or person this
    document belongs to or comes from?" - it held **8 of the 14 wrong names for 3 of the 46
-   right ones** (threshold chosen leave-one-out, so not fitted to the document it scores).
+   right ones** (threshold chosen leave-one-out, so not fitted to the document it scores;
+   8 for 5 with the smaller Q4_K_M file at the app's thread count, ~15 s per ready name).
    Those 8 are the substantive errors: a board chair, an aircraft mechanic, a museum's loan
    contact, an amendment's signatories named instead of the organization. That roughly
    halves the wrong names Intern would file without a check. See the costs and caveats
@@ -130,8 +131,21 @@ For comparison, the token-confidence gate measured on Qwen in
 
 ### As it could ship: one question, Q4_K_M, the app's 2 threads
 
-(Pending: `scripts/lfm3-eval/run-d1-gate.sh` is running; this section is filled in from
-its `d1/d1-2B-Q4_K_M-party_main-t2.md` when it finishes.)
+`scripts/lfm3-eval/run-d1-gate.sh`: only the main-party question, only for names marked
+ready, the 1.1 GB Q4_K_M file, 2 threads (Intern's count on this 4-core host), `-b/-ub
+4096`. Results in `d1/d1-2B-Q4_K_M-party_main-t2.md`.
+
+| d1 file, threads | Wrong names held (LOO) | Right names held (LOO) | Wrong among the 12 most doubtful | Time per ready name (median / p90 / max) | Server peak |
+| --- | ---: | ---: | ---: | --- | ---: |
+| Q8_0, 4 threads, 7 questions | 8/14 | 3/46 | 10 | 94 s / - / 335 s (all 7 questions) | 2.4 GB |
+| **Q4_K_M, 2 threads, 1 question** | **8/14** | **5/46** | 7 | **14.8 s / 45 s / 59 s** | 2.3 GB |
+
+Q4_K_M keeps the signal (its probabilities differ from Q8_0's by a median 0.016, at most
+0.18) at a slightly worse trade: two more right names held. Shipped this way, Intern's
+InternBench run would go from 15 wrong names filed to about 7, with 13 more documents held
+for review (16 -> 29 of 77), and each ready document would wait a further ~15 s - on top
+of Qwen's ~35-40 s per document at 2 threads on this host (`bench/reports/bonsai-linux-cpu-2026-10-27`). The 2.3 GB peak is mostly
+compute buffers for the 4096-token batch the decision path needs, not weights.
 
 ### What it costs
 
@@ -139,9 +153,11 @@ its `d1/d1-2B-Q4_K_M-party_main-t2.md` when it finishes.)
   2,634-character state took a median 94 s per document (max 335 s) at 4 threads; the
   prompt cache does not change that (same answers to 4 decimal places, same time). Only
   the one question that works should ever be asked.
-* Memory: the Q8_0 server peaked at 2.4 GB (16k context, `-ub 8192`).
+* Memory: the Q8_0 server peaked at 2.4 GB (16k context, `-ub 8192`), the Q4_K_M one at
+  2.3 GB (8k context, `-ub 4096`).
 * It is a second model: Intern would load it after Qwen for each ready name, or keep both
-  resident (~4.5 GB together).
+  resident (~4.4 GB together) - against the one-model-at-a-time rule the memory guard
+  enforces on 14 GB laptops.
 
 ## Caveats
 
