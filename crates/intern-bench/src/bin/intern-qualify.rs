@@ -582,10 +582,7 @@ fn run() -> Result<(), String> {
         &out.join("terminal.json"),
         &json!({"run_id":p.run_id,"attempted":attempted,"planned":p.cases.len(),"elapsed_seconds":whole.elapsed().as_secs_f64(),"server_peak_working_set_bytes":peak,"complete":attempted==p.cases.len()}),
     )?;
-    println!(
-        "BATCH STOPPED; {} cases. Collect only after guest shutdown.",
-        attempted
-    );
+    println!("BATCH STOPPED; {attempted} cases. Collect only after guest shutdown.");
     intern_bench::qualification::require_complete(attempted, p.cases.len())
 }
 fn main() {
