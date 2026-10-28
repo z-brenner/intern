@@ -112,6 +112,7 @@ def ask(args):
                 row = json.loads(line)
                 if not row.get("error"):
                     done.add(row["id"])
+    failed = 0
     with open(args.out, "a") as out:
         for record in report:
             proposal = record.get("proposal") or {}
@@ -140,6 +141,14 @@ def ask(args):
             out.write(json.dumps(row) + "\n")
             out.flush()
             print(f"{record['id']}: {row['seconds']} s{' ERROR ' + error if error else ''}", flush=True)
+            failed += error is not None
+    # A pass with failures is not complete: exit non-zero so a wrapper running
+    # under `set -e` stops before analyze writes the report it skips on, and
+    # the next run asks the failed documents again.
+    if failed:
+        print(f"{failed} request(s) failed; run again to retry them", file=sys.stderr)
+        return 1
+    return 0
 
 
 def signals(row, proposal):
@@ -282,7 +291,7 @@ def main():
     z.add_argument("--markdown")
     z.add_argument("--costs", type=float, nargs="+", default=[0.5, 1.0])
     args = parser.parse_args()
-    ask(args) if args.command == "ask" else analyze(args)
+    return ask(args) if args.command == "ask" else analyze(args)
 
 
 if __name__ == "__main__":
