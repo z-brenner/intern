@@ -44,7 +44,8 @@ EXPECTED = {
     "for": {"subject", "recipient"},
     "between": {"counterparty"},
     "with": {"counterparty"},
-    "-": {"subject", "issuer", "recipient", "counterparty"},
+    # PartyRelation::None, serialized "none": the name follows a dash.
+    "none": {"subject", "issuer", "recipient", "counterparty"},
 }
 
 
@@ -102,11 +103,15 @@ def post(server, body, timeout):
 def ask(args):
     recording = {d["id"]: d for d in json.load(open(args.recording))["documents"]}
     report = json.load(open(args.report))["records"]
+    # Only an answered document is done: a failed one is asked again, and
+    # analyze() keeps the latest answered row for each document.
     done = set()
     if os.path.exists(args.out):
         for line in open(args.out):
             if line.strip():
-                done.add(json.loads(line)["id"])
+                row = json.loads(line)
+                if not row.get("error"):
+                    done.add(row["id"])
     with open(args.out, "a") as out:
         for record in report:
             proposal = record.get("proposal") or {}
@@ -153,7 +158,7 @@ def signals(row, proposal):
         if v is not None:
             out[name] = 1 - v if flip else v
     relation = answers.get("party_relation")
-    word = (proposal.get("party_relation") or "-").strip() or "-"
+    word = (proposal.get("party_relation") or "none").strip() or "none"
     if relation and relation.get("probabilities") and word in EXPECTED:
         probabilities = relation["probabilities"]
         out["relation_mismatch"] = 1 - sum(probabilities.get(k, 0.0) for k in EXPECTED[word])
@@ -190,8 +195,15 @@ def best_threshold(items, cost):
 def analyze(args):
     report = {r["id"]: r for r in json.load(open(args.report))["records"]}
     rows = [json.loads(line) for line in open(args.answers) if line.strip()]
-    ready = []
+    # One observation per document: its latest answered row. A document whose
+    # every attempt failed is left out of the denominators and named below.
+    answered = {}
     for row in rows:
+        if not row.get("error"):
+            answered[row["id"]] = row
+    unanswered = sorted({row["id"] for row in rows} - set(answered))
+    ready = []
+    for row in answered.values():
         record = report[row["id"]]
         scores = record["scores"]
         if not scores.get("ready"):
@@ -204,9 +216,11 @@ def analyze(args):
     lines = [
         f"# d1 as a review gate over ready names",
         "",
-        f"Documents asked: {len(rows)} ({errors} errors). Ready documents with a party: {len(ready)} "
-        f"({n_wrong} wrong names, {n_right} right).",
+        f"Documents asked: {len(answered) + len(unanswered)} ({errors} failed attempts). Ready documents "
+        f"with a party and an answer: {len(ready)} ({n_wrong} wrong names, {n_right} right).",
     ]
+    if unanswered:
+        lines.append(f"Never answered, left out: {', '.join(unanswered)}.")
     if seconds:
         lines.append(f"d1 time per document: median {seconds[len(seconds)//2]:.1f} s, max {seconds[-1]:.1f} s.")
     names = sorted({k for row, record, _ in ready for k in signals(row, record["proposal"])})

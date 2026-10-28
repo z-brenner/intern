@@ -1,6 +1,6 @@
 # d1 as a review gate over ready names
 
-Documents asked: 60 (0 errors). Ready documents with a party: 60 (14 wrong names, 46 right).
+Documents asked: 60 (0 failed attempts). Ready documents with a party and an answer: 60 (14 wrong names, 46 right).
 d1 time per document: median 14.8 s, max 58.6 s.
 
 ## Leave-one-out threshold, worth holding 2 right name(s) to hold one wrong one
