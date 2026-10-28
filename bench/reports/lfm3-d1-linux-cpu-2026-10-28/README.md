@@ -3,6 +3,9 @@
 Status: complete (2026-10-28). Question asked: can LiquidAI's LFM3-Omni-2B replace
 Qwen3.5-2B as the model that names documents, and can d1-2B make the pipeline better?
 
+Follow-up: `../lfm3-retest-linux-cpu-2026-10-28/` retests LFM3-1.7B with thinking on and with
+other quantizations. Its best configuration ties Qwen3.5-2B; the conclusion below stands.
+
 ## Answer
 
 1. **Do not replace Qwen3.5-2B with LFM3-Omni-2B, or with LFM3-1.7B (Omni's own text
@@ -58,8 +61,10 @@ audio in separate `mmproj` files that were not loaded (`--no-mmproj`), as Intern
 **Accuracy:** live InternBench, 77 documents, `bench/gold.json`, current `main` (a759d11,
 with #36's validation rules), the app's server flags plus `--cache-ram 0 -ub 256`, 4
 threads, chunks of 8 documents on a fresh server (`scripts/lfm3-eval/run.sh`). The LFM3
-models also ran with `--reasoning off` (they are non-reasoning; their template opens every
-reply with an empty `<think></think>`).
+models also ran with `--reasoning off`. That fits LFM3-Omni-2B, which is non-reasoning (its
+template opens every reply with an empty `<think></think>`). It undersells LFM3-1.7B, a hybrid
+reasoning model whose card runs it with thinking on; see `../lfm3-retest-linux-cpu-2026-10-28/`,
+which retests it with bounded thinking and with LiquidAI's QAD-Q4_0 and Q8_0 files.
 
 **d1:** `scripts/lfm3-eval/d1_verifier.py` sends each document's recorded text (the first
 6,000 and last 2,000 characters when longer, so the letterhead and the signatures stay in)
