@@ -60,7 +60,7 @@ use crate::evidence::{
     numeric_dates, stated_dates,
 };
 use crate::index::{EvidenceIndex, EvidenceUnit, UnitKind};
-use crate::infer::{infer_date_role, repair_issued_relation};
+use crate::infer::{infer_date_role, reads_as_signature_date, repair_issued_relation};
 use crate::phrases::{
     has_a_kind, head_noun, is_placeholder, is_reference, label_and_value, names_a_kind,
     opens_with_party_label, phrase_positions, same_word, subject_value, tidy_case, title_phrase,
@@ -578,6 +578,14 @@ pub fn validate_facts_at(
     // It gives way to the latest - unless a stated effective date already
     // replaced it above. Ported from #26, where it moved Bonsai 4B's and
     // Qwen3.5-2B's trap date on InternBench's mixed-signature-region.
+    //
+    // Only a signature's date gives way, and only to another signature's.
+    // The signature region is positional - it runs on for a dozen units
+    // after a signature cue - so an "Effective Date: August 18" set beside
+    // the signatures is the document's own date and stands, and a later
+    // "Expiration Date" there is never taken: each date must read as signed
+    // on, and a replacement must pass the deadline and other-document
+    // guards the model's own date passed above.
     if !replaced
         && matches!(
             DocumentClass::of(document_type.as_deref()),
@@ -585,7 +593,14 @@ pub fn validate_facts_at(
         )
         && let Some(date) = document_date.clone()
         && only_in_signatures(scope.index, &date)
-        && let Some((latest, line)) = latest_signature_date(scope, &date)
+        && reads_as_signature_date(document, &date)
+        && let Some((latest, line)) = latest_signature_date(scope, &date, |candidate| {
+            reads_as_signature_date(document, candidate)
+                && !deadline_fires(context, candidate)
+                && !deadline_fires(document, candidate)
+                && !date_is_tainted(context, candidate, document_type.as_deref())
+                && !date_is_tainted(document, candidate, document_type.as_deref())
+        })
     {
         document_date = Some(latest);
         date_role = Some(DateRole::Execution);
@@ -1611,8 +1626,13 @@ fn only_in_signatures(index: &EvidenceIndex, date: &str) -> bool {
 }
 
 /// The latest date later than `date` that the document states only in its
-/// signature blocks, with the line it stands on. ISO dates order as text.
-fn latest_signature_date(scope: &ValidationScope<'_>, date: &str) -> Option<(String, String)> {
+/// signature blocks and that `acceptable` admits, with the line it stands
+/// on. ISO dates order as text.
+fn latest_signature_date(
+    scope: &ValidationScope<'_>,
+    date: &str,
+    acceptable: impl Fn(&str) -> bool,
+) -> Option<(String, String)> {
     let mut latest: Option<(String, String)> = None;
     for unit in scope.index.units() {
         if unit.running || !unit.features.position.signature {
@@ -1624,6 +1644,7 @@ fn latest_signature_date(scope: &ValidationScope<'_>, date: &str) -> Option<(Str
                     .as_ref()
                     .is_none_or(|(kept, _)| candidate.as_str() > kept.as_str())
                 && only_in_signatures(scope.index, &candidate)
+                && acceptable(&candidate)
             {
                 let line = line_where(unit, |line| {
                     !date_match_positions(&candidate, line).is_empty()
@@ -4056,6 +4077,47 @@ PELLWORTH COUNTY WATER AUTHORITY\nBy:\nName: Barnaby Quist\nTitle: General Manag
         let index = index_of(&text);
         let outcome = check(
             amendment_facts(&index, "2026-08-18", "is dated August 18"),
+            &whole(&index),
+            &index,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-08-18")
+        );
+    }
+
+    /// A stated effective date set beside the signatures is the document's
+    /// own date, not an earlier party's signature, and stands against a
+    /// later signing date.
+    #[test]
+    fn an_effective_date_beside_the_signatures_stands() {
+        let text = SIGNED_AMENDMENT.replace(
+            "Title: Chief Revenue Officer\nDate: August 18, 2026",
+            "Title: Chief Revenue Officer\nEffective Date: August 18, 2026",
+        );
+        let index = index_of(&text);
+        let outcome = check(
+            amendment_facts(&index, "2026-08-18", "Effective Date"),
+            &whole(&index),
+            &index,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-08-18")
+        );
+    }
+
+    /// A later date in the signature region that names another event - an
+    /// expiration - is no signature, and never replaces a signing date.
+    #[test]
+    fn a_later_expiration_beside_the_signatures_is_not_taken() {
+        let text = SIGNED_AMENDMENT.replace(
+            "Title: General Manager\nDate: August 21, 2026",
+            "Title: General Manager\nDate: August 18, 2026\nExpiration Date: August 21, 2027",
+        );
+        let index = index_of(&text);
+        let outcome = check(
+            amendment_facts(&index, "2026-08-18", "August 18"),
             &whole(&index),
             &index,
         );

@@ -481,6 +481,31 @@ pub(crate) fn dates_stated_on(
     found
 }
 
+/// Whether every mention of `date` reads as a signature's date: its wording
+/// says it was signed or executed, or it carries only a bare "Date:" label
+/// that names no other event. An "Effective Date:", an "Expiration Date:" or
+/// a due date is not a signature's, and neither is a date with no label at
+/// all. False when nothing states the date.
+pub(crate) fn reads_as_signature_date(digest: &impl Segments, date: &str) -> bool {
+    let mut stated = false;
+    for segment in digest.segments() {
+        for line in wrapped_lines(segment) {
+            let normalized = normalize(&line);
+            for position in date_match_positions(date, &normalized) {
+                let window = window_before(&normalized, position);
+                match role_from_wording(&window) {
+                    Some(DateRole::Execution) => {}
+                    Some(_) => return false,
+                    None if is_generic_label(&window) => {}
+                    None => return false,
+                }
+                stated = true;
+            }
+        }
+    }
+    stated
+}
+
 pub(crate) fn role_from_wording(window: &str) -> Option<DateRole> {
     let has = |cues: &[&str]| cues.iter().any(|cue| window.contains(cue));
     if has(INVOICE_CUES) {
