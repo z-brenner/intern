@@ -116,6 +116,8 @@ def ask(args):
                 continue
             state = state_of(recording[record["id"]], args.budget)
             questions = questions_for(proposal, record["filename"])
+            if args.questions:
+                questions = {name: q for name, q in questions.items() if name in args.questions}
             started = time.monotonic()
             try:
                 reply = post(args.server, {"state": state, "questions": questions}, args.timeout)
@@ -255,6 +257,8 @@ def main():
     a.add_argument("--out", required=True)
     a.add_argument("--budget", type=int, default=8000)
     a.add_argument("--timeout", type=float, default=600)
+    a.add_argument("--questions", nargs="+",
+                   help="ask only these questions (each costs one full read of the state), e.g. party_main")
     a.add_argument("--only-ready", action="store_true",
                    help="ask only about names the pipeline marked ready (all the gate is scored on); "
                    "llama.cpp re-reads the state for every question, so each document costs minutes on a CPU")
