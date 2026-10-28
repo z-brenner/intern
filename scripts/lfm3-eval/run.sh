@@ -24,13 +24,17 @@ OUT="$S/results/lfm3"
 mkdir -p "$OUT"
 
 # 1. runtime
-if [ ! -x "$BUILD/bin/llama-server" ]; then
+if [ ! -x "$BUILD/bin/llama-server" ] || ! compgen -G "$BUILD/bin/libggml-cpu-*.so" > /dev/null; then
   [ -d "$SRC/.git" ] || git clone --filter=blob:none https://github.com/ggml-org/llama.cpp "$SRC"
   git -C "$SRC" fetch -q origin tag "$TAG" || true
   git -C "$SRC" checkout -q --detach "$COMMIT"
   [ "$(git -C "$SRC" rev-parse HEAD)" = "$COMMIT" ]
-  TARGETS="llama-server llama-bench" "$REPO/scripts/build-llama-cpu-linux.sh" "$SRC" "$BUILD" portable
+  # Portable mode builds every target: its CPU backends are loaded at start-up
+  # and nothing links against them, so naming only the executables can leave
+  # them out (see build-llama-cpu-linux.sh).
+  "$REPO/scripts/build-llama-cpu-linux.sh" "$SRC" "$BUILD" portable
 fi
+compgen -G "$BUILD/bin/libggml-cpu-*.so" > /dev/null || { echo "no CPU backend in $BUILD/bin" >&2; exit 1; }
 SERVER="$BUILD/bin/llama-server"
 "$SERVER" --version 2>&1 | tail -1 | tee "$OUT/runtime-version.txt"
 
