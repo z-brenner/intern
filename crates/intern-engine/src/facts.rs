@@ -60,7 +60,7 @@ use crate::evidence::{
     numeric_dates, stated_dates,
 };
 use crate::index::{EvidenceIndex, EvidenceUnit, UnitKind};
-use crate::infer::{infer_date_role, repair_issued_relation};
+use crate::infer::{infer_date_role, reads_as_signature_date, repair_issued_relation};
 use crate::phrases::{
     has_a_kind, head_noun, is_placeholder, is_reference, label_and_value, names_a_kind,
     opens_with_party_label, phrase_positions, same_word, subject_value, tidy_case, title_phrase,
@@ -427,6 +427,20 @@ pub fn validate_facts_at(
     if !type_supported {
         push(&mut reasons, ReviewReason::TypeUnsupported);
     }
+    // "Never 'Document', 'Agreement' or 'Letter' alone", as the prompt
+    // says: a bare generic word that no title of the document completed
+    // (read_type has tried) names no kind a person could file by, so the
+    // name waits for a person rather than being filed. Ported from #26.
+    // On InternBench it holds agreement-two-column-footnotes, typed
+    // "Agreement" under the title "SEED PRODUCTION AND SUPPLY AGREEMENT",
+    // for review instead of filing a wrong name: a deliberate trade, since
+    // the gold expects that document ready under its full title.
+    if document_type
+        .as_deref()
+        .is_some_and(|value| matches!(normalize(value).trim(), "letter" | "document" | "agreement"))
+    {
+        push(&mut reasons, ReviewReason::TypeMissing);
+    }
     if document_type.is_none() {
         match title_of(scope) {
             Some((inferred, line)) => {
@@ -555,6 +569,43 @@ pub fn validate_facts_at(
             date_line = Some(line);
             replaced = true;
         }
+    }
+    // An agreement is made when its last party signs it. A date the
+    // document states only in its signature blocks, with a later one in
+    // another of them, is an earlier party's signature: "Date: August 18,
+    // 2026" under the licensor's name when the licensee signed on August 21
+    // and the amendment "is effective on the date of the last signature".
+    // It gives way to the latest - unless a stated effective date already
+    // replaced it above. Ported from #26, where it moved Bonsai 4B's and
+    // Qwen3.5-2B's trap date on InternBench's mixed-signature-region.
+    //
+    // Only a signature's date gives way, and only to another signature's.
+    // The signature region is positional - it runs on for a dozen units
+    // after a signature cue - so an "Effective Date: August 18" set beside
+    // the signatures is the document's own date and stands, and a later
+    // "Expiration Date" there is never taken: each date must read as signed
+    // on, and a replacement must pass the deadline and other-document
+    // guards the model's own date passed above.
+    if !replaced
+        && matches!(
+            DocumentClass::of(document_type.as_deref()),
+            DocumentClass::Agreement | DocumentClass::Amendment
+        )
+        && let Some(date) = document_date.clone()
+        && only_in_signatures(scope.index, &date)
+        && reads_as_signature_date(document, &date)
+        && let Some((latest, line)) = latest_signature_date(scope, &date, |candidate| {
+            reads_as_signature_date(document, candidate)
+                && !deadline_fires(context, candidate)
+                && !deadline_fires(document, candidate)
+                && !date_is_tainted(context, candidate, document_type.as_deref())
+                && !date_is_tainted(document, candidate, document_type.as_deref())
+        })
+    {
+        document_date = Some(latest);
+        date_role = Some(DateRole::Execution);
+        date_line = Some(line);
+        replaced = true;
     }
     if document_date.is_none() && date_supported && !withheld_as_deadline {
         push(&mut reasons, ReviewReason::DateMissing);
@@ -1556,6 +1607,54 @@ fn scope_name(context: bool, document: bool) -> String {
         _ => "document",
     }
     .to_owned()
+}
+
+/// True when every unit that states `date` stands in or just after a
+/// signature block, and one does. Running headers and footers are not read.
+fn only_in_signatures(index: &EvidenceIndex, date: &str) -> bool {
+    let mut stated = false;
+    for unit in index.units() {
+        if unit.running || date_match_positions(date, &unit.normalized).is_empty() {
+            continue;
+        }
+        if !unit.features.position.signature {
+            return false;
+        }
+        stated = true;
+    }
+    stated
+}
+
+/// The latest date later than `date` that the document states only in its
+/// signature blocks and that `acceptable` admits, with the line it stands
+/// on. ISO dates order as text.
+fn latest_signature_date(
+    scope: &ValidationScope<'_>,
+    date: &str,
+    acceptable: impl Fn(&str) -> bool,
+) -> Option<(String, String)> {
+    let mut latest: Option<(String, String)> = None;
+    for unit in scope.index.units() {
+        if unit.running || !unit.features.position.signature {
+            continue;
+        }
+        for candidate in stated_dates(&scope.view(&[unit])) {
+            if candidate.as_str() > date
+                && latest
+                    .as_ref()
+                    .is_none_or(|(kept, _)| candidate.as_str() > kept.as_str())
+                && only_in_signatures(scope.index, &candidate)
+                && acceptable(&candidate)
+            {
+                let line = line_where(unit, |line| {
+                    !date_match_positions(&candidate, line).is_empty()
+                })
+                .unwrap_or_else(|| unit.text.trim().to_owned());
+                latest = Some((candidate, line));
+            }
+        }
+    }
+    latest
 }
 
 /// The one alternate both views agree on, when each has exactly one and it
@@ -3902,6 +4001,189 @@ Payment terms: net 30. Remit to Halvorsen Fixture Works LLC.";
                 .as_deref(),
             Some("both")
         );
+    }
+
+    /// InternBench's mixed-signature-region, as its text reads: the
+    /// amendment takes effect on the last signature, and each party's
+    /// signature block carries its own date.
+    const SIGNED_AMENDMENT: &str = "FIRST AMENDMENT TO SOFTWARE LICENSE AGREEMENT\n\n\
+This First Amendment (this \"Amendment\") is between Corvane Analytics Inc. (\"Licensor\") and \
+Pellworth County Water Authority (\"Licensee\"), and amends the Software License and Services \
+Agreement between them dated September 30, 2024. This Amendment is effective on the date of the \
+last signature below.\n\n\
+IN WITNESS WHEREOF, the parties have signed this Amendment on the dates written below.\n\n\
+CORVANE ANALYTICS INC.\nBy:\nName: Rosalind Achterberg\nTitle: Chief Revenue Officer\nDate: August 18, 2026\n\n\
+PELLWORTH COUNTY WATER AUTHORITY\nBy:\nName: Barnaby Quist\nTitle: General Manager\nDate: August 21, 2026";
+
+    fn amendment_facts(index: &EvidenceIndex, date: &str, cited: &str) -> ModelFacts {
+        let parties_line = id_of(index, "This First Amendment");
+        ModelFacts {
+            document_type: Some("First Amendment to Software License Agreement".into()),
+            type_evidence: vec![id_of(index, "FIRST AMENDMENT")],
+            document_date: Some(date.into()),
+            date_role: Some(DateRole::Amendment),
+            date_evidence: vec![id_of(index, cited)],
+            parties: vec![
+                party(
+                    "Corvane Analytics Inc.",
+                    Some(PartyRole::Licensor),
+                    &[parties_line.clone()],
+                ),
+                party(
+                    "Pellworth County Water Authority",
+                    Some(PartyRole::Licensee),
+                    &[parties_line],
+                ),
+            ],
+            ..ModelFacts::default()
+        }
+    }
+
+    /// An agreement is made when its last party signs it: an earlier
+    /// signature's date gives way to the latest.
+    #[test]
+    fn an_earlier_signature_gives_way_to_the_last() {
+        let index = index_of(SIGNED_AMENDMENT);
+        let outcome = check(
+            amendment_facts(&index, "2026-08-18", "August 18"),
+            &whole(&index),
+            &index,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-08-21")
+        );
+        // The last signature's own date stands as it is.
+        let outcome = check(
+            amendment_facts(&index, "2026-08-21", "August 21"),
+            &whole(&index),
+            &index,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-08-21")
+        );
+    }
+
+    /// A date the document also states outside its signature blocks is
+    /// not only a signature's, and stands: here the amendment says it is
+    /// dated the day the first party signed.
+    #[test]
+    fn a_signature_date_the_body_states_too_stands() {
+        let text = SIGNED_AMENDMENT.replace(
+            "This Amendment is effective on the date of the last signature below.",
+            "This Amendment is dated August 18, 2026.",
+        );
+        let index = index_of(&text);
+        let outcome = check(
+            amendment_facts(&index, "2026-08-18", "is dated August 18"),
+            &whole(&index),
+            &index,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-08-18")
+        );
+    }
+
+    /// A stated effective date set beside the signatures is the document's
+    /// own date, not an earlier party's signature, and stands against a
+    /// later signing date.
+    #[test]
+    fn an_effective_date_beside_the_signatures_stands() {
+        let text = SIGNED_AMENDMENT.replace(
+            "Title: Chief Revenue Officer\nDate: August 18, 2026",
+            "Title: Chief Revenue Officer\nEffective Date: August 18, 2026",
+        );
+        let index = index_of(&text);
+        let outcome = check(
+            amendment_facts(&index, "2026-08-18", "Effective Date"),
+            &whole(&index),
+            &index,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-08-18")
+        );
+    }
+
+    /// A later date in the signature region that names another event - an
+    /// expiration - is no signature, and never replaces a signing date.
+    #[test]
+    fn a_later_expiration_beside_the_signatures_is_not_taken() {
+        let text = SIGNED_AMENDMENT.replace(
+            "Title: General Manager\nDate: August 21, 2026",
+            "Title: General Manager\nDate: August 18, 2026\nExpiration Date: August 21, 2027",
+        );
+        let index = index_of(&text);
+        let outcome = check(
+            amendment_facts(&index, "2026-08-18", "August 18"),
+            &whole(&index),
+            &index,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-08-18")
+        );
+    }
+
+    /// "Never Letter alone": a bare generic word is no type a person could
+    /// file by, and goes to review.
+    #[test]
+    fn a_bare_letter_is_no_type() {
+        let index = index_of(
+            "January 9, 2026\n\nSilverbirch Ceramics Inc.\n\nThis letter confirms our engagement.\n\n\
+             Halloran Ostrowski CPAs LLP",
+        );
+        let facts = ModelFacts {
+            document_type: Some("Letter".into()),
+            type_evidence: vec![id_of(&index, "This letter")],
+            document_date: Some("2026-01-09".into()),
+            date_evidence: vec![id_of(&index, "January 9")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
+        assert_ne!(outcome.status, ProposalStatus::Ready);
+    }
+
+    /// InternBench's agreement-two-column-footnotes, as Qwen3.5-2B read it:
+    /// typed "Agreement", citing a title the type reader cannot complete
+    /// past its "AND". A bare "Agreement" is not filed; it waits for a
+    /// person.
+    #[test]
+    fn a_bare_agreement_under_a_longer_title_goes_to_review() {
+        let index = index_of(
+            "SEED PRODUCTION AND SUPPLY AGREEMENT\n\n\
+             This Seed Production and Supply Agreement (this \"Agreement\") is dated as of March 2, 2026 \
+             and is made between\nLarkhaven Seed Company, a Nebraska corporation (\"Company\"), and \
+             Prairie Wren Growers Cooperative, an Iowa cooperative\nassociation (\"Grower\").\n\n\
+             Counties, Iowa. The parties agree as follows:",
+        );
+        let line = id_of(&index, "This Seed");
+        let facts = ModelFacts {
+            document_type: Some("Agreement".into()),
+            type_evidence: vec![id_of(&index, "SEED PRODUCTION")],
+            document_date: Some("2026-03-02".into()),
+            date_role: Some(DateRole::Execution),
+            date_evidence: vec![line.clone()],
+            parties: vec![
+                party(
+                    "Larkhaven Seed Company",
+                    Some(PartyRole::Recipient),
+                    &[line.clone()],
+                ),
+                party(
+                    "Prairie Wren Growers Cooperative",
+                    Some(PartyRole::Sender),
+                    &[line],
+                ),
+            ],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(outcome.reasons, vec![ReviewReason::TypeMissing]);
+        assert_ne!(outcome.status, ProposalStatus::Ready);
     }
 
     const SOW_UNDER_MSA: &str = "STATEMENT OF WORK NO. 7\n\n\

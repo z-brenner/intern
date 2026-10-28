@@ -232,7 +232,7 @@ install -m 0644 "$WORK/pdfium/LICENSE" "$STAGE/licenses/PDFium-LICENSE.txt"
 # --- ONNX Runtime and the PP-OCR models -----------------------------------
 "$ROOT/scripts/fetch-ocr-runtime.sh" "$WORK/ocr" "$CACHE" > /dev/null
 install -m 0644 "$WORK/ocr/libonnxruntime.so" "$STAGE/runtime/libonnxruntime.so"
-owned_by libonnxruntime.so "ONNX Runtime" 1.30.0
+owned_by libonnxruntime.so onnxruntime 1.30.0
 mkdir -p "$STAGE/runtime/ocr-models"
 while IFS=$'\t' read -r archive name version; do
   install -m 0644 "$WORK/ocr/ocr-models/$archive" "$STAGE/runtime/ocr-models/$archive"
