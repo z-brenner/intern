@@ -27,6 +27,8 @@ pub fn transform(original: &Value, profile: &Value) -> Result<Value, String> {
             "cache_prompt",
             "chat_template_kwargs",
             "seed",
+            "reasoning_budget_tokens",
+            "grammar_after_thinking",
         ]
         .contains(&key.as_str())
         {
@@ -34,10 +36,28 @@ pub fn transform(original: &Value, profile: &Value) -> Result<Value, String> {
         }
         match key.as_str() {
             "cache_prompt" if value.is_boolean() => {}
-            "chat_template_kwargs" if value == &serde_json::json!({"enable_thinking":false}) => {}
+            // Thinking may be turned on to measure a reasoning model as its
+            // makers run it; the app itself always sends false.
+            "chat_template_kwargs"
+                if value == &serde_json::json!({"enable_thinking":false})
+                    || value == &serde_json::json!({"enable_thinking":true}) => {}
             "seed" | "top_k" | "repeat_last_n"
                 if value.as_u64().is_some_and(|v| v <= 1_000_000) => {}
-            "max_tokens" if value.as_u64().is_some_and(|v| v > 0 && v <= 1024) => {}
+            // Room for a reasoning trace before the reply.
+            "max_tokens" if value.as_u64().is_some_and(|v| v > 0 && v <= 8192) => {}
+            // llama-server ends the thinking block after this many tokens.
+            "reasoning_budget_tokens" if value.as_u64().is_some_and(|v| v <= 8192) => {}
+            "grammar_after_thinking" if value.is_boolean() => {
+                // Not forwarded: it rewrites the request's own grammar so the
+                // reply may think first. The profile still cannot supply one.
+                if value == &Value::Bool(true) {
+                    let grammar = body["grammar"]
+                        .as_str()
+                        .ok_or("grammar_after_thinking needs a request grammar")?;
+                    body["grammar"] = Value::String(grammar_after_thinking(grammar)?);
+                }
+                continue;
+            }
             "temperature" | "top_p" | "min_p" | "presence_penalty" | "repeat_penalty"
                 if value
                     .as_f64()
@@ -98,6 +118,48 @@ pub fn transform(original: &Value, profile: &Value) -> Result<Value, String> {
     Ok(body)
 }
 
+/// The request's grammar, preceded by a thinking block. With thinking on, a
+/// hybrid-reasoning template (Qwen3.5, LFM3) ends its generation prompt
+/// inside `<think>`, and llama-server applies a request grammar from the
+/// first generated token - so the original grammar would force the reply
+/// into the thinking block and leave the answer empty. This lets any text
+/// without `</think>` come first, then `</think>`, then exactly the
+/// original reply.
+fn grammar_after_thinking(grammar: &str) -> Result<String, String> {
+    let mut found = false;
+    let mut out = Vec::new();
+    for line in grammar.lines() {
+        if let Some(rest) = line.strip_prefix("root ::=") {
+            found = true;
+            out.push(format!("intern-reply ::={rest}"));
+        } else {
+            out.push(line.to_owned());
+        }
+    }
+    if !found {
+        return Err("request grammar has no root rule".into());
+    }
+    out.push(r#"root ::= think-0 "</think>" [ \t\n]* intern-reply"#.into());
+    // Text that never contains "</think>", as a matcher: think-k has just
+    // read the tag's first k characters. Any state may end, so the closing
+    // tag llama-server forces at the budget is accepted after any text,
+    // a stray "<" or a partial tag included.
+    const TAG: &[u8] = b"</think>";
+    out.push(r#"think-0 ::= | [^<] think-0 | "<" think-1"#.into());
+    for (k, &next) in TAG.iter().enumerate().skip(1) {
+        let next = next as char;
+        let advance = if k + 1 < TAG.len() {
+            format!(r#" | "{next}" think-{}"#, k + 1)
+        } else {
+            String::new()
+        };
+        out.push(format!(
+            r#"think-{k} ::={advance} | "<" think-1 | [^{next}<] think-0"#
+        ));
+    }
+    Ok(out.join("\n"))
+}
+
 use sha2::{Digest, Sha256};
 use std::{
     io::{Read, Write},
@@ -123,7 +185,7 @@ impl BenchmarkTransport {
         }
         let profile: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
         transform(
-            &serde_json::json!({"messages":[{"role":"user","content":"validation"}]}),
+            &serde_json::json!({"messages":[{"role":"user","content":"validation"}],"grammar":"root ::= \"x\""}),
             &profile,
         )?;
         std::fs::create_dir(output).map_err(|e| format!("capture directory must be new: {e}"))?;
@@ -184,6 +246,36 @@ mod tests {
             let p = json!({"settings":{key:"untrusted"}});
             assert!(transform(&json!({"messages":[]}), &p).is_err());
         }
+    }
+    #[test]
+    fn thinking_settings_wrap_the_request_grammar_and_are_bounded() {
+        let body = json!({"messages":[],"grammar":"root ::= \"{\" a \"}\"\na ::= \"x\"","max_tokens":1024});
+        let profile = json!({"settings":{"chat_template_kwargs":{"enable_thinking":true},"max_tokens":2048,"reasoning_budget_tokens":1024,"grammar_after_thinking":true}});
+        let got = transform(&body, &profile).unwrap();
+        assert_eq!(got["chat_template_kwargs"], json!({"enable_thinking":true}));
+        assert_eq!(got["max_tokens"], json!(2048));
+        assert_eq!(got["reasoning_budget_tokens"], json!(1024));
+        assert!(got.get("grammar_after_thinking").is_none());
+        let grammar = got["grammar"].as_str().unwrap();
+        assert!(grammar.contains("intern-reply ::= \"{\" a \"}\""));
+        assert!(grammar.contains("a ::= \"x\""));
+        assert!(grammar.contains(r#"root ::= think-0 "</think>" [ \t\n]* intern-reply"#));
+        assert!(grammar.contains(r#"think-0 ::= | [^<] think-0 | "<" think-1"#));
+        assert!(grammar.contains(r#"think-1 ::= | "/" think-2 | "<" think-1 | [^/<] think-0"#));
+        assert!(grammar.contains(r#"think-7 ::= | "<" think-1 | [^><] think-0"#));
+        assert_eq!(grammar.matches("root ::=").count(), 1);
+        for bad in [
+            json!({"settings":{"max_tokens":8193}}),
+            json!({"settings":{"reasoning_budget_tokens":8193}}),
+            json!({"settings":{"chat_template_kwargs":{"enable_thinking":true,"other":1}}}),
+            json!({"settings":{"grammar_after_thinking":"yes"}}),
+        ] {
+            assert!(transform(&body, &bad).is_err(), "{bad}");
+        }
+        // Off leaves the grammar alone; a request without one cannot be wrapped.
+        let off = transform(&body, &json!({"settings":{"grammar_after_thinking":false}})).unwrap();
+        assert_eq!(off["grammar"], body["grammar"]);
+        assert!(transform(&json!({"messages":[]}), &profile).is_err());
     }
     #[test]
     fn empty_profile_preserves_original_request_exactly() {
