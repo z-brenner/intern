@@ -8,29 +8,34 @@ checklist authorizes a tag or publication.
 
 ## Hosted QA artifacts and accepted alpha.12 evidence
 
-- Workflow: Whole-product QA evidence, run `40566145844`, attempt `1`.
-- Commit: `cd058571ebe529d4bf434c1abcdebf6fddbbeb57`; runner: `Windows/X64`.
+- Workflow: Whole-product QA evidence, run `40618344348`, attempt `1`.
+- Commit: `33082af6ebb2a4ad96b1cf299e502c164ab3834e`; runner: `Windows/X64`.
+  This is `main` after #36, which fixed the SBOM failure that stopped the
+  first alpha.12 release run (`40605312406`) before tagging. Nothing was
+  published from that run. The earlier QA run `40566145844` is superseded.
 - Execution result: every step passed, including the real-inference corpus
   evaluation, which `validate-model-evaluation.mjs` accepted.
 - Release-input digest:
-  `649494076b200fc7546e3aa97b605ed77c07626adb917715951d9732f2213126`.
+  `1dbe634135b2f85c92b532d7bfcdb5376945a0b5308c3ef338b6db5a09c31a84`.
 - Capture: `docs/qa/latest-implementation.png`, 1536x1024, SHA-256
   `2ea19abf6f400ead3d9fa25a4452bed2d44d78f44642f846317d64bd9b9ea52d`.
-- Fidelity reviewer: the maintainer, Zachary Brenner, accepted the capture. The
-  record is in `rendered-fidelity-signoff.json`, bound to the digest above, and
-  the reasoning is in `fidelity-ledger.md`.
+- Fidelity reviewer: the maintainer, Zachary Brenner, accepted this capture
+  from run `40566145844`. Run `40618344348` produced the same file byte for
+  byte, which Claude Code verified before carrying the acceptance to this
+  digest. The record is in `rendered-fidelity-signoff.json` and the reasoning
+  is in `fidelity-ledger.md`.
 
 | Gate | Status | Hosted run artifact or post-run evidence |
 |---|---|---|
-| Frontend unit, lint, and build check | accepted | `npm run check` exit 0; TypeScript, 71 Vitest files (716 tests passed, 1 skipped), and the Vite production build. |
+| Frontend unit, lint, and build check | accepted | `npm run check` exit 0; TypeScript, 72 Vitest files (717 tests passed, 1 skipped), and the Vite production build. |
 | Browser core interaction, accessibility, and 1024-pixel layout | accepted | `npm run test:e2e` exit 0; 29 Playwright tests, and the 1536x1024 capture. |
 | Rendered fidelity review | accepted | The capture above, reviewed and bound to the alpha.12 release-input digest. |
 | Rust formatting and workspace lint | accepted | `cargo fmt --all -- --check` and `cargo clippy --locked --workspace --all-targets -- -D warnings`, both exit 0. |
-| Rust workspace tests | accepted | `cargo test --locked --workspace --all-targets` exit 0; 1,684 tests. |
+| Rust workspace tests | accepted | `cargo test --locked --workspace --all-targets` exit 0; 1,690 tests. |
 | Pinned runtime assets and native fixtures | accepted | `npm run assets:verify -- --require-bundled` exit 0 (54 runtime files, 26 license files); 4 native fixture tests with the pinned assets. |
 | Windows Tauri/NSIS build | accepted | `npm run tauri build -- --bundles nsis -- --locked` exit 0; one installer. |
 | Installer and installed-core smoke | accepted | `scripts/smoke-installer.ps1` exit 0: install, packaged worker PDF/OCR, uninstall, user data retained. |
-| Corpus evaluation and model acceptance | accepted | 19 documents scored on the pinned Qwen3.5 2B model. Every accuracy gate is above its floor, and no document was filed under a forbidden date or party. |
+| Corpus evaluation and model acceptance | accepted | 19 documents scored on the pinned Qwen3.5 2B model (peak model RSS 2,052 MB): dates 16/18, parties 18/19, filenames 13/18. Every accuracy gate is above its floor, and no document was filed under a forbidden date or party. |
 | Exact-main validation | pending/blocked | The release workflow must verify its dispatch target is the exact current `main` commit. |
 | Deliberately dispatched release workflow | pending/blocked | Rebuild, updater signature verification, checksums/SBOM/evidence acceptance, provenance, annotated tag creation, and publication remain release-job gates. |
 
