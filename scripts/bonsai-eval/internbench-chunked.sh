@@ -11,6 +11,7 @@
 #   MODEL=... LLAMA_SERVER=... INTERN_BENCH=... INTERN_RUNTIME_DIR=... \
 #   [BENCH_PROFILE=...] [THREADS=n] [LLAMA_SERVER_ARGS=...] [LOCK=bench.lock] \
 #   [INTERN_BENCH_TOKEN_CONFIDENCE=1] [SAMPLE_RSS=1] [ONLY=id,id] \
+#   [BENCH_ARGS="--prompt-profile bonsai_2"] \
 #     scripts/bonsai-eval/internbench-chunked.sh RUN_DIR
 set -uo pipefail
 # Hold the exclusive lock for the whole run (the run is one measurement), not per
@@ -39,7 +40,9 @@ while [ $i -lt $n ]; do
   else
     rm -rf "$dir"
     echo "chunk $c: $ids  ($(date -u +%H:%M:%S))"
-    "$REPO/scripts/run-internbench-candidate.sh" "$dir" -- --only "$ids"
+    # BENCH_ARGS is split on spaces on purpose: it carries intern-bench flags.
+    # shellcheck disable=SC2086
+    "$REPO/scripts/run-internbench-candidate.sh" "$dir" -- --only "$ids" ${BENCH_ARGS:-}
     echo "chunk $c exit $? ($(date -u +%H:%M:%S))"
   fi
   i=$((i + CHUNK)); c=$((c + 1))
@@ -52,6 +55,6 @@ for d in "$RUN"/chunks/*; do
     --output "$RUN/recording.merged.json" --gold "$REPO/bench/gold.json" && mv "$RUN/recording.merged.json" "$RUN/recording.json"
 done
 "$INTERN_BENCH" run --corpus "${CORPUS:-$REPO/bench/generated}" --gold "$REPO/bench/gold.json" \
-  --manifest "$REPO/bench/manifest.json" ${ONLY:+--only "$ONLY"} --replay "$RUN/recording.json" \
+  --manifest "$REPO/bench/manifest.json" ${ONLY:+--only "$ONLY"} ${BENCH_ARGS:-} --replay "$RUN/recording.json" \
   --output "$RUN/report.json" --markdown "$RUN/report.md"
 echo "merged report: $RUN/report.md"

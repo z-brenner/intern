@@ -112,6 +112,8 @@ def ask(args):
             proposal = record.get("proposal") or {}
             if record["id"] in done or not proposal.get("parties"):
                 continue
+            if args.only_ready and not record["scores"].get("ready"):
+                continue
             state = state_of(recording[record["id"]], args.budget)
             questions = questions_for(proposal, record["filename"])
             started = time.monotonic()
@@ -253,6 +255,9 @@ def main():
     a.add_argument("--out", required=True)
     a.add_argument("--budget", type=int, default=8000)
     a.add_argument("--timeout", type=float, default=600)
+    a.add_argument("--only-ready", action="store_true",
+                   help="ask only about names the pipeline marked ready (all the gate is scored on); "
+                   "llama.cpp re-reads the state for every question, so each document costs minutes on a CPU")
     z = sub.add_parser("analyze")
     z.add_argument("--answers", required=True)
     z.add_argument("--report", required=True)

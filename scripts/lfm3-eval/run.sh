@@ -59,7 +59,7 @@ if [ ! -f "$OUT/$D1_NAME.md" ]; then
   D1PID=$!
   trap 'kill $D1PID 2>/dev/null || true' EXIT
   for _ in $(seq 1 600); do curl -sf --noproxy '*' "http://127.0.0.1:$PORT/health" | grep -q ok && break; sleep 0.5; done
-  python3 -I "$REPO/scripts/lfm3-eval/d1_verifier.py" ask --server "http://127.0.0.1:$PORT" \
+  python3 -I "$REPO/scripts/lfm3-eval/d1_verifier.py" ask --server "http://127.0.0.1:$PORT" --only-ready \
     --recording "$OUT/qwen/recording.json" --report "$OUT/qwen/report.json" --out "$OUT/$D1_NAME-answers.jsonl"
   grep -E '^VmHWM|^VmRSS' "/proc/$D1PID/status" > "$OUT/$D1_NAME-memory.txt" || true
   kill $D1PID; wait $D1PID 2>/dev/null || true
