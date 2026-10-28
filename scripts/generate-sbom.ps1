@@ -63,6 +63,22 @@ try {
         throw "Actual vcpkg Tesseract and Leptonica package ownership is missing from the runtime inventory"
     }
     if ($Packages.Name -contains "Tesseract/vcpkg") { throw "Synthetic Tesseract/vcpkg grouping is forbidden" }
+    # Each runtime SBOM is found twice when the application SBOM is generated:
+    # through the -er list, and by component detection, which scans the
+    # repository root and so release/. The tool merges the two by document
+    # namespace, which it builds from the package name and version
+    # percent-escaped. Component detection reads that namespace back through
+    # System.Uri, which unescapes a space but leaves a slash escaped, so a name
+    # with a space reaches the merge as two namespaces and its document is
+    # referenced twice. alpha.12's first release run failed so on "ONNX Runtime",
+    # 25 references for 24 packages. Characters both readings agree on only.
+    foreach ($Package in $Packages) {
+        if ($Package.Name -cnotmatch '^[A-Za-z0-9._~/-]+$' -or $Package.Version -cnotmatch '^[A-Za-z0-9._~/-]+$') {
+            throw ("Runtime package '$($Package.Name)' version '$($Package.Version)' has a character other than " +
+                "letters, digits, '.', '_', '~', '-' and '/', which the SBOM tool would reference twice. " +
+                "Rename it where scripts/fetch-windows-assets.ps1 registers it.")
+        }
+    }
     foreach ($Package in $Packages) {
         $SafeName = "$($Package.Name)-$($Package.Version)" -replace '[^A-Za-z0-9_.-]', '-'
         $Drop = Join-Path $Work "runtime-$SafeName"
@@ -116,8 +132,14 @@ try {
         }
         Write-Host "Application SBOM covers $Matched $Ecosystem packages."
     }
-    if (@($Main.externalDocumentRefs).Count -ne $Packages.Count) {
-        throw "Application SBOM does not reference every native runtime component SBOM"
+    # Every runtime SBOM exactly once, and nothing else: compare namespaces, not
+    # counts, so a document referenced twice and another left out cannot cancel.
+    $ExpectedNamespaces = @($ExternalDocuments | ForEach-Object { [string](Get-Content -LiteralPath $_ -Raw | ConvertFrom-Json).documentNamespace } | Sort-Object)
+    $ReferencedNamespaces = @(@($Main.externalDocumentRefs) | ForEach-Object { [string]$_.spdxDocument } | Sort-Object)
+    if (($ExpectedNamespaces -join "`n") -cne ($ReferencedNamespaces -join "`n")) {
+        throw ("Application SBOM does not reference every native runtime component SBOM exactly once. " +
+            "Expected $($ExpectedNamespaces.Count): $($ExpectedNamespaces -join ', '). " +
+            "Referenced $($ReferencedNamespaces.Count): $($ReferencedNamespaces -join ', ').")
     }
     Copy-Item -LiteralPath $MainManifest -Destination (Join-Path $Release "Intern-v0.1.0-alpha.12.spdx.json")
     Remove-Item -LiteralPath (Join-Path $Release "_manifest") -Recurse -Force

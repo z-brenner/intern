@@ -226,7 +226,9 @@ try {
     } finally { $OnnxPackage.Dispose() }
     $OnnxDll = Join-Path $OnnxExtract (Split-Path -Leaf $OnnxDownload.extract.path)
     Assert-ExactFile -Path $OnnxDll -Size $OnnxDownload.extract.size -Sha256 $OnnxDownload.extract.sha256 -Label "onnxruntime extracted DLL"
-    Copy-SidecarDll $OnnxDll "ONNX Runtime" ([string]$OnnxDownload.version)
+    # "onnxruntime", the upstream project's own name: a package name with a
+    # space breaks the application SBOM (see scripts/generate-sbom.ps1).
+    Copy-SidecarDll $OnnxDll "onnxruntime" ([string]$OnnxDownload.version)
     Copy-RuntimeFile (Join-Path $OnnxExtract "LICENSE") (Join-Path $LicensesDirectory "onnxruntime-LICENSE.txt")
     Copy-RuntimeFile (Join-Path $OnnxExtract "ThirdPartyNotices.txt") (Join-Path $LicensesDirectory "onnxruntime-ThirdPartyNotices.txt")
 
