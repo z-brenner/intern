@@ -631,6 +631,12 @@ fn defines_another_document(before: &str, from: usize) -> bool {
     let Some(open) = term.rfind('"') else {
         return false;
     };
+    // The term opens its clause, as in a list of definitions: what is
+    // being referred to "as the \"Supply Agreement\"" names the sentence's
+    // own subject, which may be this document.
+    if !opens_its_clause(&term[..open]) {
+        return false;
+    }
     let words = &term[open + 1..];
     let Some(noun_at) = last_document_noun(words) else {
         return false;
@@ -639,6 +645,28 @@ fn defines_another_document(before: &str, from: usize) -> bool {
     last_word_start(lead) == Some(noun_at)
         && words.split_whitespace().count() >= 2
         && !determined_by_this(before, open + 1 + noun_at)
+}
+
+/// Whether what stands before a quoted term on its line leaves the term
+/// opening its clause: nothing after the last sentence's end, or only a
+/// list marker ("2.7", "(a)", "iv.").
+fn opens_its_clause(lead: &str) -> bool {
+    let clause = lead.rsplit_once([';', ':']).map_or(lead, |(_, rest)| rest);
+    let clause = clause
+        .rsplit_once(". ")
+        .map_or(clause, |(_, rest)| rest)
+        .trim();
+    let marker = |token: &str| {
+        token.chars().count() <= 8
+            && token.chars().all(|character| {
+                character.is_alphanumeric() || matches!(character, '.' | '(' | ')')
+            })
+            && (token
+                .chars()
+                .any(|character| character.is_ascii_digit() || character == '(')
+                || token.ends_with(['.', ')']))
+    };
+    clause.is_empty() || (clause.split_whitespace().count() == 1 && marker(clause))
 }
 
 /// Whether the wording between a citation and a date ends the clause the
@@ -1815,6 +1843,12 @@ Parties on the 21st day of February, 2017.",
         // A defined date names no document.
         assert!(!reference_at(
             "\"Effective Date\" means February 21, 2017.",
+            "2017-02-21"
+        ));
+        // A name given to the sentence's own subject may be this document's.
+        assert!(!reference_at(
+            "This agreement is referred to as the \"Supply Agreement\" and is effective \
+February 21, 2017.",
             "2017-02-21"
         ));
     }

@@ -399,8 +399,11 @@ checks read the document around it:
   Agreements`, `the Subcontract`), so a contractor or a border is none. A
   definition dates the document it defines: a quoted term of two words or
   more ending on a document noun (`"Master Services Agreement" the agreement
-  executed between the Parties on ...`) taints the date in its clause,
-  unless it is this document's own alias in parentheses or `this` one. A
+  executed between the Parties on ...`) taints the date in its clause when
+  it opens that clause, as in a list of definitions (nothing before it but a
+  marker like `2.7`), and is not this document's own alias in parentheses
+  or `this` one: a name the sentence gives its subject (`is referred to as
+  the "Supply Agreement"`) may be this document's. A
   citation (`issued under`, `pursuant to`) taints only a date it runs
   straight into, with no clause punctuation in between; a comma that only
   sets off the cited date (`the Master Services Agreement, as amended,
