@@ -2993,6 +2993,31 @@ fn column_header(line: &str, above: Option<&str>, at: usize) -> Option<String> {
         .then(|| header.to_owned())
 }
 
+/// The label that opens `line`, as the document writes it, when `loose` is
+/// in the list it introduces: "Mechanics: Linnea Hart, Joaquin Moncrieff".
+/// Only names and separators may stand between the label and the name, so
+/// a name the line's prose goes on to mention is not under the label:
+/// "Prepared by: John Smith for Jane Doe".
+fn listed_under(line: &str, loose: &str) -> Option<String> {
+    let (label, rest) = line.split_once(':')?;
+    let label = normalize_loosely(label);
+    if label.split_whitespace().count() > 3 {
+        return None;
+    }
+    let tokens = rest.split_whitespace().collect::<Vec<_>>();
+    let start = (0..tokens.len()).find(|&start| {
+        (start + 1..=tokens.len().min(start + 10))
+            .any(|end| normalize_loosely(&tokens[start..end].join(" ")) == loose)
+    })?;
+    tokens[..start]
+        .iter()
+        .all(|word| {
+            let bare = word.trim_matches(|c: char| !c.is_alphanumeric());
+            bare.is_empty() || bare.starts_with(char::is_uppercase) || matches!(bare, "and" | "s")
+        })
+        .then_some(label)
+}
+
 /// Whether `line`, as the document writes it, gives the person `loose`
 /// names a post right after their name: "Jane Doe, Chief Inspector",
 /// "Jane Doe (Conservator)", "| Jane Doe | Winemaker |". Every word up to
@@ -3100,10 +3125,6 @@ fn standing_of(scope: &ValidationScope<'_>, name: &str, class: DocumentClass) ->
                         .map(normalize_loosely),
                 };
                 let header = column_header(line, above.as_deref(), at);
-                let opening = line
-                    .split_once(':')
-                    .map(|(label, _)| label.trim())
-                    .filter(|label| label.len() < at && label.split_whitespace().count() <= 3);
                 if subject_label(label_cell(before)) || header.as_deref().is_some_and(subject_label)
                 {
                     return Standing::Subject;
@@ -3132,7 +3153,12 @@ fn standing_of(scope: &ValidationScope<'_>, name: &str, class: DocumentClass) ->
                             POST_WORDS.contains(&word) || STAFF_GROUP_WORDS.contains(&word)
                         })
                 });
-                let staff_opening = opening.is_some_and(|label| STAFF_LABELS.contains(&label));
+                let staff_opening = unit
+                    .text
+                    .lines()
+                    .nth(index)
+                    .and_then(|written| listed_under(written, &loose))
+                    .is_some_and(|label| STAFF_LABELS.contains(&label.as_str()));
                 if labeled_by(before, STAFF_LABELS)
                     || labeled_by(before, issued_staff)
                     || staff_header
@@ -6962,6 +6988,35 @@ I declare that I have lived at 14 Wren Street since 2019.\n\nSignature: /s/ Jane
             document_type: Some("Declaration of Residency".into()),
             type_evidence: vec![id_of(index, "DECLARATION")],
             parties: vec![party("Jane Doe", None, &[id_of(index, "Signature:")])],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
+    }
+
+    #[test]
+    fn a_label_opening_a_line_covers_only_the_names_it_lists() {
+        assert_eq!(
+            listed_under(
+                "Mechanics: Linnea Hart, Joaquin Moncrieff",
+                "joaquin moncrieff"
+            )
+            .as_deref(),
+            Some("mechanics")
+        );
+        assert_eq!(
+            listed_under("Prepared by: /s/ John Smith", "john smith").as_deref(),
+            Some("prepared by")
+        );
+        assert_eq!(
+            listed_under("Prepared by: John Smith for Jane Doe", "jane doe"),
+            None
+        );
+        const REPORT: &str = "INSPECTION REPORT\n\nDated March 3, 2026\n\n\
+Prepared by: John Smith for Jane Doe\n\nThe roof at 14 Wren Street needs new flashing.";
+        let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+            document_type: Some("Inspection Report".into()),
+            type_evidence: vec![id_of(index, "INSPECTION")],
+            parties: vec![party("Jane Doe", None, &[id_of(index, "Prepared")])],
             ..ModelFacts::default()
         });
         assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
