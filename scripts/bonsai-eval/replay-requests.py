@@ -28,8 +28,12 @@ def load_requests(dirs, skip_first):
         files = sorted(glob.glob(os.path.join(directory, "*-model-wire.json")))
         if skip_first:
             files = files[1:]
+        # Keyed like the reference replies: the chunk directory a `wire/` capture sits in.
+        name = os.path.basename(directory.rstrip("/"))
+        if name == "wire":
+            name = os.path.basename(os.path.dirname(directory.rstrip("/")))
         for path in files:
-            requests.append((f"{os.path.basename(directory.rstrip('/'))}/{os.path.basename(path)[:4]}", path))
+            requests.append((f"{name}/{os.path.basename(path)[:4]}", path))
     return requests
 
 
