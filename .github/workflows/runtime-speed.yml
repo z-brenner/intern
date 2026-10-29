@@ -1,0 +1,124 @@
+name: Runtime speed on Windows
+
+# The packaged llama.cpp runtime against upstream llama.cpp on a Windows
+# runner: the same 26 recorded InternBench requests replayed through each,
+# timed, and compared reply for reply with the reply the request got live.
+# Laboratory measurement only: it gates nothing and publishes nothing. See
+# bench/reports/speed-linux-cpu-2026-10-29.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/runtime-speed.yml
+      - bench/reports/speed-linux-cpu-2026-10-29/requests/**
+
+permissions:
+  contents: read
+
+jobs:
+  windows-runtime-speed:
+    name: Windows runtime speed (Prism vs upstream llama.cpp)
+    runs-on: windows-latest
+    timeout-minutes: 180
+    env:
+      UPSTREAM_VERSION: b11946
+      UPSTREAM_URL: https://github.com/ggml-org/llama.cpp/releases/download/b11946/llama-b11946-bin-win-cpu-x64.zip
+      UPSTREAM_SHA256: 8a702bb07c873b133c56eb3acd92a48d7c5c9ad339c6435eddc5185e46e1a043
+      REQUESTS: bench/reports/speed-linux-cpu-2026-10-29/requests
+      # The recorded requests are UTF-8; Windows Python would read them as cp1252.
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Fetch the pinned model and both runtimes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          function Get-Pinned([string]$Url, [string]$Sha256, [string]$Path) {
+            Invoke-WebRequest -Uri $Url -OutFile $Path
+            $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+            if ($Actual -ne $Sha256) { throw "$Path has SHA-256 $Actual, not the pinned $Sha256" }
+          }
+          New-Item -ItemType Directory lab -Force | Out-Null
+          $Manifest = Get-Content src-tauri/resources/model-manifest.json -Raw | ConvertFrom-Json
+          $Model = ($Manifest.models | Where-Object tier -eq "accurate").files | Where-Object role -eq "model"
+          Get-Pinned $Model.url $Model.sha256 "lab\model.gguf"
+          $Assets = Get-Content src-tauri/resources/runtime-assets.json -Raw | ConvertFrom-Json
+          $Prism = $Assets.downloads | Where-Object id -eq "llama.cpp"
+          Get-Pinned $Prism.url $Prism.sha256 "lab\prism.zip"
+          Get-Pinned $env:UPSTREAM_URL $env:UPSTREAM_SHA256 "lab\upstream.zip"
+          Expand-Archive lab\prism.zip lab\prism
+          Expand-Archive lab\upstream.zip lab\upstream
+          [ordered]@{
+            prism = [string]$Prism.version
+            upstream = $env:UPSTREAM_VERSION
+            cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
+            logical_processors = [int]$env:NUMBER_OF_PROCESSORS
+            # The app's own rule for its server's threads (server.rs default_threads):
+            # half the logical processors, between 2 and 12.
+            threads = [Math]::Max(2, [Math]::Min(12, [int][Math]::Floor([int]$env:NUMBER_OF_PROCESSORS / 2)))
+          } | ConvertTo-Json | Set-Content lab\context.json -Encoding utf8NoBOM
+          Get-Content lab\context.json
+      - name: Replay the requests against each runtime (prism, upstream, upstream, prism)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $Threads = (Get-Content lab\context.json -Raw | ConvertFrom-Json).threads
+          $Model = (Resolve-Path lab\model.gguf).Path
+          $Port = 18200
+          $Runs = @(@("prism", "prism-1"), @("upstream", "upstream-1"), @("upstream", "upstream-2"), @("prism", "prism-2"))
+          foreach ($Run in $Runs) {
+            $Runtime = $Run[0]; $Label = $Run[1]
+            $Server = @(Get-ChildItem -LiteralPath "lab\$Runtime" -Recurse -File -Filter "llama-server.exe")[0].FullName
+            # The app's launch (server.rs arguments_for and its measured flags), no API key.
+            $Arguments = @("--host", "127.0.0.1", "--port", "$Port", "--model", $Model,
+              "--parallel", "1", "--ctx-size", "8192", "--n-gpu-layers", "0",
+              "--threads", "$Threads", "--threads-batch", "$Threads", "--jinja", "--no-webui",
+              "--cache-ram", "0", "-ub", "256", "--prio", "-1", "--poll", "0", "--no-mmproj")
+            $Process = Start-Process -FilePath $Server -ArgumentList $Arguments -PassThru -NoNewWindow `
+              -RedirectStandardOutput "lab\$Label-server.out.log" -RedirectStandardError "lab\$Label-server.log"
+            $Healthy = $false
+            for ($i = 0; $i -lt 480; $i++) {
+              try {
+                if ((Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health" -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200) { $Healthy = $true; break }
+              } catch { }
+              if ($Process.HasExited) { break }
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $Healthy) { Get-Content "lab\$Label-server.log" -Tail 40; throw "$Runtime llama-server did not become healthy" }
+            python scripts/bonsai-eval/replay-requests.py --server "http://127.0.0.1:$Port" --wire $env:REQUESTS `
+              --skip-first --warm-up --reference $env:REQUESTS --out "lab\$Label.json"
+            if ($LASTEXITCODE -ne 0) { throw "The replay against $Runtime failed" }
+            Stop-Process -Id $Process.Id -Force
+            Start-Sleep -Seconds 3
+          }
+      - name: Summarize
+        if: always() && hashFiles('lab/context.json') != ''
+        shell: pwsh
+        run: |
+          @'
+          import glob, json, os
+          context = json.load(open("lab/context.json", encoding="utf-8-sig"))
+          lines = [f"Windows runner: {context['cpu']}, {context['logical_processors']} logical processors, "
+                   f"{context['threads']} server threads; Prism {context['prism']}, upstream {context['upstream']}",
+                   "", "| Run | Time per document | Prefill (median) | Decode (median) | Replies identical to the Linux capture |",
+                   "| --- | ---: | ---: | ---: | ---: |"]
+          for path in sorted(glob.glob("lab/*-[12].json")):
+              s = json.load(open(path))["summary"]
+              lines.append(f"| {os.path.basename(path)[:-5]} | {s['wall_per_request_s']} s | {s['prompt_ms_p50'] / 1000:.1f} s | "
+                           f"{s['predicted_ms_p50'] / 1000:.1f} s | {s['identical_to_reference']}/{s['compared_with_reference']} |")
+          text = "\n".join(lines)
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(text + "\n")
+          '@ | python -
+      - name: Upload the measurements
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runtime-speed-windows
+          path: |
+            lab/*.json
+            lab/*.log
+          retention-days: 30
