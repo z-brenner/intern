@@ -3143,15 +3143,29 @@ fn standing_of(scope: &ValidationScope<'_>, name: &str, class: DocumentClass) ->
                 {
                     staff = true;
                 }
-                if labeled_by(before, SIGNATURE_MARKS) {
+                // A signature mark before the name, or the column it sits
+                // in: "/s/ Jane Doe", or a "Signature" column's cell.
+                if labeled_by(before, SIGNATURE_MARKS)
+                    || header
+                        .as_deref()
+                        .is_some_and(|header| has_cue(header, SIGNATURE_MARKS))
+                {
                     signed = true;
                 }
             }
         }
     }
+    // A signature alone says someone signed, not for whom. It counts as
+    // acting for another only where the document names an organization at
+    // its head to sign for, and never on correspondence or a form, which
+    // their own writers and filers sign.
     let signed_for_another = signed
-        && !matches!(class, DocumentClass::Letter | DocumentClass::Email)
-        && labeled_role(scope, name) != Some(PartyRole::Sender);
+        && !matches!(
+            class,
+            DocumentClass::Letter | DocumentClass::Email | DocumentClass::Form
+        )
+        && labeled_role(scope, name) != Some(PartyRole::Sender)
+        && (header_organization(scope).is_some() || letterhead_organization(scope).is_some());
     if staff || signed_for_another {
         Standing::Staff
     } else {
@@ -6768,6 +6782,24 @@ Kestrel Ridge Aero Services - Repair Station Certificate KRA\n\n\
             "{:?}",
             outcome.proposal
         );
+        // The column says who signed, with no mark in the cell.
+        let unmarked = RECORD.replace("/s/ ", "");
+        let (outcome, _) = facts_for(&unmarked, |index| ModelFacts {
+            document_type: Some("Aircraft Maintenance Record".into()),
+            type_evidence: vec![id_of(index, "AIRCRAFT")],
+            parties: vec![party(
+                "Arlo Sinclair-Ray",
+                Some(PartyRole::Other),
+                &[id_of(index, "| Arlo")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Kestrel Ridge Aero Services"],
+            "{:?}",
+            outcome.proposal
+        );
         const REPORT: &str = "Saltash Point Museum of Art\n\nLOAN CONDITION REPORT\n\n\
 | Examined by | Delphine Moncrieff, Associate Conservator of Paintings |";
         let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
@@ -6909,6 +6941,30 @@ I resign from my position effective March 31, 2026.\n\n/s/ Jane Doe";
             without_sentence_stop("Halden Bay National Bank, N.A."),
             "Halden Bay National Bank, N.A."
         );
+    }
+
+    #[test]
+    fn a_signature_alone_is_not_signing_for_someone_else() {
+        // A form's filer signs it: no organization stands to sign for.
+        const FORM: &str = "COPYRIGHT REGISTRATION FORM\n\nName: Jane Doe\n\
+Title of work: Harbor at Dusk\n\nSignature: /s/ Jane Doe";
+        let (outcome, _) = facts_for(FORM, |index| ModelFacts {
+            document_type: Some("Copyright Registration Form".into()),
+            type_evidence: vec![id_of(index, "COPYRIGHT")],
+            parties: vec![party("Jane Doe", None, &[id_of(index, "Name:")])],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
+        // Nor does a declaration that names no organization.
+        const DECLARATION: &str = "DECLARATION OF RESIDENCY\n\nDated June 2, 2026\n\n\
+I declare that I have lived at 14 Wren Street since 2019.\n\nSignature: /s/ Jane Doe";
+        let (outcome, _) = facts_for(DECLARATION, |index| ModelFacts {
+            document_type: Some("Declaration of Residency".into()),
+            type_evidence: vec![id_of(index, "DECLARATION")],
+            parties: vec![party("Jane Doe", None, &[id_of(index, "Signature:")])],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
     }
 
     #[test]
