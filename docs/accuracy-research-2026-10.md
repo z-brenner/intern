@@ -1,6 +1,6 @@
 # Making Intern more accurate: research, October 2026
 
-Status: research summary plus the first measured change (2026-10-29). The question was
+Status: research summary plus the measured changes of 2026-10-29. The question was
 "there has to be something we can do model-wise or pipeline-wise to increase accuracy".
 Three research passes covered:
 - other models;
@@ -30,7 +30,11 @@ choices, not missing information.
 
 | Change | Result | Verdict |
 |---|---|---|
-| **Organization over staff, record relation "for"** (deterministic, `facts.rs`/`compose.rs`, PR #40) | Qwen production runtime **52 → 60** names, unsafe **17 → 10**; reference runtime 52 → 61, 15 → 7; no right name lost on any of 8 recorded runs × 77 documents (5 models) | **Shipped** |
+| **Organization over staff, record relation "for"** (deterministic, `facts.rs`/`compose.rs`, PR #40) | Qwen production runtime **52 → 59** names, unsafe **17 → 11**; committed recording 54 → 62, 14 → 7; no right name lost on any of 8 recorded runs × 77 documents (5 models), apart from one name the earlier code had right by luck | **Shipped** |
+| **Issuers: an order from its buyer, a header's organization before the kind of document, a title's type** (deterministic) | **+3 names and 2 fewer unsafe on every Qwen run** (committed 62 → 65, 7 → 5; production runtime 59 → 62, 11 → 9); no name lost on any of 9 runs | **Shipped** |
+| **Review gate on token probability** (least probable date or party token below 0.5 goes to review; `docs/model-candidates.md`) | Unsafe 9 → 3 and 8 → 4 on two production-runtime runs, for 9 and 12 right names sent to review; about +1–2% time | **Shipped** |
+| Short ordinal line ids (`[3]` for `[p1.b4.r2]`) | Prompt −5%, reply −24% tokens, but −1% time per document; names 58 → 50, trap dates 0 → 5. The model cited line 1 for most facts. | Rejected |
+| Plainer prompt scaffold ("1 page, every line:" and `<<<`/`>>>` for "The whole 1-page document follows" and BEGIN/END EVIDENCE) | Names 58 → 58 with 19 of 77 names changed in both directions; unsafe 10 → 12. The echo it targeted is now caught by the issuer rules instead. | Rejected |
 | Whole documents instead of retrieval (64K context) | 0 fixed, 2 new unsafe errors (a trap date, a CEO as party); 2–20x slower; the 60–100-page documents timed out or did not fit | Rejected |
 | Thinking mode, 1,024-token budget (LFM3 and Qwen) | Both worse (Qwen 52 → 47, unsafe 15 → 21), ~5x slower; neither ever finished reasoning in budget | Rejected (`bench/reports/lfm3-retest-linux-cpu-2026-10-28/`) |
 | LFM3-1.7B QAD-Q4_0 as the namer | 51/77, ties Qwen; LFM licence caps commercial use at US$10M revenue | Rejected |
@@ -44,12 +48,12 @@ Ranking from the research pass, adjusted for what was measured since.
    remain, and they may be the model mislabelling roles:
    - a purchase order "from" its supplier;
    - a loss notice "from" the insurer.
-3. **Better routing from token log-probabilities.** Score the role token and each party's first
-   token, request `top_logprobs` 5 for a top-two margin, and hold a document when the model's
-   party disagrees with item 1's candidate. Reported: log-prob confidence alone reaches
-   AUROC 0.65–0.83 on 7–8B models (arXiv 2605.02241), and agreement between two
-   differently-built readings helped most in ExtractConf (2606.24420). Cost about 0 s.
-   Next to try.
+3. **Better routing from token log-probabilities.** Shipped as a review gate (measured above). On
+   the recorded replies, the minimum over date and party tokens beat the alternatives tried:
+   party names alone, each name's first token, the type, the role words. Reported: log-prob
+   confidence ranks errors but does not verify them. First-token aggregation ranked best on
+   12–27B models (ConfBench, arXiv 2608.01792), and a single misattributing sentence flipped
+   high-confidence extractions in 96–100% of counterfactuals (arXiv 2610.20417).
 4. **Party names constrained by the grammar to candidate strings.** This adds a typed
    candidate block, organizations first. Reported: a candidate grammar took LLaMA-7B entity
    disambiguation from 37.4 to 77.2 (arXiv 2305.13971). It is less likely to help here,
@@ -57,16 +61,20 @@ Ranking from the research pass, adjusted for what was measured since.
    prompt tokens.
 5. **Organization-first output key and per-class role lists in the grammar.** The direction of
    the effect is inconsistent in the literature; it needs a live run.
-6. **Remove words the model echoes from the prompt scaffolding.** "BEGIN EVIDENCE" and "The whole
-   N-page document follows" became types and parties in held documents. Cost none; needs a
-   live run.
+6. **Remove words the model echoes from the prompt scaffolding.** Measured and rejected (above):
+   any change to the prompt moved about a quarter of the names for no net gain.
 7. **Type chosen from the document's title candidates.** Rules out a bare "Letter",
    "Agreement" or "Report". Targets about 5–7 held misses.
 8. **A small NER model to tell people from organizations.** GLiNER family, Apache-2.0, ONNX.
    Only if 1 and 4 misclassify.
 9. **Same-model yes/no verification.** Reported: P(True) did not help Qwen3.5-2B rank candidates
-   (ΔAUROC +0.008), though it helped Qwen3.5-4B (arXiv 2609.33142). Low priority.
-10. **Not recommended:**
+   (ΔAUROC +0.008), though it helped Qwen3.5-4B (arXiv 2609.33142). A two-step "validate the
+   first answer" pass helped 8–70B models but hurt 3–4B ones (arXiv 2607.26780). Low priority.
+10. **Better wording of each field's question.** Reported: optimizing the extraction questions
+    alone moved clinical extraction F1 by about 18.6 points across five models, more than a
+    larger model did (arXiv 2608.31058). It is worth doing only against a held-out set:
+    tuning wording on these 77 documents would fit them, not documents in general.
+11. **Not recommended:**
     - self-consistency sampling (N× cost, little routing gain);
     - one call per field (+9 s per field);
     - few-shot examples chosen per document type (breaks the cached instruction prefix);
@@ -131,10 +139,19 @@ This is the largest remaining model-side lever, and the one that needs the most 
   140 documents can detect +10 points, and about 400 can detect +5. InternBench alone is
   too small and synthetic: 11 vs 12 discordant names give McNemar p = 1.0.
 
+## What the failures are (reported, and consistent with what is measured here)
+
+A preregistered audit of LLM entity extraction (arXiv 2610.20417) found hallucination
+behind only 1.2% of false positives. 65.6% were real strings from the wrong context, and
+19.9% fell outside the gold set's scope. That matches Intern's errors: the right names are
+in the context, and the model picks a person who works for the party, the wrong side of an
+order, or a word from the prompt. Its conclusion matches the measurements above. Repairs work
+when matched to the failure mode (the deterministic role rules), and confidence can set
+review priorities but never settle truth (the gate sends a reading to a person; it does not
+change the name).
+
 ## Still to measure
 
 - The candidate models above, live on the same runtime as a Qwen control.
-- Log-probability routing (item 3).
-- The prompt scaffolding cleanup (item 6).
 - A held-out set of real documents. This is the most important missing piece. Every rule
   so far was written from failures on the 77 synthetic documents it is scored on.

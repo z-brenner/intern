@@ -302,7 +302,7 @@ order the document first names them.
 | Class | Relation |
 | --- | --- |
 | Agreement, amendment | `between` the first two parties; one party, `with` |
-| Issued | `from` the issuer; for a purchase order, the buyer; then the vendor, seller or sender; then the party the issuer and customer cues name, or the one party at the head of the first page before any customer cue; then the side opposite a supported customer. The customer alone is never the filename's party. A reply that names no one takes the one organization at the head of the first page as the issuer |
+| Issued | `from` the issuer; for a purchase order, the side buying (buyer, client or customer), never its vendor; otherwise the vendor, seller or sender; then the party the issuer and customer cues name, or the one party at the head of the first page before any customer cue; then the side opposite a supported customer. The customer alone is never the filename's party. A reply that proposed a type but named no one who could issue it takes the one organization at the head of the first page as the issuer, read before the kind of document its line names ("Halvorsen Fixture Works LLC INVOICE"), even when the type had to come from the title |
 | Notice | `for` the party it is about; else `to` the recipient; else `from` the issuer; else `for` the counterpart of a provider; else `from` the provider; two parties marked other read `between` |
 | Letter | `to` the addressee; else `from` the sender; else `for` the party it is about, or the provider's counterpart; else `from` the provider |
 | Email | `from` the sender; else `to` the addressee |

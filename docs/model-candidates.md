@@ -84,25 +84,31 @@ cases could calibrate it. InternBench is that corpus.
 ### Calibrated on InternBench (October 2026)
 
 InternBench's 77 documents have many more ready-but-wrong readings than the
-fixture corpus. The run below is the recorded Qwen3.5 2B run on the packaged
-runtime (Prism b10826, 4 threads, Linux), re-scored with the party rules of
-October 2026, with `--min-token-confidence` applied to its recorded
-probabilities:
+fixture corpus. Below are two recorded Qwen3.5 2B runs on the packaged runtime (Prism b10826, 4
+threads, Linux). Run A was recorded on October 27, run B on October 29. Both are re-scored with the party and
+issuer rules of October 2026, with `--min-token-confidence` applied to their
+recorded probabilities. "Unsafe" counts wrong names marked ready; "lost" counts
+right names the gate sends to review.
 
-| Threshold | Ready | Wrong names ready ("unsafe") | Right names sent to review |
-| --- | ---: | ---: | ---: |
-| unset | 65 | 11 | 0 |
-| 0.3 | 65 | 11 | 0 |
-| **0.5** | **50** | **4** | **8** |
-| 0.7 | 27 | 1 | 28 |
-| 0.9 | 9 | 1 | 46 |
+| Threshold | A: ready | A: unsafe | A: lost | B: ready | B: unsafe | B: lost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| unset | 65 | 9 | 0 | 64 | 8 | 0 |
+| 0.3 | 65 | 9 | 0 | 64 | 8 | 0 |
+| **0.5** | **50** | **3** | **9** | **48** | **4** | **12** |
+| 0.7 | 27 | 1 | 30 | 32 | 2 | 26 |
+| 0.9 | 9 | 1 | 48 | 8 | 0 | 48 |
 
-At 0.5 the gate takes 7 of the 11 wrong names out of the files written
-unattended, for 8 right names a person now confirms. The threshold is the one the
-fixture corpus suggested, not one read off these documents, so the result is
-not tuned to them. Above 0.5 the cost climbs steeply. The Bonsai models gain
-less: 15 → 11 (4B) and 21 → 18 (2B) for 3 right names each. Their readings
-always go to review anyway.
+At 0.5 the gate takes half to two thirds of the wrong names out of the files
+written unattended. The cost is 9–12 right names a person now confirms, about
+two right names per wrong one caught. The threshold is the one the fixture corpus suggested,
+not one read off these documents. Above 0.5 the cost climbs steeply.
+
+Other ways of reading the same probabilities were tried on run B: the party names alone, the
+first token of each name, the type, the role words, and the date. None caught
+more wrong names for the same number of right ones sent to review, so the gate
+keeps the date-and-party minimum. Published work agrees that such a signal ranks errors
+without verifying them: log-probability confidence on document extraction
+reaches AUROC 0.62–0.64 on 12–27B models (ConfBench, arXiv 2608.01792).
 
 The app therefore asks the accurate model for token probabilities and sends a
 reading whose least probable date or party token is below 0.5 to review. The
