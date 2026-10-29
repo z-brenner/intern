@@ -649,8 +649,16 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_server_runs_in_its_own_folder() {
+        let here = std::env::current_dir().unwrap();
         let directory = tempfile::tempdir().unwrap();
-        let folder = directory.path().join("llama-upstream");
+        // Deeper than the directory the tests run in, so that the relative
+        // path below - up to the root from here, and down again - names
+        // nothing from the server's own folder.
+        let mut folder = directory.path().to_path_buf();
+        while folder.components().count() <= here.components().count() {
+            folder.push("deeper");
+        }
+        let folder = folder.join("llama-upstream");
         std::fs::create_dir_all(&folder).unwrap();
         // A shell under the server's name: nothing is written and then run.
         std::os::unix::fs::symlink("/bin/sh", folder.join("llama-server")).unwrap();
@@ -675,7 +683,6 @@ mod tests {
         let own = folder.canonicalize().unwrap();
         assert_eq!(ran_in(&folder.join("llama-server")), own);
 
-        let here = std::env::current_dir().unwrap();
         let relative = here
             .components()
             .skip(1)
