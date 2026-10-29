@@ -2135,7 +2135,23 @@ fn first_appearance(scope: &ValidationScope<'_>, name: &str) -> Option<u32> {
 /// `, as Lender`).
 fn role_words(role: PartyRole) -> (&'static [&'static str], &'static [&'static str]) {
     match role {
-        PartyRole::Client => (&["client", "prepared for"], &["client"]),
+        // An insurance document's or a health plan's client is its insured,
+        // policyholder, member or patient: "Named insured: Brannock Tool &
+        // Die Inc." is who a cancellation notice or a loss notice is for,
+        // whichever company's form it is on.
+        PartyRole::Client => (
+            &[
+                "client",
+                "prepared for",
+                "insured",
+                "policyholder",
+                "policy holder",
+                "member",
+                "patient",
+                "subscriber",
+            ],
+            &["client", "insured", "policyholder"],
+        ),
         PartyRole::Contractor => (
             &["contractor", "consultant", "service provider", "provider"],
             &[
@@ -2225,8 +2241,18 @@ fn role_support(
     let normalized = normalize(name);
     let loose = normalize_loosely(name);
     let letter = LetterLayout::of(scope);
-    let supports =
-        |unit: &EvidenceUnit| unit_supports_role(unit, &normalized, &loose, role, true, letter);
+    let supports = |unit: &EvidenceUnit| {
+        let header = table_header_line(scope, unit);
+        unit_supports_role(
+            unit,
+            header.as_deref(),
+            &normalized,
+            &loose,
+            role,
+            true,
+            letter,
+        )
+    };
     if scope.cited_units(cited).into_iter().any(supports) {
         return Support::Cited;
     }
@@ -2274,10 +2300,29 @@ fn labeled_role(scope: &ValidationScope<'_>, name: &str) -> Option<PartyRole> {
         .collect::<Vec<_>>();
     let letter = LetterLayout::of(scope);
     LABELED_ROLES.into_iter().find(|role| {
-        naming
-            .iter()
-            .any(|unit| unit_supports_role(unit, &normalized, &loose, *role, false, letter))
+        naming.iter().any(|unit| {
+            let header = table_header_line(scope, unit);
+            unit_supports_role(
+                unit,
+                header.as_deref(),
+                &normalized,
+                &loose,
+                *role,
+                false,
+                letter,
+            )
+        })
     })
+}
+
+/// The header row of the table a row unit belongs to, as its first line
+/// reads loosely: what [`column_header`] reads a row's first line against.
+fn table_header_line(scope: &ValidationScope<'_>, unit: &EvidenceUnit) -> Option<String> {
+    unit.table_header
+        .filter(|header| *header != unit.ordinal)
+        .and_then(|header| scope.unit_at(header))
+        .and_then(|header| header.text.lines().next())
+        .map(normalize_loosely)
 }
 
 /// Where a letter's first page ends its letterhead: at a dateline standing
@@ -2345,6 +2390,7 @@ fn is_bare_date(unit: &EvidenceUnit) -> bool {
 /// the document alone takes them only as issuer and customer.
 fn unit_supports_role(
     unit: &EvidenceUnit,
+    table_header: Option<&str>,
     normalized: &str,
     loose: &str,
     role: PartyRole,
@@ -2375,6 +2421,13 @@ fn unit_supports_role(
         }
     }
     if labeled_on_its_line(unit, normalized, loose, labels) {
+        return true;
+    }
+    // A table's column header over the name, for the side a document is
+    // about: "| Named insured | Insured phone |" over "| Delacroix Bakehouse
+    // LLC | (603) 555-0119 |". A column of recipients or signers says who
+    // took delivery, not whose record it is.
+    if role == PartyRole::Client && under_column(unit, table_header, loose, labels) {
         return true;
     }
     for (text, at, length) in positions {
@@ -2413,6 +2466,28 @@ fn unit_supports_role(
         }
         _ => false,
     }
+}
+
+/// Whether a table's column header over `loose` in `unit` is one of
+/// `labels`: the row above in the unit, else the header row of the table
+/// the row belongs to.
+fn under_column(
+    unit: &EvidenceUnit,
+    table_header: Option<&str>,
+    loose: &str,
+    labels: &[&str],
+) -> bool {
+    let lines = unit.text.lines().map(normalize_loosely).collect::<Vec<_>>();
+    lines.iter().enumerate().any(|(index, line)| {
+        let above = match index.checked_sub(1) {
+            Some(previous) => lines.get(previous).map(String::as_str),
+            None => table_header,
+        };
+        whole_positions(line, loose).into_iter().any(|at| {
+            column_header(line, above, at)
+                .is_some_and(|header| labels.iter().any(|word| label_names(&header, word)))
+        })
+    })
 }
 
 /// Whether a line names the party after one of `labels` - "Bill To:
@@ -2471,11 +2546,17 @@ fn labeled_on_its_line(
 /// "Landlord", "Name of Tenant".
 /// A short word - "to", "from", "attn", "dear" - must be the whole label,
 /// so "payable to" is not "to".
+/// A label naming a group of staff - "Crew member", "Board member" - names
+/// no role.
 fn label_names(label: &str, word: &str) -> bool {
-    label == word
-        || (word.len() > 4
-            && label.ends_with(word)
-            && word_starts_at(label, label.len() - word.len()))
+    let staff = label
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|part| STAFF_GROUP_WORDS.contains(&part));
+    !staff
+        && (label == word
+            || (word.len() > 4
+                && label.ends_with(word)
+                && word_starts_at(label, label.len() - word.len())))
 }
 
 fn word_starts_at(text: &str, at: usize) -> bool {
@@ -7046,6 +7127,78 @@ I declare that I have lived at 14 Wren Street since 2019.\n\nSignature: /s/ Jane
             ..ModelFacts::default()
         });
         assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
+    }
+
+    #[test]
+    fn an_insurance_notice_is_for_its_insured_whoever_sends_it() {
+        // The insured under a column header, on the insurer's form: the
+        // insurer the reply calls its recipient does not send it.
+        const LOSS: &str = "PROPERTY LOSS NOTICE Date reported: 02/16/2026\n\n\
+Harrowmere Mutual Insurance Company - Claims Intake - 9 Granary Street, Hollis Bend, NH 03049\n\n\
+| Named insured | Insured phone |\n| --- | --- |\n| Delacroix Bakehouse LLC | (603) 555-0119 |\n\n\
+The insured must protect the property from further damage.";
+        let (outcome, _) = facts_for(LOSS, |index| ModelFacts {
+            document_type: Some("Property Loss Notice".into()),
+            type_evidence: vec![id_of(index, "PROPERTY LOSS")],
+            document_date: Some("2026-02-16".into()),
+            date_evidence: vec![id_of(index, "PROPERTY LOSS")],
+            parties: vec![
+                party(
+                    "Delacroix Bakehouse LLC",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "| Delacroix")],
+                ),
+                party(
+                    "Harrowmere Mutual Insurance Company",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Harrowmere")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Delacroix Bakehouse LLC"],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        // A "Named insured:" field: the producer the reply calls its issuer
+        // is not who the notice is for.
+        const CANCEL: &str = "Kestrel Casualty Company\n\n\
+NOTICE OF CANCELLATION\n\nDate of notice: 08/12/2026\n\n\
+Named insured: Brannock Tool & Die Inc.\nProducer: Ridley Cross Insurance Services, code 4471";
+        let (outcome, _) = facts_for(CANCEL, |index| ModelFacts {
+            document_type: Some("Notice of Cancellation".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF")],
+            document_date: Some("2026-08-12".into()),
+            date_evidence: vec![id_of(index, "Date of notice")],
+            parties: vec![
+                party(
+                    "Brannock Tool & Die Inc.",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "Named insured")],
+                ),
+                party(
+                    "Ridley Cross Insurance Services",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "Named insured")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Brannock Tool & Die Inc."],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        // A crew member is no member a plan is about.
+        assert!(label_names("named insured", "insured"));
+        assert!(label_names("member", "member"));
+        assert!(!label_names("crew member", "member"));
+        assert!(!label_names("board member", "member"));
     }
 
     #[test]

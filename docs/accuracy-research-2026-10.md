@@ -37,6 +37,7 @@ upstream llama.cpp runtime reads prompts 36% faster than the packaged one.
 |---|---|---|
 | **Organization over staff, record relation "for"** (deterministic, `facts.rs`/`compose.rs`, PR #40) | Qwen production runtime **52 → 59** names, unsafe **17 → 11**; committed recording 54 → 62, 14 → 7; no right name lost on any of 8 recorded runs × 77 documents (5 models), apart from one name the earlier code had right by luck | **Shipped** |
 | **Issuers: an order from its buyer, a header's organization before the kind of document, a title's type** (deterministic) | **+3 names and 2 fewer unsafe on every Qwen run** (committed 62 → 65, 7 → 5; production runtime 59 → 62, 11 → 9); no name lost on any of 9 runs | **Shipped** |
+| **An insurance document is for its insured** (deterministic, `facts.rs`): "Named insured", "Insured", "Policyholder", "Member", "Patient" and "Subscriber" support the client role, as a field label or a table's column header ("Crew member" and other staff groups never do) | **+1–2 names on all five Qwen runs, 1 fewer unsafe on three** (committed 65 → 66, 5 → 5; production runtime 61 → 63, 8 → 7; upstream 63 → 65, 6 → 5); +1 name on 4 of the 5 other models' runs; no name lost on any of 10 runs. A loss notice on the insurer's form is no longer filed "from" the insurer. | **Shipped** |
 | **Review gate on token probability** (least probable date or party token below 0.5 goes to review; `docs/model-candidates.md`) | Unsafe 9 → 3 and 8 → 4 on two production-runtime runs, for 9 and 12 right names sent to review; about +1–2% time | **Shipped** |
 | Short ordinal line ids (`[3]` for `[p1.b4.r2]`) | Prompt −5%, reply −24% tokens, but −1% time per document; names 58 → 50, trap dates 0 → 5. The model cited line 1 for most facts. | Rejected |
 | Plainer prompt scaffold ("1 page, every line:" and `<<<`/`>>>` for "The whole 1-page document follows" and BEGIN/END EVIDENCE) | Names 58 → 58 with 19 of 77 names changed in both directions; unsafe 10 → 12. The echo it targeted is now caught by the issuer rules instead. | Rejected |
@@ -98,6 +99,23 @@ All three files are downloaded and verified against the Hub's SHA-256.
 | **NuExtract-2.0-2B** (`numind/NuExtract-2.0-2B-GGUF` @ `d038fea`, 0.99 GB) | MIT | Trained for verbatim extraction | 2024 base (Qwen2-VL); no published scores |
 | Intern-Decision-2B (`internlm/Intern-Decision-2B`) | Apache-2.0 | A Qwen3.5-2B fine-tune for calibrated yes/no and choice answers; could fill d1's review-gate role without d1's licence | Trained on agent tasks; its official readout is Transformers-only |
 
+Measured live (2026-10-29): 77 documents, upstream llama.cpp b11946, the same machine, scored
+with the rules above. MiniCPM5 and Granite were also run with the fast tier's few-shot prompt
+profile (`bonsai_2`), which shows a small model the shape of a reply.
+
+| Model, prompt | Names right | Wrong names ready | Time per document (median) |
+|---|---:|---:|---:|
+| **Qwen3.5-2B, production prompt** | **65** | **5** | 18.8 s |
+| MiniCPM5-2B, production prompt | 48 | 2 (4 ready at all) | 24.4 s |
+| MiniCPM5-2B, few-shot | 50 | 16 | 22.6 s |
+| Granite-4.0-1B, production prompt | 0 (null replies) | 0 | 12.8 s |
+| Granite-4.0-1B, few-shot | 47 | 10 | 18.5 s |
+
+Neither replaces Qwen: both name fewer documents and mark more wrong names ready, and neither
+is faster once its replies are usable. MiniCPM5's zero-shot replies echoed the prompt's words
+as the type and sent nearly everything to review. NuExtract-2.0-2B was not run: it takes its
+own `template` request argument instead of Intern's grammar.
+
 Rejected:
 - 3–4B dense models (Granite 4.x 3B, Gemma 4 E4B, Ministral 3B, SmolLM3, Phi-4-mini): too
   slow.
@@ -157,6 +175,5 @@ change the name).
 
 ## Still to measure
 
-- The candidate models above, live on the same runtime as a Qwen control.
 - A held-out set of real documents. This is the most important missing piece. Every rule
   so far was written from failures on the 77 synthetic documents it is scored on.

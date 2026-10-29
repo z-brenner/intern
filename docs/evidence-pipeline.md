@@ -185,6 +185,11 @@ The other checks:
 - **Roles.** A role is supported when the document states it next to the
   name:
   - a label (`Bill To:`, `Landlord:`, `| Tenant |`, `Dear`);
+  - for a client, a table's column header over the name too: an insured,
+    policyholder, member, patient or subscriber is the client an insurance
+    or a health plan's document is for (`| Named insured |` over
+    `| Delacroix Bakehouse LLC |`), on whoever's form it is. A label naming
+    a group of staff (`Crew member`, `Board member`) names no role;
   - a defined term (`("Tenant")`, `, as Lender`);
   - a page-one letterhead, for an issuer or a sender, that opens its line
     and, in a letter that greets someone (`Dear`), stands before the
