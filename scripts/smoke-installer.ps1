@@ -67,8 +67,33 @@ try {
         $Digest = (Get-FileHash -LiteralPath $Packaged -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($Digest -ne [string]$Entry.sha256) { throw "Installed SHA-256 mismatch: $Relative" }
     }
-    foreach ($Required in @("intern-worker.exe", "llama-server.exe", "tesseract.exe", "pdfium.dll", "tessdata/eng.traineddata", "tessdata/osd.traineddata", "onnxruntime.dll", "ocr-models/text-detection.onnx", "ocr-models/text-recognition.onnx", "ocr-models/page-orientation.onnx")) {
+    foreach ($Required in @("intern-worker.exe", "llama-server.exe", "llama-upstream/llama-server.exe", "llama-upstream/libomp.dll", "llama-upstream/ggml-base.dll", "tesseract.exe", "pdfium.dll", "tessdata/eng.traineddata", "tessdata/osd.traineddata", "onnxruntime.dll", "ocr-models/text-detection.onnx", "ocr-models/text-recognition.onnx", "ocr-models/page-orientation.onnx")) {
         if (-not $Seen.ContainsKey($Required)) { throw "Installed manifest omits required runtime: $Required" }
+    }
+    # Both llama.cpp builds start from where they are installed: the PrismML
+    # fork's, for the fast tier, at the root beside its DLLs, and upstream's,
+    # for the accurate tier, in llama-upstream\ beside its own DLLs and the
+    # OpenMP runtime they import. --version prints the build and exits, but the
+    # process cannot start at all unless every DLL it imports is found, so a
+    # DLL missing from either folder fails here - as -1073741515, which is
+    # STATUS_DLL_NOT_FOUND - rather than on a user's first document. The output
+    # goes to a temporary file, never into the installation, which has to be
+    # empty again after the uninstall below.
+    foreach ($ServerRelative in @("llama-server.exe", "llama-upstream/llama-server.exe")) {
+        $ServerPath = [IO.Path]::GetFullPath((Join-Path $InstallDirectory $ServerRelative))
+        $ServerOutput = Join-Path ([IO.Path]::GetTempPath()) ("intern-smoke-llama-server-" + [guid]::NewGuid().ToString("N") + ".log")
+        $ServerProcess = Start-Process -FilePath $ServerPath -ArgumentList "--version" -WorkingDirectory (Split-Path -Parent $ServerPath) -NoNewWindow -PassThru -RedirectStandardOutput $ServerOutput -RedirectStandardError "$ServerOutput.err"
+        # Taken while it runs: without its handle a process started this way
+        # can report no exit code once it has gone.
+        $null = $ServerProcess.Handle
+        if (-not $ServerProcess.WaitForExit(60000)) {
+            Stop-Process -Id $ServerProcess.Id -Force -ErrorAction SilentlyContinue
+            throw "Installed $ServerRelative --version did not exit within 60s"
+        }
+        $ServerText = ((Get-Content -LiteralPath $ServerOutput, "$ServerOutput.err" -Raw -ErrorAction SilentlyContinue) -join "`n").Trim() -replace '\s*\r?\n\s*', '; '
+        Remove-Item -LiteralPath $ServerOutput, "$ServerOutput.err" -Force -ErrorAction SilentlyContinue
+        if ($ServerProcess.ExitCode -ne 0) { throw "Installed $ServerRelative --version exited with $($ServerProcess.ExitCode): $ServerText" }
+        Write-Host "Installed $ServerRelative started: $ServerText"
     }
     if (-not (Get-ChildItem -LiteralPath $InstallDirectory -Recurse -File -Filter "THIRD_PARTY_NOTICES.md")) { throw "Third-party notices are missing from the installation" }
     if (-not (Get-ChildItem -LiteralPath (Join-Path $InstallDirectory "licenses") -Recurse -File -Filter "*.txt")) { throw "Complete license texts are missing from the installation" }
@@ -181,7 +206,7 @@ public static class InternSmokeWindow {
             }
         } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $EvidencePath -Encoding utf8NoBOM
     }
-    Write-Host "Per-user NSIS app launch, clean shutdown, signed runtime, worker PDF/OCR, Send to shortcut, and install/uninstall smoke passed."
+    Write-Host "Per-user NSIS app launch, clean shutdown, signed runtime, both llama-server builds, worker PDF/OCR, Send to shortcut, and install/uninstall smoke passed."
 }
 finally {
     if ($AppProcess -and -not $AppProcess.HasExited) {

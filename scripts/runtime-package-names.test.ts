@@ -24,8 +24,9 @@ it('gives every runtime package an identity the release SBOM can reference once'
   const manifest = JSON.parse(await readFile('src-tauri/resources/runtime-assets.json', 'utf8'));
   const versions = manifest.downloads.map((download: { version: string }) => download.version);
 
-  // Guard against a pattern that silently stops matching.
-  expect(names).toEqual(expect.arrayContaining(['onnxruntime', 'llama.cpp', 'PDFium', 'tessdata_fast']));
+  // Guard against a pattern that silently stops matching. llvm-openmp owns the
+  // OpenMP runtime that ships beside upstream llama.cpp.
+  expect(names).toEqual(expect.arrayContaining(['onnxruntime', 'llama.cpp', 'llvm-openmp', 'PDFium', 'tessdata_fast']));
   expect(names.filter((name) => name.startsWith('PaddlePaddle/'))).toHaveLength(3);
   expect(versions.length).toBeGreaterThan(5);
 

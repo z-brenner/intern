@@ -6,11 +6,21 @@ import { describe, expect, it } from 'vitest';
 import { verifyRuntimeAssets } from './verify-assets.mjs';
 
 describe('runtime asset verification', () => {
+  const pin = (manifest: any, id: string) => manifest.downloads.find((download: any) => download.id === id);
   it.each([
-    ['changed URL', (manifest: any) => { manifest.downloads[0].url = 'https://example.invalid/llama.zip'; }],
-    ['changed archive basename', (manifest: any) => { manifest.downloads[1].archive = 'other.tgz'; }],
-    ['unsafe archive path', (manifest: any) => { manifest.downloads[2].archive = '../eng.traineddata'; }],
-    ['extra download', (manifest: any) => { manifest.downloads.push({ ...manifest.downloads[0], id: 'extra' }); }],
+    ['changed URL', (manifest: any) => { pin(manifest, 'llama.cpp').url = 'https://example.invalid/llama.zip'; }],
+    ['changed archive basename', (manifest: any) => { pin(manifest, 'llama.cpp-license').archive = 'other.tgz'; }],
+    ['unsafe archive path', (manifest: any) => { pin(manifest, 'eng.traineddata').archive = '../eng.traineddata'; }],
+    ['extra download', (manifest: any) => { manifest.downloads.push({ ...pin(manifest, 'llama.cpp'), id: 'extra' }); }],
+    // The accurate tier's llama.cpp is pinned exactly as the fast tier's is.
+    ['changed upstream llama.cpp release', (manifest: any) => {
+      const upstream = pin(manifest, 'llama.cpp-upstream');
+      upstream.url = upstream.url.replaceAll('b11946', 'b11947');
+    }],
+    ['changed upstream llama.cpp digest', (manifest: any) => { pin(manifest, 'llama.cpp-upstream').sha256 = '0'.repeat(64); }],
+    ['missing upstream llama.cpp download', (manifest: any) => {
+      manifest.downloads = manifest.downloads.filter((download: any) => download.id !== 'llama.cpp-upstream');
+    }],
     ['changed vcpkg repository', (manifest: any) => { manifest.vcpkg.repository = 'https://example.invalid/vcpkg.git'; }],
     // A model URL on a branch rather than a commit is not a pin: the same
     // bytes are not guaranteed tomorrow, and the size and hash would fail late.
@@ -29,7 +39,7 @@ describe('runtime asset verification', () => {
     await writeFile(manifestPath, JSON.stringify(source));
 
     await expect(verifyRuntimeAssets(manifestPath, { root, requireExpectedPins: true }))
-      .rejects.toThrow(/download|URL|archive|vcpkg/i);
+      .rejects.toThrow(/download|URL|archive|SHA-256|vcpkg/i);
   });
 
   // The DLL is taken out of a 157 MB package of every platform's build; the
@@ -153,7 +163,7 @@ describe('runtime asset verification', () => {
       expect(model.version).toMatch(/^[0-9a-f]{40}$/);
     }
     await expect(verifyRuntimeAssets(join(process.cwd(), 'src-tauri/resources/runtime-assets.json'), { requireExpectedPins: true }))
-      .resolves.toMatchObject({ verifiedDownloads: 10 });
+      .resolves.toMatchObject({ verifiedDownloads: 11 });
   });
 
   it('refuses a bundle that carries only part of the OCR runtime', async () => {

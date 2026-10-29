@@ -159,9 +159,11 @@ it('bundles the Linux runtime as one folder and leaves the Windows layout to Win
   expect(linux.bundle.externalBin).toEqual([]);
   expect(linux.bundle.resources['resources/runtime/']).toBe('runtime/');
   // Merged as a JSON merge patch: null removes a Windows mapping, anything
-  // not named is kept as the base config has it.
+  // not named is kept as the base config has it. Everything under native/ is
+  // Windows-only, upstream llama.cpp's folder included.
+  expect(base.bundle.resources['resources/native/llama-upstream/']).toBe('llama-upstream/');
   for (const source of Object.keys(base.bundle.resources)) {
-    const windowsOnly = /\.(dll|traineddata|onnx)$/.test(source);
+    const windowsOnly = /\.(dll|traineddata|onnx)$/.test(source) || source.startsWith('resources/native/');
     expect(linux.bundle.resources[source], source).toBe(windowsOnly ? null : undefined);
   }
   expect(linux.bundle.linux.deb.depends).toEqual(['libgomp1', 'libssl3t64 | libssl3', 'tesseract-ocr']);
@@ -181,19 +183,62 @@ it('lets a Linux file manager open documents with Intern', async () => {
   expect(template).not.toMatch(/^MimeType=(?!\{\{mime_type\}\})/m);
 });
 
-// The PrismML release zip is flat: llama-server sits beside every CLI tool,
-// their impl DLLs, an RPC backend and an OpenMP runtime nothing in the CPU
-// build imports. The Windows package takes llama-server's import closure and
-// every CPU backend variant - ggml picks the one the processor can run at
-// start-up - and nothing else.
-it('stages exactly llama-server, its import closure and the CPU backend variants', async () => {
+// Both llama.cpp release zips are flat: llama-server sits beside every CLI
+// tool, their impl DLLs and an RPC backend. The Windows package takes each
+// server's import closure and every CPU backend variant - ggml picks the one
+// the processor can run at start-up - and nothing else. The PrismML fork's,
+// for the fast tier, installs beside the executables; upstream's, for the
+// accurate tier, in llama-upstream\, with the OpenMP runtime its ggml-base
+// and CPU backends import. The fork's zip carries an OpenMP runtime too, but
+// nothing in its CPU build imports it.
+it('stages exactly each llama-server, its import closure and the CPU backend variants', async () => {
   const fetch = await readFile('scripts/fetch-windows-assets.ps1', 'utf8');
-  const required = /\$LlamaRequired = @\(([^)]*)\)/.exec(fetch)?.[1];
-  expect(required?.split(',').map((name) => name.trim().replace(/"/g, ''))).toEqual([
-    'llama-server-impl.dll', 'llama-common.dll', 'mtmd.dll', 'llama.dll', 'ggml.dll', 'ggml-base.dll',
-  ]);
+  const closure = ['llama-server-impl.dll', 'llama-common.dll', 'mtmd.dll', 'llama.dll', 'ggml.dll', 'ggml-base.dll'];
+  for (const runtime of ['Prism', 'Upstream']) {
+    const required = new RegExp(`\\$${runtime}Required = @\\(([^)]*)\\)`).exec(fetch)?.[1];
+    expect(required?.split(',').map((name) => name.trim().replace(/"/g, '')), runtime).toEqual(closure);
+  }
+  // Each list is staged with its own server, into its own folder.
+  expect(fetch).toContain('$PrismServer = Join-Path $BinariesDirectory "llama-server-$TargetTriple.exe"');
+  expect(fetch).toMatch(/Install-LlamaServer -Archive \$Downloads\["llama\.cpp"\] .*-ServerDestination \$PrismServer -Folder "sidecars" -Required \$PrismRequired$/m);
+  expect(fetch).toContain('$LlamaUpstreamDirectory = Join-Path $NativeDirectory "llama-upstream"');
+  expect(fetch).toContain('$UpstreamServer = Join-Path $LlamaUpstreamDirectory "llama-server.exe"');
+  expect(fetch).toMatch(/Install-LlamaServer -Archive \$Downloads\["llama\.cpp-upstream"\] .*-ServerDestination \$UpstreamServer -Folder "llama-upstream" -Required \$UpstreamRequired$/m);
+  expect(fetch).toContain('return "llama-upstream/$(Split-Path -Leaf $Path)"');
   expect(fetch).toContain('-Filter "ggml-cpu-*.dll"');
   expect(fetch).toContain('carries no CPU backend');
   expect(fetch).not.toMatch(/-notmatch '-impl\\\.dll\$'/);
-  for (const unwanted of ['ggml-rpc.dll', 'libomp140']) expect(fetch).not.toContain(`"${unwanted}`);
+  // No RPC backend for either build, and not the fork's OpenMP runtime.
+  for (const unwanted of ['ggml-rpc', 'libomp140']) expect(fetch).not.toContain(`"${unwanted}`);
+
+  // libomp.dll ships for upstream only, beside upstream's server, owned by
+  // LLVM's OpenMP package rather than llama.cpp, with its license. Comments
+  // are left out: they explain the fork's runtime by name.
+  const code = fetch.split('\n').filter((line) => !line.trimStart().startsWith('#')).join('\n');
+  expect(code).toContain('$OpenMpRuntime = Join-Path $UpstreamDirectory "libomp.dll"');
+  expect(code).toContain('Copy-SidecarDll $OpenMpRuntime "llvm-openmp" $UpstreamVersion -Folder "llama-upstream"');
+  expect(code.match(/"llvm-openmp"/g)).toHaveLength(1);
+  expect(code.match(/Copy-SidecarDll \$OpenMpRuntime\b/g)).toHaveLength(1);
+  for (const [literal] of code.matchAll(/"[^"\n]*libomp[^"\n]*"/g)) expect(literal).toMatch(/\blibomp\.dll"$/);
+  expect(code).toContain('$OpenMpLicense = Join-Path $UpstreamDirectory "LICENSE-LLVM-OpenMP"');
+  expect(code).toContain('Copy-RuntimeFile $OpenMpLicense (Join-Path $LicensesDirectory "llvm-openmp-LICENSE.txt")');
+});
+
+// The installed package must carry both servers, and each must start from
+// where it is installed: a process cannot start at all while a DLL it imports
+// is missing from beside it, and upstream's ggml-base imports libomp.dll.
+it('requires both installed llama-server builds and starts each from its own folder', async () => {
+  const smoke = await readFile('scripts/smoke-installer.ps1', 'utf8');
+  const required = /foreach \(\$Required in @\(([^)]*)\)\)/.exec(smoke)?.[1]
+    .split(',').map((name) => name.trim().replace(/"/g, ''));
+  expect(required).toEqual(expect.arrayContaining([
+    'llama-server.exe', 'llama-upstream/llama-server.exe', 'llama-upstream/libomp.dll', 'llama-upstream/ggml-base.dll',
+  ]));
+  expect(smoke).toContain('foreach ($ServerRelative in @("llama-server.exe", "llama-upstream/llama-server.exe"))');
+  expect(smoke).toContain('-ArgumentList "--version" -WorkingDirectory (Split-Path -Parent $ServerPath)');
+  expect(smoke).toContain('if ($ServerProcess.ExitCode -ne 0) { throw');
+  // Its output stays out of the installation, which the uninstall check
+  // further down requires to be empty again.
+  expect(smoke).toContain('$ServerOutput = Join-Path ([IO.Path]::GetTempPath())');
+  expect(smoke.indexOf('"--version"')).toBeLessThan(smoke.indexOf('$Uninstaller = '));
 });
