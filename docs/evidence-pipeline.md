@@ -185,6 +185,11 @@ The other checks:
 - **Roles.** A role is supported when the document states it next to the
   name:
   - a label (`Bill To:`, `Landlord:`, `| Tenant |`, `Dear`);
+  - for a client, a table's column header over the name too: an insured,
+    policyholder, member, patient or subscriber is the client an insurance
+    or a health plan's document is for (`| Named insured |` over
+    `| Delacroix Bakehouse LLC |`), on whoever's form it is. A label naming
+    a group of staff (`Crew member`, `Board member`) names no role;
   - a defined term (`("Tenant")`, `, as Lender`);
   - a page-one letterhead, for an issuer or a sender, that opens its line
     and, in a letter that greets someone (`Dear`), stands before the
@@ -248,7 +253,11 @@ The other checks:
   place: the two a first-page "between" clause names for an agreement or
   an amendment, else the one organization at the head of the first page,
   else the one a letterhead unit names (with an "of" phrase the index cut
-  off restored: `Saltash Point Museum of Art`). A notice or a letter
+  off restored: `Saltash Point Museum of Art`). A record whose staff the
+  reply named beside another organization still comes from that first-page
+  organization, as its issuer: a museum's loan condition report, its
+  conservator the examiner, is from the museum, not the lender whose
+  painting it examines. A notice or a letter
   whose reply names no one it is addressed to takes as its addressee the
   name its first page's `To:` field opens with; an `Attn:` line names the
   person who reads it for the addressee and never does.
@@ -299,6 +308,18 @@ and an addendum is an amendment.
 `relation_from_roles` uses supported roles only. Parties are taken in the
 order the document first names them.
 
+Before the table, a court document is filed under its case: when the
+document has a court's, a tribunal's or an arbitration's heading on its
+first page, sets the case out as "A v. B" and labels one party a plaintiff,
+petitioner, appellant or claimant and another a defendant, respondent or
+appellee right beside its name ("Plaintiff Gilchrist Harbor Marine Supply,
+LLC", "Tavistock Boatworks, Inc., Defendant"), the filename reads `between`
+them, the side bringing the case first. A letter or an email about a case
+keeps the table's correspondence rules, and an invoice or a statement for it
+still comes from its issuer. A role's own label is never part of
+a name: the index's "Plaintiff Gilchrist Harbor Marine Supply, LLC" does not
+complete the reply's "Gilchrist Harbor Marine Supply, LLC".
+
 | Class | Relation |
 | --- | --- |
 | Agreement, amendment | `between` the first two parties; one party, `with` |
@@ -311,7 +332,10 @@ order the document first names them.
 | Unknown | `between` a bilateral pair, or the two named "by and between"; else `from` the issuer; else `to` the addressee |
 
 "The party it is about" means a client, customer, tenant, employee,
-borrower, licensee or buyer. When nothing settles the relation, the first
+borrower, licensee or buyer. In a record or a notice, a reply's bare
+"recipient" or "addressee" gives way to such a role when the document's own
+label gives it one: a report "Prepared for Cobalt Basin Water Authority" is
+`for` the authority, not `to` it, whoever else the reply named. When nothing settles the relation, the first
 party is kept with no joining word (`Invoice - Acme`). A relation is never
 guessed.
 

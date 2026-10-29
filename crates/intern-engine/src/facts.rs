@@ -44,8 +44,8 @@ use std::collections::BTreeSet;
 use unicode_normalization::char::is_combining_mark;
 
 use crate::compose::{
-    CastMember, DescriptionFacts, Relation, RelationCues, amount_label, describe, identifier_word,
-    money_in, relation_from_roles,
+    CastMember, DescriptionFacts, Relation, RelationCues, SUBSTANTIVE, amount_label, describe,
+    identifier_word, money_in, relation_from_roles,
 };
 use crate::cues::{CUSTOMER_CUES, ISSUER_CUES, STOPWORDS, TYPE_NOUNS};
 use crate::distill::normalize_heading;
@@ -748,6 +748,23 @@ pub fn validate_facts_at(
         }
     }
     let class = DocumentClass::of(document_type.as_deref());
+    // A record or a notice is kept for the side it is about, not sent to
+    // it: a reply's bare "recipient" gives way to that side when the
+    // document's own label names it so - "Prepared for Cobalt Basin Water
+    // Authority", "Named insured", "Tenant:".
+    if matches!(class, DocumentClass::Record | DocumentClass::Notice) {
+        for party in &mut parties {
+            if matches!(
+                party.role,
+                Some(PartyRole::Recipient | PartyRole::Addressee)
+            ) && let Some(labeled) = labeled_role(scope, &party.name)
+                && SUBSTANTIVE.contains(&labeled)
+            {
+                party.role = Some(labeled);
+                party.document_role = Some(labeled);
+            }
+        }
+    }
     // So does a person the document names only by the post they hold for
     // it - "Beckett Halloran (President)", "Winemaker | Esme Varga",
     // "Examined by | Delphine Moncrieff, Associate Conservator", "/s/ Arlo
@@ -830,6 +847,51 @@ pub fn validate_facts_at(
                 at,
                 ValidatedParty {
                     name: display_name(&name),
+                    support: Support::Context,
+                    evidence: vec![unit.id.clone()],
+                    ..ValidatedParty::default()
+                },
+            );
+        }
+    }
+    // A record whose staff act for the organization at the head of its
+    // first page comes from that organization, though the reply named
+    // another besides them: a museum's loan condition report, its
+    // conservator the examiner, about a lender's painting.
+    if acting_for
+        && !only_people
+        && class == DocumentClass::Record
+        && let Some((name, unit)) =
+            header_organization(scope).or_else(|| letterhead_organization(scope))
+    {
+        let name = without_sentence_stop(&with_of_phrase(unit, &name));
+        if !parties
+            .iter()
+            .any(|party| normalize_loosely(&party.name) == normalize_loosely(&name))
+        {
+            let line = unit
+                .text
+                .lines()
+                .find(|line| normalize_loosely(line).contains(&normalize_loosely(&name)))
+                .unwrap_or(&unit.text)
+                .trim()
+                .to_owned();
+            remember(
+                &Found {
+                    support: Support::Context,
+                    unit: Some(unit),
+                    line: Some(line),
+                    miscited: 0,
+                },
+                &mut references,
+            );
+            parties.insert(
+                0,
+                ValidatedParty {
+                    name: display_name(&name),
+                    role: Some(PartyRole::Issuer),
+                    role_support: Support::Context,
+                    document_role: Some(PartyRole::Issuer),
                     support: Support::Context,
                     evidence: vec![unit.id.clone()],
                     ..ValidatedParty::default()
@@ -952,6 +1014,7 @@ pub fn validate_facts_at(
                 .flatten()
         }),
         between: between_cue(context, &cast),
+        caption: caption_sides(scope, context, &cast),
     };
     let relation = relation_from_roles(class, document_type.as_deref(), &cast, cues);
 
@@ -2135,7 +2198,23 @@ fn first_appearance(scope: &ValidationScope<'_>, name: &str) -> Option<u32> {
 /// `, as Lender`).
 fn role_words(role: PartyRole) -> (&'static [&'static str], &'static [&'static str]) {
     match role {
-        PartyRole::Client => (&["client", "prepared for"], &["client"]),
+        // An insurance document's or a health plan's client is its insured,
+        // policyholder, member or patient: "Named insured: Brannock Tool &
+        // Die Inc." is who a cancellation notice or a loss notice is for,
+        // whichever company's form it is on.
+        PartyRole::Client => (
+            &[
+                "client",
+                "prepared for",
+                "insured",
+                "policyholder",
+                "policy holder",
+                "member",
+                "patient",
+                "subscriber",
+            ],
+            &["client", "insured", "policyholder"],
+        ),
         PartyRole::Contractor => (
             &["contractor", "consultant", "service provider", "provider"],
             &[
@@ -2225,8 +2304,18 @@ fn role_support(
     let normalized = normalize(name);
     let loose = normalize_loosely(name);
     let letter = LetterLayout::of(scope);
-    let supports =
-        |unit: &EvidenceUnit| unit_supports_role(unit, &normalized, &loose, role, true, letter);
+    let supports = |unit: &EvidenceUnit| {
+        let header = table_header_line(scope, unit);
+        unit_supports_role(
+            unit,
+            header.as_deref(),
+            &normalized,
+            &loose,
+            role,
+            true,
+            letter,
+        )
+    };
     if scope.cited_units(cited).into_iter().any(supports) {
         return Support::Cited;
     }
@@ -2274,10 +2363,29 @@ fn labeled_role(scope: &ValidationScope<'_>, name: &str) -> Option<PartyRole> {
         .collect::<Vec<_>>();
     let letter = LetterLayout::of(scope);
     LABELED_ROLES.into_iter().find(|role| {
-        naming
-            .iter()
-            .any(|unit| unit_supports_role(unit, &normalized, &loose, *role, false, letter))
+        naming.iter().any(|unit| {
+            let header = table_header_line(scope, unit);
+            unit_supports_role(
+                unit,
+                header.as_deref(),
+                &normalized,
+                &loose,
+                *role,
+                false,
+                letter,
+            )
+        })
     })
+}
+
+/// The header row of the table a row unit belongs to, as its first line
+/// reads loosely: what [`column_header`] reads a row's first line against.
+fn table_header_line(scope: &ValidationScope<'_>, unit: &EvidenceUnit) -> Option<String> {
+    unit.table_header
+        .filter(|header| *header != unit.ordinal)
+        .and_then(|header| scope.unit_at(header))
+        .and_then(|header| header.text.lines().next())
+        .map(normalize_loosely)
 }
 
 /// Where a letter's first page ends its letterhead: at a dateline standing
@@ -2345,6 +2453,7 @@ fn is_bare_date(unit: &EvidenceUnit) -> bool {
 /// the document alone takes them only as issuer and customer.
 fn unit_supports_role(
     unit: &EvidenceUnit,
+    table_header: Option<&str>,
     normalized: &str,
     loose: &str,
     role: PartyRole,
@@ -2375,6 +2484,13 @@ fn unit_supports_role(
         }
     }
     if labeled_on_its_line(unit, normalized, loose, labels) {
+        return true;
+    }
+    // A table's column header over the name, for the side a document is
+    // about: "| Named insured | Insured phone |" over "| Delacroix Bakehouse
+    // LLC | (603) 555-0119 |". A column of recipients or signers says who
+    // took delivery, not whose record it is.
+    if role == PartyRole::Client && under_column(unit, table_header, loose, labels) {
         return true;
     }
     for (text, at, length) in positions {
@@ -2413,6 +2529,28 @@ fn unit_supports_role(
         }
         _ => false,
     }
+}
+
+/// Whether a table's column header over `loose` in `unit` is one of
+/// `labels`: the row above in the unit, else the header row of the table
+/// the row belongs to.
+fn under_column(
+    unit: &EvidenceUnit,
+    table_header: Option<&str>,
+    loose: &str,
+    labels: &[&str],
+) -> bool {
+    let lines = unit.text.lines().map(normalize_loosely).collect::<Vec<_>>();
+    lines.iter().enumerate().any(|(index, line)| {
+        let above = match index.checked_sub(1) {
+            Some(previous) => lines.get(previous).map(String::as_str),
+            None => table_header,
+        };
+        whole_positions(line, loose).into_iter().any(|at| {
+            column_header(line, above, at)
+                .is_some_and(|header| labels.iter().any(|word| label_names(&header, word)))
+        })
+    })
 }
 
 /// Whether a line names the party after one of `labels` - "Bill To:
@@ -2471,11 +2609,17 @@ fn labeled_on_its_line(
 /// "Landlord", "Name of Tenant".
 /// A short word - "to", "from", "attn", "dear" - must be the whole label,
 /// so "payable to" is not "to".
+/// A label naming a group of staff - "Crew member", "Board member" - names
+/// no role.
 fn label_names(label: &str, word: &str) -> bool {
-    label == word
-        || (word.len() > 4
-            && label.ends_with(word)
-            && word_starts_at(label, label.len() - word.len()))
+    let staff = label
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|part| STAFF_GROUP_WORDS.contains(&part));
+    !staff
+        && (label == word
+            || (word.len() > 4
+                && label.ends_with(word)
+                && word_starts_at(label, label.len() - word.len())))
 }
 
 fn word_starts_at(text: &str, at: usize) -> bool {
@@ -2599,7 +2743,9 @@ fn completed_name(scope: &ValidationScope<'_>, name: &str) -> Option<String> {
     scope.context_units().find_map(|unit| {
         // What completes the name is a few words of its own, never another
         // organization's legal form or noun: "Systems LLC and" is no part
-        // of "Quill and Vane Advisory Group, Inc.".
+        // of "Quill and Vane Advisory Group, Inc.". Nor is a role's label:
+        // "Plaintiff" is no part of "Plaintiff Gilchrist Harbor Marine
+        // Supply, LLC".
         let organization = unit.features.organizations.iter().find(|organization| {
             let Some(before) = organization
                 .strip_suffix(loose.as_str())
@@ -2612,6 +2758,7 @@ fn completed_name(scope: &ValidationScope<'_>, name: &str) -> Option<String> {
                 && !words.iter().any(|word| {
                     crate::cues::ORGANIZATION_ENDINGS.contains(word)
                         || matches!(*word, "and" | "&" | "of")
+                        || is_role_word(word)
                 })
         })?;
         written_span(unit, organization)
@@ -3551,6 +3698,88 @@ fn between_cue(context: &ScopeView, cast: &[CastMember]) -> bool {
             matches!((named(&first), named(&second)), (Some(a), Some(b)) if a != b)
         })
     })
+}
+
+/// Whether a word is a role's own label - "Tenant", "Buyer", "Plaintiff" -
+/// which names no one.
+fn is_role_word(word: &str) -> bool {
+    BRINGING_SIDE.contains(&word)
+        || ANSWERING_SIDE.contains(&word)
+        || PartyRole::ALL
+            .iter()
+            .any(|role| role_words(*role).0.contains(&word))
+}
+
+/// Words a caption labels the side bringing a case with.
+const BRINGING_SIDE: &[&str] = &["plaintiff", "petitioner", "appellant", "claimant"];
+
+/// Words a caption labels the side answering a case with.
+const ANSWERING_SIDE: &[&str] = &["defendant", "respondent", "appellee"];
+
+/// Words a court's, a tribunal's or an arbitration's heading names it by.
+const FORUM_WORDS: &[&str] = &["court", "tribunal", "arbitration"];
+
+/// The two sides of the case a document is filed in, by their places in
+/// the cast: a party the document labels a plaintiff, petitioner,
+/// appellant or claimant right beside its name ("Plaintiff Gilchrist
+/// Harbor Marine Supply, LLC") and one it labels a defendant, respondent
+/// or appellee ("Tavistock Boatworks, Inc., Defendant"), in a document
+/// that sets the case out as "A v. B" under a forum's heading on its first
+/// page ("SUPERIOR COURT OF THE STATE OF WASHINGTON"). A document that only
+/// mentions a case - a law firm's invoice for the matter - has no such
+/// heading.
+fn caption_sides(
+    scope: &ValidationScope<'_>,
+    context: &ScopeView,
+    cast: &[CastMember],
+) -> Option<(usize, usize)> {
+    let first_page = scope.context_units().map(|unit| unit.page).min()?;
+    let headed = scope
+        .context_units()
+        .filter(|unit| unit.page == first_page)
+        .take(8)
+        .any(|unit| {
+            let text = normalize_loosely(&unit.text);
+            FORUM_WORDS
+                .iter()
+                .any(|word| !whole_positions(&text, word).is_empty())
+        });
+    if !headed {
+        return None;
+    }
+    let segments = context
+        .segments()
+        .iter()
+        .map(|segment| normalize_loosely(segment))
+        .collect::<Vec<_>>();
+    let versus = segments.iter().any(|text| {
+        ["v", "vs", "versus"]
+            .iter()
+            .any(|word| !whole_positions(text, word).is_empty())
+    });
+    if !versus {
+        return None;
+    }
+    let labeled = |name: &str, side: &[&str]| {
+        let name = normalize_loosely(name);
+        segments.iter().any(|text| {
+            whole_positions(text, &name).into_iter().any(|at| {
+                let before = text[..at].split_whitespace().next_back();
+                let after = text[at + name.len()..].split_whitespace().next();
+                [before, after]
+                    .into_iter()
+                    .flatten()
+                    .any(|word| side.contains(&word))
+            })
+        })
+    };
+    let bringing = cast
+        .iter()
+        .position(|party| labeled(&party.name, BRINGING_SIDE))?;
+    let answering = cast
+        .iter()
+        .position(|party| labeled(&party.name, ANSWERING_SIDE))?;
+    (bringing != answering).then_some((bringing, answering))
 }
 
 /// Room an extension takes at the end of a filename, its dot included.
@@ -7046,6 +7275,221 @@ I declare that I have lived at 14 Wren Street since 2019.\n\nSignature: /s/ Jane
             ..ModelFacts::default()
         });
         assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
+    }
+
+    #[test]
+    fn an_insurance_notice_is_for_its_insured_whoever_sends_it() {
+        // The insured under a column header, on the insurer's form: the
+        // insurer the reply calls its recipient does not send it.
+        const LOSS: &str = "PROPERTY LOSS NOTICE Date reported: 02/16/2026\n\n\
+Harrowmere Mutual Insurance Company - Claims Intake - 9 Granary Street, Hollis Bend, NH 03049\n\n\
+| Named insured | Insured phone |\n| --- | --- |\n| Delacroix Bakehouse LLC | (603) 555-0119 |\n\n\
+The insured must protect the property from further damage.";
+        let (outcome, _) = facts_for(LOSS, |index| ModelFacts {
+            document_type: Some("Property Loss Notice".into()),
+            type_evidence: vec![id_of(index, "PROPERTY LOSS")],
+            document_date: Some("2026-02-16".into()),
+            date_evidence: vec![id_of(index, "PROPERTY LOSS")],
+            parties: vec![
+                party(
+                    "Delacroix Bakehouse LLC",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "| Delacroix")],
+                ),
+                party(
+                    "Harrowmere Mutual Insurance Company",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Harrowmere")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Delacroix Bakehouse LLC"],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        // A "Named insured:" field: the producer the reply calls its issuer
+        // is not who the notice is for.
+        const CANCEL: &str = "Kestrel Casualty Company\n\n\
+NOTICE OF CANCELLATION\n\nDate of notice: 08/12/2026\n\n\
+Named insured: Brannock Tool & Die Inc.\nProducer: Ridley Cross Insurance Services, code 4471";
+        let (outcome, _) = facts_for(CANCEL, |index| ModelFacts {
+            document_type: Some("Notice of Cancellation".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF")],
+            document_date: Some("2026-08-12".into()),
+            date_evidence: vec![id_of(index, "Date of notice")],
+            parties: vec![
+                party(
+                    "Brannock Tool & Die Inc.",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "Named insured")],
+                ),
+                party(
+                    "Ridley Cross Insurance Services",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "Named insured")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Brannock Tool & Die Inc."],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        // A crew member is no member a plan is about.
+        assert!(label_names("named insured", "insured"));
+        assert!(label_names("member", "member"));
+        assert!(!label_names("crew member", "member"));
+        assert!(!label_names("board member", "member"));
+    }
+
+    #[test]
+    fn a_court_document_is_filed_between_the_two_sides_of_its_case() {
+        const HEARING: &str = "SUPERIOR COURT OF THE STATE OF WASHINGTON\n\n\
+GILCHRIST HARBOR MARINE SUPPLY, LLC, )\n\n\
+a Washington limited liability company, ) No. 26-2-04417-1 Plaintiff, )\n\n\
+v. ) NOTICE OF HEARING\n\n\
+TAVISTOCK BOATWORKS, INC., ) a Washington corporation, ) Defendant. )\n\n\
+AND TO: Tavistock Boatworks, Inc., Defendant, and its attorneys of record\n\n\
+PLEASE TAKE NOTICE that Plaintiff Gilchrist Harbor Marine Supply, LLC will bring on \
+for hearing its Motion to Compel.\n\nDATED this 29th day of July, 2026.";
+        let (outcome, _) = facts_for(HEARING, |index| ModelFacts {
+            document_type: Some("Notice of Hearing".into()),
+            type_evidence: vec![id_of(index, "v. )")],
+            document_date: Some("2026-07-29".into()),
+            date_evidence: vec![id_of(index, "DATED")],
+            parties: vec![
+                party(
+                    "Tavistock Boatworks, Inc.",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "AND TO")],
+                ),
+                party(
+                    "Gilchrist Harbor Marine Supply, LLC",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "PLEASE TAKE")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec![
+                "Gilchrist Harbor Marine Supply, LLC",
+                "Tavistock Boatworks, Inc."
+            ],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        // The same words with no court over them only mention the case.
+        let unheaded = HEARING.replacen(
+            "SUPERIOR COURT OF THE STATE OF WASHINGTON",
+            "Kavanagh Trask PLLC",
+            1,
+        );
+        let (outcome, _) = facts_for(&unheaded, |index| ModelFacts {
+            document_type: Some("Notice of Hearing".into()),
+            type_evidence: vec![id_of(index, "v. )")],
+            document_date: Some("2026-07-29".into()),
+            date_evidence: vec![id_of(index, "DATED")],
+            parties: vec![
+                party(
+                    "Tavistock Boatworks, Inc.",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "AND TO")],
+                ),
+                party(
+                    "Gilchrist Harbor Marine Supply, LLC",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "PLEASE TAKE")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_ne!(outcome.proposal.party_relation, PartyRelation::Between);
+    }
+
+    #[test]
+    fn a_report_is_for_the_client_it_was_prepared_for_not_sent_to_it() {
+        const REPORT: &str = "ANNUAL WATERSHED MONITORING REPORT\n\n\
+Prepared for Cobalt Basin Water Authority, 900 Reservoir Road, Ashby, Vermont 05032 \
+Prepared by Thornwick Basin Engineering, PLLC, 61 Foundry Street, Montpelier, Vermont 05602\n\n\
+Thornwick Basin Engineering, PLLC monitored 40 stations with Bramblecote Aquatic Ecology LLC \
+through the 2025 monitoring year.";
+        let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+            document_type: Some("Annual Watershed Monitoring Report".into()),
+            type_evidence: vec![id_of(index, "ANNUAL")],
+            parties: vec![
+                party(
+                    "Cobalt Basin Water Authority",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Prepared for")],
+                ),
+                party(
+                    "Thornwick Basin Engineering, PLLC",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "Prepared for")],
+                ),
+                party(
+                    "Bramblecote Aquatic Ecology LLC",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "monitored")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Cobalt Basin Water Authority"],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+    }
+
+    #[test]
+    fn a_record_its_staff_made_comes_from_their_letterhead_not_the_other_party() {
+        const REPORT: &str = "Saltash Point Museum of Art\n\n\
+Registration and Conservation - 1 Gallery Walk, Saltash Point, CA 94923\n\n\
+LOAN CONDITION REPORT\n\n\
+| Field | Entry |\n| --- | --- |\n\
+| Date of examination | October 2, 2025 |\n\
+| Examined by | Delphine Moncrieff, Associate Conservator of Paintings |\n\
+| Lender | Haverford Family Collection |\n\
+| Artist | Elias Brandvold (1871-1934) |";
+        let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+            document_type: Some("Loan Condition Report".into()),
+            type_evidence: vec![id_of(index, "LOAN CONDITION")],
+            document_date: Some("2025-10-02".into()),
+            date_evidence: vec![id_of(index, "| Date of examination")],
+            parties: vec![
+                party(
+                    "Haverford Family Collection",
+                    Some(PartyRole::Lender),
+                    &[id_of(index, "| Lender")],
+                ),
+                party(
+                    "Delphine Moncrieff",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "| Examined by")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Saltash Point Museum of Art"],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
     }
 
     #[test]

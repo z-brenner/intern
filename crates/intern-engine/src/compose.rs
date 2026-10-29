@@ -159,7 +159,7 @@ pub struct Relation {
 
 /// The side a document is "about": the client, customer, tenant, employee,
 /// borrower, licensee or buyer.
-const SUBSTANTIVE: &[PartyRole] = &[
+pub(crate) const SUBSTANTIVE: &[PartyRole] = &[
     PartyRole::Client,
     PartyRole::Customer,
     PartyRole::Tenant,
@@ -220,6 +220,10 @@ pub struct RelationCues {
     /// Whether the document names its first two parties as its two sides:
     /// "by and between A and B".
     pub between: bool,
+    /// The two sides of a case the document is filed in, as its caption
+    /// names them - the one bringing it, then the one answering it - by
+    /// their places in the cast.
+    pub caption: Option<(usize, usize)>,
 }
 
 /// The filename's parties and joining word, from the document's class and
@@ -298,6 +302,23 @@ pub fn relation_from_roles(
         }),
         _ => None,
     };
+    // A court document - a notice of hearing, a motion, an order - is
+    // filed under the case: between its two sides, the one bringing it
+    // first. A letter or an email about the case is still correspondence,
+    // and an invoice for it still comes from its issuer.
+    if let Some((bringing, answering)) = cues.caption
+        && !matches!(
+            class,
+            DocumentClass::Letter | DocumentClass::Email | DocumentClass::Issued
+        )
+        && let (Some(a), Some(b)) = (parties.get(bringing), parties.get(answering))
+    {
+        return Relation {
+            relation: PartyRelation::Between,
+            parties: vec![a.name.clone(), b.name.clone()],
+            basis: format!("{}: the case's two sides", class.as_str()),
+        };
+    }
     match class {
         DocumentClass::Agreement | DocumentClass::Amendment => match parties {
             [a, b, ..] => Relation {
@@ -1378,11 +1399,41 @@ mod tests {
             &parties,
             RelationCues {
                 issuer: Some(0),
-                between: false,
+                ..RelationCues::default()
             },
         );
         assert_eq!(relation.relation, PartyRelation::From);
         assert_eq!(relation.parties, vec!["Halvorsen Fixture Works LLC"]);
+    }
+
+    #[test]
+    fn a_case_files_its_court_documents_between_its_sides_but_not_its_letters() {
+        let parties = cast(&[
+            ("Tavistock Boatworks, Inc.", Some(PartyRole::Recipient)),
+            ("Gilchrist Harbor Marine Supply, LLC", None),
+        ]);
+        let cues = RelationCues {
+            caption: Some((1, 0)),
+            ..RelationCues::default()
+        };
+        let relation = relation_from_roles(
+            DocumentClass::Notice,
+            Some("Notice of Hearing"),
+            &parties,
+            cues,
+        );
+        assert_eq!(relation.relation, PartyRelation::Between);
+        assert_eq!(
+            relation.parties,
+            vec![
+                "Gilchrist Harbor Marine Supply, LLC",
+                "Tavistock Boatworks, Inc."
+            ]
+        );
+        let relation = relation_from_roles(DocumentClass::Letter, Some("Letter"), &parties, cues);
+        assert_eq!(relation.relation, PartyRelation::To);
+        let relation = relation_from_roles(DocumentClass::Issued, Some("Invoice"), &parties, cues);
+        assert_ne!(relation.relation, PartyRelation::Between);
     }
 
     #[test]

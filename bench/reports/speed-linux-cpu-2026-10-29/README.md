@@ -157,11 +157,28 @@ Bonsai's weights need Prism, so there are three ways to do it:
 3. **Wait for Prism to move to a newer upstream.** It costs nothing, but the timing is not
    Intern's to choose.
 
-**Measure Windows before choosing.** These numbers are Linux x86-64 at 4 threads.
-Intern's main platform is Windows, and upstream's Windows CPU builds load per-ISA backends
-at run time. A Windows replay of the same 26 requests (`replay-server.sh` runs under Git
-Bash or WSL; the requests are portable JSON) would settle whether the prefill gain carries
-over.
+### Windows (measured)
+
+The same 26 requests on a GitHub-hosted Windows runner (`.github/workflows/runtime-speed.yml`,
+run by hand): AMD EPYC 7763, 4 logical processors, so 2 server threads by the app's own rule
+(`server.rs` `default_threads`), the app's flags, each slot warmed first, runs alternated to
+cancel drift.
+
+| Runtime, model | Time per document | Prefill (median) | Decode (median) |
+| --- | ---: | ---: | ---: |
+| Prism b10826, Qwen3.5-2B (shipped) | 27.5 s, 28.2 s | 18.0 s | 6.0 s |
+| **Upstream b11946, Qwen3.5-2B** | **20.8 s, 20.8 s (−25%)** | **12.2 s** | 6.2 s |
+| Prism b10826, Bonsai 2 2B (fast tier) | 25.0 s | 16.2 s | 5.9 s |
+
+- **The gain holds on Windows, and is larger.** Prefill is 32% faster. Unlike on Linux, decode
+  is no slower, so the whole document is 25% faster.
+- **The fast tier is no longer faster there.** On this 2-thread runner, Bonsai on Prism took
+  longer than Qwen on upstream. It was given Qwen's prompts, about the length of its own, so
+  only its time means anything. On the 4-thread Linux host it took about two thirds of Prism
+  Qwen's time (about 16 s), still about a fifth faster than Qwen on upstream (19.5 s). Which
+  is faster depends on the thread count, and a laptop has more threads than this runner.
+- Replies matched the Linux capture for 6–7 of 26 on either runtime: a different CPU changes
+  the arithmetic as much as a different runtime does.
 
 ## Reproduce
 
