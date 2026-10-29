@@ -3075,11 +3075,32 @@ fn signs_by(line: &str) -> bool {
 /// which a letterhead or a signature gives the staff who sign, and not an
 /// issued document's buyer, whose "Buyer:" names its purchasing contact.
 fn labeled_party(scope: &ValidationScope<'_>, name: &str, class: DocumentClass) -> bool {
-    labeled_role(scope, name).is_some_and(|role| match role {
+    labeled_role(scope, name).is_some_and(|role| stands_as_party(role, class))
+}
+
+/// Whether a role a label gives makes its name a party in a document of
+/// `class`: see [`labeled_party`].
+fn stands_as_party(role: PartyRole, class: DocumentClass) -> bool {
+    match role {
         PartyRole::Issuer | PartyRole::Sender => false,
         PartyRole::Buyer => class != DocumentClass::Issued,
         _ => true,
-    })
+    }
+}
+
+/// Whether a table's column header names a party's role, as a field's
+/// label would: the names in a "Recipient" or "Tenant" column are the
+/// document's parties, whatever else their row says.
+fn header_names_party(header: &str, class: DocumentClass) -> bool {
+    LABELED_ROLES
+        .into_iter()
+        .filter(|role| stands_as_party(*role, class))
+        .any(|role| {
+            role_words(role)
+                .0
+                .iter()
+                .any(|word| label_names(header, word))
+        })
 }
 
 /// What the document makes of a person the reply named: someone acting for
@@ -3125,7 +3146,10 @@ fn standing_of(scope: &ValidationScope<'_>, name: &str, class: DocumentClass) ->
                         .map(normalize_loosely),
                 };
                 let header = column_header(line, above.as_deref(), at);
-                if subject_label(label_cell(before)) || header.as_deref().is_some_and(subject_label)
+                if subject_label(label_cell(before))
+                    || header.as_deref().is_some_and(|header| {
+                        subject_label(header) || header_names_party(header, class)
+                    })
                 {
                     return Standing::Subject;
                 }
@@ -6991,6 +7015,28 @@ I declare that I have lived at 14 Wren Street since 2019.\n\nSignature: /s/ Jane
             ..ModelFacts::default()
         });
         assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
+    }
+
+    #[test]
+    fn a_column_naming_a_party_keeps_its_names_whoever_signs() {
+        assert!(header_names_party("recipient", DocumentClass::Record));
+        assert!(header_names_party("tenant", DocumentClass::Notice));
+        assert!(!header_names_party("signature", DocumentClass::Record));
+        assert!(!header_names_party("buyer", DocumentClass::Issued));
+        const RECORD: &str = "Harbor Point Shipping Co.\n\nDELIVERY RECORD\n\n\
+| Recipient | Signature |\n| --- | --- |\n| Jane Doe | /s/ Jane Doe |";
+        let (outcome, _) = facts_for(RECORD, |index| ModelFacts {
+            document_type: Some("Delivery Record".into()),
+            type_evidence: vec![id_of(index, "DELIVERY")],
+            parties: vec![party("Jane Doe", None, &[id_of(index, "| Jane")])],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Jane Doe"],
+            "{:?}",
+            outcome.proposal
+        );
     }
 
     #[test]
