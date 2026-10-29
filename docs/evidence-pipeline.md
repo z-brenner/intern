@@ -304,6 +304,16 @@ and an addendum is an amendment.
 `relation_from_roles` uses supported roles only. Parties are taken in the
 order the document first names them.
 
+Before the table, a court document is filed under its case: when the
+document sets the case out as "A v. B" and labels one party a plaintiff,
+petitioner, appellant or claimant and another a defendant, respondent or
+appellee right beside its name ("Plaintiff Gilchrist Harbor Marine Supply,
+LLC", "Tavistock Boatworks, Inc., Defendant"), the filename reads `between`
+them, the side bringing the case first. A letter or an email about a case
+keeps the table's correspondence rules. A role's own label is never part of
+a name: the index's "Plaintiff Gilchrist Harbor Marine Supply, LLC" does not
+complete the reply's "Gilchrist Harbor Marine Supply, LLC".
+
 | Class | Relation |
 | --- | --- |
 | Agreement, amendment | `between` the first two parties; one party, `with` |

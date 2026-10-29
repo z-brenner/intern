@@ -952,6 +952,7 @@ pub fn validate_facts_at(
                 .flatten()
         }),
         between: between_cue(context, &cast),
+        caption: caption_sides(context, &cast),
     };
     let relation = relation_from_roles(class, document_type.as_deref(), &cast, cues);
 
@@ -2680,7 +2681,9 @@ fn completed_name(scope: &ValidationScope<'_>, name: &str) -> Option<String> {
     scope.context_units().find_map(|unit| {
         // What completes the name is a few words of its own, never another
         // organization's legal form or noun: "Systems LLC and" is no part
-        // of "Quill and Vane Advisory Group, Inc.".
+        // of "Quill and Vane Advisory Group, Inc.". Nor is a role's label:
+        // "Plaintiff" is no part of "Plaintiff Gilchrist Harbor Marine
+        // Supply, LLC".
         let organization = unit.features.organizations.iter().find(|organization| {
             let Some(before) = organization
                 .strip_suffix(loose.as_str())
@@ -2693,6 +2696,7 @@ fn completed_name(scope: &ValidationScope<'_>, name: &str) -> Option<String> {
                 && !words.iter().any(|word| {
                     crate::cues::ORGANIZATION_ENDINGS.contains(word)
                         || matches!(*word, "and" | "&" | "of")
+                        || is_role_word(word)
                 })
         })?;
         written_span(unit, organization)
@@ -3632,6 +3636,64 @@ fn between_cue(context: &ScopeView, cast: &[CastMember]) -> bool {
             matches!((named(&first), named(&second)), (Some(a), Some(b)) if a != b)
         })
     })
+}
+
+/// Whether a word is a role's own label - "Tenant", "Buyer", "Plaintiff" -
+/// which names no one.
+fn is_role_word(word: &str) -> bool {
+    BRINGING_SIDE.contains(&word)
+        || ANSWERING_SIDE.contains(&word)
+        || PartyRole::ALL
+            .iter()
+            .any(|role| role_words(*role).0.contains(&word))
+}
+
+/// Words a caption labels the side bringing a case with.
+const BRINGING_SIDE: &[&str] = &["plaintiff", "petitioner", "appellant", "claimant"];
+
+/// Words a caption labels the side answering a case with.
+const ANSWERING_SIDE: &[&str] = &["defendant", "respondent", "appellee"];
+
+/// The two sides of the case a document is filed in, by their places in
+/// the cast: a party the document labels a plaintiff, petitioner,
+/// appellant or claimant right beside its name ("Plaintiff Gilchrist
+/// Harbor Marine Supply, LLC") and one it labels a defendant, respondent
+/// or appellee ("Tavistock Boatworks, Inc., Defendant"), in a document
+/// that sets the case out as "A v. B".
+fn caption_sides(context: &ScopeView, cast: &[CastMember]) -> Option<(usize, usize)> {
+    let segments = context
+        .segments()
+        .iter()
+        .map(|segment| normalize_loosely(segment))
+        .collect::<Vec<_>>();
+    let versus = segments.iter().any(|text| {
+        ["v", "vs", "versus"]
+            .iter()
+            .any(|word| !whole_positions(text, word).is_empty())
+    });
+    if !versus {
+        return None;
+    }
+    let labeled = |name: &str, side: &[&str]| {
+        let name = normalize_loosely(name);
+        segments.iter().any(|text| {
+            whole_positions(text, &name).into_iter().any(|at| {
+                let before = text[..at].split_whitespace().next_back();
+                let after = text[at + name.len()..].split_whitespace().next();
+                [before, after]
+                    .into_iter()
+                    .flatten()
+                    .any(|word| side.contains(&word))
+            })
+        })
+    };
+    let bringing = cast
+        .iter()
+        .position(|party| labeled(&party.name, BRINGING_SIDE))?;
+    let answering = cast
+        .iter()
+        .position(|party| labeled(&party.name, ANSWERING_SIDE))?;
+    (bringing != answering).then_some((bringing, answering))
 }
 
 /// Room an extension takes at the end of a filename, its dot included.
@@ -7199,6 +7261,47 @@ Named insured: Brannock Tool & Die Inc.\nProducer: Ridley Cross Insurance Servic
         assert!(label_names("member", "member"));
         assert!(!label_names("crew member", "member"));
         assert!(!label_names("board member", "member"));
+    }
+
+    #[test]
+    fn a_court_document_is_filed_between_the_two_sides_of_its_case() {
+        const HEARING: &str = "SUPERIOR COURT OF THE STATE OF WASHINGTON\n\n\
+GILCHRIST HARBOR MARINE SUPPLY, LLC, )\n\n\
+a Washington limited liability company, ) No. 26-2-04417-1 Plaintiff, )\n\n\
+v. ) NOTICE OF HEARING\n\n\
+TAVISTOCK BOATWORKS, INC., ) a Washington corporation, ) Defendant. )\n\n\
+AND TO: Tavistock Boatworks, Inc., Defendant, and its attorneys of record\n\n\
+PLEASE TAKE NOTICE that Plaintiff Gilchrist Harbor Marine Supply, LLC will bring on \
+for hearing its Motion to Compel.\n\nDATED this 29th day of July, 2026.";
+        let (outcome, _) = facts_for(HEARING, |index| ModelFacts {
+            document_type: Some("Notice of Hearing".into()),
+            type_evidence: vec![id_of(index, "v. )")],
+            document_date: Some("2026-07-29".into()),
+            date_evidence: vec![id_of(index, "DATED")],
+            parties: vec![
+                party(
+                    "Tavistock Boatworks, Inc.",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "AND TO")],
+                ),
+                party(
+                    "Gilchrist Harbor Marine Supply, LLC",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "PLEASE TAKE")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec![
+                "Gilchrist Harbor Marine Supply, LLC",
+                "Tavistock Boatworks, Inc."
+            ],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
     }
 
     #[test]
