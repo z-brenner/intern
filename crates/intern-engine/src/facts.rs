@@ -758,15 +758,13 @@ pub fn validate_facts_at(
         .map(|party| {
             if party.copied || party.signatory || is_organization(&party.name) {
                 Standing::Unknown
+            } else if labeled_party(scope, &party.name, class) {
+                // A label that gives them a party's role ("Recipient:",
+                // "Tenant:") outranks a signature or a post, and keeps the
+                // others' staff from taking them along.
+                Standing::Subject
             } else {
-                match standing_of(scope, &party.name, class) {
-                    // A label that gives them a party's role ("Recipient:",
-                    // "Tenant:") outranks a signature or a post.
-                    Standing::Staff if labeled_party(scope, &party.name, class) => {
-                        Standing::Subject
-                    }
-                    standing => standing,
-                }
+                standing_of(scope, &party.name, class)
             }
         })
         .collect::<Vec<_>>();
@@ -6770,6 +6768,35 @@ Your coverage changes on March 1, 2026.\n\nAcknowledged: /s/ Jane Doe";
         );
         let facts = outcome.facts.unwrap();
         assert!(!facts.parties.iter().any(|party| party.signatory));
+    }
+
+    #[test]
+    fn a_labeled_party_is_not_taken_along_when_staff_give_way() {
+        const NOTICE: &str = "HARBOR FREIGHT COURIERS LLC\n\nNOTICE OF RATE CHANGE\n\n\
+Recipient: Jane Doe\n\nRates change on March 1, 2026.\n\nPrepared by: John Smith";
+        let (outcome, _) = facts_for(NOTICE, |index| ModelFacts {
+            document_type: Some("Notice of Rate Change".into()),
+            type_evidence: vec![id_of(index, "NOTICE")],
+            parties: vec![
+                party(
+                    "Jane Doe",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Recipient")],
+                ),
+                party(
+                    "John Smith",
+                    Some(PartyRole::Sender),
+                    &[id_of(index, "Prepared")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Jane Doe"],
+            "{:?}",
+            outcome.proposal
+        );
     }
 
     #[test]
