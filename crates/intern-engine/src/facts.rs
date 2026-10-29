@@ -2993,6 +2993,43 @@ fn column_header(line: &str, above: Option<&str>, at: usize) -> Option<String> {
         .then(|| header.to_owned())
 }
 
+/// Whether `line`, as the document writes it, gives the person `loose`
+/// names a post right after their name: "Jane Doe, Chief Inspector",
+/// "Jane Doe (Conservator)", "| Jane Doe | Winemaker |". Every word up to
+/// the post must read as part of a title - capitalized, or "of", "and" or
+/// "the" -
+/// so a post in the prose that follows a name belongs to someone else:
+/// "Jane Doe spoke to the manager".
+fn titled_after(line: &str, loose: &str) -> bool {
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    (0..tokens.len()).any(|start| {
+        (start + 1..=tokens.len().min(start + 10)).any(|end| {
+            normalize_loosely(&tokens[start..end].join(" ")) == loose
+                && post_follows(&tokens[end..])
+        })
+    })
+}
+
+/// Whether a post opens `words`, after nothing but title words and
+/// separators.
+fn post_follows(words: &[&str]) -> bool {
+    for word in words.iter().take(4) {
+        let bare = word.trim_matches(|c: char| !c.is_alphanumeric());
+        if bare.is_empty() {
+            continue;
+        }
+        let lower = bare.to_lowercase();
+        if POST_WORDS.contains(&lower.as_str()) {
+            return true;
+        }
+        if !(bare.starts_with(char::is_uppercase) || matches!(lower.as_str(), "of" | "and" | "the"))
+        {
+            return false;
+        }
+    }
+    false
+}
+
 /// Whether a line is a signature block's "Title:" field - not a field
 /// whose label merely starts with the word ("Title of work:").
 fn is_title_field(line: &str) -> bool {
@@ -3071,13 +3108,11 @@ fn standing_of(scope: &ValidationScope<'_>, name: &str, class: DocumentClass) ->
                 {
                     return Standing::Subject;
                 }
-                let after = line[at + loose.len()..]
-                    .split_whitespace()
-                    .map(|word| word.trim_matches(|c: char| matches!(c, '(' | ')' | '|' | ':')))
-                    .filter(|word| !word.is_empty())
-                    .take(4)
-                    .collect::<Vec<_>>();
-                let posted_after = after.iter().any(|word| POST_WORDS.contains(word));
+                let posted_after = unit
+                    .text
+                    .lines()
+                    .nth(index)
+                    .is_some_and(|written| titled_after(written, &loose));
                 let posted_before = POST_WORDS.contains(&closing_words(before, 1).as_str());
                 let signed_above = index > 0 && signs_by(&lines[index - 1]);
                 // The block's "Title:" may open the next unit.
@@ -6874,6 +6909,30 @@ I resign from my position effective March 31, 2026.\n\n/s/ Jane Doe";
             without_sentence_stop("Halden Bay National Bank, N.A."),
             "Halden Bay National Bank, N.A."
         );
+    }
+
+    #[test]
+    fn a_post_after_a_name_must_be_theirs() {
+        assert!(titled_after(
+            "Jane Doe, Chief Financial Officer",
+            "jane doe"
+        ));
+        assert!(titled_after("Jane Doe (Conservator)", "jane doe"));
+        assert!(titled_after("| Jane Doe | Winemaker |", "jane doe"));
+        assert!(titled_after("JANE DOE - SITE INSPECTOR", "jane doe"));
+        assert!(titled_after("Jane Doe, Director of Operations", "jane doe"));
+        assert!(titled_after("Jane Doe, the conservator", "jane doe"));
+        assert!(!titled_after("Jane Doe spoke to the manager.", "jane doe"));
+        assert!(!titled_after("Jane Doe, who met the inspector", "jane doe"));
+        const REPORT: &str = "INCIDENT REPORT\n\nDated March 3, 2026\n\n\
+Jane Doe spoke to the manager about the leak in Unit 4.";
+        let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+            document_type: Some("Incident Report".into()),
+            type_evidence: vec![id_of(index, "INCIDENT")],
+            parties: vec![party("Jane Doe", None, &[id_of(index, "spoke")])],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
     }
 
     #[test]
