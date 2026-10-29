@@ -10,7 +10,8 @@ changes accuracy too and has to be scored by a full InternBench run.
 
 Laboratory tooling; the app does not call it. Standard library only.
   python3 -I replay-requests.py --server http://127.0.0.1:PORT --wire DIR [--wire DIR ...]
-      [--concurrency N] [--limit N] [--skip-first] [--reference DIR|FILE] --out OUT.json
+      [--concurrency N] [--limit N] [--every K] [--skip-first] [--warm-up] [--strip-logprobs]
+      [--reference DIR|FILE] --out OUT.json
 """
 import argparse
 import glob
@@ -73,6 +74,11 @@ def main():
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--skip-first", action="store_true", help="skip each directory's first capture (a warm-up)")
+    parser.add_argument("--every", type=int, default=1, help="replay every K-th request only (a fixed subset)")
+    parser.add_argument("--warm-up", action="store_true",
+                        help="before timing, send the first directory's first capture once per concurrent slot, so each "
+                             "slot holds the cached system prompt as an app that has read one document does")
+    parser.add_argument("--strip-logprobs", action="store_true", help="drop logprobs/top_logprobs from every request")
     parser.add_argument("--reference")
     parser.add_argument("--api-key", default="")
     parser.add_argument("--timeout", type=float, default=600)
@@ -80,10 +86,18 @@ def main():
     args = parser.parse_args()
 
     requests = load_requests(args.wire, args.skip_first)
+    requests = requests[:: max(1, args.every)]
     if args.limit:
         requests = requests[: args.limit]
     reference = load_reference(args.reference)
     results = [None] * len(requests)
+
+    def prepared(path):
+        body = json.load(open(path))
+        if args.strip_logprobs:
+            body.pop("logprobs", None)
+            body.pop("top_logprobs", None)
+        return body
     lock = threading.Lock()
     cursor = [0]
 
@@ -95,7 +109,7 @@ def main():
             if index >= len(requests):
                 return
             key, path = requests[index]
-            body = json.load(open(path))
+            body = prepared(path)
             started = time.monotonic()
             try:
                 reply = post(args.server, body, args.api_key, args.timeout)
@@ -115,6 +129,15 @@ def main():
                 "usage": (reply or {}).get("usage"),
                 "timings": (reply or {}).get("timings"),
             }
+
+    if args.warm_up:
+        first = sorted(glob.glob(os.path.join(args.wire[0], "*-model-wire.json")))[0]
+        warmers = [threading.Thread(target=post, args=(args.server, prepared(first), args.api_key, args.timeout))
+                   for _ in range(max(1, args.concurrency))]
+        for thread in warmers:
+            thread.start()
+        for thread in warmers:
+            thread.join()
 
     began = time.monotonic()
     threads = [threading.Thread(target=worker) for _ in range(max(1, args.concurrency))]
@@ -145,6 +168,8 @@ def main():
         "decode_tok_per_s_p50": round(statistics.median((r["timings"] or {}).get("predicted_per_second", 0) for r in done), 2) if done else None,
         "draft_tokens": draft_n,
         "draft_accepted": draft_ok,
+        "prompt_tokens_p50": round(statistics.median((r["timings"] or {}).get("prompt_n", 0) for r in done)) if done else None,
+        "wall_per_request_s": round(wall / len(done), 2) if done else None,
         "compared_with_reference": len(compared),
         "identical_to_reference": same,
         "differing": [r["key"] for r in compared if r["content"] != reference[r["key"]]],

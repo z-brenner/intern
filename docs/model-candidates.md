@@ -118,12 +118,15 @@ way. A live run with the flag asks the server for probabilities, and a replay
 applies the gate to the probabilities its recording kept. `bench/recording.json`
 kept none, so its CI baseline is unchanged.
 
-**Latency.** Not separable from noise in this run. Mean inference was 20.7 s
-without logprobs (first run, cold), 17.2 s with them, and 15.1 s for a repeat
-without them on a warm server. llama.cpp sorts the whole vocabulary once per
-generated token to report a probability, so expect a cost of a few percent. That
-cost should be measured with `llama-bench`-style repeated runs before the flag is
-turned on in the app.
+**Latency.** The first fixture-corpus run could not separate the cost from
+noise. Mean inference was 20.7 s without logprobs (first run, cold), 17.2 s with
+them, and 15.1 s for a repeat without them on a warm server. It was then measured
+on the packaged runtime (Prism b10826, 4 threads, Linux). The same 26 recorded
+InternBench requests were replayed against a warm server, once as recorded with
+`logprobs` and once with it stripped (`scripts/bonsai-eval/replay-requests.py
+--strip-logprobs`). They took 23.71 s and 23.72 s per request. Generation alone was
+7.40 s against 7.28 s at the median, and all 26 replies were byte-identical. The cost
+is within noise.
 
 **Reproduce.**
 
