@@ -3,6 +3,10 @@ name: Runtime speed on Windows
 # The packaged llama.cpp runtime against upstream llama.cpp on a Windows
 # runner: the same 26 recorded InternBench requests replayed through each,
 # timed, and compared reply for reply with the reply the request got live.
+# One more run puts the fast tier's model (Bonsai, which only the packaged
+# runtime reads) through the same requests, for its speed alone: they were
+# written for the accurate model's prompt profile, so its replies are not
+# scored.
 # Laboratory measurement only: it gates nothing and publishes nothing. See
 # bench/reports/speed-linux-cpu-2026-10-29.
 
@@ -16,9 +20,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: runtime-speed-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows-runtime-speed:
-    name: Windows runtime speed (Prism vs upstream llama.cpp)
+    name: Windows runtime speed (Prism vs upstream llama.cpp, and Bonsai)
     runs-on: windows-latest
     timeout-minutes: 180
     env:
@@ -42,8 +50,10 @@ jobs:
           }
           New-Item -ItemType Directory lab -Force | Out-Null
           $Manifest = Get-Content src-tauri/resources/model-manifest.json -Raw | ConvertFrom-Json
-          $Model = ($Manifest.models | Where-Object tier -eq "accurate").files | Where-Object role -eq "model"
-          Get-Pinned $Model.url $Model.sha256 "lab\model.gguf"
+          foreach ($Tier in @("accurate", "fast")) {
+            $Model = ($Manifest.models | Where-Object tier -eq $Tier).files | Where-Object role -eq "model"
+            Get-Pinned $Model.url $Model.sha256 "lab\$Tier.gguf"
+          }
           $Assets = Get-Content src-tauri/resources/runtime-assets.json -Raw | ConvertFrom-Json
           $Prism = $Assets.downloads | Where-Object id -eq "llama.cpp"
           Get-Pinned $Prism.url $Prism.sha256 "lab\prism.zip"
@@ -60,16 +70,17 @@ jobs:
             threads = [Math]::Max(2, [Math]::Min(12, [int][Math]::Floor([int]$env:NUMBER_OF_PROCESSORS / 2)))
           } | ConvertTo-Json | Set-Content lab\context.json -Encoding utf8NoBOM
           Get-Content lab\context.json
-      - name: Replay the requests against each runtime (prism, upstream, upstream, prism)
+      - name: Replay the requests (Qwen on prism, upstream; Bonsai on prism; Qwen on upstream, prism)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $Threads = (Get-Content lab\context.json -Raw | ConvertFrom-Json).threads
-          $Model = (Resolve-Path lab\model.gguf).Path
           $Port = 18200
-          $Runs = @(@("prism", "prism-1"), @("upstream", "upstream-1"), @("upstream", "upstream-2"), @("prism", "prism-2"))
+          $Runs = @(@("prism", "accurate", "prism-1"), @("upstream", "accurate", "upstream-1"),
+            @("prism", "fast", "bonsai-1"), @("upstream", "accurate", "upstream-2"), @("prism", "accurate", "prism-2"))
           foreach ($Run in $Runs) {
-            $Runtime = $Run[0]; $Label = $Run[1]
+            $Runtime = $Run[0]; $Label = $Run[2]
+            $Model = (Resolve-Path "lab\$($Run[1]).gguf").Path
             $Server = @(Get-ChildItem -LiteralPath "lab\$Runtime" -Recurse -File -Filter "llama-server.exe")[0].FullName
             # The app's launch (server.rs arguments_for and its measured flags), no API key.
             $Arguments = @("--host", "127.0.0.1", "--port", "$Port", "--model", $Model,
@@ -102,6 +113,8 @@ jobs:
           context = json.load(open("lab/context.json", encoding="utf-8-sig"))
           lines = [f"Windows runner: {context['cpu']}, {context['logical_processors']} logical processors, "
                    f"{context['threads']} server threads; Prism {context['prism']}, upstream {context['upstream']}",
+                   "", "prism-N and upstream-N run Qwen3.5-2B (accurate); bonsai-1 runs Bonsai 2 2B (fast) on Prism, "
+                   "with prompts written for Qwen, so only its time means anything.",
                    "", "| Run | Time per document | Prefill (median) | Decode (median) | Replies identical to the Linux capture |",
                    "| --- | ---: | ---: | ---: | ---: |"]
           for path in sorted(glob.glob("lab/*-[12].json")):
