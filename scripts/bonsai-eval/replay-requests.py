@@ -22,16 +22,22 @@ import time
 import urllib.request
 
 
+def capture_name(directory):
+    """What a capture directory is called in keys: its own name, or for a `wire/` directory
+    (internbench-chunked.sh's chunks/NN/wire) the chunk's."""
+    name = os.path.basename(directory.rstrip("/"))
+    if name == "wire":
+        name = os.path.basename(os.path.dirname(directory.rstrip("/")))
+    return name
+
+
 def load_requests(dirs, skip_first):
     requests = []
     for directory in dirs:
         files = sorted(glob.glob(os.path.join(directory, "*-model-wire.json")))
         if skip_first:
             files = files[1:]
-        # Keyed like the reference replies: the chunk directory a `wire/` capture sits in.
-        name = os.path.basename(directory.rstrip("/"))
-        if name == "wire":
-            name = os.path.basename(os.path.dirname(directory.rstrip("/")))
+        name = capture_name(directory)
         for path in files:
             requests.append((f"{name}/{os.path.basename(path)[:4]}", path))
     return requests
@@ -44,9 +50,9 @@ def load_reference(source):
         return {r["key"]: r["content"] for r in json.load(open(source))["results"]}
     reference = {}
     for path in sorted(glob.glob(os.path.join(source, "**", "*-response.json"), recursive=True)):
-        parent = os.path.basename(os.path.dirname(os.path.dirname(path)))
         body = json.load(open(path))
-        reference[f"{parent}/{os.path.basename(path)[:4]}"] = body["choices"][0]["message"].get("content")
+        key = f"{capture_name(os.path.dirname(path))}/{os.path.basename(path)[:4]}"
+        reference[key] = body["choices"][0]["message"].get("content")
     return reference
 
 

@@ -759,7 +759,14 @@ pub fn validate_facts_at(
             if party.copied || party.signatory || is_organization(&party.name) {
                 Standing::Unknown
             } else {
-                standing_of(scope, &party.name, class)
+                match standing_of(scope, &party.name, class) {
+                    // A label that gives them a party's role ("Recipient:",
+                    // "Tenant:") outranks a signature or a post.
+                    Standing::Staff if labeled_party(scope, &party.name, class) => {
+                        Standing::Subject
+                    }
+                    standing => standing,
+                }
             }
         })
         .collect::<Vec<_>>();
@@ -2990,6 +2997,18 @@ fn signs_by(line: &str) -> bool {
     line.trim()
         .trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ':' | '-' | '_' | '\u{2014}'))
         == "by"
+}
+
+/// Whether the document's own wording gives a person a party's role - a
+/// label, a defined term, a customer cue. Not the issuer's or sender's,
+/// which a letterhead or a signature gives the staff who sign, and not an
+/// issued document's buyer, whose "Buyer:" names its purchasing contact.
+fn labeled_party(scope: &ValidationScope<'_>, name: &str, class: DocumentClass) -> bool {
+    labeled_role(scope, name).is_some_and(|role| match role {
+        PartyRole::Issuer | PartyRole::Sender => false,
+        PartyRole::Buyer => class != DocumentClass::Issued,
+        _ => true,
+    })
 }
 
 /// What the document makes of a person the reply named: someone acting for
@@ -6716,6 +6735,31 @@ Kestrel Ridge Aero Services - Repair Station Certificate KRA\n\n\
             "{:?}",
             outcome.proposal
         );
+    }
+
+    #[test]
+    fn a_labeled_recipient_who_also_signs_stays_a_party() {
+        const NOTICE: &str = "NOTICE OF POLICY CHANGE\n\nRecipient: Jane Doe\n\n\
+Your coverage changes on March 1, 2026.\n\nAcknowledged: /s/ Jane Doe";
+        let reply = |index: &EvidenceIndex| ModelFacts {
+            document_type: Some("Notice of Policy Change".into()),
+            type_evidence: vec![id_of(index, "NOTICE")],
+            parties: vec![party(
+                "Jane Doe",
+                Some(PartyRole::Recipient),
+                &[id_of(index, "Recipient")],
+            )],
+            ..ModelFacts::default()
+        };
+        let (outcome, _) = facts_for(NOTICE, reply);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Jane Doe"],
+            "{:?}",
+            outcome.proposal
+        );
+        let facts = outcome.facts.unwrap();
+        assert!(!facts.parties.iter().any(|party| party.signatory));
     }
 
     #[test]
