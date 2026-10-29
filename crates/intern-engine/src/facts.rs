@@ -47,7 +47,7 @@ use crate::compose::{
     CastMember, DescriptionFacts, Relation, RelationCues, amount_label, describe, identifier_word,
     money_in, relation_from_roles,
 };
-use crate::cues::{CUSTOMER_CUES, ISSUER_CUES, STOPWORDS};
+use crate::cues::{CUSTOMER_CUES, ISSUER_CUES, STOPWORDS, TYPE_NOUNS};
 use crate::distill::normalize_heading;
 use crate::domain::{
     DateRole, DocumentClass, Evidence, EvidenceRef, FactSupport, ModelFacts, ModelProposal,
@@ -840,7 +840,8 @@ pub fn validate_facts_at(
     // An issued document whose reply said what it is but named no one
     // who could have issued it - no one, or only parties a customer cue
     // labels - takes as its issuer the one organization at the head of its
-    // first page, before any customer.
+    // first page, before any customer. The type may be the one its title
+    // gave when the reply's own was not in the document.
     let customer_only = parties.iter().all(|party| {
         party.copied
             || party.signatory
@@ -851,7 +852,7 @@ pub fn validate_facts_at(
     });
     if class == DocumentClass::Issued
         && proposed_type.is_some()
-        && type_supported
+        && document_type.is_some()
         && customer_only
         && let Some((name, unit)) = header_organization(scope)
         && !parties
@@ -3386,14 +3387,21 @@ fn header_organization<'a>(scope: &ValidationScope<'a>) -> Option<(String, &'a E
         {
             break;
         }
-        for organization in &unit.features.organizations {
+        let before_kind = unit.text.lines().filter_map(organization_before_kind);
+        for organization in unit
+            .features
+            .organizations
+            .iter()
+            .cloned()
+            .chain(before_kind)
+        {
             if found
                 .iter()
-                .any(|(known, _)| normalize_loosely(known) == *organization)
+                .any(|(known, _)| normalize_loosely(known) == organization)
             {
                 continue;
             }
-            if let Some(span) = written_span(unit, organization) {
+            if let Some(span) = written_span(unit, &organization) {
                 found.push((span, unit));
             }
         }
@@ -3402,6 +3410,29 @@ fn header_organization<'a>(scope: &ValidationScope<'a>) -> Option<(String, &'a E
         [only] => Some(only.clone()),
         _ => None,
     }
+}
+
+/// The organization a header line names before the kind of document it
+/// heads, which the index reads as one run of capitals with it:
+/// "Halvorsen Fixture Works LLC INVOICE".
+fn organization_before_kind(line: &str) -> Option<String> {
+    let words = line.split_whitespace().collect::<Vec<_>>();
+    let kind = words
+        .iter()
+        .rev()
+        .take_while(|word| {
+            TYPE_NOUNS.contains(
+                &word
+                    .trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_lowercase()
+                    .as_str(),
+            )
+        })
+        .count();
+    if kind == 0 || kind == words.len() {
+        return None;
+    }
+    crate::index::organizations_in(&words[..words.len() - kind].join(" ")).pop()
 }
 
 /// The words of a unit that read, loosely, as `loose`: the document's own
@@ -7090,6 +7121,39 @@ Jane Doe spoke to the manager about the leak in Unit 4.";
             ..ModelFacts::default()
         });
         assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
+    }
+
+    #[test]
+    fn a_header_names_its_issuer_before_the_kind_of_document() {
+        assert_eq!(
+            organization_before_kind("Halvorsen Fixture Works LLC INVOICE").as_deref(),
+            Some("halvorsen fixture works llc")
+        );
+        assert_eq!(organization_before_kind("INVOICE"), None);
+        assert_eq!(
+            organization_before_kind("Halvorsen Fixture Works LLC"),
+            None
+        );
+        const INVOICE: &str = "Halvorsen Fixture Works LLC INVOICE\n\n\
+4410 Ostrander Road, Halden Bay, WA 98264\n\nInvoice Date: 03/04/2026\n\n\
+Bill to: Quillon Ridge Bakery, Inc.";
+        let (outcome, _) = facts_for(INVOICE, |index| ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec![id_of(index, "Halvorsen")],
+            parties: vec![party(
+                "Quillon Ridge Bakery, Inc.",
+                Some(PartyRole::Customer),
+                &[id_of(index, "Bill to")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Halvorsen Fixture Works LLC"],
+            "{:?}",
+            outcome.proposal
+        );
     }
 
     #[test]

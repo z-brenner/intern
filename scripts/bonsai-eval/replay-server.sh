@@ -5,7 +5,7 @@
 #
 # Laboratory tooling; the app does not call it. Usage:
 #   LLAMA_SERVER=... MODEL=... WIRE="dir [dir ...]" [THREADS=4] [PORT=18120] [CONCURRENCY=1]
-#   [REFERENCE=dir-or-json] [LIMIT=n] [CTX=8192] [PARALLEL=1] \
+#   [REFERENCE=dir-or-json] [LIMIT=n] [EVERY=k] [STRIP_LOGPROBS=1] [CTX=8192] [PARALLEL=1] \
 #     scripts/bonsai-eval/replay-server.sh OUT_DIR [extra llama-server flags ...]
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -28,7 +28,10 @@ for _ in $(seq 1 240); do
   sleep 0.5
 done
 WIRE_ARGS=(); for w in $WIRE; do WIRE_ARGS+=(--wire "$w"); done
+# Each capture's first request is its warm-up: it is skipped, and replayed untimed once per slot
+# so every slot starts with the instructions cached, as in an app that has read a document.
 python3 -I "$REPO/scripts/bonsai-eval/replay-requests.py" --server "http://127.0.0.1:$PORT" \
-  "${WIRE_ARGS[@]}" --skip-first --concurrency "$CONCURRENCY" ${LIMIT:+--limit "$LIMIT"} \
+  "${WIRE_ARGS[@]}" --skip-first --warm-up --every "${EVERY:-1}" ${STRIP_LOGPROBS:+--strip-logprobs} \
+  --concurrency "$CONCURRENCY" ${LIMIT:+--limit "$LIMIT"} \
   ${REFERENCE:+--reference "$REFERENCE"} --out "$OUT/replay.json"
 grep -E "draft acceptance|statistics" "$OUT/llama-server.log" | tail -3 || true

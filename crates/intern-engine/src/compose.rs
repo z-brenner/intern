@@ -312,12 +312,21 @@ pub fn relation_from_roles(
             if let Some(issuer) = with(&[PartyRole::Issuer]) {
                 return one(PartyRelation::From, issuer, "the issuer");
             }
-            if contains_word(&lowered, "purchase order")
-                && let Some(buyer) = with(&[PartyRole::Buyer])
+            // An order is issued by the side buying - its buyer, client or
+            // customer - and sent to its vendor, which never issues it.
+            let order = contains_word(&lowered, "purchase order");
+            if order
+                && let Some(buyer) =
+                    with(&[PartyRole::Buyer, PartyRole::Client, PartyRole::Customer])
             {
                 return one(PartyRelation::From, buyer, "the buyer issues an order");
             }
-            if let Some(seller) = with(&[PartyRole::Vendor, PartyRole::Seller, PartyRole::Sender]) {
+            let issuing: &[PartyRole] = if order {
+                &[PartyRole::Sender]
+            } else {
+                &[PartyRole::Vendor, PartyRole::Seller, PartyRole::Sender]
+            };
+            if let Some(seller) = with(issuing) {
                 return one(PartyRelation::From, seller, "the vendor");
             }
             if let Some(index) = cues.issuer
@@ -1226,6 +1235,38 @@ mod tests {
                 role_supported: role.is_some(),
             })
             .collect()
+    }
+
+    #[test]
+    fn an_order_is_from_the_side_buying_never_from_its_vendor() {
+        let order = |parties: &[(&str, Option<PartyRole>)]| {
+            relation_from_roles(
+                DocumentClass::Issued,
+                Some("Purchase Order"),
+                &cast(parties),
+                RelationCues::default(),
+            )
+        };
+        let relation = order(&[
+            ("Ridgewell Textiles Ltd.", Some(PartyRole::Vendor)),
+            ("Thornbury Outdoor Gear Co.", Some(PartyRole::Client)),
+        ]);
+        assert_eq!(relation.relation, PartyRelation::From);
+        assert_eq!(relation.parties, vec!["Thornbury Outdoor Gear Co."]);
+        // An order naming only its vendor names no issuer.
+        let relation = order(&[("Ridgewell Textiles Ltd.", Some(PartyRole::Vendor))]);
+        assert_ne!(relation.relation, PartyRelation::From);
+        // An invoice is still from its vendor.
+        let invoice = relation_from_roles(
+            DocumentClass::Issued,
+            Some("Invoice"),
+            &cast(&[
+                ("Ridgewell Textiles Ltd.", Some(PartyRole::Vendor)),
+                ("Thornbury Outdoor Gear Co.", Some(PartyRole::Client)),
+            ]),
+            RelationCues::default(),
+        );
+        assert_eq!(invoice.parties, vec!["Ridgewell Textiles Ltd."]);
     }
 
     #[test]

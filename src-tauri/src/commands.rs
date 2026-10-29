@@ -403,9 +403,13 @@ impl RuntimeLauncher for LlamaLauncher {
             manifest.served_model_name.clone(),
         )?
         .with_token_confidence(tiers::wants_token_confidence(tier));
+        let mut engine = Engine::new(client).with_prompt_profile(pinned.prompt_profile);
+        if let Some(threshold) = tiers::review_below_token_confidence(tier) {
+            engine = engine.with_min_token_confidence(threshold);
+        }
         Ok(LaunchedRuntime {
             process: Box::new(server),
-            engine: Engine::new(client).with_prompt_profile(pinned.prompt_profile),
+            engine,
         })
     }
 }

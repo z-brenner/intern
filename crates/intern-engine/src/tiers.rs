@@ -347,13 +347,39 @@ pub fn escalation_with(
     unsure.then_some(EscalationReason::LowTokenConfidence)
 }
 
+/// The token probability below which an accurate reading goes to review
+/// instead of being filed: the least probable token of its date or of a
+/// party's name ([`crate::domain::TokenConfidence::min`]). The model naming
+/// a date or a party it would rather not have written is the one signal
+/// validation cannot see, since the value it chose is still in the text.
+///
+/// On the 77-document evaluation (Qwen3.5 2B, the packaged runtime, after
+/// the party rules of October 2026) it sent 15 of the 65 ready readings to
+/// review: 7 of the 11 wrong names among them, and 8 right ones. The value
+/// was chosen on the fixture corpus (`docs/model-candidates.md`), not on
+/// those documents.
+pub const REVIEW_BELOW_TOKEN_CONFIDENCE: Option<f32> = Some(0.5);
+
+/// The token probability below which `tier`'s readings go to review. A fast
+/// reading always goes to review ([`hold_fast_reading`]), so only the
+/// accurate tier has one.
+pub fn review_below_token_confidence(tier: ModelTier) -> Option<f32> {
+    match tier {
+        ModelTier::Accurate => REVIEW_BELOW_TOKEN_CONFIDENCE,
+        ModelTier::Fast => None,
+    }
+}
+
 /// Whether `tier`'s requests should ask the server for token probabilities:
-/// only a reading the cascade may escalate on them. The server pays a softmax
-/// over the vocabulary for every generated token, so no other reading asks.
+/// a reading the review gate judges by them, or one the cascade may escalate
+/// on them. The server pays a softmax over the vocabulary for every
+/// generated token (about 1-2% of a reading's time), so no other reading
+/// asks.
 pub fn wants_token_confidence(tier: ModelTier) -> bool {
-    matches!(AUTOMATIC_STRATEGY, AutomaticStrategy::Cascade)
-        && tier == ModelTier::Fast
-        && ESCALATION.below_token_confidence.is_some()
+    review_below_token_confidence(tier).is_some()
+        || (matches!(AUTOMATIC_STRATEGY, AutomaticStrategy::Cascade)
+            && tier == ModelTier::Fast
+            && ESCALATION.below_token_confidence.is_some())
 }
 
 /// The memory available for a model to load into, in bytes, or `None` when
@@ -755,12 +781,14 @@ mod tests {
     }
 
     #[test]
-    fn token_probabilities_are_asked_for_only_where_they_can_escalate() {
-        assert!(!wants_token_confidence(A));
+    fn token_probabilities_are_asked_for_only_where_something_reads_them() {
+        assert_eq!(review_below_token_confidence(A), Some(0.5));
+        assert_eq!(review_below_token_confidence(F), None);
+        assert!(wants_token_confidence(A), "the review gate reads them");
         assert_eq!(
             wants_token_confidence(F),
             AUTOMATIC_STRATEGY == Cascade,
-            "AccurateFirst never escalates, so never pays for them"
+            "a fast reading is always reviewed, and AccurateFirst never escalates"
         );
     }
 
