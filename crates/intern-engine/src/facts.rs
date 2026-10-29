@@ -854,6 +854,51 @@ pub fn validate_facts_at(
             );
         }
     }
+    // A record whose staff act for the organization at the head of its
+    // first page comes from that organization, though the reply named
+    // another besides them: a museum's loan condition report, its
+    // conservator the examiner, about a lender's painting.
+    if acting_for
+        && !only_people
+        && class == DocumentClass::Record
+        && let Some((name, unit)) =
+            header_organization(scope).or_else(|| letterhead_organization(scope))
+    {
+        let name = without_sentence_stop(&with_of_phrase(unit, &name));
+        if !parties
+            .iter()
+            .any(|party| normalize_loosely(&party.name) == normalize_loosely(&name))
+        {
+            let line = unit
+                .text
+                .lines()
+                .find(|line| normalize_loosely(line).contains(&normalize_loosely(&name)))
+                .unwrap_or(&unit.text)
+                .trim()
+                .to_owned();
+            remember(
+                &Found {
+                    support: Support::Context,
+                    unit: Some(unit),
+                    line: Some(line),
+                    miscited: 0,
+                },
+                &mut references,
+            );
+            parties.insert(
+                0,
+                ValidatedParty {
+                    name: display_name(&name),
+                    role: Some(PartyRole::Issuer),
+                    role_support: Support::Context,
+                    document_role: Some(PartyRole::Issuer),
+                    support: Support::Context,
+                    evidence: vec![unit.id.clone()],
+                    ..ValidatedParty::default()
+                },
+            );
+        }
+    }
     // An issued document whose reply said what it is but named no one
     // who could have issued it - no one, or only parties a customer cue
     // labels - takes as its issuer the one organization at the head of its
@@ -7357,6 +7402,44 @@ through the 2025 monitoring year.";
             outcome.proposal
         );
         assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+    }
+
+    #[test]
+    fn a_record_its_staff_made_comes_from_their_letterhead_not_the_other_party() {
+        const REPORT: &str = "Saltash Point Museum of Art\n\n\
+Registration and Conservation - 1 Gallery Walk, Saltash Point, CA 94923\n\n\
+LOAN CONDITION REPORT\n\n\
+| Field | Entry |\n| --- | --- |\n\
+| Date of examination | October 2, 2025 |\n\
+| Examined by | Delphine Moncrieff, Associate Conservator of Paintings |\n\
+| Lender | Haverford Family Collection |\n\
+| Artist | Elias Brandvold (1871-1934) |";
+        let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+            document_type: Some("Loan Condition Report".into()),
+            type_evidence: vec![id_of(index, "LOAN CONDITION")],
+            document_date: Some("2025-10-02".into()),
+            date_evidence: vec![id_of(index, "| Date of examination")],
+            parties: vec![
+                party(
+                    "Haverford Family Collection",
+                    Some(PartyRole::Lender),
+                    &[id_of(index, "| Lender")],
+                ),
+                party(
+                    "Delphine Moncrieff",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "| Examined by")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Saltash Point Museum of Art"],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
     }
 
     #[test]

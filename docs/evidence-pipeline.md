@@ -253,7 +253,11 @@ The other checks:
   place: the two a first-page "between" clause names for an agreement or
   an amendment, else the one organization at the head of the first page,
   else the one a letterhead unit names (with an "of" phrase the index cut
-  off restored: `Saltash Point Museum of Art`). A notice or a letter
+  off restored: `Saltash Point Museum of Art`). A record whose staff the
+  reply named beside another organization still comes from that first-page
+  organization, as its issuer: a museum's loan condition report, its
+  conservator the examiner, is from the museum, not the lender whose
+  painting it examines. A notice or a letter
   whose reply names no one it is addressed to takes as its addressee the
   name its first page's `To:` field opens with; an `Attn:` line names the
   person who reads it for the addressee and never does.
