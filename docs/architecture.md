@@ -821,14 +821,13 @@ llama.cpp `b11946` read Qwen3.5 2B 19% faster than Prism on Linux, at the same
 accuracy
 ([`bench/reports/speed-linux-cpu-2026-10-29`](../bench/reports/speed-linux-cpu-2026-10-29/README.md)),
 and 25% faster on Windows, but cannot read Bonsai's PQ2_0 weights, so the
-quick model stays on Prism.
-Prism's llama-server is where the one runtime always was, in the sidecar
-folder - the install root on Windows, the `runtime` folder on Linux - and
-upstream's in a `llama-upstream` folder inside it. Both builds name their CPU
-backends `ggml-cpu-*`, and ggml loads them from the executable's folder and
-the current directory, so each server is started in its own folder. A runtime
-that is missing fails to start like any other server, and its model is set
-aside while the other reads.
+quick model stays on Prism. Prism's llama-server is where the one runtime
+always was, in the sidecar folder - the install root on Windows, the `runtime`
+folder on Linux - and upstream's in a `llama-upstream` folder inside it. Both
+builds name their CPU backends `ggml-cpu-*`, and ggml loads them from the
+executable's folder and the current directory, so each server is started in
+its own folder. A runtime that is missing fails to start like any other
+server, and its model is set aside while the other reads.
 
 One llama-server runs at a time. A document planned onto the model that is not
 loaded unloads it and loads the other under the same `lifecycle` lock and

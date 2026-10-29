@@ -155,8 +155,8 @@ the accurate tier) and an upstream llama.cpp CPU build from source, before the
 runtime moved to the PrismML fork's `prism-b10826-c9c34bc` release; the
 77-document evaluation (`bench/reports/bonsai-linux-cpu-2026-10-27`) found that
 release reads the same model the same way, within run-to-run noise, and the
-same run on upstream `b11946`, which the accurate model now runs on while Prism
-runs only the quick one, found it no less accurate
+same run on upstream `b11946` - the build the accurate model runs on now, Prism
+running only the quick one - read it no less accurately
 (`bench/reports/speed-linux-cpu-2026-10-29`); the digest pipeline's with PDFium
 `chromium/7881` for Linux, the same pinned `tessdata_fast` files, and the
 distribution's Tesseract 5.3.4 rather than the vcpkg 5.5.2 the installer
