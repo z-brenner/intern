@@ -8,6 +8,7 @@
       "resources/tessdata/*.traineddata": null,
       "resources/native/pdfium/*.dll": null,
       "resources/native/sidecars/*.dll": null,
+      "resources/native/llama-upstream/": null,
       "resources/ocr-models/*.onnx": null,
       "resources/runtime/": "runtime/"
     },

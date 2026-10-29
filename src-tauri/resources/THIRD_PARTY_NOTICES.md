@@ -17,7 +17,9 @@ under `ocr-models/`, because reading a scan must work offline from the first run
 
 | Component | Pinned source | License | Copyright / project |
 | --- | --- | --- | --- |
-| llama.cpp, PrismML fork | `prism-b10826-c9c34bc` (commit `c9c34bc9c4042c13a31598ebf43461cd0ad8f00d`) of `PrismML-Eng/llama.cpp`, the release's Windows CPU x64 archive (Linux: its Ubuntu x64 archive) | MIT | The ggml authors and llama.cpp contributors |
+| llama.cpp, PrismML fork, which the fast model runs on (`llama-server.exe` and its DLLs, beside `Intern.exe`) | `prism-b10826-c9c34bc` (commit `c9c34bc9c4042c13a31598ebf43461cd0ad8f00d`) of `PrismML-Eng/llama.cpp`, the release's Windows CPU x64 archive (Linux: its Ubuntu x64 archive) | MIT | The ggml authors and llama.cpp contributors |
+| llama.cpp, which the accurate model runs on (`llama-upstream/`) | `b11946` of `ggml-org/llama.cpp`, the release's Windows CPU x64 archive (Linux: its Ubuntu x64 archive, in `runtime/llama-upstream/`) | MIT | The ggml authors and llama.cpp contributors |
+| LLVM OpenMP runtime (`llama-upstream/libomp.dll`), which that llama.cpp build imports | as shipped in llama.cpp `b11946`'s Windows CPU x64 archive | Apache-2.0 WITH LLVM-exception | The LLVM Project contributors |
 | PDFium binaries | `chromium/7881`, Windows x64 | BSD-3-Clause | The PDFium Authors / Chromium Authors |
 | Tesseract OCR | 5.5.2, built with vcpkg baseline `644588ca32576d86325fb3fe3b6020042bee61b8` | Apache-2.0 | Tesseract OCR contributors |
 | tessdata_fast English and OSD data | commit `87416418657359cb625c412a48b6e1d6d41c29bd` | Apache-2.0 | Tesseract OCR contributors |
@@ -30,7 +32,9 @@ under `ocr-models/`, because reading a scan must work offline from the first run
 
 Sources:
 
-- <https://github.com/ggml-org/llama.cpp>
+- <https://github.com/ggml-org/llama.cpp> and
+  <https://github.com/PrismML-Eng/llama.cpp>
+- <https://github.com/llvm/llvm-project> (`openmp/`)
 - <https://pdfium.googlesource.com/pdfium/>
 - <https://github.com/bblanchon/pdfium-binaries>
 - <https://github.com/tesseract-ocr/tesseract>
@@ -41,6 +45,13 @@ Sources:
   <https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime/1.30.0>
 - <https://github.com/PaddlePaddle/PaddleOCR> and
   <https://huggingface.co/PaddlePaddle>
+
+Both llama.cpp builds are under the same MIT license: the `LICENSE` file is
+byte for byte the same at both pins, and is installed once, as
+`licenses/llama.cpp-LICENSE.txt`. The LLVM OpenMP runtime's license, the Apache
+License 2.0 with LLVM Exceptions, is installed as
+`licenses/llvm-openmp-LICENSE.txt`, copied from the `LICENSE-LLVM-OpenMP` file
+in the same llama.cpp archive.
 
 ONNX Runtime's own third-party notices are installed beside its license as
 `licenses/onnxruntime-ThirdPartyNotices.txt`. Intern loads ONNX Runtime from its

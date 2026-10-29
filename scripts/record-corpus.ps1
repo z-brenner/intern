@@ -12,9 +12,10 @@ fixtures/corpus-baseline.json (the scores that recording earns). Commit both
 with the change that made the recording stale. See docs/evaluation.md.
 
 .PARAMETER RuntimeDirectory
-A package-shaped runtime: intern-worker.exe, llama-server.exe, pdfium.dll,
-tesseract.exe, and tessdata\. Produce one with scripts/stage-windows-runtime.ps1
-after scripts/fetch-windows-assets.ps1.
+A package-shaped runtime: intern-worker.exe, llama-server.exe (the PrismML
+fork, for the fast model), llama-upstream\llama-server.exe (upstream llama.cpp,
+for the accurate model), pdfium.dll, tesseract.exe, and tessdata\. Produce one
+with scripts/stage-windows-runtime.ps1 after scripts/fetch-windows-assets.ps1.
 
 .PARAMETER ModelPath
 The GGUF file named in src-tauri/resources/model-manifest.json, as the app
@@ -47,7 +48,7 @@ $Fixtures = Join-Path $RepositoryRoot "fixtures/generated"
 if (-not (Test-Path -LiteralPath $Fixtures -PathType Container)) {
     throw "fixtures/generated is missing; run 'npm run fixtures' first"
 }
-foreach ($Required in @("intern-worker.exe", "llama-server.exe", "pdfium.dll", "tesseract.exe", "tessdata/eng.traineddata")) {
+foreach ($Required in @("intern-worker.exe", "pdfium.dll", "tesseract.exe", "tessdata/eng.traineddata")) {
     if (-not (Test-Path -LiteralPath (Join-Path $Runtime $Required) -PathType Leaf)) { throw "Runtime is missing $Required" }
 }
 
@@ -57,8 +58,16 @@ $Pinned = @($Manifest.models | ForEach-Object { $_.files } | Where-Object { $_.s
 if ($Pinned.Count -eq 0) {
     throw "The model at $Model is not the one model-manifest.json pins; a recording of another model would be scored as if it were the shipped one"
 }
+# Recorded on the llama.cpp build the app runs the model's tier on: upstream
+# llama.cpp, in the runtime's llama-upstream folder, for the accurate tier, and
+# the PrismML fork at its root for the fast one.
+$Tier = [string](@($Manifest.models | Where-Object { @($_.files | Where-Object { $_.sha256 -eq $ModelHash }).Count -gt 0 })[0].tier)
+$ServerRelative = if ($Tier -eq "accurate") { "llama-upstream/llama-server.exe" } else { "llama-server.exe" }
+$ServerPath = [IO.Path]::GetFullPath((Join-Path $Runtime $ServerRelative))
+if (-not (Test-Path -LiteralPath $ServerPath -PathType Leaf)) { throw "Runtime is missing $ServerRelative, which the $Tier model runs on" }
+$LlamaDownload = if ($Tier -eq "accurate") { "llama.cpp-upstream" } else { "llama.cpp" }
 $RuntimeAssets = Get-Content -LiteralPath (Join-Path $RepositoryRoot "src-tauri/resources/runtime-assets.json") -Raw | ConvertFrom-Json
-$LlamaVersion = @($RuntimeAssets.downloads | Where-Object { $_.id -eq "llama.cpp" } | ForEach-Object { $_.version })
+$LlamaVersion = @($RuntimeAssets.downloads | Where-Object { $_.id -eq $LlamaDownload } | ForEach-Object { $_.version })
 $Description = "$($Pinned[0].name) (manifest sha256 $($ModelHash.Substring(0, 8))); llama.cpp $($LlamaVersion -join ',') on Windows, $Threads threads, 8192 context; packaged worker, PDFium, and Tesseract"
 if ($Note) { $Description = "$Description; $Note" }
 
@@ -72,7 +81,7 @@ $ServerArguments = @(
     "--threads", "$Threads", "--threads-batch", "$Threads", "--jinja", "--no-webui", "--no-mmproj",
     "--cache-ram", "0", "-ub", "256", "--prio", "-1", "--poll", "0"
 )
-$Server = Start-Process -FilePath (Join-Path $Runtime "llama-server.exe") -ArgumentList $ServerArguments -PassThru -WindowStyle Hidden
+$Server = Start-Process -FilePath $ServerPath -ArgumentList $ServerArguments -PassThru -WindowStyle Hidden
 try {
     $Deadline = (Get-Date).AddMinutes(3)
     do {

@@ -8,6 +8,13 @@
 // before bundling, /usr/lib/Intern once installed - so the same inventory
 // checks the staged tree, a copy of it, and the installed package alike.
 //
+// `llama_cpp` lists the llama.cpp builds the runtime carries, one object per
+// build: the archive it came from (repository, release, archive, url, size,
+// sha256) and `path`, the folder under runtime/ that holds its llama-server
+// and libraries - "." for runtime/ itself, where Prism's build has always
+// been, and "llama-upstream" for ggml-org's. LLAMA_CPP_JSON holds that
+// list, or a single build's object, which is a build in runtime/ itself.
+//
 //   node scripts/linux-runtime-inventory.mjs write ROOT PACKAGES_TSV LLAMA_CPP_JSON
 //   node scripts/linux-runtime-inventory.mjs verify ROOT
 //   node scripts/linux-runtime-inventory.mjs stage ROOT DESTINATION
@@ -19,6 +26,7 @@ import { pathToFileURL } from 'node:url';
 
 export const INVENTORY = 'runtime/runtime-inventory.json';
 const TARGET = 'x86_64-unknown-linux-gnu';
+const LLAMA_CPP = 'llama.cpp';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -59,12 +67,71 @@ async function describe(root, path) {
   return { size: metadata.size, sha256: await sha256(join(root, path)), executable: (metadata.mode & 0o111) !== 0 };
 }
 
+/** The folder under runtime/ that holds a runtime file: "." for runtime/ itself. */
+function runtimeFolder(path) {
+  const inside = path.slice('runtime/'.length);
+  const slash = inside.lastIndexOf('/');
+  return slash < 0 ? '.' : inside.slice(0, slash);
+}
+
+/**
+ * The llama.cpp builds to record, each checked for a complete archive pin
+ * and a folder of its own. A single object, the shape from before there
+ * were two builds, is one build in runtime/ itself.
+ */
+function llamaCppBuilds(llamaCpp) {
+  const builds = Array.isArray(llamaCpp) ? llamaCpp : [{ path: '.', ...llamaCpp }];
+  assert(builds.length > 0, 'no llama.cpp build is recorded');
+  const folders = new Set();
+  return builds.map((build) => {
+    assert(build && typeof build === 'object', `a llama.cpp build must be an object: ${JSON.stringify(build)}`);
+    const { path, repository, release, archive, url, size, sha256: digest } = build;
+    for (const [key, value] of Object.entries({ repository, release, archive, url })) {
+      assert(typeof value === 'string' && value.length > 0, `llama.cpp build ${release ?? path} has no ${key}`);
+    }
+    assert(Number.isSafeInteger(size) && size > 0, `llama.cpp ${release} has an invalid archive size`);
+    assert(typeof digest === 'string' && /^[0-9a-f]{64}$/.test(digest), `llama.cpp ${release} has an invalid archive SHA-256`);
+    assert(typeof path === 'string', `llama.cpp ${release} names no folder under runtime/`);
+    if (path !== '.') safeRelative(path, `llama.cpp ${release} folder`);
+    assert(!folders.has(path), `two llama.cpp builds are recorded in runtime/${path}`);
+    folders.add(path);
+    return { path, repository, release, archive, url, size, sha256: digest };
+  });
+}
+
+/**
+ * Refuses a llama.cpp build without its own llama-server, and a llama.cpp
+ * file in a folder other than its build's: the builds' libraries share
+ * names, and each server loads the ones beside it.
+ */
+function checkLlamaCppFolders(builds, bundled) {
+  for (const file of bundled) {
+    for (const owner of file.packages.filter((candidate) => candidate.name === LLAMA_CPP)) {
+      const build = builds.find((candidate) => candidate.path === runtimeFolder(file.path));
+      assert(build, `${file.path} belongs to llama.cpp ${owner.version}, but no llama.cpp build is recorded in its folder`);
+      assert(owner.version === build.release, `${file.path} belongs to llama.cpp ${owner.version}, but its folder holds llama.cpp ${build.release}`);
+    }
+  }
+  for (const build of builds) {
+    const server = build.path === '.' ? 'runtime/llama-server' : `runtime/${build.path}/llama-server`;
+    const file = bundled.find((candidate) => candidate.path === server);
+    assert(
+      file?.packages.some((owner) => owner.name === LLAMA_CPP && owner.version === build.release),
+      `llama.cpp ${build.release} has no llama-server of its own at ${server}`,
+    );
+  }
+}
+
 /**
  * Records what is staged under ROOT/runtime and ROOT/licenses. `packages`
  * maps each runtime file to the packages it belongs to; a file without one,
  * or one named that is not there, is refused rather than recorded.
+ * `llamaCpp` is the list of llama.cpp builds staged (or one build's object,
+ * for a build in runtime/ itself); every llama.cpp file must lie in its
+ * build's folder.
  */
 export async function writeInventory(root, { packages, llamaCpp }) {
+  const builds = llamaCppBuilds(llamaCpp);
   const runtime = (await filesUnder(root, 'runtime')).filter((path) => path !== INVENTORY);
   const licenses = await filesUnder(root, 'licenses');
   assert(runtime.length > 0, 'no runtime files are staged');
@@ -76,6 +143,7 @@ export async function writeInventory(root, { packages, llamaCpp }) {
     assert(owners?.length, `no package identity for staged runtime file ${path}`);
     bundled.push({ path, packages: owners, ...(await describe(root, path)) });
   }
+  checkLlamaCppFolders(builds, bundled);
   const licenseFiles = [];
   for (const path of licenses) {
     const { size, sha256: digest } = await describe(root, path);
@@ -85,7 +153,7 @@ export async function writeInventory(root, { packages, llamaCpp }) {
     schema_version: 1,
     generated_by: 'scripts/fetch-linux-assets.sh',
     target: TARGET,
-    llama_cpp: llamaCpp,
+    llama_cpp: builds,
     bundled_files: bundled,
     license_files: licenseFiles,
   };

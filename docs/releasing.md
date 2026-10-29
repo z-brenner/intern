@@ -168,8 +168,17 @@ and accepts it. It is only worth anything if that is true.
 - **The release job failed before tagging.** Fix the cause. If the fix is
   outside `docs/qa/`, it changes the release inputs, so QA runs again first.
 - **QA's corpus scoring hit its 60-minute limit.** Usually a wedged
-  llama-server. `docs/qa/logs/model-evaluation.log` in the artifact shows where
-  it stopped; run QA again.
+  llama-server: the accurate model's, upstream llama.cpp from the staged
+  runtime's `llama-upstream` folder, which is the one the corpus is scored on.
+  `docs/qa/logs/model-evaluation.log` in the artifact shows where it stopped;
+  run QA again.
+- **The installer smoke says an installed llama-server exited with
+  -1073741515.** That is `STATUS_DLL_NOT_FOUND`: a DLL the server imports is
+  not beside it. The PrismML fork's server, for the fast model, loads its DLLs
+  from the install root; upstream's, for the accurate model, loads its own and
+  LLVM's `libomp.dll` from `llama-upstream\`. Compare what
+  `scripts/fetch-windows-assets.ps1` staged in `src-tauri/resources/native/`
+  with the server's imports in the pinned archive.
 - **Pages did not deploy.** Usually Pages is not enabled; the run summary
   then says so, with the fix (Settings → Pages → Source: GitHub Actions). A
   run the `github-pages` environment refused stops before any step, so it

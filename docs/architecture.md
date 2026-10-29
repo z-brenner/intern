@@ -723,7 +723,7 @@ named as it was keeps whatever the reviewer had typed.
 | | |
 | --- | --- |
 | Models | Qwen3.5 2B, Q4_K_M GGUF (1.19 GiB), the accurate model; Bonsai 2 2B, ternary PQ2_0 GGUF (0.48 GiB), an optional quick model whose readings always go to review. One loaded at a time |
-| Runtime | the PrismML llama.cpp fork, release `prism-b10826-c9c34bc` (its PQ2_0 kernels run the quick model), CPU only |
+| Runtime | two llama.cpp builds, CPU only, one running at a time: upstream `b11946` runs the accurate model; the PrismML fork, release `prism-b10826-c9c34bc`, runs the quick one, whose PQ2_0 weights only its kernels read |
 | Context | 8,192 tokens |
 | Threads | half the logical processors, clamped to 2–12, for generation and for prompt processing alike |
 | Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below) |
@@ -815,6 +815,19 @@ error on its line in Settings and a Try again there, and the other installed
 model reads; with no other model, setup reports the failure as it always has.
 A paused download stays paused across restarts (a `<model>.paused` marker
 beside its partial file).
+
+Each model runs on its own runtime (`tiers::server_runtime`). Upstream
+llama.cpp `b11946` read Qwen3.5 2B 19% faster than Prism on Linux, at the same
+accuracy
+([`bench/reports/speed-linux-cpu-2026-10-29`](../bench/reports/speed-linux-cpu-2026-10-29/README.md)),
+and 25% faster on Windows, but cannot read Bonsai's PQ2_0 weights, so the
+quick model stays on Prism. Prism's llama-server is where the one runtime
+always was, in the sidecar folder - the install root on Windows, the `runtime`
+folder on Linux - and upstream's in a `llama-upstream` folder inside it. Both
+builds name their CPU backends `ggml-cpu-*`, and ggml loads them from the
+executable's folder and the current directory, so each server is started in
+its own folder. A runtime that is missing fails to start like any other
+server, and its model is set aside while the other reads.
 
 One llama-server runs at a time. A document planned onto the model that is not
 loaded unloads it and loads the other under the same `lifecycle` lock and
@@ -914,18 +927,19 @@ there at the size the manifest pins; the digest is checked behind the window,
 on the setup thread, and used to be read twice in the hook, a white window for
 five seconds or more on an office laptop. A model that has passed its digest
 and the semantic self-test is stamped in `models/.verified.json` with its size
-and modification time, the digest it was checked against, the llama-server
-binary's size and date, and the version of Intern that checked it. The stamp
-has an entry for each tier's file, and an entry records whether that model has
-passed the self-test or only its digest - the accurate model is digest-checked
-when its download ends and self-tested the first time a document loads it.
-While all of that still matches, the next launch starts the server with neither
-check; when any of it changes, the model is hashed and self-tested once and
-stamped again, and a failed self-test removes its entry. A stamp from the
-single-model build vouches for nothing. Within a session the digest is read
-at most once: restarts - a cancel, a recovery, a swap, a reload after idle -
-start a file that still looks exactly as it did when it was checked, and refuse
-one that does not. The
+and modification time, the digest it was checked against, the size and date
+of the llama-server binary it runs on, and the version of Intern that checked
+it. The stamp has an entry for each tier's file, and an entry records whether
+that model has passed the self-test or only its digest - the accurate model is
+digest-checked when its download ends and self-tested the first time a
+document loads it. While all of that still matches, the next launch starts the
+server with neither check; when any of it changes, the model is hashed and
+self-tested once and stamped again, and a failed self-test removes its entry.
+A new build of one runtime sends only its own model through the checks again.
+A stamp from the single-model or the one-runtime build vouches for nothing.
+Within a session the digest is read at most once: restarts - a cancel, a
+recovery, a swap, a reload after idle - start a file that still looks exactly
+as it did when it was checked, and refuse one that does not. The
 setup thread is started only once the rest of launch has succeeded: a launch
 that fails later waits behind a dialog that says why, and a server started
 earlier went on loading the model for an app that could not run. Until then
