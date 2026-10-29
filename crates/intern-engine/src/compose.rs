@@ -436,7 +436,15 @@ pub fn relation_from_roles(
             if let Some(party) = with(SUBSTANTIVE) {
                 return one(PartyRelation::For, party, "the party it is about");
             }
+            // A record is kept for the one it was made for: a policy for the
+            // insured, a report or a review for its client - not "to" them,
+            // which reads as correspondence. A third party whose role nothing
+            // settles may be the one it is about (a certificate's insured,
+            // whose holder it is sent to), and then the recipient stays "to".
             if let Some(party) = with(&[PartyRole::Recipient, PartyRole::Addressee]) {
+                if unassigned().is_none() {
+                    return one(PartyRelation::For, party, "the party it was made for");
+                }
                 return one(PartyRelation::To, party, "the recipient");
             }
             if let Some(party) = counterpart(true) {
@@ -1265,6 +1273,44 @@ mod tests {
             assert_eq!(DocumentClass::of(Some(kind)), class, "{kind}");
         }
         assert_eq!(DocumentClass::of(None), DocumentClass::Unknown);
+    }
+
+    #[test]
+    fn a_record_is_for_the_one_it_was_made_for_unless_a_third_party_may_be_its_subject() {
+        let review = cast(&[
+            ("Harbor Analytics LLC", Some(PartyRole::Issuer)),
+            (
+                "Pemberly Falls Distribution Co.",
+                Some(PartyRole::Recipient),
+            ),
+        ]);
+        let relation = relation_from_roles(
+            DocumentClass::Record,
+            Some("Quarterly Business Review"),
+            &review,
+            RelationCues::default(),
+        );
+        assert_eq!(relation.relation, PartyRelation::For);
+        assert_eq!(relation.parties, vec!["Pemberly Falls Distribution Co."]);
+        // A certificate is about its insured and sent to its holder.
+        let certificate = cast(&[
+            ("Ostergaard Roofing Contractors LLC", None),
+            (
+                "Hartsfield & Quail Insurance Brokers",
+                Some(PartyRole::Issuer),
+            ),
+            (
+                "Calloway Crossing Shopping Center LLC",
+                Some(PartyRole::Recipient),
+            ),
+        ]);
+        let relation = relation_from_roles(
+            DocumentClass::Record,
+            Some("Certificate of Liability Insurance"),
+            &certificate,
+            RelationCues::default(),
+        );
+        assert_eq!(relation.relation, PartyRelation::To);
     }
 
     #[test]
