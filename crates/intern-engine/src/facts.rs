@@ -1017,6 +1017,13 @@ pub fn validate_facts_at(
         caption: caption_sides(scope, context, &cast),
     };
     let relation = relation_from_roles(class, document_type.as_deref(), &cast, cues);
+    // An agreement has two sides at least. One that names only one has
+    // lost the other, which a person must supply.
+    if matches!(class, DocumentClass::Agreement | DocumentClass::Amendment)
+        && relation.relation == PartyRelation::With
+    {
+        push(&mut reasons, ReviewReason::PartyMissing);
+    }
 
     // The subject, the identifier and the key facts: every number and name
     // in them must be in what the model was shown, and the subject and a
@@ -2743,9 +2750,10 @@ fn completed_name(scope: &ValidationScope<'_>, name: &str) -> Option<String> {
     scope.context_units().find_map(|unit| {
         // What completes the name is a few words of its own, never another
         // organization's legal form or noun: "Systems LLC and" is no part
-        // of "Quill and Vane Advisory Group, Inc.". Nor is a role's label:
-        // "Plaintiff" is no part of "Plaintiff Gilchrist Harbor Marine
-        // Supply, LLC".
+        // of "Quill and Vane Advisory Group, Inc.". Nor is a role's or a
+        // field's label: "Plaintiff" is no part of "Plaintiff Gilchrist
+        // Harbor Marine Supply, LLC", nor "Account Name" of "Account Name
+        // Calm.com, Inc.".
         let organization = unit.features.organizations.iter().find(|organization| {
             let Some(before) = organization
                 .strip_suffix(loose.as_str())
@@ -3701,10 +3709,12 @@ fn between_cue(context: &ScopeView, cast: &[CastMember]) -> bool {
 }
 
 /// Whether a word is a role's own label - "Tenant", "Buyer", "Plaintiff" -
-/// which names no one.
+/// or a field's - "Name", "Account" - which names no one.
 fn is_role_word(word: &str) -> bool {
     BRINGING_SIDE.contains(&word)
         || ANSWERING_SIDE.contains(&word)
+        || matches!(word, "name" | "account")
+        || crate::cues::PARTY_LABELS.contains(&word)
         || PartyRole::ALL
             .iter()
             .any(|role| role_words(*role).0.contains(&word))
@@ -3788,7 +3798,10 @@ const EXTENSION_ROOM: usize = 6;
 /// A shorter type for a filename that names two parties but would not fit
 /// them: a compound title's first part when that part is itself a kind of
 /// document ("Settlement Agreement" of "Settlement Agreement and Mutual
-/// Release"). `None` when the name fits or there is no such part.
+/// Release"), or of an agreement named for what it joins, the agreement it
+/// ends on ("Product Development Agreement" of "Exclusive License and
+/// Product Development Agreement"). `None` when the name fits or there is
+/// no such part.
 fn fit_type(document_type: &str, relation: &Relation, date: Option<&str>) -> Option<String> {
     let [first, second] = relation.parties.as_slice() else {
         return None;
@@ -3809,6 +3822,20 @@ fn fit_type(document_type: &str, relation: &Relation, date: Option<&str>) -> Opt
         return None;
     }
     let lowered = document_type.to_lowercase();
+    let type_words = words(document_type);
+    // Only an agreement named for what it joins and nothing else: "Second
+    // Amendment to Software License and Support Agreement" is an amendment.
+    if type_words
+        .last()
+        .is_some_and(|last| matches!(last.as_str(), "agreement" | "contract"))
+        && !type_words
+            .iter()
+            .any(|word| matches!(word.as_str(), "of" | "to" | "for" | "on" | "under"))
+    {
+        let at = lowered.rfind(" and ")?;
+        let shorter = document_type[at + " and ".len()..].trim();
+        return (words(shorter).len() >= 2 && length(shorter) <= room).then(|| shorter.to_owned());
+    }
     let at = lowered.find(" and ")?;
     let shorter = document_type[..at].trim();
     let shorter_words = words(shorter);
@@ -7490,6 +7517,68 @@ LOAN CONDITION REPORT\n\n\
             outcome.proposal
         );
         assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+    }
+
+    #[test]
+    fn a_compound_agreement_too_long_for_both_parties_keeps_the_agreement_it_ends_on() {
+        let relation = Relation {
+            relation: PartyRelation::Between,
+            parties: vec![
+                "Eton Pharmaceuticals, Inc.".into(),
+                "Aucta Pharmaceuticals, Inc.".into(),
+            ],
+            basis: String::new(),
+        };
+        assert_eq!(
+            fit_type(
+                "Exclusive License and Product Development Agreement",
+                &relation,
+                Some("2019-06-12")
+            )
+            .as_deref(),
+            Some("Product Development Agreement")
+        );
+        // An amendment to such an agreement is an amendment still.
+        assert_eq!(
+            fit_type(
+                "Second Amendment to Software License and Support Agreement",
+                &relation,
+                Some("2025-09-29")
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn an_agreement_naming_one_of_its_parties_goes_to_review() {
+        const AGREEMENT: &str = "SPONSORSHIP AGREEMENT\n\n\
+This Sponsorship Agreement is made on July 16, 2012 by Peek Investments LLC.";
+        let (outcome, _) = facts_for(AGREEMENT, |index| ModelFacts {
+            document_type: Some("Sponsorship Agreement".into()),
+            type_evidence: vec![id_of(index, "SPONSORSHIP")],
+            document_date: Some("2012-07-16".into()),
+            date_evidence: vec![id_of(index, "This Sponsorship")],
+            parties: vec![party(
+                "Peek Investments LLC",
+                None,
+                &[id_of(index, "This Sponsorship")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::With);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyMissing),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    #[test]
+    fn a_field_label_is_no_part_of_the_name_it_labels() {
+        assert!(is_role_word("name"));
+        assert!(is_role_word("account"));
+        assert!(is_role_word("plaintiff"));
+        assert!(!is_role_word("calm"));
     }
 
     #[test]

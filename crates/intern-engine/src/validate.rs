@@ -595,6 +595,15 @@ pub(crate) fn reference_introduced(normalized: &str, position: usize) -> bool {
         let noun_at = last_document_noun(before).filter(|&at| at >= wide);
         return noun_at.is_some_and(|at| !determined_by_this(before, at));
     }
+    // A definition dates the document it defines: '"Master Services
+    // Agreement" the agreement executed between the Parties on the 21st
+    // day of February, 2017'. A defined term of two words or more that ends
+    // on a document noun, closed by its quotation mark in the date's clause,
+    // is that document - unless it is this one's own alias, in parentheses
+    // (`(the "Supply Agreement")`) or determined by "this".
+    if defines_another_document(before, window_start(normalized, position, WIDE)) {
+        return true;
+    }
     // A citation runs straight into the date it cites: "issued under the MSA
     // effective June 2, 2023". Clause punctuation in between means the
     // sentence moved on - "Pursuant to Section 9.2 of the Employment
@@ -605,6 +614,31 @@ pub(crate) fn reference_introduced(normalized: &str, position: usize) -> bool {
         wide.rfind(cue)
             .is_some_and(|at| !ends_the_clause(&wide[at + cue.len()..]))
     })
+}
+
+/// Whether the last quoted term in `before`, from `from` on, is a defined
+/// term naming another document whose clause runs on to the end of
+/// `before` (see [`reference_introduced`]).
+fn defines_another_document(before: &str, from: usize) -> bool {
+    let Some(close) = before[from..].rfind('"').map(|at| from + at) else {
+        return false;
+    };
+    let after = &before[close + 1..];
+    if after.trim_start().starts_with(')') || ends_the_clause(after) {
+        return false;
+    }
+    let term = before[..close].trim_end();
+    let Some(open) = term.rfind('"') else {
+        return false;
+    };
+    let words = &term[open + 1..];
+    let Some(noun_at) = last_document_noun(words) else {
+        return false;
+    };
+    let lead = words.trim_end_matches(|character: char| !character.is_alphanumeric());
+    last_word_start(lead) == Some(noun_at)
+        && words.split_whitespace().count() >= 2
+        && !determined_by_this(before, open + 1 + noun_at)
 }
 
 /// Whether the wording between a citation and a date ends the clause the
@@ -1764,6 +1798,25 @@ The total fee is $248,000.00 payable on delivery.
             .first()
             .expect("the line states the date");
         reference_introduced(&normalized, position)
+    }
+
+    #[test]
+    fn a_defined_term_dates_the_document_it_defines() {
+        assert!(reference_at(
+            "2.7 \u{201c}Master Services Agreement\u{201d} the agreement executed between the \
+Parties on the 21st day of February, 2017.",
+            "2017-02-21"
+        ));
+        // This document's own alias, in its parentheses, is this document.
+        assert!(!reference_at(
+            "This Supply Agreement (the \"Supply Agreement\") is made as of February 21, 2017.",
+            "2017-02-21"
+        ));
+        // A defined date names no document.
+        assert!(!reference_at(
+            "\"Effective Date\" means February 21, 2017.",
+            "2017-02-21"
+        ));
     }
 
     /// "This Consulting Agreement dated as of March 1, 2026" is the

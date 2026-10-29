@@ -316,9 +316,13 @@ appellee right beside its name ("Plaintiff Gilchrist Harbor Marine Supply,
 LLC", "Tavistock Boatworks, Inc., Defendant"), the filename reads `between`
 them, the side bringing the case first. A letter or an email about a case
 keeps the table's correspondence rules, and an invoice or a statement for it
-still comes from its issuer. A role's own label is never part of
-a name: the index's "Plaintiff Gilchrist Harbor Marine Supply, LLC" does not
-complete the reply's "Gilchrist Harbor Marine Supply, LLC".
+still comes from its issuer. A role's or a field's own label is never part
+of a name: the index's "Plaintiff Gilchrist Harbor Marine Supply, LLC" does
+not complete the reply's "Gilchrist Harbor Marine Supply, LLC", nor "Account
+Name Calm.com, Inc." its "Calm.com, Inc.".
+
+An agreement or an amendment that names only one party goes to review with
+`PARTY_MISSING`: an agreement has two sides at least, so the reply lost one.
 
 | Class | Relation |
 | --- | --- |
