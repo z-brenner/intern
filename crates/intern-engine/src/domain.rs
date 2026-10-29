@@ -655,6 +655,9 @@ pub enum ReviewReason {
     TypeInferred,
     /// A named party could not be found in the document.
     PartyUnsupported,
+    /// An agreement named only one of its parties: an agreement always has
+    /// two sides, so the reply missed the other.
+    PartyMissing,
     /// The description asserted something the document does not contain.
     DescriptionUnsupported,
     /// The description was not a single usable sentence.
@@ -689,6 +692,7 @@ impl ReviewReason {
             Self::TypeUnsupported => "TYPE_UNSUPPORTED",
             Self::TypeInferred => "TYPE_INFERRED",
             Self::PartyUnsupported => "PARTY_UNSUPPORTED",
+            Self::PartyMissing => "PARTY_MISSING",
             Self::DescriptionUnsupported => "DESCRIPTION_UNSUPPORTED",
             Self::DescriptionInvalid => "DESCRIPTION_INVALID",
             Self::LowConfidence => "LOW_CONFIDENCE",

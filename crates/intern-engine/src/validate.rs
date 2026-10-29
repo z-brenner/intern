@@ -595,6 +595,15 @@ pub(crate) fn reference_introduced(normalized: &str, position: usize) -> bool {
         let noun_at = last_document_noun(before).filter(|&at| at >= wide);
         return noun_at.is_some_and(|at| !determined_by_this(before, at));
     }
+    // A definition dates the document it defines: '"Master Services
+    // Agreement" the agreement executed between the Parties on the 21st
+    // day of February, 2017'. A defined term of two words or more that ends
+    // on a document noun, closed by its quotation mark in the date's clause,
+    // is that document - unless it is this one's own alias, in parentheses
+    // (`(the "Supply Agreement")`) or determined by "this".
+    if defines_another_document(before, window_start(normalized, position, WIDE)) {
+        return true;
+    }
     // A citation runs straight into the date it cites: "issued under the MSA
     // effective June 2, 2023". Clause punctuation in between means the
     // sentence moved on - "Pursuant to Section 9.2 of the Employment
@@ -605,6 +614,59 @@ pub(crate) fn reference_introduced(normalized: &str, position: usize) -> bool {
         wide.rfind(cue)
             .is_some_and(|at| !ends_the_clause(&wide[at + cue.len()..]))
     })
+}
+
+/// Whether the last quoted term in `before`, from `from` on, is a defined
+/// term naming another document whose clause runs on to the end of
+/// `before` (see [`reference_introduced`]).
+fn defines_another_document(before: &str, from: usize) -> bool {
+    let Some(close) = before[from..].rfind('"').map(|at| from + at) else {
+        return false;
+    };
+    let after = &before[close + 1..];
+    if after.trim_start().starts_with(')') || ends_the_clause(after) {
+        return false;
+    }
+    let term = before[..close].trim_end();
+    let Some(open) = term.rfind('"') else {
+        return false;
+    };
+    // The term opens its clause, as in a list of definitions: what is
+    // being referred to "as the \"Supply Agreement\"" names the sentence's
+    // own subject, which may be this document.
+    if !opens_its_clause(&term[..open]) {
+        return false;
+    }
+    let words = &term[open + 1..];
+    let Some(noun_at) = last_document_noun(words) else {
+        return false;
+    };
+    let lead = words.trim_end_matches(|character: char| !character.is_alphanumeric());
+    last_word_start(lead) == Some(noun_at)
+        && words.split_whitespace().count() >= 2
+        && !determined_by_this(before, open + 1 + noun_at)
+}
+
+/// Whether what stands before a quoted term on its line leaves the term
+/// opening its clause: nothing after the last sentence's end, or only a
+/// list marker ("2.7", "(a)", "iv.").
+fn opens_its_clause(lead: &str) -> bool {
+    let clause = lead.rsplit_once([';', ':']).map_or(lead, |(_, rest)| rest);
+    let clause = clause
+        .rsplit_once(". ")
+        .map_or(clause, |(_, rest)| rest)
+        .trim();
+    let marker = |token: &str| {
+        token.chars().count() <= 8
+            && token.chars().all(|character| {
+                character.is_alphanumeric() || matches!(character, '.' | '(' | ')')
+            })
+            && (token
+                .chars()
+                .any(|character| character.is_ascii_digit() || character == '(')
+                || token.ends_with(['.', ')']))
+    };
+    clause.is_empty() || (clause.split_whitespace().count() == 1 && marker(clause))
 }
 
 /// Whether the wording between a citation and a date ends the clause the
@@ -1764,6 +1826,31 @@ The total fee is $248,000.00 payable on delivery.
             .first()
             .expect("the line states the date");
         reference_introduced(&normalized, position)
+    }
+
+    #[test]
+    fn a_defined_term_dates_the_document_it_defines() {
+        assert!(reference_at(
+            "2.7 \u{201c}Master Services Agreement\u{201d} the agreement executed between the \
+Parties on the 21st day of February, 2017.",
+            "2017-02-21"
+        ));
+        // This document's own alias, in its parentheses, is this document.
+        assert!(!reference_at(
+            "This Supply Agreement (the \"Supply Agreement\") is made as of February 21, 2017.",
+            "2017-02-21"
+        ));
+        // A defined date names no document.
+        assert!(!reference_at(
+            "\"Effective Date\" means February 21, 2017.",
+            "2017-02-21"
+        ));
+        // A name given to the sentence's own subject may be this document's.
+        assert!(!reference_at(
+            "This agreement is referred to as the \"Supply Agreement\" and is effective \
+February 21, 2017.",
+            "2017-02-21"
+        ));
     }
 
     /// "This Consulting Agreement dated as of March 1, 2026" is the

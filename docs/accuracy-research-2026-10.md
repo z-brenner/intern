@@ -41,6 +41,9 @@ upstream llama.cpp runtime reads prompts 36% faster than the packaged one.
 | **A court document is filed between the two sides of its case** (deterministic, `facts.rs`/`compose.rs`): a plaintiff, petitioner, appellant or claimant and a defendant, respondent or appellee, each labelled beside its name, in a document with "A v. B"; letters and emails about a case are unchanged. A role word no longer completes a name ("Plaintiff Gilchrist ... LLC") | The court hearing notice right on 9 of 10 runs (8 were wrong and ready); +1 name and 1 fewer unsafe on all five Qwen runs (committed 66 → 67, 5 → 4); no other document changed | **Shipped** |
 | **A record or a notice is for the side its label names** (deterministic, `facts.rs`): a reply's bare "recipient" gives way to a client, tenant or other side-it-is-about role that the document's own label gives the party ("Prepared for ...") | The watershed report right on the 3 runs that had it wrong and ready; committed 67 → 68, 4 → 3; no other document changed on 10 runs | **Shipped** |
 | **A record its staff made comes from the organization they act for** (deterministic, `facts.rs`): when the reply named staff (an examiner, an inspector) and another organization, the first page's organization is added as the record's issuer | The loan condition report right on 6 of 10 runs (all were wrong and ready), and one maintenance record; committed 68 → 69, 3 → 2; no other document changed | **Shipped** |
+| **Real contracts (CUAD sample, 42 SEC filings; `bench/reports/cuad-sample-2026-10-29`): a field's label never completes a name; a defined term dates the document it defines; an agreement naming one party goes to review (`PARTY_MISSING`); an agreement's title reads across "and" and shortens to the agreement it ends on** (deterministic) | CUAD, adjudicated: names 28 → 30 of 42, **wrong names ready 5 → 2**, exact types 34 → 37. InternBench unchanged on all 10 recordings (Qwen runs exactly; three other models' runs shorten one title the gold also accepts) | **Shipped** |
+| A date stated only on a running header or footer is the copy's, not the document's (CUAD's EDGAR "Source:" stamp) | Missed the stamp it targeted, which runs into a different paragraph on each page; read line by line, it withheld a correct date a contract repeats in its own header | Rejected |
+| Always file a record "for" its recipient (drop the "to" when a third party may be its subject) | Fixed the property policy on 4 runs, but a certificate whose insured is unlabelled would be filed "for" its holder, which no gold accepts | Rejected |
 | **Review gate on token probability** (least probable date or party token below 0.5 goes to review; `docs/model-candidates.md`) | Unsafe 9 → 3 and 8 → 4 on two production-runtime runs, for 9 and 12 right names sent to review; about +1–2% time | **Shipped** |
 | Short ordinal line ids (`[3]` for `[p1.b4.r2]`) | Prompt −5%, reply −24% tokens, but −1% time per document; names 58 → 50, trap dates 0 → 5. The model cited line 1 for most facts. | Rejected |
 | Plainer prompt scaffold ("1 page, every line:" and `<<<`/`>>>` for "The whole 1-page document follows" and BEGIN/END EVIDENCE) | Names 58 → 58 with 19 of 77 names changed in both directions; unsafe 10 → 12. The echo it targeted is now caught by the issuer rules instead. | Rejected |
@@ -178,5 +181,8 @@ change the name).
 
 ## Still to measure
 
-- A held-out set of real documents. This is the most important missing piece. Every rule
-  so far was written from failures on the 77 synthetic documents it is scored on.
+- A held-out set of real documents. The CUAD sample (42 real contracts, above) is a first one:
+  real contracts are harder (71% of names right against InternBench's 90%) and fail in ways
+  the synthetic set does not have (filing stamps, definitions of other agreements, templates,
+  many-party filings). It covers only contracts; letters, invoices, notices and forms have no
+  real-document check yet, and the CUAD rules above were themselves written from this sample.

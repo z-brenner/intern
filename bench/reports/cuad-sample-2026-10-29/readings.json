@@ -1,0 +1,1127 @@
+{
+ "note": "Per-contract readings of the CUAD sample (scripts/cuad-eval/sample.json): Qwen3.5-2B Q4_K_M on llama.cpp b11946, the app flags, review gate 0.5. before = the rules of PR #44, after = this change. cuad-13 after is a live re-run (its prompt changed).",
+ "contracts": [
+  {
+   "id": "cuad-00",
+   "before": {
+    "type": "Advertising Agreement",
+    "date": "1999-06-21",
+    "parties": [
+     "I-ESCROW, INC.",
+     "2THEMART.COM, INC."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Co-branding and Advertising Agreement",
+    "date": "1999-06-21",
+    "parties": [
+     "I-ESCROW, INC.",
+     "2THEMART.COM, INC."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-01",
+   "before": {
+    "type": "Franchise Agreement",
+    "date": null,
+    "parties": [
+     "Airsopure International Group, Inc."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Franchise Agreement",
+    "date": null,
+    "parties": [
+     "Airsopure International Group, Inc."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "PARTY_MISSING"
+    ]
+   }
+  },
+  {
+   "id": "cuad-02",
+   "before": {
+    "type": "Outsourcing Agreement",
+    "date": null,
+    "parties": [
+     "Twin Cities Power Holdings, LLC",
+     "Redwater LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Outsourcing Agreement",
+    "date": null,
+    "parties": [
+     "Twin Cities Power Holdings, LLC",
+     "Redwater LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   }
+  },
+  {
+   "id": "cuad-03",
+   "before": {
+    "type": "Jacksonville Jaguars Sponsorship Agreement",
+    "date": "2017-11-27",
+    "parties": [
+     "Jacksonville Jaguars, LLC",
+     "The ARC Group, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Jacksonville Jaguars Sponsorship Agreement",
+    "date": "2017-11-27",
+    "parties": [
+     "Jacksonville Jaguars, LLC",
+     "The ARC Group, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-04",
+   "before": {
+    "type": "Agency Agreement",
+    "date": null,
+    "parties": [
+     "El Banco Financial Corporation",
+     "Nelson Mullins Riley & Scarborough LLP"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Agency Agreement",
+    "date": null,
+    "parties": [
+     "El Banco Financial Corporation",
+     "Nelson Mullins Riley & Scarborough LLP"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-05",
+   "before": {
+    "type": "Joint Filing Agreement",
+    "date": "2020-04-07",
+    "parties": [
+     "BANK OF AMERICA CORPORATION",
+     "BANC OF AMERICA PREFERRED FUNDING CORPORATION"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Joint Filing Agreement",
+    "date": "2020-04-07",
+    "parties": [
+     "BANK OF AMERICA CORPORATION",
+     "BANC OF AMERICA PREFERRED FUNDING CORPORATION"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-06",
+   "before": {
+    "type": "Amendment",
+    "date": "2018-06-11",
+    "parties": [
+     "Stremick's Heritage Foods, LLC",
+     "Premier Nutrition Corporation"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Amendment",
+    "date": "2018-06-11",
+    "parties": [
+     "Stremick's Heritage Foods, LLC",
+     "Premier Nutrition Corporation"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-07",
+   "before": {
+    "type": "Hosting Agreement",
+    "date": "1999-12-13",
+    "parties": [
+     "Corio Inc.",
+     "Changepoint, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "License and Hosting Agreement",
+    "date": "1999-12-13",
+    "parties": [
+     "Corio Inc.",
+     "Changepoint, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-08",
+   "before": {
+    "type": "Software License, Customization and Maintenance Agreement",
+    "date": null,
+    "parties": [
+     "Cardlytics, Inc.",
+     "Bank of America, N.A."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Software License, Customization and Maintenance Agreement",
+    "date": null,
+    "parties": [
+     "Cardlytics, Inc.",
+     "Bank of America, N.A."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-09",
+   "before": {
+    "type": "Development Agreement",
+    "date": "2019-09-30",
+    "parties": [
+     "Howmedica Osteonics Corp.",
+     "Conformis, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Development Agreement",
+    "date": "2019-09-30",
+    "parties": [
+     "Howmedica Osteonics Corp.",
+     "Conformis, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-10",
+   "before": {
+    "type": "Content Licensing Agreement",
+    "date": "2006-09-18",
+    "parties": [
+     "Data Call Technologies, Inc.",
+     "PLAN_B MEDIA AG"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Content Licensing Agreement",
+    "date": "2006-09-18",
+    "parties": [
+     "Data Call Technologies, Inc.",
+     "PLAN_B MEDIA AG"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-11",
+   "before": {
+    "type": "Strategic Alliance Agreement",
+    "date": null,
+    "parties": [
+     "NORTHERN TELECOM LIMITED",
+     "ENTRUST TECHNOLOGIES INC."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Strategic Alliance Agreement",
+    "date": null,
+    "parties": [
+     "NORTHERN TELECOM LIMITED",
+     "ENTRUST TECHNOLOGIES INC."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   }
+  },
+  {
+   "id": "cuad-12",
+   "before": {
+    "type": "Product Development Agreement",
+    "date": "2019-06-12",
+    "parties": [
+     "Eton Pharmaceuticals, Inc.",
+     "Aucta Pharmaceuticals, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Product Development Agreement",
+    "date": "2019-06-12",
+    "parties": [
+     "Eton Pharmaceuticals, Inc.",
+     "Aucta Pharmaceuticals, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-13",
+   "before": {
+    "type": "Supply Agreement",
+    "date": "2017-02-21",
+    "parties": [
+     "Centre for Probe Development and Commercialization",
+     "FUSION Pharmaceuticals Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Supply Agreement",
+    "date": null,
+    "parties": [
+     "Centre for Probe Development and Commercialization",
+     "FUSION Pharmaceuticals Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-14",
+   "before": {
+    "type": "Promotion Agreement",
+    "date": null,
+    "parties": [
+     "Go Call, Inc.",
+     "PageMaster Corporation"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Promotion Agreement",
+    "date": null,
+    "parties": [
+     "Go Call, Inc.",
+     "PageMaster Corporation"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   }
+  },
+  {
+   "id": "cuad-15",
+   "before": {
+    "type": "Wireless Content License Agreement",
+    "date": "2004-12-16",
+    "parties": [
+     "Twentieth Century Fox Licensing & Merchandising",
+     "Sorrent, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Wireless Content License Agreement",
+    "date": "2004-12-16",
+    "parties": [
+     "Twentieth Century Fox Licensing & Merchandising",
+     "Sorrent, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-16",
+   "before": {
+    "type": "Escrow Agreement",
+    "date": "1998-03-12",
+    "parties": [
+     "NCC Escrow International"
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Escrow Agreement",
+    "date": "1998-03-12",
+    "parties": [
+     "NCC Escrow International"
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED",
+     "PARTY_MISSING"
+    ]
+   }
+  },
+  {
+   "id": "cuad-17",
+   "before": {
+    "type": "Software Maintenance Agreement",
+    "date": "2016-10-13",
+    "parties": [
+     "Leader Act Ltd HK",
+     "EZJR, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Software Maintenance Agreement",
+    "date": "2016-10-13",
+    "parties": [
+     "Leader Act Ltd HK",
+     "EZJR, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-18",
+   "before": {
+    "type": "Strategic Alliance Agreement",
+    "date": "2018-01-10",
+    "parties": [
+     "Bravatek Solutions, Inc.",
+     "Fazync LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Strategic Alliance Agreement",
+    "date": "2018-01-10",
+    "parties": [
+     "Bravatek Solutions, Inc.",
+     "Fazync LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-19",
+   "before": {
+    "type": "Co-branding Agreement",
+    "date": "2000-03-03",
+    "parties": [
+     "VerticalNet, Inc.",
+     "Impresse Corporation"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Co-branding Agreement",
+    "date": "2000-03-03",
+    "parties": [
+     "VerticalNet, Inc.",
+     "Impresse Corporation"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-20",
+   "before": {
+    "type": "Joint Venture Agreement",
+    "date": "2020-04-02",
+    "parties": [
+     "Kiromic Biopharma Inc.",
+     "Molipharma s.r.l."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Joint Venture Agreement",
+    "date": "2020-04-02",
+    "parties": [
+     "Kiromic Biopharma Inc.",
+     "Molipharma s.r.l."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-21",
+   "before": {
+    "type": "Sponsorship Agreement",
+    "date": "2012-07-16",
+    "parties": [
+     "Peek Investments LLC"
+    ],
+    "relation": "with",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Sponsorship Agreement",
+    "date": "2012-07-16",
+    "parties": [
+     "Peek Investments LLC"
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "PARTY_MISSING"
+    ]
+   }
+  },
+  {
+   "id": "cuad-22",
+   "before": {
+    "type": "Marketing Agreement",
+    "date": null,
+    "parties": [
+     "Loop Industries, Inc.",
+     "Indorama Loop Technologies, LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Marketing Agreement",
+    "date": null,
+    "parties": [
+     "Loop Industries, Inc.",
+     "Indorama Loop Technologies, LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-23",
+   "before": {
+    "type": "Joint Filing Agreement",
+    "date": "2020-07-06",
+    "parties": [
+     "MFA Financial, Inc.",
+     "Apollo Insurance Solutions Group LP"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Joint Filing Agreement",
+    "date": "2020-07-06",
+    "parties": [
+     "MFA Financial, Inc.",
+     "Apollo Insurance Solutions Group LP"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-24",
+   "before": {
+    "type": "Commercialization Agreement",
+    "date": "2016-04-26",
+    "parties": [
+     "Achaogen Inc.",
+     "Microgenics Corporation"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Commercialization Agreement",
+    "date": "2016-04-26",
+    "parties": [
+     "Achaogen Inc.",
+     "Microgenics Corporation"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-25",
+   "before": {
+    "type": "Distributor Agreement",
+    "date": "1996-01-01",
+    "parties": [
+     "Peregrine/Bridge Transfer Corporation",
+     "Neon Systems, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Distributor Agreement",
+    "date": "1996-01-01",
+    "parties": [
+     "Peregrine/Bridge Transfer Corporation",
+     "Neon Systems, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-26",
+   "before": {
+    "type": "Co-branding Agreement",
+    "date": "1999-11-19",
+    "parties": [
+     "Neoforma.com, Inc.",
+     "Mario V. Shaffer VerticalNet, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Co-branding Agreement",
+    "date": "1999-11-19",
+    "parties": [
+     "Neoforma.com, Inc.",
+     "Mario V. Shaffer VerticalNet, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-27",
+   "before": {
+    "type": "Joint Filing Agreement",
+    "date": "2020-02-20",
+    "parties": [
+     "OneMain Holdings, Inc.",
+     "UNIFORM INVESTCO LP"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Joint Filing Agreement",
+    "date": "2020-02-20",
+    "parties": [
+     "OneMain Holdings, Inc.",
+     "UNIFORM INVESTCO LP"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-29",
+   "before": {
+    "type": "Co-branding Agreement",
+    "date": "1996-10-11",
+    "parties": [
+     "PC QUOTE, INC.",
+     "A.B. Watley, Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Co-branding Agreement",
+    "date": "1996-10-11",
+    "parties": [
+     "PC QUOTE, INC.",
+     "A.B. Watley, Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-30",
+   "before": {
+    "type": "Outsourcing Agreement",
+    "date": "2017-05-16",
+    "parties": [
+     "Dai Nippon Printing Co., Ltd.",
+     "Photronics DNP Mask Corporation"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Outsourcing Agreement",
+    "date": "2017-05-16",
+    "parties": [
+     "Dai Nippon Printing Co., Ltd.",
+     "Photronics DNP Mask Corporation"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED"
+    ]
+   }
+  },
+  {
+   "id": "cuad-31",
+   "before": {
+    "type": "Service Agreement",
+    "date": null,
+    "parties": [
+     "Rise (Tianjin) Education Information Consulting Co., Ltd."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Service Agreement",
+    "date": null,
+    "parties": [
+     "Rise (Tianjin) Education Information Consulting Co., Ltd."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "PARTY_MISSING",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-32",
+   "before": {
+    "type": "Master Supply Agreement",
+    "date": null,
+    "parties": [
+     "REYNOLDS CONSUMER PRODUCTS LLC",
+     "PACTIV LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Master Supply Agreement",
+    "date": null,
+    "parties": [
+     "REYNOLDS CONSUMER PRODUCTS LLC",
+     "PACTIV LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   }
+  },
+  {
+   "id": "cuad-33",
+   "before": {
+    "type": "Consulting Agreement",
+    "date": "2020-04-30",
+    "parties": [
+     "Slinger Bag Inc.",
+     "Aitan Zacharin"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Consulting Agreement",
+    "date": "2020-04-30",
+    "parties": [
+     "Slinger Bag Inc.",
+     "Aitan Zacharin"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-34",
+   "before": {
+    "type": "Sponsorship Agreement",
+    "date": "1999-05-14",
+    "parties": [
+     "Intuit Inc.",
+     "Stamps.com Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Sponsorship Agreement",
+    "date": "1999-05-14",
+    "parties": [
+     "Intuit Inc.",
+     "Stamps.com Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-35",
+   "before": {
+    "type": "Promotion Agreement",
+    "date": "2019-05-31",
+    "parties": [
+     "SIGA TECHNOLOGIES, INC.",
+     "MERIDIAN MEDICAL TECHNOLOGIES, INC."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Promotion Agreement",
+    "date": "2019-05-31",
+    "parties": [
+     "SIGA TECHNOLOGIES, INC.",
+     "MERIDIAN MEDICAL TECHNOLOGIES, INC."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-36",
+   "before": {
+    "type": "Marketing Affiliate Agreement",
+    "date": "2008-10-01",
+    "parties": [
+     "Equidata, Inc.",
+     "National Credit Report.com, LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Marketing Affiliate Agreement",
+    "date": "2008-10-01",
+    "parties": [
+     "Equidata, Inc.",
+     "National Credit Report.com, LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-37",
+   "before": {
+    "type": "Development Agreement",
+    "date": "2007-01-01",
+    "parties": [
+     "BP America Production Company",
+     "True North Energy Corp."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Development Agreement",
+    "date": "2007-01-01",
+    "parties": [
+     "BP America Production Company",
+     "True North Energy Corp."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-38",
+   "before": {
+    "type": "Cooperation Agreement",
+    "date": "2014-03-13",
+    "parties": [
+     "JANA Partners LLC",
+     "URS Corporation"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Cooperation Agreement",
+    "date": "2014-03-13",
+    "parties": [
+     "JANA Partners LLC",
+     "URS Corporation"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-39",
+   "before": {
+    "type": "Maintenance Agreement",
+    "date": "2010-11-03",
+    "parties": [
+     "MAGELLAN TERMINALS HOLDINGS, L.P.",
+     "OMEGA REFINING, LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "PARSER_WARNING"
+    ]
+   },
+   "after": {
+    "type": "Operation and Maintenance Agreement",
+    "date": "2010-11-03",
+    "parties": [
+     "MAGELLAN TERMINALS HOLDINGS, L.P.",
+     "OMEGA REFINING, LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "PARSER_WARNING"
+    ]
+   }
+  },
+  {
+   "id": "cuad-40",
+   "before": {
+    "type": "Non-Exclusive License Agreement",
+    "date": "2016-05-03",
+    "parties": [
+     "The Johns Hopkins University",
+     "Virtuoso Surgical, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Non-Exclusive License Agreement",
+    "date": "2016-05-03",
+    "parties": [
+     "The Johns Hopkins University",
+     "Virtuoso Surgical, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-41",
+   "before": {
+    "type": "Reseller Agreement",
+    "date": "2005-09-14",
+    "parties": [
+     "TouchStar Software Corporation",
+     "Worldwide Strategies"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Reseller Agreement",
+    "date": "2005-09-14",
+    "parties": [
+     "TouchStar Software Corporation",
+     "Worldwide Strategies"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-42",
+   "before": {
+    "type": "Marketing Agreement",
+    "date": "2018-11-12",
+    "parties": [
+     "Account Name Calm.com, Inc.",
+     "Account Name XpresSpa Group, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Product Sale and Marketing Agreement",
+    "date": "2018-11-12",
+    "parties": [
+     "Calm.com, Inc.",
+     "XpresSpa Group, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  }
+ ]
+}
