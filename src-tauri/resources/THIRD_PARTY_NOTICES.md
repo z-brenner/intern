@@ -18,7 +18,7 @@ under `ocr-models/`, because reading a scan must work offline from the first run
 | Component | Pinned source | License | Copyright / project |
 | --- | --- | --- | --- |
 | llama.cpp, PrismML fork, which the fast model runs on (`llama-server.exe` and its DLLs, beside `Intern.exe`) | `prism-b10826-c9c34bc` (commit `c9c34bc9c4042c13a31598ebf43461cd0ad8f00d`) of `PrismML-Eng/llama.cpp`, the release's Windows CPU x64 archive (Linux: its Ubuntu x64 archive) | MIT | The ggml authors and llama.cpp contributors |
-| llama.cpp, which the accurate model runs on (`llama-upstream/`) | `b11946` of `ggml-org/llama.cpp`, the release's Windows CPU x64 archive | MIT | The ggml authors and llama.cpp contributors |
+| llama.cpp, which the accurate model runs on (`llama-upstream/`) | `b11946` of `ggml-org/llama.cpp`, the release's Windows CPU x64 archive (Linux: its Ubuntu x64 archive, in `runtime/llama-upstream/`) | MIT | The ggml authors and llama.cpp contributors |
 | LLVM OpenMP runtime (`llama-upstream/libomp.dll`), which that llama.cpp build imports | as shipped in llama.cpp `b11946`'s Windows CPU x64 archive | Apache-2.0 WITH LLVM-exception | The LLVM Project contributors |
 | PDFium binaries | `chromium/7881`, Windows x64 | BSD-3-Clause | The PDFium Authors / Chromium Authors |
 | Tesseract OCR | 5.5.2, built with vcpkg baseline `644588ca32576d86325fb3fe3b6020042bee61b8` | Apache-2.0 | Tesseract OCR contributors |
