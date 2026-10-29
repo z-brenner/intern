@@ -10,12 +10,10 @@ name: Runtime speed on Windows
 # Laboratory measurement only: it gates nothing and publishes nothing. See
 # bench/reports/speed-linux-cpu-2026-10-29.
 
+# Run by hand (Actions > Runtime speed on Windows > Run workflow): it takes
+# about 70 minutes of a Windows runner, so no push or pull request starts it.
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - .github/workflows/runtime-speed.yml
-      - bench/reports/speed-linux-cpu-2026-10-29/requests/**
 
 permissions:
   contents: read
