@@ -2993,6 +2993,14 @@ fn column_header(line: &str, above: Option<&str>, at: usize) -> Option<String> {
         .then(|| header.to_owned())
 }
 
+/// Whether a line is a signature block's "Title:" field - not a field
+/// whose label merely starts with the word ("Title of work:").
+fn is_title_field(line: &str) -> bool {
+    line.trim_start()
+        .strip_prefix("title")
+        .is_some_and(|rest| rest.trim_start().starts_with(':'))
+}
+
 /// Whether a line ends a signature block's "By:" ("By:", "By:\u{2014}").
 fn signs_by(line: &str) -> bool {
     line.trim()
@@ -3074,11 +3082,11 @@ fn standing_of(scope: &ValidationScope<'_>, name: &str, class: DocumentClass) ->
                 let signed_above = index > 0 && signs_by(&lines[index - 1]);
                 // The block's "Title:" may open the next unit.
                 let titled_below = match lines.get(index + 1) {
-                    Some(next) => next.trim_start().starts_with("title"),
+                    Some(next) => is_title_field(next),
                     None => units.get(number + 1).is_some_and(|next| {
-                        normalize_loosely(next.text.lines().next().unwrap_or_default())
-                            .trim_start()
-                            .starts_with("title")
+                        is_title_field(&normalize_loosely(
+                            next.text.lines().next().unwrap_or_default(),
+                        ))
                     }),
                 };
                 let signature_block =
@@ -6821,6 +6829,28 @@ I resign from my position effective March 31, 2026.\n\n/s/ Jane Doe";
         );
         let facts = outcome.facts.unwrap();
         assert!(!facts.parties.iter().any(|party| party.signatory));
+    }
+
+    #[test]
+    fn only_a_title_field_makes_a_name_a_signature_block() {
+        assert!(is_title_field("title: chief revenue officer"));
+        assert!(is_title_field("  title : general manager"));
+        assert!(!is_title_field("title of work: harbor at dusk"));
+        assert!(!is_title_field("titled: yes"));
+        const FORM: &str =
+            "COPYRIGHT REGISTRATION FORM\n\nName: Jane Doe\nTitle of work: Harbor at Dusk";
+        let (outcome, _) = facts_for(FORM, |index| ModelFacts {
+            document_type: Some("Copyright Registration Form".into()),
+            type_evidence: vec![id_of(index, "COPYRIGHT")],
+            parties: vec![party("Jane Doe", None, &[id_of(index, "Name:")])],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Jane Doe"],
+            "{:?}",
+            outcome.proposal
+        );
     }
 
     #[test]
