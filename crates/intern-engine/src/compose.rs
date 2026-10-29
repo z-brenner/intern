@@ -159,7 +159,7 @@ pub struct Relation {
 
 /// The side a document is "about": the client, customer, tenant, employee,
 /// borrower, licensee or buyer.
-const SUBSTANTIVE: &[PartyRole] = &[
+pub(crate) const SUBSTANTIVE: &[PartyRole] = &[
     PartyRole::Client,
     PartyRole::Customer,
     PartyRole::Tenant,

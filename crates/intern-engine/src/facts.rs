@@ -44,8 +44,8 @@ use std::collections::BTreeSet;
 use unicode_normalization::char::is_combining_mark;
 
 use crate::compose::{
-    CastMember, DescriptionFacts, Relation, RelationCues, amount_label, describe, identifier_word,
-    money_in, relation_from_roles,
+    CastMember, DescriptionFacts, Relation, RelationCues, SUBSTANTIVE, amount_label, describe,
+    identifier_word, money_in, relation_from_roles,
 };
 use crate::cues::{CUSTOMER_CUES, ISSUER_CUES, STOPWORDS, TYPE_NOUNS};
 use crate::distill::normalize_heading;
@@ -748,6 +748,23 @@ pub fn validate_facts_at(
         }
     }
     let class = DocumentClass::of(document_type.as_deref());
+    // A record or a notice is kept for the side it is about, not sent to
+    // it: a reply's bare "recipient" gives way to that side when the
+    // document's own label names it so - "Prepared for Cobalt Basin Water
+    // Authority", "Named insured", "Tenant:".
+    if matches!(class, DocumentClass::Record | DocumentClass::Notice) {
+        for party in &mut parties {
+            if matches!(
+                party.role,
+                Some(PartyRole::Recipient | PartyRole::Addressee)
+            ) && let Some(labeled) = labeled_role(scope, &party.name)
+                && SUBSTANTIVE.contains(&labeled)
+            {
+                party.role = Some(labeled);
+                party.document_role = Some(labeled);
+            }
+        }
+    }
     // So does a person the document names only by the post they hold for
     // it - "Beckett Halloran (President)", "Winemaker | Esme Varga",
     // "Examined by | Delphine Moncrieff, Associate Conservator", "/s/ Arlo
@@ -7302,6 +7319,44 @@ for hearing its Motion to Compel.\n\nDATED this 29th day of July, 2026.";
             outcome.proposal
         );
         assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+    }
+
+    #[test]
+    fn a_report_is_for_the_client_it_was_prepared_for_not_sent_to_it() {
+        const REPORT: &str = "ANNUAL WATERSHED MONITORING REPORT\n\n\
+Prepared for Cobalt Basin Water Authority, 900 Reservoir Road, Ashby, Vermont 05032 \
+Prepared by Thornwick Basin Engineering, PLLC, 61 Foundry Street, Montpelier, Vermont 05602\n\n\
+Thornwick Basin Engineering, PLLC monitored 40 stations with Bramblecote Aquatic Ecology LLC \
+through the 2025 monitoring year.";
+        let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+            document_type: Some("Annual Watershed Monitoring Report".into()),
+            type_evidence: vec![id_of(index, "ANNUAL")],
+            parties: vec![
+                party(
+                    "Cobalt Basin Water Authority",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Prepared for")],
+                ),
+                party(
+                    "Thornwick Basin Engineering, PLLC",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "Prepared for")],
+                ),
+                party(
+                    "Bramblecote Aquatic Ecology LLC",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "monitored")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Cobalt Basin Water Authority"],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
     }
 
     #[test]

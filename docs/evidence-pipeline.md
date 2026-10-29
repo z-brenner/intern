@@ -326,7 +326,10 @@ complete the reply's "Gilchrist Harbor Marine Supply, LLC".
 | Unknown | `between` a bilateral pair, or the two named "by and between"; else `from` the issuer; else `to` the addressee |
 
 "The party it is about" means a client, customer, tenant, employee,
-borrower, licensee or buyer. When nothing settles the relation, the first
+borrower, licensee or buyer. In a record or a notice, a reply's bare
+"recipient" or "addressee" gives way to such a role when the document's own
+label gives it one: a report "Prepared for Cobalt Basin Water Authority" is
+`for` the authority, not `to` it, whoever else the reply named. When nothing settles the relation, the first
 party is kept with no joining word (`Invoice - Acme`). A relation is never
 guessed.
 
