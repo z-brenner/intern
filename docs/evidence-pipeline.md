@@ -236,9 +236,11 @@ The other checks:
   other, and neither is ever a filename's party. So does someone the
   document names only by the job they do for it: after a staff label or a
   column header naming a job (`Examined by`, `Winemaker`, `Crew lead`, an
-  issued document's `Buyer:`), a signature mark (`/s/`), or the `Name:` of a
-  `By:`/`Title:` block, or with a post right beside the name (`Beckett
-  Halloran (President)`). A label or column header that names the one the
+  issued document's `Buyer:`), the `Name:` of a `By:`/`Title:` block, or
+  with a post right beside the name (`Beckett Halloran (President)`). A bare
+  signature mark (`/s/`, a `Signature` column) counts only outside letters
+  and emails, and never for the one the document labels as its sender:
+  anyone signs their own letter. A label or column header that names the one the
   document is about (`Employee name`, `Patient`, `Dear`, `To:`) or a
   "between" clause keeps a person a party, whatever else they are. When
   the reply named no organization and no such subject beside the staff, the

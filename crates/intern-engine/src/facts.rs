@@ -2894,10 +2894,13 @@ const STAFF_LABELS: &[&str] = &[
     "mechanic",
     "mechanics",
     "technician",
-    "signature",
     "driver",
-    "/s/",
 ];
+
+/// A bare signature: anyone signs their own letter this way, so it shows
+/// someone acting for an organization only outside correspondence, and
+/// never for the one the document labels as its sender.
+const SIGNATURE_MARKS: &[&str] = &["signature", "/s/"];
 
 /// Words of a label whose value is the one a document is about or for:
 /// such a person is a party whatever post they also hold ("Employee name",
@@ -3030,6 +3033,7 @@ fn standing_of(scope: &ValidationScope<'_>, name: &str, class: DocumentClass) ->
     };
     let units = scope.context_units().collect::<Vec<_>>();
     let mut staff = false;
+    let mut signed = false;
     for (number, unit) in units.iter().enumerate() {
         let text = normalize_loosely(&unit.text);
         for at in whole_positions(&text, "between") {
@@ -3098,10 +3102,16 @@ fn standing_of(scope: &ValidationScope<'_>, name: &str, class: DocumentClass) ->
                 {
                     staff = true;
                 }
+                if labeled_by(before, SIGNATURE_MARKS) {
+                    signed = true;
+                }
             }
         }
     }
-    if staff {
+    let signed_for_another = signed
+        && !matches!(class, DocumentClass::Letter | DocumentClass::Email)
+        && labeled_role(scope, name) != Some(PartyRole::Sender);
+    if staff || signed_for_another {
         Standing::Staff
     } else {
         Standing::Unknown
@@ -6752,6 +6762,30 @@ Your coverage changes on March 1, 2026.\n\nAcknowledged: /s/ Jane Doe";
             ..ModelFacts::default()
         };
         let (outcome, _) = facts_for(NOTICE, reply);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Jane Doe"],
+            "{:?}",
+            outcome.proposal
+        );
+        let facts = outcome.facts.unwrap();
+        assert!(!facts.parties.iter().any(|party| party.signatory));
+    }
+
+    #[test]
+    fn someone_who_signs_their_own_letter_stays_its_party() {
+        const LETTER: &str = "LETTER OF RESIGNATION\n\nFrom: Jane Doe\n\nMarch 2, 2026\n\n\
+I resign from my position effective March 31, 2026.\n\n/s/ Jane Doe";
+        let (outcome, _) = facts_for(LETTER, |index| ModelFacts {
+            document_type: Some("Letter of Resignation".into()),
+            type_evidence: vec![id_of(index, "LETTER")],
+            parties: vec![party(
+                "Jane Doe",
+                Some(PartyRole::Sender),
+                &[id_of(index, "From:")],
+            )],
+            ..ModelFacts::default()
+        });
         assert_eq!(
             outcome.proposal.parties,
             vec!["Jane Doe"],
