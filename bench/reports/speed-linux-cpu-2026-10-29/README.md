@@ -2,7 +2,8 @@
 
 Status: measured on 2026-10-29. The question was: can shorter line ids, two documents at
 once, or speculative decoding make Intern faster? The answer for all three is no on this
-hardware. One change not on that list, the llama.cpp runtime itself, is worth 18%.
+hardware. One change not on that list, the llama.cpp runtime itself, is worth 19% with no
+loss of accuracy ([Upstream accuracy](#upstream-accuracy)).
 
 **Machine.** An otherwise idle 4-vCPU Linux x86-64 host.
 
@@ -119,7 +120,48 @@ to each.
 
 ## Upstream accuracy
 
-(Live capture on upstream b11946 in progress; filled in below when it completes.)
+The same 77-document live run on upstream llama.cpp b11946 (the same model file, flags,
+machine and token probabilities), scored with #42's rules beside the production capture:
+
+| | Prism b10826 (shipped) | Upstream b11946 |
+| --- | ---: | ---: |
+| Names right | 61 | **63** |
+| Wrong names marked ready | 8 | **6** |
+| With the review gate (0.5): wrong names ready / right names sent to review | 4 / 12 | **2** / 13 |
+| Time per document, mean (median) | 25.8 s (22.9 s) | **21.0 s (18.8 s)**, −19% |
+| Prefill / decode, median | 13.8 s / 7.3 s | 9.1 s / 8.3 s |
+
+Ten documents score differently:
+- **Five improve:** three wrong names become right (`notice-rent-increase`, `aircraft-maintenance-log`,
+  `watershed-monitoring-report-100p`), one name held for review becomes right and ready
+  (`msa-effective-date-in-definitions-12p`), and one wrong name is no longer marked ready
+  (`demand-letter`).
+- **Two worsen:** `harvest-log` and `property-policy-declarations-mid-60p` become wrong but ready.
+- **Three change readiness only:** right names move to review.
+
+On 77 synthetic documents that is a tie on accuracy, possibly a small gain, and a clear gain
+on speed.
+
+### What switching would take
+
+Bonsai's weights need Prism, so there are three ways to do it:
+
+1. **Two runtimes.** Upstream for the accurate model, Prism only for the optional fast one.
+   It keeps everything, but the installer carries a second ~18 MB runtime. The fetch
+   scripts, `runtime-assets.json`, the release pipeline's SBOM and licence notices, and the
+   app's launcher (one executable today) all learn a second runtime.
+2. **Upstream only, no fast tier.** The simplest, and the accurate model is now about as fast as
+   the fast tier's advantage was worth. Upstream Qwen takes 21 s per document; Bonsai 2B on
+   Prism took about two thirds of Prism Qwen's time. But the fast tier goes, and with it its
+   download option.
+3. **Wait for Prism to move to a newer upstream.** It costs nothing, but the timing is not
+   Intern's to choose.
+
+**Measure Windows before choosing.** These numbers are Linux x86-64 at 4 threads.
+Intern's main platform is Windows, and upstream's Windows CPU builds load per-ISA backends
+at run time. A Windows replay of the same 26 requests (`replay-server.sh` runs under Git
+Bash or WSL; the requests are portable JSON) would settle whether the prefill gain carries
+over.
 
 ## Reproduce
 
