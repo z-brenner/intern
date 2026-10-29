@@ -10298,8 +10298,16 @@ mod runtime_tests {
         let request = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
         gate.wait_reached();
         *rig.launch_gate.lock().unwrap() = None;
+        // The cancel marks the request overtaken before it waits for the
+        // load; wait for that mark, not for a guess at how soon a thread
+        // runs, or a slow runner opens the gate first and the document
+        // completes.
+        let asked = runtime.generation.load(Ordering::SeqCst);
         let canceling = Arc::clone(&runtime);
         let cancel = std::thread::spawn(move || canceling.cancel());
+        while runtime.generation.load(Ordering::SeqCst) == asked {
+            std::thread::yield_now();
+        }
         std::thread::sleep(Duration::from_millis(50));
         assert!(!cancel.is_finished(), "the cancel waits for the load");
         gate.open();
