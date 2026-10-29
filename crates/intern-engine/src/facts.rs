@@ -267,6 +267,12 @@ impl<'a> ValidationScope<'a> {
             .filter_map(|ordinal| self.index.units().get(*ordinal as usize))
     }
 
+    /// Any unit of the document by its ordinal, shown to the model or not:
+    /// a table row's header row, say.
+    fn unit_at(&self, ordinal: u32) -> Option<&'a EvidenceUnit> {
+        self.index.units().get(ordinal as usize)
+    }
+
     /// Every date the document states, in first-mention order, at most
     /// eight - the dates a reviewer is offered.
     pub fn stated_dates(&self) -> Vec<String> {
@@ -742,6 +748,95 @@ pub fn validate_facts_at(
         }
     }
     let class = DocumentClass::of(document_type.as_deref());
+    // So does a person the document names only by the post they hold for
+    // it - "Beckett Halloran (President)", "Winemaker | Esme Varga",
+    // "Examined by | Delphine Moncrieff, Associate Conservator", "/s/ Arlo
+    // Sinclair-Ray" - unless a line names them as the one it is about or a
+    // "between" clause makes them a party.
+    let standing = parties
+        .iter()
+        .map(|party| {
+            if party.copied || party.signatory || is_organization(&party.name) {
+                Standing::Unknown
+            } else if labeled_party(scope, &party.name, class) {
+                // A label that gives them a party's role ("Recipient:",
+                // "Tenant:") outranks a signature or a post, and keeps the
+                // others' staff from taking them along.
+                Standing::Subject
+            } else {
+                standing_of(scope, &party.name, class)
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut acting_for = false;
+    for (party, standing) in parties.iter_mut().zip(&standing) {
+        if *standing == Standing::Staff {
+            party.signatory = true;
+            party.role = Some(PartyRole::Other);
+            acting_for = true;
+        }
+    }
+    // When the reply named, besides such people, no organization and no one
+    // a line names as the one the document is about, the others it named
+    // are staff too (the other signatory, the crew in a log's rows), and the
+    // organization they act for is the party: the two a "between" clause
+    // names for an agreement, else the one at the head of the first page.
+    // An issued document gets its header issuer below.
+    let left = parties
+        .iter()
+        .zip(&standing)
+        .filter(|(party, _)| !party.copied && !party.signatory)
+        .collect::<Vec<_>>();
+    let only_people = left
+        .iter()
+        .all(|(party, standing)| !is_organization(&party.name) && **standing != Standing::Subject);
+    if acting_for && only_people {
+        let found = match class {
+            DocumentClass::Issued => Vec::new(),
+            DocumentClass::Agreement | DocumentClass::Amendment => between_organizations(scope),
+            _ => header_organization(scope)
+                .or_else(|| letterhead_organization(scope))
+                .into_iter()
+                .collect(),
+        };
+        if class == DocumentClass::Issued || !found.is_empty() {
+            for party in parties
+                .iter_mut()
+                .filter(|party| !party.copied && !party.signatory)
+            {
+                party.signatory = true;
+                party.role = Some(PartyRole::Other);
+            }
+        }
+        for (at, (name, unit)) in found.into_iter().enumerate() {
+            let name = without_sentence_stop(&with_of_phrase(unit, &name));
+            let line = unit
+                .text
+                .lines()
+                .find(|line| normalize_loosely(line).contains(&normalize_loosely(&name)))
+                .unwrap_or(&unit.text)
+                .trim()
+                .to_owned();
+            remember(
+                &Found {
+                    support: Support::Context,
+                    unit: Some(unit),
+                    line: Some(line),
+                    miscited: 0,
+                },
+                &mut references,
+            );
+            parties.insert(
+                at,
+                ValidatedParty {
+                    name: display_name(&name),
+                    support: Support::Context,
+                    evidence: vec![unit.id.clone()],
+                    ..ValidatedParty::default()
+                },
+            );
+        }
+    }
     // An issued document whose reply said what it is but named no one
     // who could have issued it - no one, or only parties a customer cue
     // labels - takes as its issuer the one organization at the head of its
@@ -2735,6 +2830,500 @@ fn signs_for(scope: &ValidationScope<'_>, name: &str, organizations: &[String]) 
                     .any(|organization| !whole_positions(after, organization).is_empty())
         })
     })
+}
+
+/// Words of a post someone holds for an organization, read right after
+/// their name ("Delphine Moncrieff, Associate Conservator", "Beckett
+/// Halloran (President)"). Not "owner": "Owner: Jane Doe" names a party.
+const POST_WORDS: &[&str] = &[
+    "president",
+    "director",
+    "manager",
+    "officer",
+    "counsel",
+    "secretary",
+    "treasurer",
+    "chief",
+    "ceo",
+    "cfo",
+    "coo",
+    "cto",
+    "head",
+    "partner",
+    "principal",
+    "administrator",
+    "coordinator",
+    "supervisor",
+    "representative",
+    "chair",
+    "chairman",
+    "chairperson",
+    "controller",
+    "conservator",
+    "curator",
+    "registrar",
+    "winemaker",
+    "mechanic",
+    "inspector",
+    "examiner",
+    "technician",
+    "engineer",
+    "accountant",
+    "auditor",
+    "clerk",
+    "superintendent",
+    "foreman",
+];
+
+/// Labels whose value is someone doing a job for the document's
+/// organization rather than a party to it.
+const STAFF_LABELS: &[&str] = &[
+    "examined by",
+    "inspected by",
+    "prepared by",
+    "approved by",
+    "authorized by",
+    "reviewed by",
+    "completed by",
+    "signed by",
+    "recorded by",
+    "winemaker",
+    "inspector",
+    "mechanic",
+    "mechanics",
+    "technician",
+    "driver",
+];
+
+/// A bare signature: anyone signs their own letter this way, so it shows
+/// someone acting for an organization only outside correspondence, and
+/// never for the one the document labels as its sender.
+const SIGNATURE_MARKS: &[&str] = &["signature", "/s/"];
+
+/// Words of a label whose value is the one a document is about or for:
+/// such a person is a party whatever post they also hold ("Employee name",
+/// "Employee signature", "Dear", "To:").
+const SUBJECT_WORDS: &[&str] = &[
+    "dear",
+    "to",
+    "resident",
+    "tenant",
+    "patient",
+    "employee",
+    "member",
+    "insured",
+    "applicant",
+    "borrower",
+    "candidate",
+    "beneficiary",
+    "claimant",
+    "policyholder",
+    "participant",
+    "student",
+    "client",
+    "customer",
+    "owner",
+    "landlord",
+    "lessee",
+    "lessor",
+    "guarantor",
+];
+
+/// What the document makes of a person the reply named.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Standing {
+    /// A line names them as the one it is about, or a "between" clause as
+    /// a party.
+    Subject,
+    /// They are named only as someone doing a job for an organization.
+    Staff,
+    Unknown,
+}
+
+/// The last `n` words of `text`, read as one phrase: what a label before a
+/// name on its line reads as ("| Examined by |" -> "examined by").
+fn closing_words(text: &str, n: usize) -> String {
+    let words = label_cell(text)
+        .split_whitespace()
+        .map(|word| word.trim_end_matches(':'))
+        .collect::<Vec<_>>();
+    words[words.len().saturating_sub(n)..].join(" ")
+}
+
+/// The table cell or line part a label before a name sits in: the text
+/// after the last cell border, without the punctuation that ends a label.
+fn label_cell(text: &str) -> &str {
+    text.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '|' | ':' | '-' | '\u{2014}'))
+        .rsplit('|')
+        .next()
+        .unwrap_or_default()
+}
+
+/// Whether `label` closes `before`, the text ahead of a name on its line.
+fn labeled_by(before: &str, labels: &[&str]) -> bool {
+    labels.iter().any(|label| {
+        let n = label.split_whitespace().count();
+        closing_words(before, n) == *label
+    })
+}
+
+/// Words that make a label name people working for an organization: a
+/// "crew member" or a "board member" is not the member a plan is about.
+const STAFF_GROUP_WORDS: &[&str] = &["crew", "staff", "board", "team", "committee"];
+
+/// Whether a label names the one a document is about.
+fn subject_label(label: &str) -> bool {
+    let words = label
+        .split(|c: char| !c.is_alphanumeric())
+        .collect::<Vec<_>>();
+    words.iter().any(|word| SUBJECT_WORDS.contains(word))
+        && !words.iter().any(|word| STAFF_GROUP_WORDS.contains(word))
+}
+
+/// The header cell over a table row's cell at byte `at`: the line above,
+/// when it is a row of the same table, read at the same column.
+fn column_header(line: &str, above: Option<&str>, at: usize) -> Option<String> {
+    let above = above?;
+    if !line.trim_start().starts_with('|') || !above.trim_start().starts_with('|') {
+        return None;
+    }
+    let column = line[..at].matches('|').count();
+    let header = above.split('|').nth(column)?.trim();
+    (!header.is_empty() && !header.chars().all(|c| matches!(c, '-' | ':' | ' ')))
+        .then(|| header.to_owned())
+}
+
+/// The label that opens `line`, as the document writes it, when `loose` is
+/// in the list it introduces: "Mechanics: Linnea Hart, Joaquin Moncrieff".
+/// Only names and separators may stand between the label and the name, so
+/// a name the line's prose goes on to mention is not under the label:
+/// "Prepared by: John Smith for Jane Doe".
+fn listed_under(line: &str, loose: &str) -> Option<String> {
+    let (label, rest) = line.split_once(':')?;
+    let label = normalize_loosely(label);
+    if label.split_whitespace().count() > 3 {
+        return None;
+    }
+    let tokens = rest.split_whitespace().collect::<Vec<_>>();
+    let start = (0..tokens.len()).find(|&start| {
+        (start + 1..=tokens.len().min(start + 10))
+            .any(|end| normalize_loosely(&tokens[start..end].join(" ")) == loose)
+    })?;
+    tokens[..start]
+        .iter()
+        .all(|word| {
+            let bare = word.trim_matches(|c: char| !c.is_alphanumeric());
+            bare.is_empty() || bare.starts_with(char::is_uppercase) || matches!(bare, "and" | "s")
+        })
+        .then_some(label)
+}
+
+/// Whether `line`, as the document writes it, gives the person `loose`
+/// names a post right after their name: "Jane Doe, Chief Inspector",
+/// "Jane Doe (Conservator)", "| Jane Doe | Winemaker |". Every word up to
+/// the post must read as part of a title - capitalized, or "of", "and" or
+/// "the" -
+/// so a post in the prose that follows a name belongs to someone else:
+/// "Jane Doe spoke to the manager".
+fn titled_after(line: &str, loose: &str) -> bool {
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    (0..tokens.len()).any(|start| {
+        (start + 1..=tokens.len().min(start + 10)).any(|end| {
+            normalize_loosely(&tokens[start..end].join(" ")) == loose
+                && post_follows(&tokens[end..])
+        })
+    })
+}
+
+/// Whether a post opens `words`, after nothing but title words and
+/// separators.
+fn post_follows(words: &[&str]) -> bool {
+    for word in words.iter().take(4) {
+        let bare = word.trim_matches(|c: char| !c.is_alphanumeric());
+        if bare.is_empty() {
+            continue;
+        }
+        let lower = bare.to_lowercase();
+        if POST_WORDS.contains(&lower.as_str()) {
+            return true;
+        }
+        if !(bare.starts_with(char::is_uppercase) || matches!(lower.as_str(), "of" | "and" | "the"))
+        {
+            return false;
+        }
+    }
+    false
+}
+
+/// Whether a line is a signature block's "Title:" field - not a field
+/// whose label merely starts with the word ("Title of work:").
+fn is_title_field(line: &str) -> bool {
+    line.trim_start()
+        .strip_prefix("title")
+        .is_some_and(|rest| rest.trim_start().starts_with(':'))
+}
+
+/// Whether a line ends a signature block's "By:" ("By:", "By:\u{2014}").
+fn signs_by(line: &str) -> bool {
+    line.trim()
+        .trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ':' | '-' | '_' | '\u{2014}'))
+        == "by"
+}
+
+/// Whether the document's own wording gives a person a party's role - a
+/// label, a defined term, a customer cue. Not the issuer's or sender's,
+/// which a letterhead or a signature gives the staff who sign, and not an
+/// issued document's buyer, whose "Buyer:" names its purchasing contact.
+fn labeled_party(scope: &ValidationScope<'_>, name: &str, class: DocumentClass) -> bool {
+    labeled_role(scope, name).is_some_and(|role| stands_as_party(role, class))
+}
+
+/// Whether a role a label gives makes its name a party in a document of
+/// `class`: see [`labeled_party`].
+fn stands_as_party(role: PartyRole, class: DocumentClass) -> bool {
+    match role {
+        PartyRole::Issuer | PartyRole::Sender => false,
+        PartyRole::Buyer => class != DocumentClass::Issued,
+        _ => true,
+    }
+}
+
+/// Whether a table's column header names a party's role, as a field's
+/// label would: the names in a "Recipient" or "Tenant" column are the
+/// document's parties, whatever else their row says.
+fn header_names_party(header: &str, class: DocumentClass) -> bool {
+    LABELED_ROLES
+        .into_iter()
+        .filter(|role| stands_as_party(*role, class))
+        .any(|role| {
+            role_words(role)
+                .0
+                .iter()
+                .any(|word| label_names(header, word))
+        })
+}
+
+/// What the document makes of a person the reply named: someone acting for
+/// an organization when their name follows a staff label, a column header
+/// or a line label naming a job, or a signature mark; carries a post right
+/// after it or right before it; or is the "Name:" of a By:/Title: block. The
+/// one the document is about when a label, a column header or a "between"
+/// clause says so - which outranks everything else. A purchase order's or
+/// an invoice's "Buyer:" is staff as well.
+fn standing_of(scope: &ValidationScope<'_>, name: &str, class: DocumentClass) -> Standing {
+    let loose = normalize_loosely(name);
+    if loose.split_whitespace().count() < 2 {
+        return Standing::Unknown;
+    }
+    let issued_staff: &[&str] = if class == DocumentClass::Issued {
+        &["buyer", "sales rep", "salesperson", "contact"]
+    } else {
+        &[]
+    };
+    let units = scope.context_units().collect::<Vec<_>>();
+    let mut staff = false;
+    let mut signed = false;
+    for (number, unit) in units.iter().enumerate() {
+        let text = normalize_loosely(&unit.text);
+        for at in whole_positions(&text, "between") {
+            if !whole_positions(window_forward(&text, at, 300), &loose).is_empty() {
+                return Standing::Subject;
+            }
+        }
+        let lines = unit.text.lines().map(normalize_loosely).collect::<Vec<_>>();
+        for (index, line) in lines.iter().enumerate() {
+            for at in whole_positions(line, &loose) {
+                let before = &line[..at];
+                // The row above in the unit, else the header row of the
+                // table a row unit belongs to.
+                let above = match index.checked_sub(1) {
+                    Some(previous) => lines.get(previous).cloned(),
+                    None => unit
+                        .table_header
+                        .filter(|header| *header != unit.ordinal)
+                        .and_then(|header| scope.unit_at(header))
+                        .and_then(|header| header.text.lines().next())
+                        .map(normalize_loosely),
+                };
+                let header = column_header(line, above.as_deref(), at);
+                if subject_label(label_cell(before))
+                    || header.as_deref().is_some_and(|header| {
+                        subject_label(header) || header_names_party(header, class)
+                    })
+                {
+                    return Standing::Subject;
+                }
+                let posted_after = unit
+                    .text
+                    .lines()
+                    .nth(index)
+                    .is_some_and(|written| titled_after(written, &loose));
+                let posted_before = POST_WORDS.contains(&closing_words(before, 1).as_str());
+                let signed_above = index > 0 && signs_by(&lines[index - 1]);
+                // The block's "Title:" may open the next unit.
+                let titled_below = match lines.get(index + 1) {
+                    Some(next) => is_title_field(next),
+                    None => units.get(number + 1).is_some_and(|next| {
+                        is_title_field(&normalize_loosely(
+                            next.text.lines().next().unwrap_or_default(),
+                        ))
+                    }),
+                };
+                let signature_block =
+                    labeled_by(before, &["name"]) && (signed_above || titled_below);
+                let staff_header = header.as_deref().is_some_and(|header| {
+                    STAFF_LABELS.contains(&header)
+                        || header.split_whitespace().any(|word| {
+                            POST_WORDS.contains(&word) || STAFF_GROUP_WORDS.contains(&word)
+                        })
+                });
+                let staff_opening = unit
+                    .text
+                    .lines()
+                    .nth(index)
+                    .and_then(|written| listed_under(written, &loose))
+                    .is_some_and(|label| STAFF_LABELS.contains(&label.as_str()));
+                if labeled_by(before, STAFF_LABELS)
+                    || labeled_by(before, issued_staff)
+                    || staff_header
+                    || staff_opening
+                    || posted_after
+                    || posted_before
+                    || signature_block
+                {
+                    staff = true;
+                }
+                // A signature mark before the name, or the column it sits
+                // in: "/s/ Jane Doe", or a "Signature" column's cell.
+                if labeled_by(before, SIGNATURE_MARKS)
+                    || header
+                        .as_deref()
+                        .is_some_and(|header| has_cue(header, SIGNATURE_MARKS))
+                {
+                    signed = true;
+                }
+            }
+        }
+    }
+    // A signature alone says someone signed, not for whom. It counts as
+    // acting for another only where the document names an organization at
+    // its head to sign for, and never on correspondence or a form, which
+    // their own writers and filers sign.
+    let signed_for_another = signed
+        && !matches!(
+            class,
+            DocumentClass::Letter | DocumentClass::Email | DocumentClass::Form
+        )
+        && labeled_role(scope, name) != Some(PartyRole::Sender)
+        && (header_organization(scope).is_some() || letterhead_organization(scope).is_some());
+    if staff || signed_for_another {
+        Standing::Staff
+    } else {
+        Standing::Unknown
+    }
+}
+
+/// The one organization a first-page letterhead unit names, as the
+/// document writes it, with its unit: "Kestrel Ridge Aero Services -
+/// Repair Station Certificate KRA" over a record whose table names the
+/// aircraft's owner too.
+fn letterhead_organization<'a>(scope: &ValidationScope<'a>) -> Option<(String, &'a EvidenceUnit)> {
+    scope
+        .context_units()
+        .filter(|unit| unit.features.position.letterhead && !unit.running)
+        .find_map(|unit| match unit.features.organizations.as_slice() {
+            [only] => written_span(unit, only).map(|span| (span, unit)),
+            _ => None,
+        })
+}
+
+/// A name that ended a sentence, without the sentence's full stop:
+/// "Pellworth Water Company." is "Pellworth Water Company", while the stop
+/// of an abbreviation stays ("Inc.", "Corp.", "N.A.").
+fn without_sentence_stop(name: &str) -> String {
+    let Some(stem) = name.strip_suffix('.') else {
+        return name.to_owned();
+    };
+    let last = stem.rsplit(' ').next().unwrap_or_default();
+    if last.contains('.') || last.chars().count() <= 4 {
+        name.to_owned()
+    } else {
+        stem.to_owned()
+    }
+}
+
+/// An organization's name as the document goes on to write it: the index
+/// ends a name on its organization word, so "Saltash Point Museum of Art"
+/// reads as "Saltash Point Museum"; up to three capitalized words after an
+/// "of" belong to it.
+fn with_of_phrase(unit: &EvidenceUnit, span: &str) -> String {
+    let Some(rest) = unit
+        .text
+        .lines()
+        .find_map(|line| line.find(span).map(|at| &line[at + span.len()..]))
+    else {
+        return span.to_owned();
+    };
+    let Some(tail) = rest.strip_prefix(" of ") else {
+        return span.to_owned();
+    };
+    let mut words = Vec::new();
+    for word in tail.split_whitespace().take(3) {
+        let bare = word.trim_end_matches([',', ';', '.', ':', ')']);
+        if !bare.chars().next().is_some_and(char::is_uppercase) {
+            break;
+        }
+        words.push(bare);
+        if bare.len() != word.len() {
+            break;
+        }
+    }
+    if words.is_empty() {
+        span.to_owned()
+    } else {
+        format!("{span} of {}", words.join(" "))
+    }
+}
+
+/// The two organizations a first-page "between" clause names, in its
+/// order, as the document writes them, with their unit.
+fn between_organizations<'a>(scope: &ValidationScope<'a>) -> Vec<(String, &'a EvidenceUnit)> {
+    let Some(first_page) = scope.context_units().map(|unit| unit.page).min() else {
+        return Vec::new();
+    };
+    for unit in scope.context_units().filter(|unit| unit.page == first_page) {
+        let text = normalize_loosely(&unit.text);
+        for at in whole_positions(&text, "between") {
+            let after = window_forward(&text, at, 300);
+            let mut named = unit
+                .features
+                .organizations
+                .iter()
+                .filter_map(|organization| {
+                    whole_positions(after, organization)
+                        .first()
+                        .map(|position| (*position, organization))
+                })
+                .collect::<Vec<_>>();
+            named.sort_by_key(|(position, _)| *position);
+            let mut found: Vec<(String, &EvidenceUnit)> = Vec::new();
+            for (_, organization) in named {
+                if found
+                    .iter()
+                    .any(|(known, _)| normalize_loosely(known) == *organization)
+                {
+                    continue;
+                }
+                if let Some(span) = written_span(unit, organization) {
+                    found.push((span, unit));
+                }
+                if found.len() == 2 {
+                    return found;
+                }
+            }
+        }
+    }
+    Vec::new()
 }
 
 /// Roles a notice or a letter gives the one it is addressed to.
@@ -6137,6 +6726,370 @@ Sincerely, Harriet Voss, Vice President of People Operations, Northstar Lantern 
         );
         let facts = outcome.facts.unwrap();
         assert!(facts.parties.iter().any(|party| party.signatory));
+    }
+
+    #[test]
+    fn a_person_named_by_their_post_gives_way_to_the_organization_at_the_head() {
+        const MINUTES: &str = "CAIRNFIELD COOPERATIVE GROCERS\n\n\
+Minutes of the Regular Meeting of the Board of Directors\n\nSeptember 17, 2025\n\n\
+Directors present: Beckett Halloran (President), Mabel Trevelyan (Vice President)\n\n\
+President Beckett Halloran called the meeting to order at 6:32 p.m.";
+        let (outcome, _) = facts_for(MINUTES, |index| ModelFacts {
+            document_type: Some("Minutes of the Regular Meeting of the Board of Directors".into()),
+            type_evidence: vec![id_of(index, "Minutes of")],
+            document_date: Some("2025-09-17".into()),
+            date_evidence: vec![id_of(index, "September")],
+            parties: vec![party(
+                "Beckett Halloran",
+                Some(PartyRole::Recipient),
+                &[id_of(index, "Directors present")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["CAIRNFIELD COOPERATIVE GROCERS"],
+            "{:?}",
+            outcome.proposal
+        );
+        let facts = outcome.facts.unwrap();
+        assert!(facts.parties.iter().any(|party| party.signatory));
+    }
+
+    #[test]
+    fn the_one_a_column_header_names_as_the_subject_keeps_the_name() {
+        const FORM: &str = "| WESTBROOK KETTLE BREWING CO. | BENEFITS ENROLLMENT CHANGE FORM |\n\n\
+| Employee name | Employee ID |\n| --- | --- |\n| Annika Solberg-Reyes | WK-0417 |\n\n\
+| Employee signature | Date signed |\n| --- | --- |\n| /s/ Annika Solberg-Reyes | 06/29/2026 |";
+        let (outcome, _) = facts_for(FORM, |index| ModelFacts {
+            document_type: Some("Benefits Enrollment Change Form".into()),
+            type_evidence: vec![id_of(index, "| WESTBROOK")],
+            parties: vec![party(
+                "Annika Solberg-Reyes",
+                Some(PartyRole::Employee),
+                &[id_of(index, "| Annika")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Annika Solberg-Reyes"],
+            "{:?}",
+            outcome.proposal
+        );
+    }
+
+    #[test]
+    fn signatories_alone_give_way_to_the_organizations_between_which_it_is_made() {
+        const AMENDMENT: &str = "FIRST AMENDMENT TO SOFTWARE LICENSE AGREEMENT\n\n\
+This First Amendment is made between Corvane Analytics Inc. and Pellworth Water Company.\n\n\
+CORVANE ANALYTICS INC.\nBy:\nName: Rosalind Achterberg\nTitle: Chief Revenue Officer\n\n\
+PELLWORTH WATER COMPANY\nBy:\nName: Barnaby Quist\nTitle: General Manager";
+        let (outcome, _) = facts_for(AMENDMENT, |index| ModelFacts {
+            document_type: Some("First Amendment to Software License Agreement".into()),
+            type_evidence: vec![id_of(index, "FIRST AMENDMENT")],
+            parties: vec![
+                party(
+                    "Rosalind Achterberg",
+                    Some(PartyRole::Other),
+                    &[id_of(index, "CORVANE")],
+                ),
+                party(
+                    "Barnaby Quist",
+                    Some(PartyRole::Other),
+                    &[id_of(index, "PELLWORTH")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Corvane Analytics Inc.", "Pellworth Water Company"],
+            "{:?}",
+            outcome.proposal
+        );
+    }
+
+    #[test]
+    fn a_signer_alone_gives_way_to_the_letterhead_and_its_full_name() {
+        const RECORD: &str = "AIRCRAFT MAINTENANCE RECORD\n\n\
+Kestrel Ridge Aero Services - Repair Station Certificate KRA\n\n\
+| Registration | Owner |\n| --- | --- |\n| N0612X | Highmeadow Air Charter LLC |\n\n\
+| Signature | Date of return to service |\n| --- | --- |\n| /s/ Arlo Sinclair-Ray | 08/14/2026 |";
+        let (outcome, _) = facts_for(RECORD, |index| ModelFacts {
+            document_type: Some("Aircraft Maintenance Record".into()),
+            type_evidence: vec![id_of(index, "AIRCRAFT")],
+            parties: vec![party(
+                "Arlo Sinclair-Ray",
+                Some(PartyRole::Other),
+                &[id_of(index, "| /s/")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Kestrel Ridge Aero Services"],
+            "{:?}",
+            outcome.proposal
+        );
+        // The column says who signed, with no mark in the cell.
+        let unmarked = RECORD.replace("/s/ ", "");
+        let (outcome, _) = facts_for(&unmarked, |index| ModelFacts {
+            document_type: Some("Aircraft Maintenance Record".into()),
+            type_evidence: vec![id_of(index, "AIRCRAFT")],
+            parties: vec![party(
+                "Arlo Sinclair-Ray",
+                Some(PartyRole::Other),
+                &[id_of(index, "| Arlo")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Kestrel Ridge Aero Services"],
+            "{:?}",
+            outcome.proposal
+        );
+        const REPORT: &str = "Saltash Point Museum of Art\n\nLOAN CONDITION REPORT\n\n\
+| Examined by | Delphine Moncrieff, Associate Conservator of Paintings |";
+        let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+            document_type: Some("Loan Condition Report".into()),
+            type_evidence: vec![id_of(index, "LOAN")],
+            parties: vec![party(
+                "Delphine Moncrieff",
+                Some(PartyRole::Recipient),
+                &[id_of(index, "| Examined")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Saltash Point Museum of Art"],
+            "{:?}",
+            outcome.proposal
+        );
+    }
+
+    #[test]
+    fn a_labeled_recipient_who_also_signs_stays_a_party() {
+        const NOTICE: &str = "NOTICE OF POLICY CHANGE\n\nRecipient: Jane Doe\n\n\
+Your coverage changes on March 1, 2026.\n\nAcknowledged: /s/ Jane Doe";
+        let reply = |index: &EvidenceIndex| ModelFacts {
+            document_type: Some("Notice of Policy Change".into()),
+            type_evidence: vec![id_of(index, "NOTICE")],
+            parties: vec![party(
+                "Jane Doe",
+                Some(PartyRole::Recipient),
+                &[id_of(index, "Recipient")],
+            )],
+            ..ModelFacts::default()
+        };
+        let (outcome, _) = facts_for(NOTICE, reply);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Jane Doe"],
+            "{:?}",
+            outcome.proposal
+        );
+        let facts = outcome.facts.unwrap();
+        assert!(!facts.parties.iter().any(|party| party.signatory));
+    }
+
+    #[test]
+    fn a_labeled_party_is_not_taken_along_when_staff_give_way() {
+        const NOTICE: &str = "HARBOR FREIGHT COURIERS LLC\n\nNOTICE OF RATE CHANGE\n\n\
+Recipient: Jane Doe\n\nRates change on March 1, 2026.\n\nPrepared by: John Smith";
+        let (outcome, _) = facts_for(NOTICE, |index| ModelFacts {
+            document_type: Some("Notice of Rate Change".into()),
+            type_evidence: vec![id_of(index, "NOTICE")],
+            parties: vec![
+                party(
+                    "Jane Doe",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Recipient")],
+                ),
+                party(
+                    "John Smith",
+                    Some(PartyRole::Sender),
+                    &[id_of(index, "Prepared")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Jane Doe"],
+            "{:?}",
+            outcome.proposal
+        );
+    }
+
+    #[test]
+    fn someone_who_signs_their_own_letter_stays_its_party() {
+        const LETTER: &str = "LETTER OF RESIGNATION\n\nFrom: Jane Doe\n\nMarch 2, 2026\n\n\
+I resign from my position effective March 31, 2026.\n\n/s/ Jane Doe";
+        let (outcome, _) = facts_for(LETTER, |index| ModelFacts {
+            document_type: Some("Letter of Resignation".into()),
+            type_evidence: vec![id_of(index, "LETTER")],
+            parties: vec![party(
+                "Jane Doe",
+                Some(PartyRole::Sender),
+                &[id_of(index, "From:")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Jane Doe"],
+            "{:?}",
+            outcome.proposal
+        );
+        let facts = outcome.facts.unwrap();
+        assert!(!facts.parties.iter().any(|party| party.signatory));
+    }
+
+    #[test]
+    fn only_a_title_field_makes_a_name_a_signature_block() {
+        assert!(is_title_field("title: chief revenue officer"));
+        assert!(is_title_field("  title : general manager"));
+        assert!(!is_title_field("title of work: harbor at dusk"));
+        assert!(!is_title_field("titled: yes"));
+        const FORM: &str =
+            "COPYRIGHT REGISTRATION FORM\n\nName: Jane Doe\nTitle of work: Harbor at Dusk";
+        let (outcome, _) = facts_for(FORM, |index| ModelFacts {
+            document_type: Some("Copyright Registration Form".into()),
+            type_evidence: vec![id_of(index, "COPYRIGHT")],
+            parties: vec![party("Jane Doe", None, &[id_of(index, "Name:")])],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Jane Doe"],
+            "{:?}",
+            outcome.proposal
+        );
+    }
+
+    #[test]
+    fn a_crew_member_is_staff_not_the_member_a_document_is_about() {
+        assert!(!subject_label("crew member"));
+        assert!(!subject_label("board member"));
+        assert!(subject_label("member"));
+        assert!(subject_label("employee signature"));
+        assert_eq!(closing_words("| examined by |", 2), "examined by");
+        assert!(signs_by("by:\u{2014}"));
+        assert!(signs_by("by:"));
+        assert_eq!(
+            without_sentence_stop("Pellworth Water Company."),
+            "Pellworth Water Company"
+        );
+        assert_eq!(
+            without_sentence_stop("Corvane Analytics Inc."),
+            "Corvane Analytics Inc."
+        );
+        assert_eq!(
+            without_sentence_stop("Halden Bay National Bank, N.A."),
+            "Halden Bay National Bank, N.A."
+        );
+    }
+
+    #[test]
+    fn a_signature_alone_is_not_signing_for_someone_else() {
+        // A form's filer signs it: no organization stands to sign for.
+        const FORM: &str = "COPYRIGHT REGISTRATION FORM\n\nName: Jane Doe\n\
+Title of work: Harbor at Dusk\n\nSignature: /s/ Jane Doe";
+        let (outcome, _) = facts_for(FORM, |index| ModelFacts {
+            document_type: Some("Copyright Registration Form".into()),
+            type_evidence: vec![id_of(index, "COPYRIGHT")],
+            parties: vec![party("Jane Doe", None, &[id_of(index, "Name:")])],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
+        // Nor does a declaration that names no organization.
+        const DECLARATION: &str = "DECLARATION OF RESIDENCY\n\nDated June 2, 2026\n\n\
+I declare that I have lived at 14 Wren Street since 2019.\n\nSignature: /s/ Jane Doe";
+        let (outcome, _) = facts_for(DECLARATION, |index| ModelFacts {
+            document_type: Some("Declaration of Residency".into()),
+            type_evidence: vec![id_of(index, "DECLARATION")],
+            parties: vec![party("Jane Doe", None, &[id_of(index, "Signature:")])],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
+    }
+
+    #[test]
+    fn a_column_naming_a_party_keeps_its_names_whoever_signs() {
+        assert!(header_names_party("recipient", DocumentClass::Record));
+        assert!(header_names_party("tenant", DocumentClass::Notice));
+        assert!(!header_names_party("signature", DocumentClass::Record));
+        assert!(!header_names_party("buyer", DocumentClass::Issued));
+        const RECORD: &str = "Harbor Point Shipping Co.\n\nDELIVERY RECORD\n\n\
+| Recipient | Signature |\n| --- | --- |\n| Jane Doe | /s/ Jane Doe |";
+        let (outcome, _) = facts_for(RECORD, |index| ModelFacts {
+            document_type: Some("Delivery Record".into()),
+            type_evidence: vec![id_of(index, "DELIVERY")],
+            parties: vec![party("Jane Doe", None, &[id_of(index, "| Jane")])],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Jane Doe"],
+            "{:?}",
+            outcome.proposal
+        );
+    }
+
+    #[test]
+    fn a_label_opening_a_line_covers_only_the_names_it_lists() {
+        assert_eq!(
+            listed_under(
+                "Mechanics: Linnea Hart, Joaquin Moncrieff",
+                "joaquin moncrieff"
+            )
+            .as_deref(),
+            Some("mechanics")
+        );
+        assert_eq!(
+            listed_under("Prepared by: /s/ John Smith", "john smith").as_deref(),
+            Some("prepared by")
+        );
+        assert_eq!(
+            listed_under("Prepared by: John Smith for Jane Doe", "jane doe"),
+            None
+        );
+        const REPORT: &str = "INSPECTION REPORT\n\nDated March 3, 2026\n\n\
+Prepared by: John Smith for Jane Doe\n\nThe roof at 14 Wren Street needs new flashing.";
+        let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+            document_type: Some("Inspection Report".into()),
+            type_evidence: vec![id_of(index, "INSPECTION")],
+            parties: vec![party("Jane Doe", None, &[id_of(index, "Prepared")])],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
+    }
+
+    #[test]
+    fn a_post_after_a_name_must_be_theirs() {
+        assert!(titled_after(
+            "Jane Doe, Chief Financial Officer",
+            "jane doe"
+        ));
+        assert!(titled_after("Jane Doe (Conservator)", "jane doe"));
+        assert!(titled_after("| Jane Doe | Winemaker |", "jane doe"));
+        assert!(titled_after("JANE DOE - SITE INSPECTOR", "jane doe"));
+        assert!(titled_after("Jane Doe, Director of Operations", "jane doe"));
+        assert!(titled_after("Jane Doe, the conservator", "jane doe"));
+        assert!(!titled_after("Jane Doe spoke to the manager.", "jane doe"));
+        assert!(!titled_after("Jane Doe, who met the inspector", "jane doe"));
+        const REPORT: &str = "INCIDENT REPORT\n\nDated March 3, 2026\n\n\
+Jane Doe spoke to the manager about the leak in Unit 4.";
+        let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+            document_type: Some("Incident Report".into()),
+            type_evidence: vec![id_of(index, "INCIDENT")],
+            parties: vec![party("Jane Doe", None, &[id_of(index, "spoke")])],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
     }
 
     #[test]

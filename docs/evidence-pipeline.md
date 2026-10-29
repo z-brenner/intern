@@ -233,7 +233,22 @@ The other checks:
 - **Who is a party.** Someone named only on a `cc:` line is copied in, and
   someone who signs for an organization among the parties (a name, a job
   title, then the organization) acts for it: both stay on record, with role
-  other, and neither is ever a filename's party. A notice or a letter
+  other, and neither is ever a filename's party. So does someone the
+  document names only by the job they do for it: after a staff label or a
+  column header naming a job (`Examined by`, `Winemaker`, `Crew lead`, an
+  issued document's `Buyer:`), the `Name:` of a `By:`/`Title:` block, or
+  with a post right beside the name (`Beckett Halloran (President)`). A bare
+  signature mark (`/s/`, a `Signature` column) counts only outside letters
+  and emails, and never for the one the document labels as its sender:
+  anyone signs their own letter. A label or column header that names the one the
+  document is about (`Employee name`, `Patient`, `Dear`, `To:`) or a
+  "between" clause keeps a person a party, whatever else they are. When
+  the reply named no organization and no such subject beside the staff, the
+  others are staff too, and the organization they act for takes their
+  place: the two a first-page "between" clause names for an agreement or
+  an amendment, else the one organization at the head of the first page,
+  else the one a letterhead unit names (with an "of" phrase the index cut
+  off restored: `Saltash Point Museum of Art`). A notice or a letter
   whose reply names no one it is addressed to takes as its addressee the
   name its first page's `To:` field opens with; an `Attn:` line names the
   person who reads it for the addressee and never does.
@@ -291,7 +306,7 @@ order the document first names them.
 | Notice | `for` the party it is about; else `to` the recipient; else `from` the issuer; else `for` the counterpart of a provider; else `from` the provider; two parties marked other read `between` |
 | Letter | `to` the addressee; else `from` the sender; else `for` the party it is about, or the provider's counterpart; else `from` the provider |
 | Email | `from` the sender; else `to` the addressee |
-| Record | one party: `for` it if it is the party the record is about, else `from` it. Two or more: `for` the party it is about; else `to` the recipient; else `for` the provider's counterpart; else `from` the issuer |
+| Record | one party: `for` it if it is the party the record is about, else `from` it. Two or more: `for` the party it is about; else the recipient - `for` it (a policy for the insured, a review for its client), but `to` it when another party with no settled role may be the one it is about (a certificate's insured, its holder the recipient); else `for` the provider's counterpart; else `from` the issuer |
 | Form | `between` the two parties the document names "by and between"; else `for` the filer (issuer or sender, then employee, tenant, vendor or customer) |
 | Unknown | `between` a bilateral pair, or the two named "by and between"; else `from` the issuer; else `to` the addressee |
 
