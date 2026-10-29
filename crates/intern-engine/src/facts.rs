@@ -1014,7 +1014,7 @@ pub fn validate_facts_at(
                 .flatten()
         }),
         between: between_cue(context, &cast),
-        caption: caption_sides(context, &cast),
+        caption: caption_sides(scope, context, &cast),
     };
     let relation = relation_from_roles(class, document_type.as_deref(), &cast, cues);
 
@@ -3716,13 +3716,37 @@ const BRINGING_SIDE: &[&str] = &["plaintiff", "petitioner", "appellant", "claima
 /// Words a caption labels the side answering a case with.
 const ANSWERING_SIDE: &[&str] = &["defendant", "respondent", "appellee"];
 
+/// Words a court's, a tribunal's or an arbitration's heading names it by.
+const FORUM_WORDS: &[&str] = &["court", "tribunal", "arbitration"];
+
 /// The two sides of the case a document is filed in, by their places in
 /// the cast: a party the document labels a plaintiff, petitioner,
 /// appellant or claimant right beside its name ("Plaintiff Gilchrist
 /// Harbor Marine Supply, LLC") and one it labels a defendant, respondent
 /// or appellee ("Tavistock Boatworks, Inc., Defendant"), in a document
-/// that sets the case out as "A v. B".
-fn caption_sides(context: &ScopeView, cast: &[CastMember]) -> Option<(usize, usize)> {
+/// that sets the case out as "A v. B" under a forum's heading on its first
+/// page ("SUPERIOR COURT OF THE STATE OF WASHINGTON"). A document that only
+/// mentions a case - a law firm's invoice for the matter - has no such
+/// heading.
+fn caption_sides(
+    scope: &ValidationScope<'_>,
+    context: &ScopeView,
+    cast: &[CastMember],
+) -> Option<(usize, usize)> {
+    let first_page = scope.context_units().map(|unit| unit.page).min()?;
+    let headed = scope
+        .context_units()
+        .filter(|unit| unit.page == first_page)
+        .take(8)
+        .any(|unit| {
+            let text = normalize_loosely(&unit.text);
+            FORUM_WORDS
+                .iter()
+                .any(|word| !whole_positions(&text, word).is_empty())
+        });
+    if !headed {
+        return None;
+    }
     let segments = context
         .segments()
         .iter()
@@ -7364,6 +7388,32 @@ for hearing its Motion to Compel.\n\nDATED this 29th day of July, 2026.";
             outcome.proposal
         );
         assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        // The same words with no court over them only mention the case.
+        let unheaded = HEARING.replacen(
+            "SUPERIOR COURT OF THE STATE OF WASHINGTON",
+            "Kavanagh Trask PLLC",
+            1,
+        );
+        let (outcome, _) = facts_for(&unheaded, |index| ModelFacts {
+            document_type: Some("Notice of Hearing".into()),
+            type_evidence: vec![id_of(index, "v. )")],
+            document_date: Some("2026-07-29".into()),
+            date_evidence: vec![id_of(index, "DATED")],
+            parties: vec![
+                party(
+                    "Tavistock Boatworks, Inc.",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "AND TO")],
+                ),
+                party(
+                    "Gilchrist Harbor Marine Supply, LLC",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "PLEASE TAKE")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_ne!(outcome.proposal.party_relation, PartyRelation::Between);
     }
 
     #[test]

@@ -309,12 +309,14 @@ and an addendum is an amendment.
 order the document first names them.
 
 Before the table, a court document is filed under its case: when the
-document sets the case out as "A v. B" and labels one party a plaintiff,
+document has a court's, a tribunal's or an arbitration's heading on its
+first page, sets the case out as "A v. B" and labels one party a plaintiff,
 petitioner, appellant or claimant and another a defendant, respondent or
 appellee right beside its name ("Plaintiff Gilchrist Harbor Marine Supply,
 LLC", "Tavistock Boatworks, Inc., Defendant"), the filename reads `between`
 them, the side bringing the case first. A letter or an email about a case
-keeps the table's correspondence rules. A role's own label is never part of
+keeps the table's correspondence rules, and an invoice or a statement for it
+still comes from its issuer. A role's own label is never part of
 a name: the index's "Plaintiff Gilchrist Harbor Marine Supply, LLC" does not
 complete the reply's "Gilchrist Harbor Marine Supply, LLC".
 

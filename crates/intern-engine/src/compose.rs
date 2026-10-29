@@ -304,9 +304,13 @@ pub fn relation_from_roles(
     };
     // A court document - a notice of hearing, a motion, an order - is
     // filed under the case: between its two sides, the one bringing it
-    // first. A letter or an email about the case is still correspondence.
+    // first. A letter or an email about the case is still correspondence,
+    // and an invoice for it still comes from its issuer.
     if let Some((bringing, answering)) = cues.caption
-        && !matches!(class, DocumentClass::Letter | DocumentClass::Email)
+        && !matches!(
+            class,
+            DocumentClass::Letter | DocumentClass::Email | DocumentClass::Issued
+        )
         && let (Some(a), Some(b)) = (parties.get(bringing), parties.get(answering))
     {
         return Relation {
@@ -1428,6 +1432,8 @@ mod tests {
         );
         let relation = relation_from_roles(DocumentClass::Letter, Some("Letter"), &parties, cues);
         assert_eq!(relation.relation, PartyRelation::To);
+        let relation = relation_from_roles(DocumentClass::Issued, Some("Invoice"), &parties, cues);
+        assert_ne!(relation.relation, PartyRelation::Between);
     }
 
     #[test]
