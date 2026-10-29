@@ -144,3 +144,86 @@ export function humanizeReason(reason: string): string {
   }
   return parts.map((part) => SENTENCES[part.toUpperCase()]).join(' ');
 }
+
+/**
+ * The codes in a reason string, when it is a list of codes; empty for free
+ * text ("Duplicate of ..."), which names no code even when it has commas.
+ */
+export function reasonCodes(reason: string): string[] {
+  const parts = reason.split(',').map((part) => part.trim().toUpperCase()).filter((part) => part.length > 0);
+  return parts.length > 0 && parts.every((part) => SENTENCES[part] !== undefined) ? parts : [];
+}
+
+/**
+ * The same reasons in a few words, for the queue's Check column: what a
+ * person scanning forty rows needs to see to know which to open first. The
+ * sentence above is the cell's tooltip and the review panel's.
+ */
+const SHORT: Record<string, string> = {
+  DATE_MISSING: 'No date found',
+  DATE_UNSUPPORTED: 'Date not in document',
+  DATE_AMBIGUOUS: 'Date could be day- or month-first',
+  DATE_IS_DEADLINE: 'Date is a deadline',
+  DATE_IMPLAUSIBLE: 'Year looks wrong',
+  TYPE_MISSING: 'No document type',
+  TYPE_UNSUPPORTED: 'Type not in document',
+  TYPE_INFERRED: 'Type taken from its title',
+  PARTY_UNSUPPORTED: 'Party not found',
+  DESCRIPTION_UNSUPPORTED: 'Description not supported',
+  DESCRIPTION_INVALID: 'Description unusable',
+  LOW_CONFIDENCE: 'Model unsure of its reading',
+  MODEL_REQUESTED_REVIEW: 'Model asked for a check',
+  PARSER_WARNING: 'Text may be misread',
+  FAST_MODEL_READING: 'Quick model\'s reading',
+  FILE_CHANGED: 'File changed since read',
+  SOURCE_LOCKED: 'File in use',
+  DESTINATION_UNAVAILABLE: 'Destination unavailable',
+  MOVE_VERIFICATION_FAILED: 'Rename not verified',
+  SOURCE_DELETE_FAILED: 'Original not removed',
+  RECONCILIATION_REQUIRED: 'Compare two files',
+  PROPOSAL_MISSING: 'No proposal',
+  PASSWORD_PROTECTED: 'Password-protected',
+  UNSUPPORTED_CONTENT: 'Not the format it claims',
+  DOCUMENT_TOO_LARGE: 'Too large to read',
+  EXTRACTION_FAILED: 'Could not be read',
+  MODEL_INPUT_TOO_LARGE: 'Too long for the model',
+  DUPLICATE: 'Already filed',
+  NEAR_DUPLICATE: 'Possible duplicate',
+  EXACT_COPY: 'Exact copy',
+  UNDONE: 'Rename undone',
+  ALREADY_NAMED: 'Already had this name',
+  DATE_REQUIRED: 'Needs a date',
+};
+
+/** Which part of a proposal a code is about, for marking that part where it is shown. */
+export type ReasonField = 'date' | 'type' | 'parties' | 'description';
+
+export function reasonField(code: string): ReasonField | undefined {
+  if (code.startsWith('DATE_')) return 'date';
+  if (code.startsWith('TYPE_')) return 'type';
+  if (code.startsWith('PARTY_')) return 'parties';
+  if (code.startsWith('DESCRIPTION_')) return 'description';
+  return undefined;
+}
+
+/**
+ * The parts of a proposal the codes put in doubt, in the order a name is
+ * read: date, type, parties, description.
+ */
+export function flaggedFields(codes: readonly string[]): ReasonField[] {
+  const order: ReasonField[] = ['date', 'type', 'parties', 'description'];
+  const fields = new Set(codes.map(reasonField).filter((field): field is ReasonField => field !== undefined));
+  return order.filter((field) => fields.has(field));
+}
+
+/**
+ * The few words for a list of codes, most specific first: a code about one
+ * part of the name says more than the model's general doubt, so it leads,
+ * and the rest are counted rather than listed.
+ */
+export function shortReason(codes: readonly string[]): { text: string; more: number } | undefined {
+  const known = codes.filter((code) => SHORT[code] !== undefined);
+  if (!known.length) return undefined;
+  const ranked = [...known].sort((left, right) => Number(reasonField(right) !== undefined) - Number(reasonField(left) !== undefined));
+  return { text: SHORT[ranked[0]], more: ranked.length - 1 };
+}

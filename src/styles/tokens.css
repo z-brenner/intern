@@ -15,8 +15,9 @@
   */
   --font-mono: "Cascadia Mono", Consolas, "Segoe UI Mono", ui-monospace, monospace;
   font-family: var(--font-ui);
-  color: #171a1f;
-  background: #ffffff;
+  color: var(--text);
+  background: var(--surface);
+  color-scheme: light;
   --brand-navy: #1b2f5b;
   --brand-blue: #2456d6;
   --brand-tint: #e3ecfb;
@@ -43,6 +44,11 @@
   --accent-hover: #1d49bd;
   --primary: var(--brand-navy);
   --primary-hover: #142544;
+  /* Text on --primary. White on navy; the dark theme's primary is light, so
+     its text is dark. */
+  --on-primary: #ffffff;
+  /* The wordmark and the few places that speak in the brand's own color. */
+  --brand-ink: var(--brand-navy);
   --ready: #14804a;
   --review: #a45f00;
   --review-strong: #8f5200;
@@ -52,10 +58,74 @@
   /* Failed had no color at all: an XCircle glyph in ordinary body text, the
      one status a person most needs to spot. Same red as form errors. */
   --failed: #b42318;
+  /* The amber surfaces: the "need review" count, the flag on a name's part
+     to check, and the highlight inside a proposed filename. */
+  --review-surface: #fdf6ea;
+  --review-surface-hover: #faecd3;
+  --review-edge: #ecd3a8;
+  --review-edge-hover: #e0bb7c;
+  --review-mark: #fbe7c4;
+  /* Error surfaces: toasts, setup and onboarding problems. */
+  --failed-surface: #fff5f3;
+  --failed-edge: #e6a9a2;
+  --failed-text: #8f231a;
   --track: #e4e9f1;
+  --scrim: rgba(23, 26, 31, .22);
   --radius-sm: 6px;
   --radius-md: 9px;
   --radius-lg: 12px;
   --shadow-inspector: -8px 0 24px rgba(23, 26, 31, 0.06);
   --shadow-dialog: 0 18px 50px rgba(23, 26, 31, 0.18);
+  --shadow-popover: 0 8px 24px rgba(23, 26, 31, .12);
+}
+
+/*
+  Windows' own dark mode. Every color above has a counterpart here, chosen
+  to the same contrast rules the light theme is held to: body and status
+  text >= 4.5:1 on --surface, --surface-subtle and the selected fills, and
+  the meters and focus rings >= 3:1. Hard-coded colors anywhere else in the
+  stylesheet would be wrong in one theme or the other, so there are none.
+*/
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --brand-tint: #1f2c48;
+    --surface: #1c1d21;
+    --surface-subtle: #24262b;
+    --surface-selected: #222a3a;
+    --selected-border: #3d5487;
+    --cell-selected: #263553;
+    --cell-selected-edge: #7aa2ff;
+    --border: #34373e;
+    --border-strong: #4a4e57;
+    --text: #eceef2;
+    --text-soft: #c4c8d1;
+    --text-muted: #9ea4b0;
+    --accent: #8fb0ff;
+    --accent-hover: #adc5ff;
+    --primary: #c9d8ff;
+    --primary-hover: #e0e8ff;
+    --on-primary: #10203f;
+    --brand-ink: #c9d8ff;
+    --ready: #4cc38a;
+    --review: #f0a842;
+    --review-strong: #f5b85e;
+    --ready-strong: #62d19b;
+    --waiting: #9ea4b0;
+    --processing: #8fb0ff;
+    --failed: #ff8a7a;
+    --review-surface: #33281a;
+    --review-surface-hover: #3e3020;
+    --review-edge: #6b4e22;
+    --review-edge-hover: #8a6530;
+    --review-mark: #4a3818;
+    --failed-surface: #3a2220;
+    --failed-edge: #7a3a33;
+    --failed-text: #ffb4a8;
+    --track: #383b43;
+    --scrim: rgba(0, 0, 0, .5);
+    --shadow-inspector: -8px 0 24px rgba(0, 0, 0, .35);
+    --shadow-dialog: 0 18px 50px rgba(0, 0, 0, .55);
+    --shadow-popover: 0 8px 24px rgba(0, 0, 0, .45);
+  }
 }

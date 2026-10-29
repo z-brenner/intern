@@ -4,7 +4,7 @@ import type { CopiedBlock, GridSelection } from './grid';
 import type { QueueItem } from '../../types';
 
 const rows: QueueItem[] = [
-  { id: 'a', originalFilename: 'Scan 0001.pdf', status: 'review', proposedFilename: '2024-01-02 Lease.pdf', description: 'A lease.', confidence: 0.874 },
+  { id: 'a', originalFilename: 'Scan 0001.pdf', status: 'review', proposedFilename: '2024-01-02 Lease.pdf', description: 'A lease.', confidence: 0.874, reasonCodes: ['LOW_CONFIDENCE', 'DATE_AMBIGUOUS'] },
   { id: 'b', originalFilename: 'Scan 0002.pdf', status: 'ready', proposedFilename: '2024-02-03 Invoice.pdf', description: 'An invoice.', confidence: 0.95 },
   { id: 'c', originalFilename: 'Scan 0003.pdf', status: 'waiting' },
 ];
@@ -19,11 +19,12 @@ describe('queue grid', () => {
     expect(cellText(rows[0], 'original')).toBe('Scan 0001.pdf');
     expect(cellText(rows[0], 'proposed')).toBe('2024-01-02 Lease.pdf');
     expect(cellText(rows[0], 'description')).toBe('A lease.');
-    // The same rounded percentage the confidence meter prints.
-    expect(cellText(rows[0], 'confidence')).toBe('87%');
+    // The same few words the Check cell shows: the reason about a part of the
+    // name first, the rest counted.
+    expect(cellText(rows[0], 'check')).toBe('Date could be day- or month-first (+1 more)');
+    expect(cellText(rows[1], 'check')).toBe('All checks passed');
     // Nothing yet is empty, not an em dash.
-    expect(['proposed', 'description', 'confidence'].map((column) => cellText(rows[2], column as 'proposed'))).toEqual(['', '', '']);
-    expect(cellText({ ...rows[0], confidence: undefined }, 'confidence')).toBe('');
+    expect(['proposed', 'description', 'check'].map((column) => cellText(rows[2], column as 'proposed'))).toEqual(['', '', '']);
     // Status is never copied.
     expect(cellText(rows[0], 'status')).toBe('');
   });
@@ -59,7 +60,7 @@ describe('queue grid', () => {
 
   it('selects every copyable cell with Ctrl+A', () => {
     const block = selectedBlock(selectAll(rows), rows)!;
-    expect(block.columns.map((column) => column.label)).toEqual(['Original filename', 'Proposed filename', 'Description', 'Confidence']);
+    expect(block.columns.map((column) => column.label)).toEqual(['Original filename', 'Proposed filename', 'Description', 'Check']);
     expect(block.rows).toHaveLength(3);
     expect(selectAll([])).toBeUndefined();
   });
@@ -67,9 +68,9 @@ describe('queue grid', () => {
   it('copies the whole table with its headings, and a selection without', () => {
     const table = tableBlock(rows);
     expect(toTsv(table)).toBe([
-      'Original filename\tProposed filename\tDescription\tConfidence',
-      'Scan 0001.pdf\t2024-01-02 Lease.pdf\tA lease.\t87%',
-      'Scan 0002.pdf\t2024-02-03 Invoice.pdf\tAn invoice.\t95%',
+      'Original filename\tProposed filename\tDescription\tCheck',
+      'Scan 0001.pdf\t2024-01-02 Lease.pdf\tA lease.\tDate could be day- or month-first (+1 more)',
+      'Scan 0002.pdf\t2024-02-03 Invoice.pdf\tAn invoice.\tAll checks passed',
       'Scan 0003.pdf\t\t\t',
     ].join('\r\n'));
     expect(describeBlock(table)).toBe('the table, 3 rows');
@@ -105,45 +106,44 @@ describe('queue grid', () => {
       columns: tableBlock([]).columns,
       rows: [
         ['=HYPERLINK("http://x","click")', '+1 Lease.pdf', '-2 Notes', '@SUM(A1)'],
-        ['\tTabbed.pdf', '\rReturned.pdf', 'Plain = fine.pdf', '87%'],
+        ['\tTabbed.pdf', '\rReturned.pdf', 'Plain = fine.pdf', '-Free text reason'],
       ],
       header: false,
     };
     expect(toTsv(block).split('\r\n')).toEqual([
-      // Confidence is Intern's own percentage, never a formula, and left alone.
-      `"'=HYPERLINK(""http://x"",""click"")"\t'+1 Lease.pdf\t'-2 Notes\t@SUM(A1)`,
-      `"'\tTabbed.pdf"\t"'\rReturned.pdf"\tPlain = fine.pdf\t87%`,
+      // Check can carry a reason's free text, so it is guarded like the rest.
+      `"'=HYPERLINK(""http://x"",""click"")"\t'+1 Lease.pdf\t'-2 Notes\t'@SUM(A1)`,
+      `"'\tTabbed.pdf"\t"'\rReturned.pdf"\tPlain = fine.pdf\t'-Free text reason`,
     ]);
     // The header row of a whole-table copy is Intern's own words.
-    expect(toTsv({ ...block, rows: [], header: true })).toBe('Original filename\tProposed filename\tDescription\tConfidence');
+    expect(toTsv({ ...block, rows: [], header: true })).toBe('Original filename\tProposed filename\tDescription\tCheck');
   });
 
   it('writes an HTML table that pastes into separate cells, as text in both spreadsheets', () => {
     const block: CopiedBlock = {
       columns: tableBlock([]).columns,
-      rows: [['<b>&"\'', 'first\nsecond', '=HYPERLINK("x")', '87%']],
+      rows: [['<b>&"\'', 'first\nsecond', '=HYPERLINK("x")', 'Party not found']],
       header: true,
     };
     const html = toHtml(block);
     const asText = (value: string) => ` style="mso-number-format:'\\@'" data-sheets-value="${value}"`;
     expect(html).toBe(
       '<meta charset="utf-8"><table>'
-      + '<thead><tr><th>Original filename</th><th>Proposed filename</th><th>Description</th><th>Confidence</th></tr></thead>'
+      + '<thead><tr><th>Original filename</th><th>Proposed filename</th><th>Description</th><th>Check</th></tr></thead>'
       + '<tbody><tr>'
       + `<td${asText('{&quot;1&quot;:2,&quot;2&quot;:&quot;&lt;b&gt;&amp;\\&quot;&#39;&quot;}')}>&lt;b&gt;&amp;&quot;&#39;</td>`
       + `<td${asText('{&quot;1&quot;:2,&quot;2&quot;:&quot;first\\nsecond&quot;}')}>first<br style="mso-data-placement:same-cell">second</td>`
       + `<td${asText('{&quot;1&quot;:2,&quot;2&quot;:&quot;=HYPERLINK(\\&quot;x\\&quot;)&quot;}')}>=HYPERLINK(&quot;x&quot;)</td>`
-      + '<td>87%</td>'
+      + `<td${asText('{&quot;1&quot;:2,&quot;2&quot;:&quot;Party not found&quot;}')}>Party not found</td>`
       + '</tr></tbody></table>',
     );
     // Parsed back, it is the same cells, and Google Sheets' value is the exact string.
     const parsed = new DOMParser().parseFromString(html, 'text/html');
     const cells = [...parsed.querySelectorAll('tbody td')];
-    expect(cells.map((cell) => cell.textContent)).toEqual(['<b>&"\'', 'firstsecond', '=HYPERLINK("x")', '87%']);
-    expect(cells.slice(0, 3).map((cell) => JSON.parse(cell.getAttribute('data-sheets-value')!))).toEqual([
-      { 1: 2, 2: '<b>&"\'' }, { 1: 2, 2: 'first\nsecond' }, { 1: 2, 2: '=HYPERLINK("x")' },
+    expect(cells.map((cell) => cell.textContent)).toEqual(['<b>&"\'', 'firstsecond', '=HYPERLINK("x")', 'Party not found']);
+    expect(cells.map((cell) => JSON.parse(cell.getAttribute('data-sheets-value')!))).toEqual([
+      { 1: 2, 2: '<b>&"\'' }, { 1: 2, 2: 'first\nsecond' }, { 1: 2, 2: '=HYPERLINK("x")' }, { 1: 2, 2: 'Party not found' },
     ]);
-    expect(cells[3].hasAttribute('data-sheets-value')).toBe(false);
     expect(toHtml({ ...block, rows: [['東京 🗂️', '', '', '']], header: false })).toContain('東京 🗂️');
   });
 

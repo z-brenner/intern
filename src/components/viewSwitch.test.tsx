@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../App';
 import { createInMemoryBridge } from '../lib/inMemoryBridge';
-import { Sidebar } from './Sidebar';
+import { ViewSwitch } from './ViewSwitch';
 
 const items = [
   { status: 'review' }, { status: 'review' }, { status: 'review' }, { status: 'review' }, { status: 'review' },
@@ -10,36 +10,29 @@ const items = [
 ];
 
 describe('queue navigation', () => {
-  // At 1100px and below the labels and counts were both hidden and the nav
-  // buttons had no tooltip: three bare icons. And at any width the
-  // aria-label replaced the visible "Queue 6", so a screen reader never
-  // heard the count.
-  it('collapsed nav has titles and counts', () => {
-    render(<Sidebar active="queue" items={items} onChange={vi.fn()} onSettings={vi.fn()} onHelp={vi.fn()} />);
+  // The aria-label replaced the visible "Queue 6", so a screen reader never
+  // heard the count; the count is part of the name.
+  it('names each view with its count', () => {
+    render(<ViewSwitch active="queue" items={items} onChange={vi.fn()} />);
     const nav = screen.getByRole('navigation', { name: 'Queue navigation' });
 
     for (const [view, label, count] of [['queue', 'Queue', 6], ['completed', 'Completed', 1]] as const) {
       const button = within(nav).getByRole('button', { name: `${label}, ${count}` });
-      expect(button).toHaveAttribute('title', label);
       expect(button).toHaveAttribute('data-view', view);
-      // The badge the collapsed sidebar shows on the icon, kept out of the
-      // accessible name, which already carries the count.
-      const badge = button.querySelector('.nav-icon .nav-badge');
-      expect(badge).toHaveTextContent(String(count));
-      expect(badge).toHaveAttribute('aria-hidden', 'true');
+      expect(button).toHaveTextContent(`${label}${count}`);
     }
     // Items needing review are counted in the queue's toolbar, not on a page of their own.
-    expect(within(nav).getAllByRole('button')).toHaveLength(4);
+    expect(within(nav).getAllByRole('button')).toHaveLength(2);
     expect(within(nav).queryByRole('button', { name: /Needs Review/i })).not.toBeInTheDocument();
   });
 
   it('follows the queue as counts change', () => {
-    const view = render(<Sidebar active="queue" items={items} onChange={vi.fn()} onSettings={vi.fn()} onHelp={vi.fn()} />);
-    view.rerender(<Sidebar active="queue" items={items.slice(1)} onChange={vi.fn()} onSettings={vi.fn()} onHelp={vi.fn()} />);
+    const view = render(<ViewSwitch active="queue" items={items} onChange={vi.fn()} />);
+    view.rerender(<ViewSwitch active="queue" items={items.slice(1)} onChange={vi.fn()} />);
 
     const current = screen.getByRole('button', { name: 'Queue, 5' });
     expect(current).toHaveAttribute('aria-current', 'page');
-    expect(current.querySelector('.nav-badge')).toHaveTextContent('5');
+    expect(screen.getByRole('button', { name: 'Completed, 1' })).not.toHaveAttribute('aria-current');
   });
 
   // The view's button is found by data-view, not by its name: the name now

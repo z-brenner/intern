@@ -157,7 +157,7 @@ original where it was — PDFs, Word documents
 Outlook `.msg` emails, plain text, Markdown, and scanned images. Names
 Intern can support with verbatim text from the document appear ready to apply;
 anything else goes to review with the reason shown. Nothing on disk is renamed
-until you approve it, either one item at a time or with **Apply all ready**;
+until you approve it, either one item at a time or with **Rename all ready**;
 approving moves the document out of the input folder into the output folder
 under its new name, and a rename can be undone - with two exceptions Intern
 makes on its own in the input folder, both of which say so in the file's

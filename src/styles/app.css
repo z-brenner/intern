@@ -1,8 +1,8 @@
 /*
   Layout, then chrome, then the three surfaces a person actually works in:
   the queue table, the review inspector, and the dialogs. The header height
-  (72px), sidebar width (230px, 64px collapsed) and inspector width (370px)
-  are pinned by tests/e2e/qa.spec.ts and are not free to move.
+  (48px) and inspector width (370px) are pinned by tests/e2e/qa.spec.ts and
+  are not free to move.
 */
 
 /* ---------- shell ---------- */
@@ -15,11 +15,16 @@
   their own box. The update banner has a row of its own above the header:
   as an unplaced grid child it was auto-placed into the 230x72 corner cell
   and painted under the header.
+
+  There is no sidebar. It was 230px for two destinations, Queue and
+  Completed, and beside the Details panel it left the table too narrow for
+  its own status labels; the two are a switch at the head of the table now,
+  and Help and Settings are in the header with the other commands.
 */
 .app-shell {
   height: 100vh; overflow: hidden; display: grid; background: var(--surface);
-  grid-template: auto 72px minmax(0, 1fr) / 230px minmax(0, 1fr);
-  grid-template-areas: 'banner banner' 'header header' 'nav main';
+  grid-template: auto 48px minmax(0, 1fr) / minmax(0, 1fr);
+  grid-template-areas: 'banner' 'header' 'main';
 }
 .app-shell > .note--update { grid-area: banner; margin: 0; border-width: 0 0 1px 3px; border-radius: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 24px; }
 .app-shell > .note--update .update-actions { margin: 0 0 0 auto; }
@@ -77,62 +82,95 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .inspector-actions .primary,
 .settings-dialog .primary,
 .setup-screen .primary,
-.history-actions .primary { background: var(--primary); color: #fff; border-color: var(--primary); font-weight: 600; }
+.history-actions .primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); font-weight: 600; }
 .queue-actions .primary:hover:not(:disabled),
 .inspector-actions .primary:hover:not(:disabled),
 .settings-dialog .primary:hover:not(:disabled),
 .setup-screen .primary:hover:not(:disabled),
 .history-actions .primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
 
-/* Small-caps field labels. The wordmark tag style already uses this
-   treatment, so reusing it for column headings, evidence fields, and form
-   eyebrows says "this names something" in one consistent voice. */
-.field-label, .table-wrap th { font-size: 12px; font-weight: 600; text-transform: lowercase; font-variant-caps: small-caps; letter-spacing: .07em; color: var(--text-muted); }
+/* Field labels and column headings, in sentence case as Windows sets them
+   (Fluent's caption style, 12px semibold). They were lowercased and set in
+   small caps, which the system face does not have: the browser drew fake
+   ones, and the "fi" ligature escaped them - "ORIGINAL fILENAME". */
+.field-label, .table-wrap th { font-size: 12px; font-weight: 600; letter-spacing: 0; color: var(--text-muted); }
 .field-label { margin: 0; }
 .section-lead { margin: 0 0 14px; font-size: 12px; line-height: 1.5; color: var(--text-muted); }
 
 /* ---------- header ---------- */
-.app-header { grid-area: header; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 24px 0 28px; background: var(--surface); }
-.product { display: flex; align-items: center; gap: 24px; min-width: 0; }
-.product strong { font-family: var(--font-display); font-size: 34px; font-weight: 700; letter-spacing: -.85px; line-height: 1; color: var(--brand-navy); white-space: nowrap; }
-.brand-tag { font-size: 13px; font-weight: 400; font-variant-caps: small-caps; letter-spacing: .06em; color: var(--text-muted); margin-left: 10px; }
+/* A command bar, not a masthead: 48px, the height Windows gives a title bar
+   that carries controls. The wordmark was 34px in a 72px band and said
+   "Intern" a second time under the window's own title. */
+.app-header { grid-area: header; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 12px 0 20px; background: var(--surface); }
+.product { position: relative; display: flex; align-items: center; gap: 16px; min-width: 0; }
+.product strong { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -.2px; line-height: 1; color: var(--brand-ink); white-space: nowrap; }
+.brand-tag { font-size: 13px; font-weight: 400; color: var(--text-muted); margin-left: 10px; }
 /* The privacy posture is a standing fact about the app, not a second
-   headline. Set as a badge it stays legible without competing with the mark. */
-.private { display: inline-flex; align-items: center; gap: 9px; padding: 5px 13px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-subtle); font-size: 13px; color: var(--text); white-space: nowrap; }
-.private i { width: 8px; height: 8px; border-radius: 50%; background: var(--ready); box-shadow: 0 0 0 3px rgba(20, 128, 74, .14); }
-.header-actions { display: flex; gap: 10px; align-items: center; }
+   headline. Set as a badge it stays legible without competing with the mark,
+   and it is a button: what it promises can be looked into. */
+.private { display: inline-flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 11px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-subtle); font: inherit; font-size: 12.5px; color: var(--text); white-space: nowrap; cursor: pointer; transition: background-color .12s ease, border-color .12s ease; }
+.private:hover { border-color: var(--border-strong); background: var(--surface); }
+.private[aria-expanded='true'] { border-color: var(--selected-border); background: var(--brand-tint); }
+.private i { width: 8px; height: 8px; border-radius: 50%; background: var(--ready); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ready) 16%, transparent); }
+.private svg { width: 14px; height: 14px; color: var(--text-muted); }
+.header-actions { display: flex; gap: 8px; align-items: center; }
+.header-actions button { min-height: 32px; padding: 0 11px; }
+.header-actions .icon-button { min-width: 32px; }
+/* Help and Settings, set apart from the commands that act on the queue. */
+.header-divider { width: 1px; height: 20px; margin: 0 4px; background: var(--border); }
+.header-actions .quiet { border-color: transparent; background: transparent; color: var(--text-muted); }
+.header-actions .quiet:hover:not(:disabled) { background: var(--surface-subtle); border-color: transparent; color: var(--text); }
+.header-actions button svg { width: 18px; height: 18px; flex: none; }
+.pause-toggle.paused { background: var(--review-surface); border-color: var(--review-edge); color: var(--review-strong); }
+
+/* What "On this device" means, opened from the badge. A popover rather than
+   a dialog: nothing in it is a decision, and the queue stays usable. */
+.privacy-popover { position: absolute; z-index: 5; top: calc(100% + 10px); left: 0; width: min(400px, calc(100vw - 32px)); padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-dialog); font-size: 13px; line-height: 1.5; color: var(--text-soft); }
+.privacy-popover h2 { margin: 0 0 6px; font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--text); }
+.privacy-popover h2:focus { outline: none; }
+.privacy-popover > p { margin: 0 0 12px; }
+.privacy-popover dl { display: grid; gap: 8px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); }
+.privacy-popover dl > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: baseline; }
+.privacy-popover dt { color: var(--text); font-weight: 600; }
+.privacy-popover dd { margin: 0; text-align: right; color: var(--text-soft); font-variant-numeric: tabular-nums; }
+.privacy-popover dd.privacy-detail { grid-column: 1 / -1; text-align: left; font-size: 12px; color: var(--text-muted); }
+.privacy-popover .hosted-warning { color: var(--review-strong); font-weight: 600; }
+.privacy-popover .link-button { font-size: 13px; }
 /* Where Add files and Add folder put what they are given, by the folder's own name. */
-.header-note { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-muted); }
+.header-note { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text-muted); }
 .header-note strong { color: var(--text); font-weight: 600; }
 
-/* ---------- sidebar ---------- */
-.sidebar { grid-area: nav; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; justify-content: space-between; gap: 16px; border-right: 1px solid var(--border); padding: 14px 0 16px; background: var(--surface); }
-.sidebar .nav-item { border: 0; border-left: 3px solid transparent; background: transparent; width: 100%; min-height: 44px; padding: 0 18px; display: flex; gap: 13px; align-items: center; text-align: left; font-size: 13px; font-weight: 500; color: var(--text); transition: background-color .12s ease; }
-.sidebar .nav-item:hover { background: var(--surface-subtle); }
-.sidebar .nav-item.active { background: var(--brand-tint); border-left-color: var(--accent); color: var(--brand-navy); font-weight: 600; }
-.sidebar .nav-item b { margin-left: auto; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--text-muted); }
-.sidebar .nav-item.active b { color: var(--brand-navy); }
-.sidebar .nav-icon { position: relative; flex: none; display: inline-grid; place-items: center; }
-/* The count rides on the icon only when the sidebar is collapsed. */
-.sidebar .nav-badge { display: none; }
-.sidebar-footer { display: flex; align-items: center; gap: 4px; padding: 0 15px; }
-.footer-nav { border: 0; background: transparent; border-radius: var(--radius-sm); min-width: 40px; min-height: 40px; display: inline-grid; place-items: center; color: var(--text-muted); transition: background-color .12s ease, color .12s ease; }
-.footer-nav:hover { background: var(--surface-subtle); color: var(--text); }
+/* ---------- view switch ---------- */
+/* Queue and Completed, at the head of the table they choose between: a
+   segmented switch, the counts inside it. */
+.view-switch { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-subtle); }
+.view-switch button { min-height: 30px; padding: 0 12px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-soft); font-size: 13px; font-weight: 500; transition: background-color .12s ease, color .12s ease; }
+.view-switch button:hover { color: var(--text); }
+.view-switch button[aria-current='page'] { border-color: var(--border); background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 8%, transparent); }
+.view-switch b { font-weight: 500; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.view-switch [aria-current='page'] b { color: var(--text-soft); }
 
 /* ---------- drop target ---------- */
-.drop-zone--bar { flex: 0 0 auto; border: 1px dashed var(--border-strong); border-radius: var(--radius-md); background: var(--surface-subtle); margin: 0 10px 16px; display: flex; align-items: center; gap: 18px; padding: 15px 20px; font-size: 14px; }
-.drop-zone--bar > svg { flex: none; width: 28px; height: 28px; color: var(--accent); }
-.drop-zone--bar .drop-copy { display: grid; gap: 4px; }
-.drop-zone--bar small { color: var(--text-muted); font-size: 12px; }
+/* Once the queue has work, the whole queue is the drop target. The dashed
+   bar that stood above it took two table rows' height to say, on every
+   screen, what the empty queue already said once; the overlay and this
+   outline say it while something is actually being dragged. */
+.drop-zone--panel { flex: 1; min-height: 0; display: flex; flex-direction: column; border-radius: var(--radius-md); }
+.drop-zone--panel.drag-over { outline: 2px dashed var(--accent); outline-offset: -2px; background: color-mix(in srgb, var(--accent) 5%, transparent); }
 /* The first screen a new user meets. An empty table with four column headings
    said only that the app had loaded; this says what to do with it. */
 .drop-zone--hero { flex: 1; min-height: 300px; border: 1px dashed var(--border-strong); border-radius: var(--radius-lg); background: var(--surface-subtle); margin: 0 10px 16px; display: grid; align-content: start; justify-items: center; padding: min(18vh, 150px) 24px 48px; text-align: center; }
 .drop-zone--hero .drop-copy { display: grid; justify-items: center; gap: 12px; max-width: 470px; }
-.drop-mark { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 50%; background: var(--brand-tint); color: var(--brand-navy); }
+.drop-mark { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 50%; background: var(--brand-tint); color: var(--brand-ink); }
 .drop-mark svg { width: 26px; height: 26px; }
 .drop-zone--hero h2 { margin: 2px 0 0; font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: -.3px; color: var(--text); }
 .drop-zone--hero p { margin: 0; font-size: 14px; line-height: 1.55; color: var(--text-soft); }
 .drop-zone--hero .drop-alternative { font-size: 13px; color: var(--text-muted); }
+.drop-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 6px 0 2px; }
+.drop-actions button { min-height: 36px; padding: 0 16px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 13px; font-weight: 500; }
+.drop-actions button:hover { background: var(--surface-subtle); border-color: var(--text-muted); }
+.drop-actions .primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 600; }
+.drop-actions .primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
 .drop-zone--hero small { font-size: 12px; line-height: 1.5; color: var(--text-muted); }
 
 /* A view that filters to nothing, while the queue itself still has work. */
@@ -145,20 +183,48 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 /* One row above the table: the "need review" count on the left, what can be
    done to the table on the right. Wraps at narrow widths rather than
    squeezing the buttons. */
-.queue-toolbar { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; min-height: 38px; margin: 0 10px 12px; }
+.queue-toolbar { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; min-height: 36px; margin: 0 10px 12px; }
+.queue-toolbar .view-switch { margin-right: 4px; }
 /* Its buttons flow in the toolbar's own row, so beside the Details panel they
    wrap one at a time instead of as a block. */
 .queue-actions { display: contents; }
-.need-review { margin-right: auto; }
-.queue-actions button { min-height: 36px; }
+.toolbar-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-right: auto; }
+.queue-actions button { min-height: 34px; }
 .queue-actions button svg { width: 16px; height: 16px; flex: none; }
-.queue-actions .details-toggle[aria-expanded='true'] { background: var(--brand-tint); border-color: var(--selected-border); color: var(--brand-navy); }
+.queue-actions .details-toggle[aria-expanded='true'] { background: var(--brand-tint); border-color: var(--selected-border); color: var(--brand-ink); }
 /* The count the Needs Review page's badge used to carry, in the review amber
    the Status column uses for the same state. */
-.need-review { min-height: 30px; padding: 0 12px; border: 1px solid #ecd3a8; border-radius: 15px; background: #fdf6ea; color: var(--review-strong); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.need-review:hover { background: #faecd3; border-color: #e0bb7c; }
-.queue-actions span { display: inline-grid; place-items: center; min-width: 22px; height: 20px; margin-left: 4px; padding: 0 6px; border-radius: 10px; font-size: 12px; font-variant-numeric: tabular-nums; background: var(--brand-tint); color: var(--brand-navy); }
-.queue-actions .primary span { background: rgba(255, 255, 255, .22); color: #fff; }
+.need-review { min-height: 30px; padding: 0 12px; border: 1px solid var(--review-edge); border-radius: 15px; background: var(--review-surface); color: var(--review-strong); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.need-review:hover { background: var(--review-surface-hover); border-color: var(--review-edge-hover); }
+/* Show only what Rename all ready will rename: a toggle, so its pressed
+   state is the filter's. */
+.ready-filter { min-height: 30px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong); border-radius: 15px; background: var(--surface); color: var(--ready); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ready-filter svg { width: 15px; height: 15px; }
+.ready-filter:hover { background: var(--surface-subtle); }
+.ready-filter[aria-pressed='true'] { border-color: var(--ready); background: color-mix(in srgb, var(--ready) 12%, var(--surface)); color: var(--ready-strong); }
+/* Things done to the queue rarely: behind a More button, away from the
+   one primary command, so Discard is never a slip from Rename. */
+.more-menu { position: relative; }
+.more-menu [role='menu'] { position: absolute; z-index: 5; top: calc(100% + 6px); right: 0; min-width: 220px; display: grid; gap: 2px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-popover); }
+.queue-actions .more-menu [role='menu'] button { min-height: 34px; justify-content: flex-start; border-color: transparent; background: transparent; }
+.queue-actions .more-menu [role='menu'] button:hover:not(:disabled) { background: var(--surface-subtle); border-color: transparent; }
+.queue-actions span { display: inline-grid; place-items: center; min-width: 22px; height: 20px; margin-left: 4px; padding: 0 6px; border-radius: 10px; font-size: 12px; font-variant-numeric: tabular-nums; background: var(--brand-tint); color: var(--brand-ink); }
+.queue-actions .primary span { background: color-mix(in srgb, var(--on-primary) 22%, transparent); color: var(--on-primary); }
+
+/* The batch as a whole: how far along, roughly how long, and the one
+   control that matters while it runs. A row says "Proposing a name…"; only
+   this says how many more are coming. */
+.queue-progress { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px 12px; margin: 0 10px 12px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-subtle); font-size: 13px; }
+.queue-progress > svg { width: 16px; height: 16px; color: var(--processing); }
+.queue-progress.working > svg { animation: spin 1s linear infinite; }
+.queue-progress.paused > svg { color: var(--review); }
+.queue-progress p { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-variant-numeric: tabular-nums; }
+.queue-progress p span { color: var(--text-muted); }
+.queue-progress .meter { grid-column: 1 / -1; width: 100%; height: 4px; }
+.queue-progress .meter-fill { background: var(--processing); transition: width .3s ease; }
+.queue-progress button { min-height: 28px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 12.5px; font-weight: 500; }
+.queue-progress button:hover:not(:disabled) { background: var(--surface-subtle); border-color: var(--text-muted); }
+.queue-progress button svg { width: 14px; height: 14px; }
 .queue-filter { margin: 0 10px 12px; }
 .queue-filter input { width: 100%; max-width: 380px; min-height: 36px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
 .queue-filter input::placeholder { color: var(--text-muted); }
@@ -171,15 +237,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .table-wrap thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); box-shadow: inset 0 -1px 0 var(--border); }
 .table-wrap table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 14px; }
 .table-wrap th { text-align: left; padding: 6px 12px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.table-wrap th.col-original { width: 25%; }
-.table-wrap th.col-status { width: 15%; }
-.table-wrap th.col-proposed { width: 26%; }
-.table-wrap th.col-description { width: 21%; }
-.table-wrap th.col-confidence { width: 13%; }
+.table-wrap th.col-original { width: 24%; }
+/* Wide enough for the longest label on one line: "Ready to file as a copy". */
+.table-wrap th.col-status { width: 188px; }
+.table-wrap th.col-proposed { width: 30%; }
+.table-wrap th.col-description { width: 24%; }
+.table-wrap th.col-check { width: 22%; }
 /* Below this the words of a filename start breaking mid-word; the table
    scrolls sideways instead, which only happens beside the Details panel at
    the narrowest widths it is a side panel for. */
-.queue-grid { min-width: 560px; }
+.queue-grid { min-width: 640px; }
 .table-wrap td { padding: 8px 12px; height: 48px; border-bottom: 1px solid var(--border); vertical-align: middle; overflow-wrap: break-word; }
 .cell-filename { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .cell-filename > span:last-child { min-width: 0; }
@@ -191,6 +258,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .file-kind--image { color: #7653a8; }
 .file-kind--presentation { color: #b04a17; }
 .file-kind--email { color: #1f6f8b; }
+@media (prefers-color-scheme: dark) {
+  .file-kind--pdf { color: #f08a7e; }
+  .file-kind--document { color: #8fb0ff; }
+  .file-kind--spreadsheet { color: #6fd19c; }
+  .file-kind--text { color: #9ea4b0; }
+  .file-kind--image { color: #c4a5f0; }
+  .file-kind--presentation { color: #f5a06a; }
+  .file-kind--email { color: #6cc4e0; }
+}
 /* Hover and selection used to be the same tint, so the row under the pointer
    claimed to be the row the inspector was describing. */
 .table-wrap tbody tr:hover { background: var(--surface-subtle); }
@@ -209,7 +285,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
    shows it will not be copied. */
 .queue-grid td { -webkit-user-select: none; user-select: none; cursor: cell; box-shadow: var(--row-bar, 0 0 transparent), var(--edge-top, 0 0 transparent), var(--edge-bottom, 0 0 transparent), var(--edge-left, 0 0 transparent), var(--edge-right, 0 0 transparent), var(--active-ring, 0 0 transparent); }
 .queue-grid td.col-status { cursor: default; }
-.queue-grid th.col-original, .queue-grid th.col-proposed, .queue-grid th.col-description, .queue-grid th.col-confidence { cursor: pointer; -webkit-user-select: none; user-select: none; }
+.queue-grid th.col-original, .queue-grid th.col-proposed, .queue-grid th.col-description, .queue-grid th.col-check { cursor: pointer; -webkit-user-select: none; user-select: none; }
 .queue-grid td.cell-selected { background: var(--cell-selected); }
 /* The active cell of a selection of several, as a spreadsheet marks it:
    unfilled, inside a ring of its own. Shift+arrow moves this corner. */
@@ -221,10 +297,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 /* The fill is darker than a selected row's, so the quieter text in it takes
    the next darker shade to stay at 4.5:1 or better. */
 .queue-grid td.cell-selected .row-description, .queue-grid td.cell-selected .kept-original { color: var(--text-soft); }
-.queue-grid td.cell-selected.confidence.review { color: var(--review-strong); }
-.queue-grid td.cell-selected.confidence.ready, .queue-grid td.cell-selected.confidence.completed { color: var(--ready-strong); }
+.queue-grid td.cell-selected .check-label.review { color: var(--review-strong); }
+.queue-grid td.cell-selected .check-label.ready { color: var(--ready-strong); }
 .queue-grid td:focus { outline: none; }
-.queue-grid td:focus-visible { outline: 2px solid var(--brand-navy); outline-offset: -2px; }
+.queue-grid td:focus-visible { outline: 2px solid var(--brand-ink); outline-offset: -2px; }
 @media (forced-colors: active) {
   .queue-grid td.cell-selected { forced-color-adjust: none; background: Highlight; color: HighlightText; }
   .queue-grid td.cell-selected.cell-active { background: Canvas; color: CanvasText; outline: 3px solid Highlight; outline-offset: -3px; }
@@ -234,11 +310,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 }
 .kept-original { color: var(--text-muted); font-style: italic; }
 
-/* Wraps rather than painting over the next column. Beside the inspector at
-   1200px the Status column used to be 84px of content, narrower than "Needs
-   review" and its icon; a label that will not fit now takes a second line. */
-.status { display: inline-flex; align-items: flex-start; gap: 8px; white-space: normal; font-weight: 500; }
+/* One line. The column is sized for its longest label; a status that took
+   two lines made every row in review twice the height of a ready one. */
+.status { display: inline-flex; align-items: flex-start; gap: 8px; white-space: nowrap; font-weight: 500; }
 .status svg { flex: none; margin-top: 2px; }
+.status .elapsed { margin-left: 2px; font-weight: 400; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .status.ready, .status.completed, .confidence.ready, .confidence.completed { color: var(--ready); }
 .status.review, .confidence.review { color: var(--review); }
 .status.waiting { color: var(--waiting); }
@@ -247,6 +323,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
    needs to be spotted from across the table. */
 .status.failed { color: var(--failed); }
 .status.processing svg { animation: spin 1s linear infinite; }
+
+/* What to check, in a few words: the reason a row is in review, said where
+   the row is. The full sentence is the cell's tooltip and the panel's. */
+.check-label { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; font-size: 13px; line-height: 1.35; }
+.check-label.review { color: var(--review); font-weight: 500; }
+.check-label.failed { color: var(--failed); font-weight: 500; }
+.check-label.ready { color: var(--ready); }
+.check-label.quiet { color: var(--text-muted); }
+.check-label small { font-size: 12px; font-weight: 400; color: var(--text-muted); }
+/* The part of a proposed name to check, marked where it is. */
+mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark); color: inherit; box-shadow: inset 0 -2px 0 var(--review); }
 
 .confidence-meter { display: inline-grid; gap: 5px; justify-items: start; }
 .confidence-value { font-variant-numeric: tabular-nums; font-weight: 600; }
@@ -313,7 +400,24 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .chip { min-height: 30px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; cursor: pointer; }
 .chip:hover:not(:disabled) { background: var(--surface-subtle); border-color: var(--text-muted); }
 .chip--file { color: var(--text-muted); }
-.confidence-readout { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; }
+/* The model's figure for its own reading, kept for anyone who wants it but
+   set as a detail: what is wrong, said above, is what decides a review. The
+   selector outweighs ".inspector section p", whose zero margin used to butt
+   this line against the Description label under it. */
+.inspector .confidence-readout { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; }
+.inspector .confidence-readout .confidence-meter--panel { max-width: 200px; }
+
+/* What to check, first. The reason a document is in review used to come
+   last, under the name, the description and the evidence - below the fold
+   for the documents that most needed it. */
+.check-first { margin: 14px 0 18px; padding: 12px 14px; border: 1px solid var(--review-edge); border-left: 3px solid var(--review); border-radius: var(--radius-md); background: var(--review-surface); }
+.check-first.failed { border-color: var(--failed-edge); border-left-color: var(--failed); background: var(--failed-surface); }
+.check-first h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; color: var(--review-strong); }
+.check-first.failed h3 { color: var(--failed-text); }
+.check-first h3 svg { width: 16px; height: 16px; flex: none; }
+.inspector .check-first p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text); }
+.inspector .check-first p + p { margin-top: 6px; }
+.flag-line { margin: -8px 0 14px; font-size: 12.5px; line-height: 1.5; color: var(--review-strong); }
 
 /* Evidence, as evidence: what the document says, attributed to the part of
    the proposed name it supports. It read as a metadata table before, which
@@ -323,7 +427,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .evidence-list { display: grid; gap: 14px; margin: 0; }
 .evidence-item { display: grid; gap: 5px; }
 .evidence-item dd { margin: 0; display: grid; gap: 6px; }
-.evidence-item q { display: block; quotes: "\201C" "\201D"; padding: 1px 0 1px 12px; border-left: 2px solid var(--selected-border); font-size: 14px; line-height: 1.45; color: var(--text-soft); overflow-wrap: anywhere; }
+.evidence-item q, .evidence-item .reading { display: block; quotes: "\201C" "\201D"; padding: 1px 0 1px 12px; border-left: 2px solid var(--selected-border); font-size: 14px; line-height: 1.45; color: var(--text-soft); overflow-wrap: anywhere; }
+/* The fact the review is about, in the evidence as well as in the name. */
+.evidence-item.flagged dt { display: flex; align-items: center; gap: 6px; color: var(--review-strong); }
+.evidence-item.flagged dt svg { width: 14px; height: 14px; }
+.evidence-item.flagged q, .evidence-item.flagged .reading { border-left-color: var(--review); }
 
 .note { margin: 18px 0 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); }
 .note--review { border-left: 3px solid var(--review); }
@@ -360,7 +468,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .form-error { color: var(--failed); font-size: 12.5px; line-height: 1.45; margin: 0 0 10px; }
 
 /* ---------- dialogs ---------- */
-.dialog-backdrop { position: fixed; inset: 0; z-index: 4; display: grid; place-items: center; padding: 16px; background: rgba(23, 26, 31, .22); }
+.dialog-backdrop { position: fixed; inset: 0; z-index: 4; display: grid; place-items: center; padding: 16px; background: var(--scrim); }
 .settings-dialog { width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 22px 24px; box-shadow: var(--shadow-dialog); }
 /* Settings had grown into one undifferentiated column of controls. Grouped
    sections scroll; the title and Save stay put. */
@@ -380,8 +488,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .check-label input[type=checkbox], .check-label input[type=radio] { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 .hosted-model { margin: 4px 0 0 24px; padding: 14px 16px 6px; border: 1px solid var(--border); border-radius: var(--radius-md); }
 .privacy-warning { margin: 0 0 14px; padding: 10px 12px; border-left: 3px solid var(--review); border-radius: var(--radius-sm); background: var(--surface-subtle); font-size: 13px; line-height: 1.5; color: var(--text); }
-.private.hosted i { background: var(--review); box-shadow: 0 0 0 3px rgba(181, 121, 12, .16); }
-.setup-alternative { margin: 18px 0 0; font-size: 13px; line-height: 1.5; color: var(--text-muted); }
+.private.hosted i { background: var(--review); box-shadow: 0 0 0 3px color-mix(in srgb, var(--review) 18%, transparent); }
+.setup-alternative { margin: 18px 0 0; padding-top: 16px; border-top: 1px solid var(--border); font-size: 13px; line-height: 1.5; color: var(--text-muted); }
+.setup-alternative p { margin: 0 0 10px; font-size: 13px; }
 .link-button { border: 0; padding: 0; background: transparent; color: var(--accent); font: inherit; font-size: 13px; font-weight: 600; text-decoration: underline; cursor: pointer; }
 .link-button:disabled { color: var(--text-muted); cursor: default; }
 .check-label:has(input:disabled) { color: var(--text-muted); }
@@ -445,7 +554,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .history-empty { color: var(--text-muted); margin: 18px 0; }
 .history-table-wrap { overflow: auto; max-height: min(420px, 55vh); border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 14px 0; }
 .history-table-wrap table { border-collapse: collapse; width: 100%; font-size: 13px; }
-.history-table-wrap th { position: sticky; top: 0; background: var(--surface-subtle); text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; text-transform: lowercase; font-variant-caps: small-caps; letter-spacing: .07em; color: var(--text-muted); }
+.history-table-wrap th { position: sticky; top: 0; background: var(--surface-subtle); text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; color: var(--text-muted); }
 .history-table-wrap td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
 .history-table-wrap tbody tr:last-child td { border-bottom: 0; }
 .history-dialog [role='status'] { margin: 0 0 10px; font-size: 13px; }
@@ -458,85 +567,85 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 /* ---------- feedback and setup ---------- */
 /* Files dragged over the desktop window. It must not take the drop itself:
    the runtime delivers that to the window, not to anything under the pointer. */
-.drop-overlay { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; padding: 24px; pointer-events: none; background: rgba(23, 26, 31, .22); }
-.drop-overlay p { margin: 0; padding: 18px 26px; border: 2px dashed var(--accent); border-radius: var(--radius-lg); background: var(--surface); color: var(--brand-navy); font-family: var(--font-display); font-size: 20px; font-weight: 600; box-shadow: var(--shadow-dialog); }
+.drop-overlay { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; padding: 24px; pointer-events: none; background: var(--scrim); }
+.drop-overlay p { margin: 0; padding: 18px 26px; border: 2px dashed var(--accent); border-radius: var(--radius-lg); background: var(--surface); color: var(--brand-ink); font-family: var(--font-display); font-size: 20px; font-weight: 600; box-shadow: var(--shadow-dialog); }
 /* The outcome of a queue action, at the bottom left of the queue. The error
    banner this replaces was centered on the window, so in the narrow window it
    sat over the drawer's own buttons; the drawer (z-index 3) now sits above
    these, and beside the wide panel they stop short of it. */
 .toasts { position: absolute; z-index: 2; left: 20px; bottom: 16px; display: grid; justify-items: start; gap: 8px; max-width: min(520px, calc(100% - 40px)); pointer-events: none; }
-.toast { pointer-events: auto; margin: 0; padding: 4px 4px 4px 15px; display: flex; align-items: flex-start; gap: 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--text); background: var(--surface); box-shadow: 0 8px 24px rgba(23, 26, 31, .12); font-size: 13px; line-height: 1.45; }
+.toast { pointer-events: auto; margin: 0; padding: 4px 4px 4px 15px; display: flex; align-items: flex-start; gap: 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--text); background: var(--surface); box-shadow: var(--shadow-popover); font-size: 13px; line-height: 1.45; }
 .toast p { margin: 0 8px 0 0; padding: 7px 0; font-variant-numeric: tabular-nums; }
 .toast--progress p { color: var(--text-muted); }
-.toast--error { border-color: #e6a9a2; color: #8f231a; background: #fff5f3; }
+.toast--error { border-color: var(--failed-edge); color: var(--failed-text); background: var(--failed-surface); }
 .toast .icon-button, .toast-action { flex: none; min-height: 34px; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; }
 .toast .icon-button { min-width: 34px; display: inline-grid; place-items: center; }
 .toast-action { padding: 0 10px; color: var(--accent); font-size: 13px; font-weight: 600; }
 .toast .icon-button:hover, .toast-action:hover:not(:disabled) { background: var(--surface-subtle); }
-.toast--error .icon-button:hover { background: rgba(143, 35, 26, .08); }
+.toast--error .icon-button:hover { background: color-mix(in srgb, var(--failed-text) 10%, transparent); }
 .toast-action:disabled { color: var(--text-muted); cursor: default; }
 @media (min-width: 1101px) { .workspace:has(> .inspector) > .toasts { max-width: min(520px, calc(100% - 370px - 40px)); } }
-.setup-screen { min-height: 100vh; display: grid; place-items: center; text-align: center; padding: 24px; }
-.setup-screen section { width: min(500px, calc(100vw - 32px)); }
-.setup-screen > section > svg { color: var(--brand-navy); }
-.setup-screen h1 { font-family: var(--font-display); font-size: 28px; font-weight: 700; letter-spacing: -.5px; margin: 18px 0 10px; }
+.setup-screen { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: var(--surface); }
+.setup-screen section { width: min(520px, calc(100vw - 32px)); }
+.setup-screen > section > svg { color: var(--brand-ink); }
+.setup-screen h1 { font-family: var(--font-display); font-size: 28px; font-weight: 600; letter-spacing: -.3px; margin: 14px 0 10px; }
 .setup-screen p { color: var(--text-soft); line-height: 1.55; }
+.setup-screen .setup-lead { font-size: 15px; color: var(--text); }
+/* Download, check, ready: three steps, so the wait has a shape and a bar at
+   100% that is still checking files never looks stuck. */
+.setup-steps { list-style: none; display: grid; gap: 8px; margin: 18px 0; padding: 0; font-size: 14px; color: var(--text-muted); }
+.setup-steps li { display: flex; align-items: center; gap: 10px; }
+.setup-step-mark { flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px; border: 2px solid var(--border-strong); border-radius: 50%; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.setup-steps li.current { color: var(--text); font-weight: 600; }
+.setup-steps li.current .setup-step-mark { border-color: var(--accent); color: var(--accent); }
+.setup-steps li.done .setup-step-mark { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }
+.setup-screen .setup-privacy { margin: 18px 0 10px; font-size: 13px; color: var(--text-muted); }
+.setup-details { margin: 0 0 8px; font-size: 13px; }
+.setup-details summary { cursor: pointer; color: var(--text-soft); font-weight: 600; }
+.setup-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.setup-details p { margin: 8px 0 0; font-size: 13px; }
 .setup-screen progress { width: 100%; accent-color: var(--accent); }
 .setup-screen button:disabled { opacity: .65; cursor: wait; }
-.setup-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 22px; }
-.setup-screen .setup-error { padding: 11px 13px; border: 1px solid #e6a9a2; border-radius: var(--radius-sm); color: #8f231a; background: #fff5f3; }
+.setup-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.setup-screen .setup-error { padding: 11px 13px; border: 1px solid var(--failed-edge); border-radius: var(--radius-sm); color: var(--failed-text); background: var(--failed-surface); }
 .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 
-/* With the Details panel open below 1440px the table is about 600px wide for
-   five columns. A fifth of it once left the status label 56px, and "Reading
-   document…" broke inside its words. The cells pad less, headings may wrap,
-   and Status keeps a larger share until the window is wide enough not to need
-   it; at 1100px and below the panel is a drawer and the table has the width
-   back. */
+/* With the Details panel open below 1440px the table has about 700px for
+   five columns. The cells pad less, and the description - which the panel
+   beside it shows in full - gives up the most. At 1100px and below the
+   panel is a drawer and the table has the width back. */
 @media (min-width: 1101px) and (max-width: 1439px) {
   .workspace:has(> .inspector) .table-wrap th, .workspace:has(> .inspector) .table-wrap td { padding-left: 8px; padding-right: 8px; }
-  .workspace:has(> .inspector) .table-wrap th { white-space: normal; letter-spacing: .02em; }
   .workspace:has(> .inspector) .cell-filename { gap: 8px; }
   .workspace:has(> .inspector) .status { gap: 6px; }
-  .workspace:has(> .inspector) .table-wrap th.col-original { width: 22%; }
-  .workspace:has(> .inspector) .table-wrap th.col-status { width: 20%; }
-  .workspace:has(> .inspector) .table-wrap th.col-proposed { width: 25%; }
+  .workspace:has(> .inspector) .table-wrap th.col-original { width: 24%; }
+  .workspace:has(> .inspector) .table-wrap th.col-status { width: 180px; }
+  .workspace:has(> .inspector) .table-wrap th.col-proposed { width: 32%; }
   .workspace:has(> .inspector) .table-wrap th.col-description { width: 18%; }
-  .workspace:has(> .inspector) .table-wrap th.col-confidence { width: 15%; }
+  .workspace:has(> .inspector) .table-wrap th.col-check { width: 20%; }
 }
 
 /* ---------- narrow ---------- */
 @media (max-width: 1100px) {
-  .app-shell { grid-template-columns: 64px minmax(0, 1fr); }
-  .sidebar .nav-item { justify-content: center; padding: 0; }
-  .sidebar .nav-item .nav-label, .sidebar .nav-item b { display: none; }
-  .sidebar .nav-badge { position: absolute; top: -7px; left: 12px; display: grid; place-items: center; min-width: 18px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--brand-tint); color: var(--brand-navy); font-size: 10.5px; font-style: normal; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
-  .sidebar-footer { flex-direction: column; padding: 0; }
-  .inspector { position: fixed; z-index: 3; right: 0; top: 72px; bottom: 0; width: 370px; background: var(--surface); box-shadow: -16px 0 40px rgba(23, 26, 31, .16); }
-  .product { gap: 16px; }
-  .product strong { font-size: 28px; }
-  .private { font-size: 12px; padding: 4px 10px; }
-  .header-actions button { padding: 0 10px; }
+  .inspector { position: fixed; z-index: 3; right: 0; top: 48px; bottom: 0; width: 370px; background: var(--surface); box-shadow: -16px 0 40px color-mix(in srgb, black 16%, transparent); }
+  .header-actions button { padding: 0 9px; }
+  .header-note { display: none; }
 }
 
 @media (max-width: 800px) {
-  .app-header { padding: 0 12px; }
-  .private, .brand-tag, .header-note { display: none; }
-  .header-actions { gap: 6px; }
-  .header-actions button:not(.icon-button) span { display: none; }
-  .drop-zone--bar { gap: 12px; padding: 12px 14px; }
+  .app-header { padding: 0 8px 0 12px; }
+  .brand-tag { display: none; }
+  .private { padding: 0 9px; }
+  .private .private-detail { display: none; }
+  .header-actions { gap: 4px; }
+  .header-actions button:not(.icon-button) .button-label { display: none; }
   .queue-panel { padding-top: 12px; }
   .table-wrap th, .table-wrap td { padding-left: 8px; padding-right: 8px; }
-  .table-wrap th.col-original { width: 24%; }
-  .table-wrap th.col-status { width: 19%; }
-  .table-wrap th.col-proposed { width: 24%; }
-  .table-wrap th.col-description { width: 20%; }
-  .table-wrap th.col-confidence { width: 13%; }
-  .inspector { width: min(370px, calc(100vw - 64px)); }
-  .product strong { font-size: 24px; }
+  .table-wrap th.col-status { width: 172px; }
+  .inspector { width: min(370px, 100vw); }
 }
 
 /* Spellings Intern has learned: one row per rule, the change in the middle, its state and actions at the end. */
@@ -604,29 +713,29 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
    ========================================================================== */
 .onboarding { min-height: 100vh; display: grid; grid-template-columns: 260px minmax(0, 1fr); background: var(--surface); color: var(--text); }
 .onboarding-rail { background: var(--surface-subtle); border-right: 1px solid var(--border); padding: 32px 24px; }
-.onboarding-wordmark { margin: 0 0 36px; font-family: var(--font-display); font-size: 30px; font-weight: 700; letter-spacing: -.8px; line-height: 1; color: var(--brand-navy); }
+.onboarding-wordmark { margin: 0 0 36px; font-family: var(--font-display); font-size: 30px; font-weight: 700; letter-spacing: -.8px; line-height: 1; color: var(--brand-ink); }
 .onboarding-rail ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
 .onboarding-rail li { position: relative; display: flex; align-items: center; gap: 12px; min-height: 44px; font-size: 14px; color: var(--text-muted); }
 /* The line joining each step to the next: filled once that step is done. */
 .onboarding-rail li:not(:last-child)::after { content: ""; position: absolute; left: 13px; top: 36px; width: 2px; height: 16px; background: var(--border); }
-.onboarding-rail li.done:not(:last-child)::after { background: var(--brand-navy); }
+.onboarding-rail li.done:not(:last-child)::after { background: var(--primary); }
 .onboarding-rail-mark { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--border-strong); background: var(--surface); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .onboarding-rail li.done { color: var(--text-soft); }
-.onboarding-rail li.done .onboarding-rail-mark { border-color: var(--brand-navy); background: var(--brand-navy); color: #fff; }
-.onboarding-rail li.current { color: var(--brand-navy); font-weight: 600; }
-.onboarding-rail li.current .onboarding-rail-mark { border-color: var(--brand-navy); color: var(--brand-navy); background: var(--brand-tint); }
+.onboarding-rail li.done .onboarding-rail-mark { border-color: var(--brand-ink); background: var(--primary); color: var(--on-primary); }
+.onboarding-rail li.current { color: var(--brand-ink); font-weight: 600; }
+.onboarding-rail li.current .onboarding-rail-mark { border-color: var(--brand-ink); color: var(--brand-ink); background: var(--brand-tint); }
 
 .onboarding-panel { width: min(600px, 100%); padding: min(14vh, 112px) 48px 64px; }
 .onboarding-panel h1 { margin: 0 0 16px; font-family: var(--font-display); font-size: 30px; font-weight: 700; letter-spacing: -.5px; line-height: 1.2; color: var(--text); }
 /* Headings take focus only so each step is announced from its start; they are not controls. */
 .onboarding-panel h1:focus { outline: none; }
-.onboarding-panel h1.onboarding-finished { font-size: 28px; color: var(--brand-navy); }
+.onboarding-panel h1.onboarding-finished { font-size: 28px; color: var(--brand-ink); }
 .onboarding-panel p { margin: 0 0 14px; font-size: 15px; line-height: 1.6; color: var(--text-soft); max-width: 62ch; }
 .onboarding-list { margin: 0 0 16px; padding-left: 20px; font-size: 15px; line-height: 1.7; color: var(--text-soft); }
 /* The two folders Intern works between, each with the one line that says what it is for. */
 .setup-folders { display: grid; gap: 10px; margin: 8px 0 18px; }
-.setup-folders > div { padding: 14px 16px; border-left: 3px solid var(--brand-navy); background: var(--surface-subtle); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; overflow-wrap: anywhere; }
-.setup-folders dt { margin: 0 0 2px; font-size: 13px; font-weight: 600; color: var(--brand-navy); }
+.setup-folders > div { padding: 14px 16px; border-left: 3px solid var(--brand-ink); background: var(--surface-subtle); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; overflow-wrap: anywhere; }
+.setup-folders dt { margin: 0 0 2px; font-size: 13px; font-weight: 600; color: var(--brand-ink); }
 .setup-folders dd { margin: 0; display: grid; gap: 2px; }
 .setup-folders dd strong { font-size: 15px; color: var(--text); }
 .setup-folders dd span { font-size: 14px; line-height: 1.5; color: var(--text-soft); }
@@ -638,26 +747,26 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
   font: inherit; font-size: 14px; font-weight: 500; text-decoration: none; transition: background-color .12s ease, border-color .12s ease;
 }
 .onboarding button:hover:not(:disabled) { background: var(--surface-subtle); border-color: var(--text-muted); }
-.onboarding button.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+.onboarding button.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 600; }
 .onboarding button.primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
 .onboarding button:disabled { opacity: .55; cursor: default; }
 .onboarding summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.onboarding-account { display: grid; gap: 4px; margin: 8px 0 18px; padding: 16px 18px; border-left: 3px solid var(--brand-navy); background: var(--surface-subtle); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; overflow-wrap: anywhere; }
+.onboarding-account { display: grid; gap: 4px; margin: 8px 0 18px; padding: 16px 18px; border-left: 3px solid var(--brand-ink); background: var(--surface-subtle); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; overflow-wrap: anywhere; }
 .onboarding-account strong { font-size: 18px; color: var(--text); }
 .onboarding-account span { font-size: 14px; color: var(--text-muted); }
 
 .onboarding-signin { margin: 8px 0 12px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-subtle); }
 .onboarding-signin p { margin-bottom: 8px; }
-.onboarding-code { display: block; font-family: var(--font-mono); font-size: 28px; letter-spacing: .12em; color: var(--brand-navy); user-select: all; }
+.onboarding-code { display: block; font-family: var(--font-mono); font-size: 28px; letter-spacing: .12em; color: var(--brand-ink); user-select: all; }
 .onboarding-panel .onboarding-waiting { font-size: 14px; color: var(--text-muted); }
 
 .onboarding-progress progress { width: 100%; accent-color: var(--accent); }
 .onboarding-progress p { font-size: 13px; font-variant-numeric: tabular-nums; }
 
-.onboarding-problem { margin: 12px 0 4px; padding: 12px 14px; border: 1px solid #e6a9a2; border-radius: var(--radius-sm); background: #fff5f3; }
-.onboarding-panel .onboarding-problem [role="alert"], .onboarding-panel .onboarding-alert { margin: 0; color: #8f231a; font-size: 14px; line-height: 1.55; }
-.onboarding-panel .onboarding-alert { padding: 12px 14px; border: 1px solid #e6a9a2; border-radius: var(--radius-sm); background: #fff5f3; }
+.onboarding-problem { margin: 12px 0 4px; padding: 12px 14px; border: 1px solid var(--failed-edge); border-radius: var(--radius-sm); background: var(--failed-surface); }
+.onboarding-panel .onboarding-problem [role="alert"], .onboarding-panel .onboarding-alert { margin: 0; color: var(--failed-text); font-size: 14px; line-height: 1.55; }
+.onboarding-panel .onboarding-alert { padding: 12px 14px; border: 1px solid var(--failed-edge); border-radius: var(--radius-sm); background: var(--failed-surface); }
 .onboarding-support, .onboarding-panel .onboarding-support { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); }
 .onboarding-support code { font-family: var(--font-mono); font-size: 12px; }
 .onboarding-support summary { cursor: pointer; }
@@ -670,7 +779,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 
 /* The recovery screen when onboarding status cannot be read reuses the setup layout. */
 .setup-screen .onboarding-problem { text-align: left; }
-.setup-screen .onboarding-problem [role="alert"] { margin: 0; color: #8f231a; }
+.setup-screen .onboarding-problem [role="alert"] { margin: 0; color: var(--failed-text); }
 
 @media (max-width: 760px) {
   .onboarding { grid-template-columns: 1fr; align-content: start; }

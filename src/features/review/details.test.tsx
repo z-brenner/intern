@@ -89,7 +89,7 @@ describe('the Details panel', () => {
 
   it('opens from Enter on a cell, at the name', async () => {
     await start();
-    const cell = queueCell('Scan 0102.pdf', 'confidence');
+    const cell = queueCell('Scan 0102.pdf', 'check');
     clickCell(cell);
     fireEvent.keyDown(cell, { key: 'Enter' });
 

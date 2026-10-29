@@ -30,12 +30,11 @@ test.describe('whole-product browser QA', () => {
       return {
         viewport: [window.innerWidth, window.innerHeight],
         headerHeight: box('.app-header')?.height,
-        sidebarWidth: box('.sidebar')?.width,
         inspectorWidth: box('.inspector')?.width,
         horizontalOverflow: document.documentElement.scrollWidth - window.innerWidth,
       };
     });
-    expect(geometry).toEqual({ viewport: [1536, 1024], headerHeight: 72, sidebarWidth: 230, inspectorWidth: 370, horizontalOverflow: 0 });
+    expect(geometry).toEqual({ viewport: [1536, 1024], headerHeight: 48, inspectorWidth: 370, horizontalOverflow: 0 });
 
     const addFiles = page.getByRole('button', { name: 'Add files' });
     await addFiles.focus();
@@ -95,7 +94,7 @@ test.describe('whole-product browser QA', () => {
   test('keeps ready, active, and completed queue states actionable without persistent clutter', async ({ page }) => {
     await page.goto('/');
 
-    await expect(page.getByRole('button', { name: 'Apply all ready' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Rename all ready' })).toBeVisible();
     await openDetails(page, 'Q1 Financials.pdf');
     await expect(page.getByRole('button', { name: 'Cancel processing' })).toBeVisible();
     await page.getByRole('button', { name: /^Completed, / }).click();
@@ -149,7 +148,7 @@ test.describe('whole-product browser QA', () => {
   });
 
   // The banner was an unplaced grid child: auto-placement put it in the
-  // 230x72 top-left cell, pushed the header to the second row, and painted
+  // top-left cell, pushed the header to the second row, and painted
   // its Install and Not now buttons underneath the header.
   test('update banner does not overlap header', async ({ page }) => {
     await page.setViewportSize({ width: 1200, height: 800 });
@@ -160,7 +159,7 @@ test.describe('whole-product browser QA', () => {
 
     const [bannerBox, headerBox] = await Promise.all([banner.boundingBox(), page.locator('.app-header').boundingBox()]);
     expect(bannerBox).toMatchObject({ x: 0, y: 0, width: 1200 });
-    expect(headerBox?.height).toBe(72);
+    expect(headerBox?.height).toBe(48);
     expect(headerBox!.y).toBeGreaterThanOrEqual(bannerBox!.y + bannerBox!.height);
     await expect(banner.getByRole('button', { name: 'Not now' })).toBeInViewport({ ratio: 1 });
 
@@ -174,39 +173,37 @@ test.describe('whole-product browser QA', () => {
   test('preserves labels, focus targets, and a non-overflowing inspector drawer at 1024 pixels', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.goto('/');
-    const navigation = page.locator('.sidebar');
+    const navigation = page.getByRole('navigation', { name: 'Queue navigation' });
+    // The queue the drawer makes inert, view switch and all.
+    const queue = page.locator('.queue-panel');
     // This used to open on the drawer, because the selection Intern seeds so
     // the panel is not empty opened it. A person who has clicked nothing is
     // owed their queue, so the drawer is opened here the way one is opened.
-    await expect(navigation).not.toHaveAttribute('inert', '');
+    await expect(queue).not.toHaveAttribute('inert', '');
     await expect(page.getByRole('complementary', { name: 'Review item' })).toHaveCount(0);
-    // Collapsed, the labels are tooltips; the accessible names also carry the counts.
-    for (const name of ['Queue', 'Completed', 'Settings']) {
-      await expect(navigation.locator(`button[title="${name}"]`)).toBeVisible();
-    }
+    // The labels stay at this width, and the accessible names carry the counts.
     await expect(navigation.getByRole('button', { name: 'Queue, 8' })).toBeVisible();
-    await expect(navigation.locator('button[data-view="queue"] .nav-badge')).toHaveText('8');
-    await expect(navigation.locator('button[data-view="queue"] .nav-badge')).toBeVisible();
+    await expect(navigation.getByRole('button', { name: 'Queue, 8' })).toContainText('Queue8');
+    await expect(navigation.getByRole('button', { name: 'Completed, 1' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Settings' })).toBeVisible();
     // What the Needs Review page counted is on the queue's toolbar.
     await expect(page.getByRole('button', { name: '1 needs review' })).toBeVisible();
     await queueCell(page, 'Lease Agreement - 123 Main St.pdf').click();
-    await expect(navigation).not.toHaveAttribute('inert', '');
+    await expect(queue).not.toHaveAttribute('inert', '');
     await detailsToggle(page).click();
-    await expect(navigation).toHaveAttribute('inert', '');
+    await expect(queue).toHaveAttribute('inert', '');
     const drawer = page.getByRole('dialog', { name: 'Review item' });
     await expect(drawer).toBeVisible();
     await expect(page.getByLabel('Filename')).toBeFocused();
     const geometry = await page.evaluate(() => {
-      const sidebar = document.querySelector('.sidebar')?.getBoundingClientRect();
       const inspector = document.querySelector('.inspector')?.getBoundingClientRect();
       return {
-        sidebarWidth: sidebar?.width,
         inspectorWidth: inspector?.width,
         inspectorRight: inspector ? window.innerWidth - inspector.right : undefined,
         horizontalOverflow: document.documentElement.scrollWidth - window.innerWidth,
       };
     });
-    expect(geometry).toEqual({ sidebarWidth: 64, inspectorWidth: 370, inspectorRight: 0, horizontalOverflow: 0 });
+    expect(geometry).toEqual({ inspectorWidth: 370, inspectorRight: 0, horizontalOverflow: 0 });
 
     const lastDrawerAction = page.getByRole('button', { name: 'More review actions' });
     await lastDrawerAction.focus();

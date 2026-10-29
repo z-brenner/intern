@@ -22,8 +22,9 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
   await expect(page.getByRole('row', { name: /unsupported\.zip/i })).toHaveCount(0);
   await expect(page.getByRole('row', { name: /~\$nda\.docx/i })).toHaveCount(0);
 
-  await openDetails(page, 'duplicate-invoice-b.pdf');
-  await expect(page.getByText(/different path.*separate/i)).toBeVisible();
+  const panel = await openDetails(page, 'duplicate-invoice-b.pdf');
+  // The table's Check column says it too; the panel says it in full.
+  await expect(panel.getByText(/different path.*separate/i)).toBeVisible();
 
   await page.getByRole('region', { name: 'Drag files or folders here to copy them into Input' }).evaluate((dropZone) => {
     const transfer = new DataTransfer();

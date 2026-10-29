@@ -19,6 +19,12 @@ export interface QueueItem {
    * (only some review codes can be retried), and the sentence cannot say.
    */
   errorCode?: string;
+  /**
+   * The review codes behind `reason`, when the backend sent a list of them
+   * ("DATE_AMBIGUOUS, LOW_CONFIDENCE"): which parts of the proposal are in
+   * doubt, for marking those parts where they are shown.
+   */
+  reasonCodes?: string[];
   /** The name the document was filed under, which can differ from the proposal (a " (2)" suffix, a layout folder). */
   filedName?: string;
   /** Where the filed document is, for showing it in its folder. */

@@ -100,14 +100,14 @@ describe('queue cells', () => {
     await start();
     fireEvent.mouseDown(queueCell('Scan 0101.pdf', 'description'), { button: 0, buttons: 1 });
     fireEvent.mouseEnter(queueCell('Scan 0102.pdf', 'status'), { buttons: 1 });
-    fireEvent.mouseEnter(queueCell('Scan 0103.pdf', 'confidence'), { buttons: 1 });
+    fireEvent.mouseEnter(queueCell('Scan 0103.pdf', 'check'), { buttons: 1 });
     fireEvent.mouseUp(document, { button: 0 });
     // A move after the button is up selects nothing more.
-    fireEvent.mouseEnter(queueCell('Scan 0104.pdf', 'confidence'), { buttons: 0 });
+    fireEvent.mouseEnter(queueCell('Scan 0104.pdf', 'check'), { buttons: 0 });
     expect(selectedCells()).toEqual([
-      'Scan 0101.pdf:description', 'Scan 0101.pdf:confidence',
-      'Scan 0102.pdf:description', 'Scan 0102.pdf:confidence',
-      'Scan 0103.pdf:description', 'Scan 0103.pdf:confidence',
+      'Scan 0101.pdf:description', 'Scan 0101.pdf:check',
+      'Scan 0102.pdf:description', 'Scan 0102.pdf:check',
+      'Scan 0103.pdf:description', 'Scan 0103.pdf:check',
     ]);
 
     fireEvent.mouseDown(screen.getByRole('columnheader', { name: 'Proposed filename' }), { button: 0 });
@@ -152,7 +152,7 @@ describe('queue cells', () => {
     expect(queueCell('Scan 0103.pdf')).toHaveAttribute('tabindex', '0');
 
     fireEvent.keyDown(document.activeElement!, { key: 'End', ctrlKey: true });
-    expect(queueCell('Scan 0107.pdf', 'confidence')).toHaveFocus();
+    expect(queueCell('Scan 0107.pdf', 'check')).toHaveFocus();
     fireEvent.keyDown(document.activeElement!, { key: 'Home' });
     expect(queueCell('Scan 0107.pdf')).toHaveFocus();
   });
@@ -165,7 +165,7 @@ describe('queue cells', () => {
     expect(selectedCells()).toHaveLength(7);
     expect(selectedCells().every((each) => each.endsWith(':description'))).toBe(true);
     fireEvent.keyDown(document.activeElement!, { key: ' ', shiftKey: true });
-    expect(selectedCells()).toEqual(['Scan 0101.pdf:original', 'Scan 0101.pdf:proposed', 'Scan 0101.pdf:description', 'Scan 0101.pdf:confidence']);
+    expect(selectedCells()).toEqual(['Scan 0101.pdf:original', 'Scan 0101.pdf:proposed', 'Scan 0101.pdf:description', 'Scan 0101.pdf:check']);
   });
 
   // The active cell is the end of the selection that moves, and keyboard
@@ -179,8 +179,8 @@ describe('queue cells', () => {
     fireEvent.keyDown(start0101, { key: 'a', ctrlKey: true });
     expect(selectedCells()).toHaveLength(28);
     // Focus is on the far corner, the one Tab returns to.
-    expect(queueCell('Scan 0107.pdf', 'confidence')).toHaveFocus();
-    expect(queueCell('Scan 0107.pdf', 'confidence')).toHaveAttribute('tabindex', '0');
+    expect(queueCell('Scan 0107.pdf', 'check')).toHaveFocus();
+    expect(queueCell('Scan 0107.pdf', 'check')).toHaveAttribute('tabindex', '0');
     expect(screen.getAllByRole('gridcell').filter((cell) => cell.getAttribute('tabindex') === '0')).toHaveLength(1);
     // As in a spreadsheet, Shift+Up then gives back the last row.
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp', shiftKey: true });
@@ -190,14 +190,14 @@ describe('queue cells', () => {
     const cell = queueCell('Scan 0102.pdf', 'proposed');
     clickCell(cell);
     fireEvent.keyDown(cell, { key: ' ', shiftKey: true });
-    expect(queueCell('Scan 0102.pdf', 'confidence')).toHaveFocus();
+    expect(queueCell('Scan 0102.pdf', 'check')).toHaveFocus();
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown', shiftKey: true });
     expect(selectedCells()).toEqual([
-      'Scan 0102.pdf:original', 'Scan 0102.pdf:proposed', 'Scan 0102.pdf:description', 'Scan 0102.pdf:confidence',
-      'Scan 0103.pdf:original', 'Scan 0103.pdf:proposed', 'Scan 0103.pdf:description', 'Scan 0103.pdf:confidence',
+      'Scan 0102.pdf:original', 'Scan 0102.pdf:proposed', 'Scan 0102.pdf:description', 'Scan 0102.pdf:check',
+      'Scan 0103.pdf:original', 'Scan 0103.pdf:proposed', 'Scan 0103.pdf:description', 'Scan 0103.pdf:check',
     ]);
     // The active cell of a selection of several is marked as a spreadsheet marks it.
-    expect(queueCell('Scan 0103.pdf', 'confidence')).toHaveClass('cell-active');
+    expect(queueCell('Scan 0103.pdf', 'check')).toHaveClass('cell-active');
     expect(document.querySelectorAll('.cell-active')).toHaveLength(1);
     // A single selected cell needs no marker of its own.
     clickCell(queueCell('Scan 0104.pdf'));
@@ -225,7 +225,7 @@ describe('queue cells', () => {
     await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Copied 2 rows, 3 columns.'));
   });
 
-  it('selects every copyable cell with Ctrl+A, and copies the confidence as shown', async () => {
+  it('selects every copyable cell with Ctrl+A, and copies the check as shown', async () => {
     await start(tricky);
     const cell = queueCell('Scan 1.pdf');
     cell.focus();
@@ -234,8 +234,8 @@ describe('queue cells', () => {
 
     const { data } = copyFrom(document.activeElement!);
     expect(data.get('text/plain')!.split('\r\n')).toEqual([
-      'Scan 1.pdf\t2024-01-02 Lease.pdf\t"Says ""hi""\tthen\nbreaks"\t87%',
-      'Scan 2 東京.pdf\t2024-02-03 Invoice — Café.pdf\tPlain.\t95%',
+      'Scan 1.pdf\t2024-01-02 Lease.pdf\t"Says ""hi""\tthen\nbreaks"\tModel unsure of its reading',
+      'Scan 2 東京.pdf\t2024-02-03 Invoice — Café.pdf\tPlain.\tAll checks passed',
       'Scan 3.pdf\t\t\t',
     ]);
   });
@@ -293,12 +293,12 @@ describe('queue cells', () => {
     await waitFor(() => expect(write).toHaveBeenCalledOnce());
     const item = write.mock.calls[0][0][0] as FakeClipboardItem;
     expect(await item.parts['text/plain'].text()).toBe([
-      'Original filename\tProposed filename\tDescription\tConfidence',
-      'Scan 1.pdf\t2024-01-02 Lease.pdf\t"Says ""hi""\tthen\nbreaks"\t87%',
-      'Scan 2 東京.pdf\t2024-02-03 Invoice — Café.pdf\tPlain.\t95%',
+      'Original filename\tProposed filename\tDescription\tCheck',
+      'Scan 1.pdf\t2024-01-02 Lease.pdf\t"Says ""hi""\tthen\nbreaks"\tModel unsure of its reading',
+      'Scan 2 東京.pdf\t2024-02-03 Invoice — Café.pdf\tPlain.\tAll checks passed',
       'Scan 3.pdf\t\t\t',
     ].join('\r\n'));
-    expect(await item.parts['text/html'].text()).toContain('<thead><tr><th>Original filename</th><th>Proposed filename</th><th>Description</th><th>Confidence</th></tr></thead>');
+    expect(await item.parts['text/html'].text()).toContain('<thead><tr><th>Original filename</th><th>Proposed filename</th><th>Description</th><th>Check</th></tr></thead>');
     await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Copied the table, 3 rows.'));
   });
 
@@ -310,14 +310,14 @@ describe('queue cells', () => {
     Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true });
     try {
       await start(tricky);
-      clickCell(queueCell('Scan 2 東京.pdf', 'confidence'));
+      clickCell(queueCell('Scan 2 東京.pdf', 'check'));
       const button = screen.getByRole('button', { name: 'Copy selection' });
       button.focus();
       fireEvent.click(button);
 
       expect(execCommand).toHaveBeenCalledWith('copy');
-      expect(copied?.get('text/plain')).toBe('95%');
-      expect(copied?.get('text/html')).toBe('<meta charset="utf-8"><table><tbody><tr><td>95%</td></tr></tbody></table>');
+      expect(copied?.get('text/plain')).toBe('All checks passed');
+      expect(copied?.get('text/html')).toBe('<meta charset="utf-8"><table><tbody><tr><td style="mso-number-format:\'\\@\'" data-sheets-value="{&quot;1&quot;:2,&quot;2&quot;:&quot;All checks passed&quot;}">All checks passed</td></tr></tbody></table>');
       await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Copied 1 cell.'));
     } finally {
       delete (document as { execCommand?: unknown }).execCommand;
@@ -332,7 +332,7 @@ describe('queue cells', () => {
     clickCell(queueCell('Scan 2b.pdf', 'description'), { shiftKey: true });
     expect(screen.getByRole('button', { name: 'Copy selection' })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rename all ready' }));
     await waitFor(() => expect(screen.queryByRole('grid', { name: 'Queue' })).not.toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Copy table' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Copy selection' })).not.toBeInTheDocument();
