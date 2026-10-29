@@ -398,7 +398,7 @@ impl ProcessLauncher for StdProcessLauncher {
         executable: &Path,
         arguments: &[String],
     ) -> EngineResult<Box<dyn ProcessControl>> {
-        let mut command = Command::new(executable);
+        let mut command = command_in_own_folder(executable)?;
         // Standard error is where llama-server says why it could not start:
         // missing CPU features, a quarantined runtime library, a model that
         // will not load. At its default verbosity it logs no prompt text and
@@ -419,6 +419,31 @@ impl ProcessLauncher for StdProcessLauncher {
         let child = crate::process::spawn_tied(command).map_err(|_| start_failed())?;
         Ok(Box::new(StdChildProcess(child)))
     }
+}
+
+/// A command for `executable` that runs in the executable's own folder.
+///
+/// ggml loads its `ggml-cpu-*` backends from the executable's folder and
+/// from the current directory. On Windows Intern's current directory is often
+/// the install root, where Prism's CPU backends sit under the same names as
+/// upstream's; in its own folder, each llama-server finds its own.
+///
+/// A path with a folder is made absolute first, since a relative program is
+/// found from the child's directory on some platforms and the parent's on
+/// others. A bare name is left to the search path, from where Intern is.
+fn command_in_own_folder(executable: &Path) -> EngineResult<Command> {
+    let has_folder = executable
+        .parent()
+        .is_some_and(|folder| !folder.as_os_str().is_empty());
+    if !has_folder {
+        return Ok(Command::new(executable));
+    }
+    let executable = std::path::absolute(executable).map_err(|_| start_failed())?;
+    let mut command = Command::new(&executable);
+    if let Some(folder) = executable.parent() {
+        command.current_dir(folder);
+    }
+    Ok(command)
 }
 
 struct EphemeralPortAllocator;
@@ -615,6 +640,53 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(std::fs::read_dir(&logs).unwrap().count(), 1);
+    }
+
+    /// A server runs in its own folder, where ggml finds its own CPU backends
+    /// rather than another runtime's in Intern's current directory - also
+    /// when it is named by a relative path. A program named without a folder
+    /// is still found on the search path, and runs where Intern is.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_runs_in_its_own_folder() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory.path().join("llama-upstream");
+        std::fs::create_dir_all(&folder).unwrap();
+        // A shell under the server's name: nothing is written and then run.
+        std::os::unix::fs::symlink("/bin/sh", folder.join("llama-server")).unwrap();
+        let launcher = StdProcessLauncher {
+            log_directory: None,
+        };
+        let record = directory.path().join("ran-in");
+        let ran_in = |executable: &Path| {
+            let _ = std::fs::remove_file(&record);
+            let mut process = launcher
+                .launch(
+                    executable,
+                    &["-c".to_owned(), format!("pwd -P > '{}'", record.display())],
+                )
+                .expect("a shell");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !process.has_exited().unwrap() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            PathBuf::from(std::fs::read_to_string(&record).unwrap().trim_end())
+        };
+        let own = folder.canonicalize().unwrap();
+        assert_eq!(ran_in(&folder.join("llama-server")), own);
+
+        let here = std::env::current_dir().unwrap();
+        let relative = here
+            .components()
+            .skip(1)
+            .map(|_| "..")
+            .collect::<PathBuf>()
+            .join(folder.strip_prefix("/").unwrap())
+            .join("llama-server");
+        assert!(relative.is_relative());
+        assert_eq!(ran_in(&relative), own);
+
+        assert_eq!(ran_in(Path::new("sh")), here.canonicalize().unwrap());
     }
 
     /// Windows sidecars open no console window and run below normal
