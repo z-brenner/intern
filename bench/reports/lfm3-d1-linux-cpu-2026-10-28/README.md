@@ -10,8 +10,9 @@ other quantizations. Its best configuration ties Qwen3.5-2B; the conclusion belo
 
 1. **Do not replace Qwen3.5-2B with LFM3-Omni-2B, or with LFM3-1.7B (Omni's own text
    backbone).** On the same runtime, flags and code, both name fewer documents correctly
-   (Omni 40/77 at best, LFM3-1.7B 45/77, Qwen 52/77), both are slower (their tokenizer
-   needs ~46% more tokens for the same text), and Omni would have filed **3 documents as
+   (Omni 40/77 at best, LFM3-1.7B 45/77, Qwen 52/77), both are slower (llama.cpp re-reads
+   their ~480-token instruction block on every document, where it serves Qwen's from cache;
+   see the correction under "Speed"), and Omni would have filed **3 documents as
    ready under a trap date**, which the production model never does here. Omni's vision
    and audio are separate projector files Intern would not load; for Intern it is a 1.7B
    text model and the weaker of the two.
@@ -99,9 +100,14 @@ was asked. Each question is scored as a review gate over the names marked ready.
   correctly. Qwen with the d1 gate below gets to the same ~7 wrong-but-ready while keeping
   52 names right and holding 27.
 * **Speed:** LFM3 decodes faster than Qwen (15 vs 12 tok/s) and prefills at the same rate
-  (~100 tok/s at 4 threads), but its tokenizer turns the same documents into ~46% more
-  tokens (median prompt 1,268-1,421 vs 870), so each document takes 3-5 s longer. A prompt
-  change does not fix that.
+  (~100 tok/s at 4 threads), yet each document takes 3-5 s longer. *Corrected 2026-10-29:*
+  this report first blamed LFM3's tokenizer ("~46% more tokens"). That compared LFM3's
+  whole prompt (median 1,268-1,421 tokens) with only the uncached part of Qwen's (870). Qwen's
+  whole prompt is 1,347 tokens, of which llama-server serves 477, the instruction block, from
+  the slot's prefix cache. LFM3's prompts are about 6% *shorter* than Qwen's, but none of
+  them was served from cache (`cached_tokens` 0 on every document), so its instruction block
+  was prefilled again each time. The cost is the runtime's prefix reuse for this
+  architecture, not the tokenizer.
 * **Memory:** server peak ~2.0 GB (LFM3) vs 2.1 GB (Qwen) with `--cache-ram 0`.
 
 Not tested: using Omni's vision to read scans in place of PP-OCR. Intern's pipeline needs

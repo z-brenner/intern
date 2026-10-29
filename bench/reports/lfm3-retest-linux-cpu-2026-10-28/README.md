@@ -190,9 +190,12 @@ trap.
   - a qualifying event date on a benefits change form.
 * **Speed and memory.** The QAD-Q4_0 file decodes at 15.9 tok/s and prefills at 109 tok/s,
   against 15.0 and 100 for Q4_K_M, at the same ~2.0 GB server peak. Q8_0 is the slowest of
-  the three on this CPU: 11.1 and 63 tok/s, 32.7 s per document. LFM3's tokenizer still
-  needs ~46% more tokens than Qwen's for the same text (median prompt 1,421 vs 870 tokens),
-  which accounts for the ~3 s per document.
+  the three on this CPU: 11.1 and 63 tok/s, 32.7 s per document. The ~3 s per document
+  LFM3 loses to Qwen is not its tokenizer, as this report first said ("~46% more tokens"):
+  that compared LFM3's whole prompt (median 1,421 tokens few-shot) with only the uncached
+  part of Qwen's (870 of 1,347). llama-server serves Qwen's 477-token instruction block from
+  its prefix cache and served none of LFM3's (`cached_tokens` 0 on every document), so LFM3
+  prefills its instructions again each time. Corrected 2026-10-29.
 
 ### How much to read into it
 
