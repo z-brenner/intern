@@ -83,11 +83,13 @@ pub fn run(
         Some(tokens) => client.with_context_tokens(tokens),
         None => client,
     };
-    // Laboratory opt-in: ask the server for each chosen token's probability
-    // (no generated token changes) so the record carries `token_confidence`,
-    // a candidate signal for routing between models. The app does not set it.
+    // Ask the server for each chosen token's probability (no generated token
+    // changes) so the record carries `token_confidence`: always when the run
+    // is scored with a token-confidence gate, as the app asks for the
+    // accurate model; otherwise as a laboratory opt-in.
     let client = client.with_token_confidence(
-        std::env::var_os("INTERN_BENCH_TOKEN_CONFIDENCE").is_some_and(|value| value == "1"),
+        settings.min_token_confidence.is_some()
+            || std::env::var_os("INTERN_BENCH_TOKEN_CONFIDENCE").is_some_and(|value| value == "1"),
     );
     #[cfg(feature = "benchmark-transport")]
     let client = match &options.benchmark_transport {

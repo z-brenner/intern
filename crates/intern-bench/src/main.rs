@@ -13,7 +13,7 @@
 //!                  [--latency-gate 1.5]
 //!                  [--pipeline evidence|digest] [--id-style stable|ordinal]
 //!                  [--retrieval-tier auto|whole|small|normal|dense] [--context-tokens N]
-//!                  [--prompt-profile bonsai_2]
+//!                  [--prompt-profile bonsai_2] [--min-token-confidence 0.5]
 //! intern-bench compare --before a.json --after b.json [--markdown diff.md] [--output diff.json]
 //! intern-bench report  --input report.json --markdown out.md
 //! intern-bench merge-recordings --base bench/recording.json --add new.json --output merged.json
@@ -47,7 +47,7 @@ const USAGE: &str = "usage:
                    [--baseline BASELINE.json] [--write-baseline BASELINE.json] [--latency-gate RATIO]
                    [--pipeline evidence|digest] [--id-style stable|ordinal]
                    [--retrieval-tier auto|whole|small|normal|dense] [--context-tokens N]
-                   [--prompt-profile bonsai_2]
+                   [--prompt-profile bonsai_2] [--min-token-confidence X]
   intern-bench compare --before A.json --after B.json [--markdown DIFF.md] [--output DIFF.json]
   intern-bench report --input REPORT.json --markdown OUT.md
   intern-bench merge-recordings --base A.json --add B.json --output C.json
@@ -88,6 +88,7 @@ const RUN_KEYS: &[&str] = &[
     "retrieval-tier",
     "context-tokens",
     "prompt-profile",
+    "min-token-confidence",
     "bench-profile",
     "wire-output",
 ];

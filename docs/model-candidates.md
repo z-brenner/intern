@@ -22,7 +22,7 @@ carry over:
 2. **A confidence signal from the model's own probabilities.** This was new. It
    is built and described below.
 
-## 1. Token confidence (built, off by default)
+## 1. Token confidence (on for the accurate model since October 2026)
 
 **What it is.** `ModelClient::with_token_confidence(true)` adds `"logprobs": true,
 "top_logprobs": 1` to the request. `client::token_confidence` reads the reported
@@ -46,9 +46,11 @@ written is the signal.
   one without logprobs and one with, gave byte-identical proposals for all 21
   fixtures.
 * **Readiness.** `Engine::with_min_token_confidence(t)` sends a proposal whose
-  `min` is below `t` to review with `LOW_CONFIDENCE`. Nothing sets it. The app
-  constructs `ModelClient` without token confidence, and `validate.rs` is
-  untouched and remains the grounding backstop.
+  `min` is below `t` to review with `LOW_CONFIDENCE`. Until October 2026 nothing
+  set it. The app now asks for token probabilities on the accurate model's
+  requests and sets `t` to `tiers::REVIEW_BELOW_TOKEN_CONFIDENCE` (0.5); see
+  [the InternBench calibration](#calibrated-on-internbench-october-2026) below.
+  `validate.rs` is untouched and remains the grounding backstop.
 
 **Live result** (this machine: Ryzen 7 PRO 8840U, llama.cpp b10361 Windows CPU,
 8 threads, 8,192 context, packaged runtime). Recorded with `--token-confidence`
@@ -74,10 +76,41 @@ already routes all three to review. Replaying that recording with a threshold:
 | 0.5 | 18/19 | 42% | no change: everything below 0.5 was already in review |
 | 0.7 | 15/19 | 58% | catches board-deck's wrong party, but also sends nda and termination-notice to review while they are correct |
 
-**Verdict.** The signal is real and it ranks the misreads lowest. On 19 documents
+**Verdict (fixture corpus).** The signal is real and it ranks the misreads lowest. On 19 documents
 it does not catch anything the verbatim checks miss without also costing correct
-ready files, so it stays data only. Calibrate it again when the corpus has more
-"ready but wrong" cases.
+ready files, so it stayed data only until a corpus with more "ready but wrong"
+cases could calibrate it. InternBench is that corpus.
+
+### Calibrated on InternBench (October 2026)
+
+InternBench's 77 documents have many more ready-but-wrong readings than the
+fixture corpus. The run below is the recorded Qwen3.5 2B run on the packaged
+runtime (Prism b10826, 4 threads, Linux), re-scored with the party rules of
+October 2026, with `--min-token-confidence` applied to its recorded
+probabilities:
+
+| Threshold | Ready | Wrong names ready ("unsafe") | Right names sent to review |
+| --- | ---: | ---: | ---: |
+| unset | 65 | 11 | 0 |
+| 0.3 | 65 | 11 | 0 |
+| **0.5** | **50** | **4** | **8** |
+| 0.7 | 27 | 1 | 28 |
+| 0.9 | 9 | 1 | 46 |
+
+At 0.5 the gate takes 7 of the 11 wrong names out of the files written
+unattended, for 8 right names a person now confirms. The threshold is the one the
+fixture corpus suggested, not one read off these documents, so the result is
+not tuned to them. Above 0.5 the cost climbs steeply. The Bonsai models gain
+less: 15 → 11 (4B) and 21 → 18 (2B) for 3 right names each. Their readings
+always go to review anyway.
+
+The app therefore asks the accurate model for token probabilities and sends a
+reading whose least probable date or party token is below 0.5 to review. The
+fast model's readings are held for review whatever their probabilities, so it
+does not ask. `intern-bench run --min-token-confidence 0.5` scores a run the same
+way. A live run with the flag asks the server for probabilities, and a replay
+applies the gate to the probabilities its recording kept. `bench/recording.json`
+kept none, so its CI baseline is unchanged.
 
 **Latency.** Not separable from noise in this run. Mean inference was 20.7 s
 without logprobs (first run, cold), 17.2 s with them, and 15.1 s for a repeat
