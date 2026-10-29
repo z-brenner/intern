@@ -26,6 +26,11 @@ choices, not missing information.
 | Date | 1 | 0 |
 | Wording | 3 | 2 |
 
+Speed was measured the same day, in
+[`bench/reports/speed-linux-cpu-2026-10-29`](../bench/reports/speed-linux-cpu-2026-10-29/README.md).
+Shorter ids, two documents at once and speculative decoding do not pay on a 4-core CPU. The
+upstream llama.cpp runtime reads prompts 36% faster than the packaged one.
+
 ## What was tried and measured
 
 | Change | Result | Verdict |
