@@ -238,8 +238,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .table-wrap table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 14px; }
 .table-wrap th { text-align: left; padding: 6px 12px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .table-wrap th.col-original { width: 24%; }
-/* Wide enough for the longest label on one line: "Ready to file as a copy". */
-.table-wrap th.col-status { width: 188px; }
+/* Wide enough for the longest label on one line - "Ready to file as a copy" -
+   with room to spare: a label's width moves a few pixels between fonts and
+   machines, and a status that does not fit paints over the next column. */
+.table-wrap th.col-status { width: 204px; }
 .table-wrap th.col-proposed { width: 30%; }
 .table-wrap th.col-description { width: 24%; }
 .table-wrap th.col-check { width: 22%; }
@@ -622,7 +624,7 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
   .workspace:has(> .inspector) .cell-filename { gap: 8px; }
   .workspace:has(> .inspector) .status { gap: 6px; }
   .workspace:has(> .inspector) .table-wrap th.col-original { width: 24%; }
-  .workspace:has(> .inspector) .table-wrap th.col-status { width: 180px; }
+  .workspace:has(> .inspector) .table-wrap th.col-status { width: 196px; }
   .workspace:has(> .inspector) .table-wrap th.col-proposed { width: 32%; }
   .workspace:has(> .inspector) .table-wrap th.col-description { width: 18%; }
   .workspace:has(> .inspector) .table-wrap th.col-check { width: 20%; }
@@ -644,7 +646,7 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
   .header-actions button:not(.icon-button) .button-label { display: none; }
   .queue-panel { padding-top: 12px; }
   .table-wrap th, .table-wrap td { padding-left: 8px; padding-right: 8px; }
-  .table-wrap th.col-status { width: 172px; }
+  .table-wrap th.col-status { width: 188px; }
   .inspector { width: min(370px, 100vw); }
 }
 
