@@ -238,7 +238,8 @@ The other checks:
   letterhead's `WRENFIELD SUPPLY`. An email states its kind by its header
   block, not in words: a reply's "Email" is supported when the first page
   opens with `From:` and two of `To:`, `Cc:`, `Date:`, `Sent:` and
-  `Subject:`.
+  `Subject:`. Such an email is dated by its header's `Date:` or `Sent:`,
+  never by a date its text asks for or a message it quotes.
 - **Names.** A party's name loses a field's label, a street address or a
   second name that the layout ran into it (`PrOperty 47 JUniper LOOP Cedar
   Finch Properties Llc`); a legal form ends an organization's name. A name

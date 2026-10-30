@@ -544,6 +544,17 @@ pub fn validate_facts_at(
             }
         }
     }
+    // An email is dated when it was sent: its header block's "Date:" or
+    // "Sent:", whatever other date its text or a message it quotes holds
+    // ("I need your approval by March 20, 2026").
+    if let Some((sent, line)) = email_sent_date(scope)
+        && document_date.as_deref() != Some(sent.as_str())
+    {
+        document_date = Some(sent);
+        date_role = Some(DateRole::Issuance);
+        date_line = Some(line);
+        replaced = true;
+    }
     // A signed-on date loses to a stated effective or start date: an
     // agreement or a form takes effect when it says it does, not on the day
     // it was signed. Only the one effective date both views agree on
@@ -1678,6 +1689,30 @@ fn read_type_words<'a>(
         }
     }
     TypeReading::Unsupported
+}
+
+/// The date an email's header block says it was sent ("Date:" or "Sent:"),
+/// and that line: `None` without a header block ([`email_header`]) or
+/// without exactly one date on the line.
+fn email_sent_date(scope: &ValidationScope<'_>) -> Option<(String, String)> {
+    let (unit, _) = email_header(scope)?;
+    let first_page = unit.page;
+    scope
+        .context_units()
+        .filter(|unit| unit.page == first_page && !unit.running)
+        .flat_map(|unit| unit.text.lines().map(str::trim))
+        .filter(|line| !line.is_empty())
+        .take(8)
+        .find_map(|line| {
+            let (label, value) = line.split_once(':')?;
+            if !matches!(label.trim().to_lowercase().as_str(), "date" | "sent") {
+                return None;
+            }
+            match extract_stated_dates(value).as_slice() {
+                [date] => Some((date.clone(), line.to_owned())),
+                _ => None,
+            }
+        })
 }
 
 /// The fields an email's header block holds besides its sender.
@@ -3573,15 +3608,18 @@ fn with_of_phrase(unit: &EvidenceUnit, span: &str) -> String {
 /// The two organizations a first-page "between" clause names, in its
 /// order, as the document writes them, with their unit.
 fn between_organizations<'a>(scope: &ValidationScope<'a>) -> Vec<(String, &'a EvidenceUnit)> {
-    between_organizations_where(scope, |_| true)
+    between_organizations_where(scope, |_| true, false)
 }
 
 /// [`between_organizations`], from a "between" that introduces the document
-/// itself ([`opens_this_agreement`]), never one a recital names.
+/// itself ([`opens_this_agreement`]), never one a recital names, and only
+/// when the clause names two organizations and no more: in "Acme Inc., a
+/// wholly owned subsidiary of Parent Corp., and Beta LLC" the second named
+/// is no side of the agreement, and which of the others is cannot be told.
 fn opening_clause_organizations<'a>(
     scope: &ValidationScope<'a>,
 ) -> Vec<(String, &'a EvidenceUnit)> {
-    between_organizations_where(scope, opens_this_agreement)
+    between_organizations_where(scope, opens_this_agreement, true)
 }
 
 /// Whether the words before a "between" open the document's own clause -
@@ -3615,10 +3653,12 @@ fn opens_this_agreement(before: &str) -> bool {
 }
 
 /// [`between_organizations`], from the "between"s whose preceding words
-/// (loosely normalized, in the same unit) `accept` takes.
+/// (loosely normalized, in the same unit) `accept` takes; with
+/// `exactly_two`, from one whose clause names no third organization.
 fn between_organizations_where<'a>(
     scope: &ValidationScope<'a>,
     accept: impl Fn(&str) -> bool,
+    exactly_two: bool,
 ) -> Vec<(String, &'a EvidenceUnit)> {
     let Some(first_page) = scope.context_units().map(|unit| unit.page).min() else {
         return Vec::new();
@@ -3652,9 +3692,12 @@ fn between_organizations_where<'a>(
                 if let Some(span) = written_span(unit, organization) {
                     found.push((span, unit));
                 }
-                if found.len() == 2 {
+                if found.len() == 2 && !exactly_two {
                     return found;
                 }
+            }
+            if found.len() == 2 {
+                return found;
             }
         }
     }
@@ -7884,6 +7927,27 @@ is in effect.";
         });
         assert_eq!(outcome.proposal.parties, vec!["SINA Corporation"]);
         assert!(outcome.reasons.contains(&ReviewReason::PartyMissing));
+
+        // Nor a clause that names a third organization, a side's parent:
+        // which of the other two is the other side cannot be told.
+        const WITH_PARENT: &str = "SUPPLY AGREEMENT\n\n\
+This Supply Agreement is made on May 15, 2013 between Acme Inc., a wholly owned subsidiary of \
+Parent Corp., and Beta LLC.";
+        let (outcome, _) = facts_for(WITH_PARENT, |index| ModelFacts {
+            document_type: Some("Supply Agreement".into()),
+            type_evidence: vec![id_of(index, "SUPPLY")],
+            document_date: Some("2013-05-15".into()),
+            date_evidence: vec![id_of(index, "This Supply")],
+            parties: vec![party("Acme Inc.", None, &[id_of(index, "This Supply")])],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Acme Inc."],
+            "{:?}",
+            outcome.proposal
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::PartyMissing));
     }
 
     /// InternBench's email-approval-thread: the reply typed it "email",
@@ -7912,6 +7976,20 @@ Saul,\n\nApproved. Please issue the purchase order today.\n\nSigne";
             !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
             "{:?}",
             outcome.reasons
+        );
+
+        // Its date is the header's, not a date its text asks for.
+        let with_deadline = format!("{EMAIL}\n\nI need your approval by March 20, 2026.");
+        let (outcome, _) = facts_for(&with_deadline, |index| ModelFacts {
+            document_type: Some("email".into()),
+            type_evidence: vec![id_of(index, "From: Signe")],
+            document_date: Some("2026-03-20".into()),
+            date_evidence: vec![id_of(index, "I need your approval")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-03-17")
         );
 
         // A letter is no email, nor is one that only quotes an email's
