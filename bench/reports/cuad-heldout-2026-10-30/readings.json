@@ -1,0 +1,1128 @@
+{
+ "note": "Per-contract readings of the held-out CUAD sample (scripts/cuad-eval/sample-heldout.json): Qwen3.5-2B Q4_K_M on llama.cpp b11946, the app flags, review gate 0.5, one live run replayed. before = main at PR #41 (the rules of #45), after = this change. cuad-26 after is a live re-run (its prompt changed).",
+ "contracts": [
+  {
+   "id": "cuad-00",
+   "before": {
+    "type": "Reseller Agreement",
+    "date": null,
+    "parties": [
+     "PivX Corporation",
+     "Detto Technologies"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Reseller Agreement",
+    "date": null,
+    "parties": [
+     "PivX Corporation",
+     "Detto Technologies"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-01",
+   "before": {
+    "type": "Agency Agreement",
+    "date": "1999-05-25",
+    "parties": [
+     "Mutual Insurance Corporation of America",
+     "Stratton, Cheeseman & Walsh-Nevada, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Agency Agreement",
+    "date": "1999-05-25",
+    "parties": [
+     "Mutual Insurance Corporation of America",
+     "Stratton, Cheeseman & Walsh-Nevada, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-02",
+   "before": {
+    "type": "ODM SUPPLY AGREEMENT",
+    "date": "2018-01-15",
+    "parties": [
+     "Organic Preparations Inc.",
+     "Agape ATP International Holding Limited"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "ODM SUPPLY AGREEMENT",
+    "date": "2018-01-15",
+    "parties": [
+     "Organic Preparations Inc.",
+     "Agape ATP International Holding Limited"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-03",
+   "before": {
+    "type": "Network Build and Maintenance Agreement",
+    "date": "2019-07-31",
+    "parties": [
+     "Commnet Wireless, LLC",
+     "AT&T Mobility LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Network Build and Maintenance Agreement",
+    "date": "2019-07-31",
+    "parties": [
+     "Commnet Wireless, LLC",
+     "AT&T Mobility LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-04",
+   "before": {
+    "type": "Development Agreement",
+    "date": "2010-04-15",
+    "parties": [
+     "Cargill, Incorporated",
+     "Bioamber S.A.S."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Development Agreement",
+    "date": "2010-04-15",
+    "parties": [
+     "Cargill, Incorporated",
+     "Bioamber S.A.S."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-05",
+   "before": {
+    "type": "Outsourcing Agreement",
+    "date": "2006-05-01",
+    "parties": [
+     "Virtual Item Processing Systems Inc.",
+     "Brokers National Life Assurance Company"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Outsourcing Agreement",
+    "date": "2006-05-01",
+    "parties": [
+     "Virtual Item Processing Systems Inc.",
+     "Brokers National Life Assurance Company"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-06",
+   "before": {
+    "type": "Reseller Agreement",
+    "date": "2017-04-07",
+    "parties": [
+     "i3 Integrative Creative Solutions, LLC",
+     "RESELLER Bravatek Solutions, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Reseller Agreement",
+    "date": "2017-04-07",
+    "parties": [
+     "i3 Integrative Creative Solutions, LLC",
+     "RESELLER Bravatek Solutions, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-07",
+   "before": {
+    "type": "Strategic Alliance Agreement",
+    "date": "2017-05-26",
+    "parties": [
+     "Cool Technologies Inc.",
+     "Veteran Technology Group, LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Strategic Alliance Agreement",
+    "date": "2017-05-26",
+    "parties": [
+     "Cool Technologies Inc.",
+     "Veteran Technology Group, LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-08",
+   "before": {
+    "type": "First Amendment to Supply and Manufacturing Agreement",
+    "date": null,
+    "parties": [
+     "Porex Corporation",
+     "Cerus Corporation"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "First Amendment to Supply and Manufacturing Agreement",
+    "date": "2018-06-22",
+    "parties": [
+     "Porex Corporation",
+     "Cerus Corporation"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-09",
+   "before": {
+    "type": "Outsourcing Agreement",
+    "date": "1998-01-12",
+    "parties": [
+     "Modus Media International",
+     "Dragon Systems, Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Outsourcing Agreement",
+    "date": "1998-01-12",
+    "parties": [
+     "Modus Media International",
+     "Dragon Systems, Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-10",
+   "before": {
+    "type": "Cooperation Agreement",
+    "date": "2020-07-01",
+    "parties": [
+     "e.l.f. Beauty, Inc.",
+     "Marathon Partners Equity Management, LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Cooperation Agreement",
+    "date": "2020-07-01",
+    "parties": [
+     "e.l.f. Beauty, Inc.",
+     "Marathon Partners Equity Management, LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-11",
+   "before": {
+    "type": "Co-branding Agreement",
+    "date": "2000-05-22",
+    "parties": [
+     "Women.com Networks, Inc."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED",
+     "PARTY_MISSING",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Co-branding Agreement",
+    "date": "2000-05-22",
+    "parties": [
+     "Women.com Networks, Inc.",
+     "EDIETS.COM, INC."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-12",
+   "before": {
+    "type": "Second Amendment to Services Agreement",
+    "date": "2016-03-01",
+    "parties": [
+     "FEDERATED INVESTMENT MANAGEMENT COMPANY",
+     "FEDERATED INVESTMENT MANAGEMENT FEDERATED ADVISORY SERVICES COMPANY"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Second Amendment to Services Agreement",
+    "date": "2016-03-01",
+    "parties": [
+     "FEDERATED INVESTMENT MANAGEMENT COMPANY",
+     "FEDERATED INVESTMENT MANAGEMENT FEDERATED ADVISORY SERVICES COMPANY"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-13",
+   "before": {
+    "type": "Distributorship agreement",
+    "date": "2018-03-29",
+    "parties": [
+     "Signature Orthopaedics Pty Ltd",
+     "CPM Medical Consultants LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Distributorship agreement",
+    "date": "2018-03-29",
+    "parties": [
+     "Signature Orthopaedics Pty Ltd",
+     "CPM Medical Consultants LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-14",
+   "before": {
+    "type": "Sponsorship Agreement",
+    "date": "1998-03-31",
+    "parties": [
+     "CyberShop Excite, Inc."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED",
+     "PARTY_MISSING"
+    ]
+   },
+   "after": {
+    "type": "Sponsorship Agreement",
+    "date": "1998-03-31",
+    "parties": [
+     "CyberShop Excite, Inc."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED",
+     "PARTY_MISSING"
+    ]
+   }
+  },
+  {
+   "id": "cuad-15",
+   "before": {
+    "type": "Agreement",
+    "date": "2018-12-19",
+    "parties": [
+     "HOF Village, LLC",
+     "National Football Museum, Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "TYPE_MISSING"
+    ]
+   },
+   "after": {
+    "type": "Sponsorship and Services Agreement",
+    "date": "2018-12-19",
+    "parties": [
+     "HOF Village, LLC",
+     "National Football Museum, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-16",
+   "before": {
+    "type": "Outsourcing Agreement",
+    "date": null,
+    "parties": [
+     "DGT Corp.",
+     "Dolphin Industries Limited"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Outsourcing Agreement",
+    "date": null,
+    "parties": [
+     "DGT Corp.",
+     "Dolphin Industries Limited"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   }
+  },
+  {
+   "id": "cuad-17",
+   "before": {
+    "type": "Maintenance Agreement",
+    "date": "1994-01-31",
+    "parties": [
+     "XIMAGE",
+     "SAGEM S.A."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Maintenance Agreement",
+    "date": "1994-01-31",
+    "parties": [
+     "XIMAGE",
+     "SAGEM S.A."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-18",
+   "before": {
+    "type": "Sponsorship Agreement",
+    "date": "1998-12-18",
+    "parties": [
+     "Ford Motor Media",
+     "iVillage"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Sponsorship Agreement",
+    "date": "1998-12-18",
+    "parties": [
+     "Ford Motor Media",
+     "iVillage"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-19",
+   "before": {
+    "type": "Channel Partner Reseller Agreement",
+    "date": "2018-04-24",
+    "parties": [
+     "IPASS INC.",
+     "Victor A. Bozzo"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Channel Partner Reseller Agreement",
+    "date": "2018-04-24",
+    "parties": [
+     "IPASS INC.",
+     "Victor A. Bozzo"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-20",
+   "before": {
+    "type": "Agreement",
+    "date": "2014-04-06",
+    "parties": [
+     "Leclanché S.A.",
+     "Oak Ridge Energy Technologies, Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "TYPE_MISSING"
+    ]
+   },
+   "after": {
+    "type": "Marketing Agreement",
+    "date": "2014-04-06",
+    "parties": [
+     "Leclanché S.A.",
+     "Oak Ridge Energy Technologies, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-21",
+   "before": {
+    "type": "Domain Name and Content License Agreement",
+    "date": "2014-01-21",
+    "parties": [
+     "SINA Corporation",
+     "CRIC Holdings Limited"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Domain Name and Content License Agreement",
+    "date": "2014-01-21",
+    "parties": [
+     "SINA Corporation",
+     "CRIC Holdings Limited"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-22",
+   "before": {
+    "type": "Agreement",
+    "date": "2003-12-23",
+    "parties": [
+     "Martin Operating Partnership L.P.",
+     "Midstream Fuel Service LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "TYPE_MISSING"
+    ]
+   },
+   "after": {
+    "type": "Transportation Services Agreement",
+    "date": "2003-12-23",
+    "parties": [
+     "Martin Operating Partnership L.P.",
+     "Midstream Fuel Service LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-23",
+   "before": {
+    "type": "Transportation Services Agreement",
+    "date": "2015-06-11",
+    "parties": [
+     "Marathon Petroleum Company LP",
+     "Marathon Pipe Line LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Transportation Services Agreement",
+    "date": "2015-06-11",
+    "parties": [
+     "Marathon Petroleum Company LP",
+     "Marathon Pipe Line LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-24",
+   "before": {
+    "type": "Sponsorship Agreement",
+    "date": "1997-09-23",
+    "parties": [
+     "Excite, Inc.",
+     "N2K Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Sponsorship Agreement",
+    "date": "1997-09-23",
+    "parties": [
+     "Excite, Inc.",
+     "N2K Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-25",
+   "before": {
+    "type": "Outsourcing Agreement",
+    "date": "2001-11-28",
+    "parties": [
+     "WYZZ, Inc.",
+     "Nexstar Broadcasting of Peoria, L.L.C."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Outsourcing Agreement",
+    "date": "2001-11-28",
+    "parties": [
+     "WYZZ, Inc.",
+     "Nexstar Broadcasting of Peoria, L.L.C."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-26",
+   "before": {
+    "type": "Technology Outsourcing Agreement",
+    "date": null,
+    "parties": [
+     "Oriental Financial Group Inc.",
+     "Metavante Corporation"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Technology Outsourcing Agreement",
+    "date": "2007-01-26",
+    "parties": [
+     "Oriental Financial Group Inc.",
+     "Metavante Corporation"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-28",
+   "before": {
+    "type": "Content License Agreement",
+    "date": "2005-11-03",
+    "parties": [
+     "THE HENRY FILM AND ENTERTAINMENT CORPORATION",
+     "PACIFICAP ENTERTAINMENT"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Content License Agreement",
+    "date": "2005-11-03",
+    "parties": [
+     "THE HENRY FILM AND ENTERTAINMENT CORPORATION",
+     "PACIFICAP ENTERTAINMENT"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-29",
+   "before": {
+    "type": "Endorsement Agreement",
+    "date": "2011-02-21",
+    "parties": [
+     "Andy North",
+     "Golfers Incorporated"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DESCRIPTION_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Endorsement Agreement",
+    "date": "2011-02-21",
+    "parties": [
+     "Andy North",
+     "Golfers Incorporated"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DESCRIPTION_UNSUPPORTED"
+    ]
+   }
+  },
+  {
+   "id": "cuad-30",
+   "before": {
+    "type": "Joint Filing Agreement",
+    "date": "2020-04-08",
+    "parties": [
+     "Q Biomed, Inc.",
+     "YA II PN, Ltd."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_AMBIGUOUS",
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Joint Filing Agreement",
+    "date": "2020-04-08",
+    "parties": [
+     "Q Biomed, Inc.",
+     "YA II PN, Ltd."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_AMBIGUOUS",
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-31",
+   "before": {
+    "type": "Transportation Services Agreement",
+    "date": "2015-04-14",
+    "parties": [
+     "PennTex North Louisiana Operating, LLC",
+     "MRD Operating LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Transportation Services Agreement",
+    "date": "2015-04-14",
+    "parties": [
+     "PennTex North Louisiana Operating, LLC",
+     "MRD Operating LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-32",
+   "before": {
+    "type": "Agreement",
+    "date": "2013-05-15",
+    "parties": [
+     "Integra LifeSciences Corporation",
+     "PcoMed, LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "TYPE_MISSING"
+    ]
+   },
+   "after": {
+    "type": "Supply Agreement",
+    "date": "2013-05-15",
+    "parties": [
+     "Integra LifeSciences Corporation",
+     "PcoMed, LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-33",
+   "before": {
+    "type": "Consulting Agreement",
+    "date": "2020-06-01",
+    "parties": [
+     "GROUPE PARAMEUS CORP",
+     "Sphere 3D Corp."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Consulting Agreement",
+    "date": "2020-06-01",
+    "parties": [
+     "GROUPE PARAMEUS CORP",
+     "Sphere 3D Corp."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-34",
+   "before": {
+    "type": "Outsourcing Agreement",
+    "date": "1998-01-01",
+    "parties": [
+     "Sykes HealthPlan Services, Inc."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "PARTY_MISSING"
+    ]
+   },
+   "after": {
+    "type": "Outsourcing Agreement",
+    "date": "1998-01-01",
+    "parties": [
+     "Sykes HealthPlan Services, Inc.",
+     "HealthPlan Services, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-35",
+   "before": {
+    "type": "Guarantees of Master Franchise Agreement",
+    "date": "2015-08-14",
+    "parties": [
+     "Kiosk Concepts, Inc."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED",
+     "PARTY_MISSING",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Guarantees of Master Franchise Agreement",
+    "date": "2015-08-14",
+    "parties": [
+     "Kiosk Concepts, Inc."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED",
+     "PARTY_MISSING",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-36",
+   "before": {
+    "type": "Service Agreement",
+    "date": "2020-04-01",
+    "parties": [
+     "Theravance Biopharma UK Limited",
+     "Brett Haumann"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Service Agreement",
+    "date": "2020-04-01",
+    "parties": [
+     "Theravance Biopharma UK Limited",
+     "Brett Haumann"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-37",
+   "before": {
+    "type": "Marketing and Reseller Agreement",
+    "date": "2018-12-20",
+    "parties": [
+     "Todos Medical Ltd.",
+     "Care G. B. Plus Ltd."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Marketing and Reseller Agreement",
+    "date": "2018-12-20",
+    "parties": [
+     "Todos Medical Ltd.",
+     "Care G. B. Plus Ltd."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-38",
+   "before": {
+    "type": "Manufacturing and Supply Agreement",
+    "date": "2013-01-01",
+    "parties": [],
+    "relation": "none",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Manufacturing and Supply Agreement",
+    "date": "2013-01-01",
+    "parties": [],
+    "relation": "none",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED"
+    ]
+   }
+  },
+  {
+   "id": "cuad-39",
+   "before": {
+    "type": "Sponsorship Agreement",
+    "date": "1998-09-23",
+    "parties": [
+     "Excite, Inc.",
+     "Vitamin Shoppe Industries Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Sponsorship Agreement",
+    "date": "1998-09-23",
+    "parties": [
+     "Excite, Inc.",
+     "Vitamin Shoppe Industries Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-40",
+   "before": {
+    "type": "Hosting Agreement",
+    "date": null,
+    "parties": [
+     "eGain Communications Corporation",
+     "Eliance Corporation"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Hosting Agreement",
+    "date": null,
+    "parties": [
+     "eGain Communications Corporation",
+     "Eliance Corporation"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-41",
+   "before": {
+    "type": "Support and Maintenance Agreement",
+    "date": "2000-01-12",
+    "parties": [
+     "XACCT Technologies, Inc."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "DATE_AMBIGUOUS",
+     "PARTY_UNSUPPORTED",
+     "PARTY_MISSING",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Support and Maintenance Agreement",
+    "date": "2000-01-12",
+    "parties": [
+     "XACCT Technologies, Inc."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "DATE_AMBIGUOUS",
+     "PARTY_UNSUPPORTED",
+     "PARTY_MISSING",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  }
+ ]
+}

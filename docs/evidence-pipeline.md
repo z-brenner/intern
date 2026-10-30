@@ -226,7 +226,15 @@ The other checks:
   a title of the same kind stands in, for review (`TYPE_INFERRED`), or
   the type is unsupported. A title set in capitals that OCR scattered
   (`DElIvery RECeIPt DR-771`) and the kind a letter's `Re:` line opens
-  with (`Re: Offer of Employment - ...`) are titles too.
+  with (`Re: Offer of Employment - ...`) are titles too. A title phrase
+  runs back from its noun to the start of the line, a connector, or the
+  end of an issuer's name: for most kinds an organization's noun or legal
+  form (`WRENFIELD RESTAURANT SUPPLY INVOICE` is an Invoice), for an
+  agreement or a contract only a legal form, since an agreement is named
+  for what it is about (`TRANSPORTATION SERVICES AGREEMENT`). A heading
+  that is only the kind of document is read with the heading just above
+  it when that is in the same capitals: a cover page's `JOINT DEVELOPMENT
+  AND MARKETING` over `AGREEMENT`.
 - **Names.** A party's name loses a field's label, a street address or a
   second name that the layout ran into it (`PrOperty 47 JUniper LOOP Cedar
   Finch Properties Llc`); a legal form ends an organization's name. A name
@@ -323,6 +331,10 @@ Name Calm.com, Inc." its "Calm.com, Inc.".
 
 An agreement or an amendment that names only one party goes to review with
 `PARTY_MISSING`: an agreement has two sides at least, so the reply lost one.
+When the one it kept is one of the two organizations the opening "between"
+clause names, the clause's other organization is taken as the other side
+first. With no party left, the clause is not used: a recital's "between" may
+name another agreement's sides.
 
 | Class | Relation |
 | --- | --- |
