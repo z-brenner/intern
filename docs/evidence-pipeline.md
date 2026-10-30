@@ -339,7 +339,8 @@ An agreement or an amendment that names only one party goes to review with
 When the one it kept is one of the two organizations the agreement's own
 "between" clause names (one that "This ... Agreement" opens, never a
 recital's), the clause's other organization is taken as the other side
-first. With no party left, no clause is used.
+first. A clause that names a third organization (a side's parent or
+affiliate) gives none, nor does any clause when no party is left.
 
 | Class | Relation |
 | --- | --- |
