@@ -40,11 +40,15 @@ const SERVER_LOG: &str = "llama-server.log";
 ///   each model), the prefix was still reused, and the time rose 1-2%.
 /// * `-ub 256`: on the AVX2-only CPU code path most laptops load, documents
 ///   took 13-14% less time than with the default 512, with the same replies;
-///   on AVX-512 it made no difference.
+///   on AVX-512 it made no difference. On upstream `b11946`, which the
+///   accurate tier runs on, 128, 256 and 512 all fell within run-to-run noise
+///   on the AVX2 and AVX-VNNI paths, and 128 or 512 changed most replies, so
+///   256 stays (`bench/reports/speed-linux-cpu-2026-10-29`).
 /// * `--prio -1 --poll 0`: low thread priority, and threads that sleep
 ///   rather than spin while waiting for work. Intern reads in the background,
 ///   and together these cost nothing measurable (-2% to +3% against the
-///   default flags, within the run-to-run noise) with identical replies.
+///   default flags, within the run-to-run noise) with identical replies. On
+///   upstream, spinning (`--poll 50`) was no faster either.
 pub const MEASURED_FLAGS: &[&str] = &[
     "--cache-ram",
     "0",

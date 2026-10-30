@@ -29,7 +29,9 @@ choices, not missing information.
 Speed was measured the same day, in
 [`bench/reports/speed-linux-cpu-2026-10-29`](../bench/reports/speed-linux-cpu-2026-10-29/README.md).
 Shorter ids, two documents at once and speculative decoding do not pay on a 4-core CPU. The
-upstream llama.cpp runtime reads prompts 36% faster than the packaged one.
+upstream llama.cpp runtime reads prompts 36% faster than the packaged one. Its batch size and
+polling were measured again on the AVX2 and AVX-VNNI paths laptops load: every setting fell
+within run-to-run noise, so the app's flags stay.
 
 ## What was tried and measured
 
