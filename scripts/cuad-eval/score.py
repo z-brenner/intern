@@ -72,7 +72,9 @@ def type_scores(intern, cuad):
 
 def cuad_parties(text):
     parties = []
-    for part in (text or "").split(";"):
+    # An answer that opens with "(" ("(Greater Delaware Valley Holdings ("PA MHC"); ...") would
+    # otherwise lose its first party to the defined-term pattern below.
+    for part in (text or "").strip().removeprefix("(").split(";"):
         name = re.sub(r"[\"“”']", " ", re.sub(r"\([^)]*\)?", " ", part))
         core = [word for word in words(name) if word not in SUFFIXES]
         if core:

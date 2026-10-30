@@ -1,0 +1,1132 @@
+{
+ "note": "Per-contract readings of the third CUAD sample (scripts/cuad-eval/sample-third.json), which no rule was written from: Qwen3.5-2B Q4_K_M on llama.cpp b11946, the app flags, review gate 0.5, one live run replayed. before = main at #47, after = this change.",
+ "contracts": [
+  {
+   "id": "cuad-00",
+   "before": {
+    "type": "Distributor Agreement",
+    "date": "2010-06-08",
+    "parties": [
+     "Accuray Incorporated",
+     "Siemens Aktiengesellschaft"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Distributor Agreement",
+    "date": "2010-06-08",
+    "parties": [
+     "Accuray Incorporated",
+     "Siemens Aktiengesellschaft"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-01",
+   "before": {
+    "type": "Agency Agreement",
+    "date": null,
+    "parties": [
+     "Alliance Bancorp, Inc.",
+     "Greater Delaware Valley Holdings, A Mutual Company"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Agency Agreement",
+    "date": null,
+    "parties": [
+     "Alliance Bancorp, Inc.",
+     "Greater Delaware Valley Holdings, A Mutual Company"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   }
+  },
+  {
+   "id": "cuad-02",
+   "before": {
+    "type": "Transportation Service Agreement",
+    "date": "1992-05-20",
+    "parties": [
+     "A. Associated Natural Gas Company",
+     "ON ARKANSAS WESTERN PIPELINE COMPANY"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Transportation Service Agreement",
+    "date": "1992-05-20",
+    "parties": [
+     "A. Associated Natural Gas Company",
+     "ON ARKANSAS WESTERN PIPELINE COMPANY"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-03",
+   "before": {
+    "type": "Intellectual Property Agreement",
+    "date": "2018-12-31",
+    "parties": [
+     "Armstrong Flooring, Inc.",
+     "AFI Licensing LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DESCRIPTION_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Intellectual Property Agreement",
+    "date": "2018-12-31",
+    "parties": [
+     "Armstrong Flooring, Inc.",
+     "AFI Licensing LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DESCRIPTION_UNSUPPORTED"
+    ]
+   }
+  },
+  {
+   "id": "cuad-04",
+   "before": {
+    "type": "Collaboration Agreement",
+    "date": "2019-09-13",
+    "parties": [
+     "Ginkgo Bioworks, Inc.",
+     "Berkeley Lights, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Collaboration Agreement",
+    "date": "2019-09-13",
+    "parties": [
+     "Ginkgo Bioworks, Inc.",
+     "Berkeley Lights, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-05",
+   "before": {
+    "type": "Agency Agreement",
+    "date": "2014-05-14",
+    "parties": [
+     "Blue Hills Bancorp, Inc.",
+     "Keefe, Bruyette & Woods, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Agency Agreement",
+    "date": "2014-05-14",
+    "parties": [
+     "Blue Hills Bancorp, Inc.",
+     "Keefe, Bruyette & Woods, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-06",
+   "before": {
+    "type": "Endorsement Agreement",
+    "date": "2012-05-17",
+    "parties": [
+     "Geno Auriemma",
+     "Berkshire Bank"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Endorsement Agreement",
+    "date": "2012-05-17",
+    "parties": [
+     "Geno Auriemma",
+     "Berkshire Bank"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-07",
+   "before": {
+    "type": "Strategic Alliance Agreement",
+    "date": null,
+    "parties": [
+     "Freedom Mortgage Corporation",
+     "Cherry Hill Mortgage Investment Corp."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Strategic Alliance Agreement",
+    "date": null,
+    "parties": [
+     "Freedom Mortgage Corporation",
+     "Cherry Hill Mortgage Investment Corp."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   }
+  },
+  {
+   "id": "cuad-08",
+   "before": {
+    "type": "Product License Schedule",
+    "date": "2018-01-12",
+    "parties": [
+     "Bank of America"
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "DATE_AMBIGUOUS",
+     "PARTY_UNSUPPORTED",
+     "PARTY_MISSING"
+    ]
+   },
+   "after": {
+    "type": "Product License Schedule",
+    "date": "2018-01-12",
+    "parties": [
+     "Bank of America"
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "DATE_AMBIGUOUS",
+     "PARTY_UNSUPPORTED",
+     "PARTY_MISSING"
+    ]
+   }
+  },
+  {
+   "id": "cuad-09",
+   "before": {
+    "type": "Commercialization and License Agreement",
+    "date": "2019-12-17",
+    "parties": [
+     "Vyera Pharmaceuticals, LLC",
+     "CytoDyn Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Commercialization and License Agreement",
+    "date": "2019-12-17",
+    "parties": [
+     "Vyera Pharmaceuticals, LLC",
+     "CytoDyn Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-10",
+   "before": {
+    "type": "Co-promotion Agreement",
+    "date": "2018-09-26",
+    "parties": [
+     "Dova Pharmaceuticals, Inc.",
+     "Valeant Pharmaceuticals North America LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Co-promotion Agreement",
+    "date": "2018-09-26",
+    "parties": [
+     "Dova Pharmaceuticals, Inc.",
+     "Valeant Pharmaceuticals North America LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-11",
+   "before": {
+    "type": "Co-branding Agreement",
+    "date": "2001-01-19",
+    "parties": [
+     "About.com, Inc.",
+     "ebix.com, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Co-branding Agreement",
+    "date": "2001-01-19",
+    "parties": [
+     "About.com, Inc.",
+     "ebix.com, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-12",
+   "before": {
+    "type": "Services Agreement",
+    "date": "2004-01-01",
+    "parties": [
+     "Federated Investment Management Company",
+     "Federated Advisory Services Company"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Services Agreement",
+    "date": "2004-01-01",
+    "parties": [
+     "Federated Investment Management Company",
+     "Federated Advisory Services Company"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-13",
+   "before": {
+    "type": "Corporate Sponsorship Agreement",
+    "date": "2018-03-22",
+    "parties": [
+     "Freeze Tag Inc.",
+     "American Diabetes Association, Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Corporate Sponsorship Agreement",
+    "date": "2018-03-22",
+    "parties": [
+     "Freeze Tag Inc.",
+     "American Diabetes Association, Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-14",
+   "before": {
+    "type": "Transportation Contract",
+    "date": "2012-01-30",
+    "parties": [
+     "ECOPETROL S.A."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "TYPE_UNSUPPORTED",
+     "TYPE_INFERRED",
+     "PARTY_MISSING"
+    ]
+   },
+   "after": {
+    "type": "Transportation Contract",
+    "date": "2012-01-30",
+    "parties": [
+     "ECOPETROL S.A."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "TYPE_UNSUPPORTED",
+     "TYPE_INFERRED",
+     "PARTY_MISSING"
+    ]
+   }
+  },
+  {
+   "id": "cuad-15",
+   "before": {
+    "type": "Amendment",
+    "date": "2007-02-19",
+    "parties": [
+     "Glu Mobile Inc.",
+     "Fox Mobile Entertainment, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Amendment",
+    "date": "2007-02-19",
+    "parties": [
+     "Glu Mobile Inc.",
+     "Fox Mobile Entertainment, Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "TYPE_MISSING"
+    ]
+   }
+  },
+  {
+   "id": "cuad-16",
+   "before": {
+    "type": "Endorsement Agreement",
+    "date": "2002-03-20",
+    "parties": [
+     "Holiday RV Superstores, Inc.",
+     "Affinity Group, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Endorsement Agreement",
+    "date": "2002-03-20",
+    "parties": [
+     "Holiday RV Superstores, Inc.",
+     "Affinity Group, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-17",
+   "before": {
+    "type": "Strategic Alliance Agreement",
+    "date": "2010-07-15",
+    "parties": [
+     "USA Managed Care Organization",
+     "USA MCO IMEDICOR, INC."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Strategic Alliance Agreement",
+    "date": "2010-07-15",
+    "parties": [
+     "USA Managed Care Organization",
+     "USA MCO IMEDICOR, INC."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-18",
+   "before": {
+    "type": "Agreement",
+    "date": "2008-10-01",
+    "parties": [
+     "IntriCon Corporation",
+     "Dynamic Hearing Pty Ltd"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "TYPE_MISSING"
+    ]
+   },
+   "after": {
+    "type": "Agreement",
+    "date": "2008-10-01",
+    "parties": [
+     "IntriCon Corporation",
+     "Dynamic Hearing Pty Ltd"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "TYPE_MISSING"
+    ]
+   }
+  },
+  {
+   "id": "cuad-19",
+   "before": {
+    "type": "Services Agreement",
+    "date": "2020-01-18",
+    "parties": [
+     "Integrity Short Term Government Fund",
+     "Integrity Funds Distributor, LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Services Agreement",
+    "date": "2020-01-18",
+    "parties": [
+     "Integrity Short Term Government Fund",
+     "Integrity Funds Distributor, LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-20",
+   "before": {
+    "type": "Master Services Agreement",
+    "date": "2020-02-05",
+    "parties": [
+     "Kubient Inc.",
+     "The Associated Press"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Master Services Agreement",
+    "date": "2020-02-05",
+    "parties": [
+     "Kubient Inc.",
+     "The Associated Press"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-21",
+   "before": {
+    "type": "Co-branding Agreement",
+    "date": "2000-03-15",
+    "parties": [],
+    "relation": "none",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Co-branding Agreement",
+    "date": "2000-03-15",
+    "parties": [],
+    "relation": "none",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED"
+    ]
+   }
+  },
+  {
+   "id": "cuad-22",
+   "before": {
+    "type": "Strategic Alliance Agreement",
+    "date": "2006-06-14",
+    "parties": [
+     "UTEK Corporation",
+     "Manakoa Services Corporation"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Strategic Alliance Agreement",
+    "date": "2006-06-14",
+    "parties": [
+     "UTEK Corporation",
+     "Manakoa Services Corporation"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-24",
+   "before": {
+    "type": "Trademark License Agreement",
+    "date": null,
+    "parties": [
+     "Morgan Stanley Investment Management Inc.",
+     "Morgan Stanley Direct Lending Fund"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Trademark License Agreement",
+    "date": null,
+    "parties": [
+     "Morgan Stanley Investment Management Inc.",
+     "Morgan Stanley Direct Lending Fund"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-25",
+   "before": {
+    "type": "Distributor Agreement",
+    "date": "1996-03-01",
+    "parties": [
+     "Ingram Micro",
+     "NETGEAR"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Distributor Agreement",
+    "date": "1996-03-01",
+    "parties": [
+     "Ingram Micro",
+     "NETGEAR"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-26",
+   "before": {
+    "type": "Trademark License Agreement",
+    "date": null,
+    "parties": [
+     "New Mountain Capital, L.L.C.",
+     "NMF Senior Loan Fund I, Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Trademark License Agreement",
+    "date": null,
+    "parties": [
+     "New Mountain Capital, L.L.C.",
+     "NMF Senior Loan Fund I, Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-27",
+   "before": {
+    "type": "Strategic Alliance Agreement",
+    "date": "2005-09-09",
+    "parties": [
+     "UTEK Corporation",
+     "World Energy Solutions"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Strategic Alliance Agreement",
+    "date": "2005-09-09",
+    "parties": [
+     "UTEK Corporation",
+     "World Energy Solutions"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-28",
+   "before": {
+    "type": "Completion and Liquidity Maintenance Agreement",
+    "date": "2006-06-29",
+    "parties": [
+     "Guaranty Bank, FSB",
+     "Prime Offshore L.L.C."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Completion and Liquidity Maintenance Agreement",
+    "date": "2006-06-29",
+    "parties": [
+     "Guaranty Bank, FSB",
+     "Prime Offshore L.L.C."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-29",
+   "before": {
+    "type": "Statement of Work",
+    "date": "2020-02-11",
+    "parties": [
+     "Pelican Delivers, Inc."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "DATE_AMBIGUOUS",
+     "PARTY_UNSUPPORTED",
+     "PARTY_MISSING",
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Statement of Work",
+    "date": "2020-02-11",
+    "parties": [
+     "Pelican Delivers, Inc."
+    ],
+    "relation": "with",
+    "ready": false,
+    "reasons": [
+     "DATE_AMBIGUOUS",
+     "PARTY_UNSUPPORTED",
+     "PARTY_MISSING",
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-30",
+   "before": {
+    "type": "Distributor Agreement",
+    "date": "2020-03-19",
+    "parties": [
+     "Co-Diagnostics, Inc.",
+     "PreCheck Health Services, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Distributor Agreement",
+    "date": "2020-03-19",
+    "parties": [
+     "Co-Diagnostics, Inc.",
+     "PreCheck Health Services, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-31",
+   "before": {
+    "type": "Sponsorship Agreement",
+    "date": "2008-03-28",
+    "parties": [
+     "Rubio's Fresh Mexican Grill",
+     "San Diego Ballpark Funding LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Sponsorship Agreement",
+    "date": "2008-03-28",
+    "parties": [
+     "Rubio's Fresh Mexican Grill",
+     "San Diego Ballpark Funding LLC"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-32",
+   "before": {
+    "type": "Distribution and Development Agreement",
+    "date": "2016-05-01",
+    "parties": [
+     "Sekisui Diagnostics, LLC",
+     "Qualigen, Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "PARSER_WARNING"
+    ]
+   },
+   "after": {
+    "type": "Distribution and Development Agreement",
+    "date": "2016-05-01",
+    "parties": [
+     "Sekisui Diagnostics, LLC",
+     "Qualigen, Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "PARSER_WARNING"
+    ]
+   }
+  },
+  {
+   "id": "cuad-33",
+   "before": {
+    "type": "Services Agreement",
+    "date": "2019-08-19",
+    "parties": [
+     "StartEngine Crowdfunding, Inc.",
+     "Solutions Vending International, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Services Agreement",
+    "date": "2019-08-19",
+    "parties": [
+     "StartEngine Crowdfunding, Inc.",
+     "Solutions Vending International, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-34",
+   "before": {
+    "type": "Strategic Alliance Agreement",
+    "date": "2015-08-26",
+    "parties": [
+     "R-TECH UENO, LTD.",
+     "Sucampo Pharmaceuticals, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Strategic Alliance Agreement",
+    "date": "2015-08-26",
+    "parties": [
+     "R-TECH UENO, LTD.",
+     "Sucampo Pharmaceuticals, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-35",
+   "before": {
+    "type": "Exclusive Distributor Agreement",
+    "date": "2017-05-17",
+    "parties": [
+     "SMART RX SYSTEMS, INC.",
+     "A3 DEVELOPMENT GROUP, LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Exclusive Distributor Agreement",
+    "date": "2017-05-17",
+    "parties": [
+     "SMART RX SYSTEMS, INC.",
+     "A3 DEVELOPMENT GROUP, LLC"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-36",
+   "before": {
+    "type": "Endorsement Agreement",
+    "date": "1996-01-01",
+    "parties": [
+     "Teardrop Putter Corporation",
+     "Consolidated Artists Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Endorsement Agreement",
+    "date": "1996-01-01",
+    "parties": [
+     "Teardrop Putter Corporation",
+     "Consolidated Artists Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-37",
+   "before": {
+    "type": "Transportation Service Agreement",
+    "date": "2016-11-01",
+    "parties": [
+     "Great Lakes Gas Transmission Limited Partnership",
+     "ANR PIPELINE COMPANY"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Transportation Service Agreement",
+    "date": "2016-11-01",
+    "parties": [
+     "Great Lakes Gas Transmission Limited Partnership",
+     "ANR PIPELINE COMPANY"
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-38",
+   "before": {
+    "type": "Manufacturing and Supply Agreement",
+    "date": null,
+    "parties": [
+     "Pfizer Inc.",
+     "Upjohn Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   },
+   "after": {
+    "type": "Manufacturing and Supply Agreement",
+    "date": null,
+    "parties": [
+     "Pfizer Inc.",
+     "Upjohn Inc."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "DATE_UNSUPPORTED"
+    ]
+   }
+  },
+  {
+   "id": "cuad-39",
+   "before": {
+    "type": "Joint Filing Statement",
+    "date": "2020-04-08",
+    "parties": [
+     "SCULPTOR CAPITAL LP"
+    ],
+    "relation": "for",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Joint Filing Statement",
+    "date": "2020-04-08",
+    "parties": [
+     "SCULPTOR CAPITAL LP",
+     "SCULPTOR MANAGEMENT, INC."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-40",
+   "before": {
+    "type": "Development Agreement",
+    "date": "2004-07-01",
+    "parties": [
+     "Squibb & Sons Inc.)",
+     "Product Supply"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Development Agreement",
+    "date": "2004-07-01",
+    "parties": [
+     "Squibb & Sons Inc.)",
+     "Product Supply"
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  },
+  {
+   "id": "cuad-41",
+   "before": {
+    "type": "Exclusive Distributor Agreement",
+    "date": "2019-11-12",
+    "parties": [
+     "Water Now",
+     "Hydraspin USA, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   },
+   "after": {
+    "type": "Exclusive Distributor Agreement",
+    "date": "2019-11-12",
+    "parties": [
+     "Water Now",
+     "Hydraspin USA, Inc."
+    ],
+    "relation": "between",
+    "ready": true,
+    "reasons": []
+   }
+  },
+  {
+   "id": "cuad-42",
+   "before": {
+    "type": "Distributorship Agreement",
+    "date": "2019-03-18",
+    "parties": [
+     "Zogenix Inc.",
+     "Nippon Shinyaku Company Ltd."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   },
+   "after": {
+    "type": "Distributorship Agreement",
+    "date": "2019-03-18",
+    "parties": [
+     "Zogenix Inc.",
+     "Nippon Shinyaku Company Ltd."
+    ],
+    "relation": "between",
+    "ready": false,
+    "reasons": [
+     "LOW_CONFIDENCE"
+    ]
+   }
+  }
+ ]
+}
