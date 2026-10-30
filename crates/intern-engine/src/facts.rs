@@ -1691,60 +1691,69 @@ fn read_type_words<'a>(
     TypeReading::Unsupported
 }
 
-/// The date an email's header block says it was sent ("Date:" or "Sent:"),
-/// and that line: `None` without a header block ([`email_header`]) or
-/// without exactly one date on the line.
+/// The date an email's header block ([`email_header_block`]) says it was
+/// sent ("Date:" or "Sent:"), and that line: `None` without a header block,
+/// or without exactly one date on the line.
 fn email_sent_date(scope: &ValidationScope<'_>) -> Option<(String, String)> {
-    let (unit, _) = email_header(scope)?;
-    let first_page = unit.page;
-    scope
-        .context_units()
-        .filter(|unit| unit.page == first_page && !unit.running)
-        .flat_map(|unit| unit.text.lines().map(str::trim))
-        .filter(|line| !line.is_empty())
-        .take(8)
-        .find_map(|line| {
+    email_header_block(scope)?
+        .into_iter()
+        .find_map(|(_, line)| {
             let (label, value) = line.split_once(':')?;
             if !matches!(label.trim().to_lowercase().as_str(), "date" | "sent") {
                 return None;
             }
             match extract_stated_dates(value).as_slice() {
-                [date] => Some((date.clone(), line.to_owned())),
+                [date] => Some((date.clone(), line.clone())),
                 _ => None,
             }
         })
 }
 
-/// The fields an email's header block holds besides its sender.
-const EMAIL_FIELDS: &[&str] = &["to", "cc", "date", "sent", "subject"];
+/// The fields an email's header block holds.
+const EMAIL_FIELDS: &[&str] = &[
+    "from",
+    "to",
+    "cc",
+    "bcc",
+    "date",
+    "sent",
+    "subject",
+    "reply-to",
+    "importance",
+];
 
-/// The "From:" line an email's header block opens its first page with, and
-/// its unit: a "From:" among the page's first three lines, and two more of
-/// its fields ([`EMAIL_FIELDS`]) among its first eight. A message quoted
-/// further down - a reply's "From: ... Sent: ..." - is no header of this
-/// document's.
-fn email_header<'a>(scope: &ValidationScope<'a>) -> Option<(&'a EvidenceUnit, String)> {
+/// An email's header block: the run of header fields its first page opens
+/// with, each line with its unit, when it holds "From:" and two more
+/// ([`EMAIL_FIELDS`]). A reply that opens with its own words has none,
+/// though a message it quotes further down starts "From: ... Sent: ...".
+fn email_header_block<'a>(scope: &ValidationScope<'a>) -> Option<Vec<(&'a EvidenceUnit, String)>> {
     let first_page = scope.context_units().map(|unit| unit.page).min()?;
-    let lines = scope
+    let field = |line: &str| {
+        let (label, _) = line.split_once(':')?;
+        let label = label.trim().to_lowercase();
+        EMAIL_FIELDS.contains(&label.as_str()).then_some(label)
+    };
+    let block = scope
         .context_units()
         .filter(|unit| unit.page == first_page && !unit.running)
         .flat_map(|unit| unit.text.lines().map(move |line| (unit, line.trim())))
         .filter(|(_, line)| !line.is_empty())
-        .take(8)
+        .take_while(|(_, line)| field(line).is_some())
+        .map(|(unit, line)| (unit, line.to_owned()))
         .collect::<Vec<_>>();
-    let field = |line: &str| {
-        let (label, _) = line.split_once(':')?;
-        Some(label.trim().to_lowercase())
-    };
-    let (unit, from) = lines
+    let from = block
         .iter()
-        .take(3)
-        .find(|(_, line)| field(line).as_deref() == Some("from"))?;
-    let others = lines
-        .iter()
-        .filter(|(_, line)| field(line).is_some_and(|label| EMAIL_FIELDS.contains(&label.as_str())))
-        .count();
-    (others >= 2).then(|| (*unit, (*from).to_owned()))
+        .any(|(_, line)| field(line).as_deref() == Some("from"));
+    (from && block.len() >= 3).then_some(block)
+}
+
+/// The "From:" line of an email's header block ([`email_header_block`]),
+/// and its unit.
+fn email_header<'a>(scope: &ValidationScope<'a>) -> Option<(&'a EvidenceUnit, String)> {
+    email_header_block(scope)?.into_iter().find(|(_, line)| {
+        line.split_once(':')
+            .is_some_and(|(label, _)| label.trim().eq_ignore_ascii_case("from"))
+    })
 }
 
 /// The context's title units: the units at the head of its first page and
@@ -7985,6 +7994,21 @@ Saul,\n\nApproved. Please issue the purchase order today.\n\nSigne";
             type_evidence: vec![id_of(index, "From: Signe")],
             document_date: Some("2026-03-20".into()),
             date_evidence: vec![id_of(index, "I need your approval")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-03-17")
+        );
+
+        // A short reply quoting a message is dated as itself, never by the
+        // quoted message's header.
+        const SHORT_REPLY: &str = "Approved on March 17, 2026.\n\n\
+From: Saul Ravenscroft\nSent: Monday, March 9, 2026\nTo: Signe Holmqvist\nSubject: Renewal";
+        let (outcome, _) = facts_for(SHORT_REPLY, |index| ModelFacts {
+            document_type: Some("Approval".into()),
+            document_date: Some("2026-03-17".into()),
+            date_evidence: vec![id_of(index, "Approved on")],
             ..ModelFacts::default()
         });
         assert_eq!(
