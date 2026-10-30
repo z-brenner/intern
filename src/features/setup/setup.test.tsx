@@ -93,7 +93,11 @@ describe('setup and queue controls', () => {
       selection={setupSelection(async () => undefined)}
     />);
 
-    expect(await screen.findByText(/Download the quick model, Bonsai 2 2B \(493 MiB\), to start naming documents/i)).toBeVisible();
+    // The size leads, in plain words; which models, by name, is a detail.
+    expect(await screen.findByText(/It needs a one-time download of 493 MiB first/i)).toBeVisible();
+    expect(screen.getByRole('list', { name: 'Model setup steps' })).toHaveTextContent('Download the model (493 MiB)');
+    fireEvent.click(screen.getByText('What gets downloaded'));
+    expect(screen.getByText(/The quick model, Bonsai 2 2B \(493 MiB\), to start naming documents/i)).toBeVisible();
     expect(screen.getByText(/Qwen3\.5 2B \(1\.19 GiB\), the accurate model, then follows in the background while you work\. Until it arrives, every name waits for you to check it\./i)).toBeVisible();
     expect(screen.queryByText(/3\.27 GB/i)).not.toBeInTheDocument();
   });

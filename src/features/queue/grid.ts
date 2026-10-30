@@ -1,5 +1,5 @@
 import { keptOriginal } from '../review/actions';
-import { confidence } from '../../lib/format';
+import { checkText } from './check';
 import type { QueueItem } from '../../types';
 
 /**
@@ -11,7 +11,7 @@ import type { QueueItem } from '../../types';
  * tested on its own, quoting edge cases and all.
  */
 
-export type ColumnKey = 'original' | 'status' | 'proposed' | 'description' | 'confidence';
+export type ColumnKey = 'original' | 'status' | 'proposed' | 'description' | 'check';
 
 export interface GridColumn {
   key: ColumnKey;
@@ -30,7 +30,7 @@ export const COLUMNS: readonly GridColumn[] = [
   { key: 'status', label: 'Status', copyable: false },
   { key: 'proposed', label: 'Proposed filename', copyable: true },
   { key: 'description', label: 'Description', copyable: true },
-  { key: 'confidence', label: 'Confidence', copyable: true },
+  { key: 'check', label: 'Check', copyable: true },
 ];
 
 export const COPYABLE_COLUMNS = COLUMNS.filter((column) => column.copyable);
@@ -83,8 +83,8 @@ export function selectAll(rows: readonly QueueItem[]): GridSelection | undefined
  * decoration: no em dash for "nothing yet", no icon. A filed row gives the
  * name it was filed under, which can differ from the proposal by a " (2)"; a
  * row that kept its own name gives that name, which is what the file is now
- * called, rather than the words "Kept original". Confidence is the same
- * rounded percentage the meter prints.
+ * called, rather than the words "Kept original". Check is the same few words
+ * the cell shows.
  */
 export function cellText(item: QueueItem, column: ColumnKey): string {
   switch (column) {
@@ -96,7 +96,7 @@ export function cellText(item: QueueItem, column: ColumnKey): string {
       if (keptOriginal(item)) return item.originalFilename;
       return item.filedName ?? item.proposedFilename ?? '';
     case 'description': return item.status === 'waiting' ? '' : item.description ?? '';
-    case 'confidence': return item.status === 'waiting' || item.confidence === undefined ? '' : confidence(item.confidence);
+    case 'check': return checkText(item);
   }
 }
 
@@ -159,13 +159,12 @@ const FORMULA_START = /^[=+\-@\t\r]/;
  * Excel and Google Sheets both take as "this is text" and do not show. Plain
  * text is what a paste without formatting uses (Keep Text Only,
  * Ctrl+Shift+V), and there the HTML's own protections below do not apply.
- * Confidence is a percentage Intern writes itself and is left as it is.
  */
 export function toTsv(block: CopiedBlock): string {
   const quoted = (value: string) => /[\t\r\n"]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-  const field = (value: string, column: GridColumn | undefined) => quoted(column?.key !== 'confidence' && FORMULA_START.test(value) ? `'${value}` : value);
+  const field = (value: string) => quoted(FORMULA_START.test(value) ? `'${value}` : value);
   const lines = block.header ? [block.columns.map((column) => column.label), ...block.rows] : block.rows;
-  return lines.map((line) => line.map((value, index) => field(value, block.columns[index])).join('\t')).join('\r\n');
+  return lines.map((line) => line.map(field).join('\t')).join('\r\n');
 }
 
 const escapeHtml = (value: string) => value
@@ -192,17 +191,14 @@ const keepSpaces = (line: string) => line.replace(/^ +| {2,}| +$/g, (run) => `<s
  * `mso-number-format:'\@'`, and Google Sheets reads `data-sheets-value` (type
  * 2, a string, holding the exact value). Without them a description starting
  * with "=" would paste as a formula and run, and a filename such as "0012"
- * would become the number 12. Confidence is left alone, so "87%" pastes as a
- * percentage a person can sort. A line break inside a cell is a <br> Excel is
+ * would become the number 12. A line break inside a cell is a <br> Excel is
  * told to keep in the same cell; a bare one starts a new row.
  */
 export function toHtml(block: CopiedBlock): string {
-  const asText = (column: GridColumn, value: string) => column.key === 'confidence'
-    ? ''
-    : ` style="mso-number-format:'\\@'" data-sheets-value="${escapeHtml(JSON.stringify({ 1: 2, 2: value }))}"`;
+  const asText = (value: string) => ` style="mso-number-format:'\\@'" data-sheets-value="${escapeHtml(JSON.stringify({ 1: 2, 2: value }))}"`;
   const content = (value: string) => value.split(/\r\n|\r|\n/).map((line) => keepSpaces(escapeHtml(line))).join('<br style="mso-data-placement:same-cell">');
   const head = block.header ? `<thead><tr>${block.columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join('')}</tr></thead>` : '';
-  const body = block.rows.map((row) => `<tr>${row.map((value, index) => `<td${asText(block.columns[index], value)}>${content(value)}</td>`).join('')}</tr>`).join('');
+  const body = block.rows.map((row) => `<tr>${row.map((value) => `<td${asText(value)}>${content(value)}</td>`).join('')}</tr>`).join('');
   return `<meta charset="utf-8"><table>${head}<tbody>${body}</tbody></table>`;
 }
 

@@ -6,7 +6,8 @@ import type { CellRef, ColumnKey } from '../features/queue/grid';
 import { selectionOf } from '../features/queue/gridStore';
 import type { GridState, GridStore } from '../features/queue/gridStore';
 import type { QueueItem } from '../types';
-import { ConfidenceMeter } from './ConfidenceMeter';
+import { checkCell, itemFlaggedFields } from '../features/queue/check';
+import { FlaggedName } from './FlaggedName';
 import { FileKindIcon } from './FileKindIcon';
 import { StatusCell } from './StatusCell';
 
@@ -255,7 +256,6 @@ const QueueRow = memo(function QueueRow({ item, statusId, current, left, right, 
       const selected = inRange && column.copyable;
       const className = [
         `col-${column.key}`,
-        column.key === 'confidence' ? `confidence ${item.status}` : '',
         selected ? 'cell-selected' : '',
         marked === column.key ? 'cell-active' : '',
         inRange && top ? 'edge-top' : '',
@@ -271,7 +271,7 @@ const QueueRow = memo(function QueueRow({ item, statusId, current, left, right, 
         aria-describedby={column.key === 'original' ? statusId : undefined}
         tabIndex={column.copyable ? (tabColumn === column.key ? 0 : -1) : undefined}
         aria-selected={column.copyable ? selected : undefined}
-        title={column.key === 'description' && item.status !== 'waiting' ? item.description : undefined}
+        title={column.key === 'description' && item.status !== 'waiting' ? item.description : column.key === 'check' ? checkCell(item)?.title : undefined}
         onMouseDown={(event) => handlers.mouseDown(event, item, column.key)}
         onMouseEnter={(event) => handlers.mouseEnter(event, item, column.key)}>
         {cellContent(item, column.key)}
@@ -295,7 +295,7 @@ function cellContent(item: QueueItem, column: ColumnKey) {
     // own so it copies into a column of its own; a long one is cut to a few
     // lines here, with the whole sentence on hover and in the Details panel.
     case 'description': return item.status === 'waiting' || !item.description ? '—' : <span className="row-description">{item.description}</span>;
-    case 'confidence': return item.status === 'waiting' ? '—' : <ConfidenceMeter value={item.confidence} status={item.status} />;
+    case 'check': return checkContent(item);
   }
 }
 
@@ -305,7 +305,14 @@ function cellContent(item: QueueItem, column: ColumnKey) {
  * kept its name, not a proposal that was never applied.
  */
 function nameCell(item: QueueItem) {
-  if (item.status !== 'completed') return item.proposedFilename ?? '—';
+  if (item.status !== 'completed') return item.proposedFilename ? <FlaggedName name={item.proposedFilename} flagged={itemFlaggedFields(item)} /> : '—';
   if (keptOriginal(item)) return <span className="kept-original">Kept original</span>;
   return item.filedName ?? item.proposedFilename ?? '—';
+}
+
+/** What to check, in a few words, toned as the status is; an em dash before there is anything to say. */
+function checkContent(item: QueueItem) {
+  const cell = checkCell(item);
+  if (!cell) return '—';
+  return <span className={`check-label ${cell.tone}`}>{cell.text}{cell.more > 0 && <small> +{cell.more} more</small>}</span>;
 }

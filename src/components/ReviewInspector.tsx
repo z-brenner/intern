@@ -1,4 +1,4 @@
-import { Ban, CalendarPlus, ChevronRight, ClipboardCopy, Ellipsis, ExternalLink, FileCheck2, FileText, FolderOpen, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
+import { Ban, CalendarPlus, CircleAlert, ChevronRight, ClipboardCopy, Ellipsis, ExternalLink, FileCheck2, FileText, FolderOpen, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
 import { useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent, Ref } from 'react';
 import { ConfidenceMeter } from './ConfidenceMeter';
@@ -6,6 +6,8 @@ import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
 import { StatusCell } from './StatusCell';
 import { isUnreadable, itemActions, keptOriginal, withoutReviewPrefix } from '../features/review/actions';
+import { itemFlaggedFields, nameParts } from '../features/queue/check';
+import type { ReasonField } from '../lib/reasons';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
 import type { ModelReading, QueueItem } from '../types';
@@ -208,11 +210,25 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // the document that supports it. A bare definition list read as metadata
   // about the file; attributing a quotation to the part of the name it
   // justifies is what makes it evidence a person can check.
+  const flagged = itemFlaggedFields(item);
   const evidence = [
-    { label: 'Date', quotes: quotations(item.evidence?.date) },
-    { label: 'Type', quotes: quotations(item.evidence?.type) },
-    { label: 'Parties', quotes: quotations(item.evidence?.parties) },
+    { label: 'Date', field: 'date' as const, quotes: quotations(item.evidence?.date) },
+    { label: 'Type', field: 'type' as const, quotes: quotations(item.evidence?.type) },
+    { label: 'Parties', field: 'parties' as const, quotes: quotations(item.evidence?.parties) },
   ].filter((entry) => entry.quotes.length > 0);
+  /*
+    Whether the evidence is the document's own lines. A local reading's is:
+    the engine looks up the lines the model cited and shows those, never the
+    model's words. A hosted model's, and a reading stored before Intern
+    recorded which model made it, is the model's own wording of the line,
+    which small models paraphrase. Shown in quotation marks, a paraphrase
+    reads as something the document says - to a lawyer above all - so only
+    the document's own lines get them.
+  */
+  const verbatim = item.readBy !== undefined;
+  // The parts of the name being edited that the review is about, as they now read.
+  const nameFlags = editable ? flaggedNameParts(joinFilename(stem, extension), flagged) : [];
+  const reviewNote = item.reason && (item.status === 'review' || item.status === 'failed');
   return <aside ref={inspectorRef} id={id} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown}>
     {/* A filed document's name is no longer its "current" one; it said so anyway (FRONTEND_UX-8). */}
     {/* Focusable so selecting a row can bring a keyboard user here, past the rest of the queue. */}
@@ -221,6 +237,21 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       <span>{position.index ? `${position.index} of ${position.total} to decide` : `${position.total} to decide`}</span>
       {onNext && <button type="button" className="link-button" onClick={onNext}>Next undecided<Icon icon={ChevronRight} /></button>}
     </div>}
+    {/*
+      What to check comes first. It used to be the last thing in the panel,
+      under the name, the description and the evidence, so for the documents
+      that most needed it the reason was below the fold.
+    */}
+    {reviewNote && <section className={`check-first${item.status === 'failed' ? ' failed' : ''}`}>
+      <h3><Icon icon={CircleAlert} />{item.status === 'failed' ? 'Failure details' : 'What to check'}</h3>
+      <p>{item.reason}</p>
+      {/*
+        The sentence says "a document that was filed already"; this says
+        which one, so the person can open it and compare rather than take
+        Intern's word for it.
+      */}
+      {item.nearDuplicateOf && <p className="near-duplicate" aria-label="Filed already as">Filed already as <q>{item.nearDuplicateOf}</q>.</p>}
+    </section>}
     <div className="source-file">
       <p className="field-label">{completed ? 'Original name' : 'Current name'}</p>
       <p className="selected-file"><FileKindIcon filename={item.originalFilename} />{item.originalFilename}</p>
@@ -252,6 +283,9 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       {extension !== undefined && <span className="sr-only" id={`${fieldId}-extension`}>The name ends in .{extension}, which cannot change.</span>}
       {error && <p className="form-error" role="alert" id={`${fieldId}-error`}>{error}</p>}
       {!error && stem.trim() && !dated && !suggestedDate && <p className="check-hint date-hint">{DATE_REQUIRED_MESSAGE}</p>}
+      {!error && nameFlags.length > 0 && <p className="flag-line" role="note" aria-label="Part of the name to check">
+        Check the {listOf(nameFlags.map(({ field }) => FIELD_WORDS[field]))}: {nameFlags.map(({ text }, index) => <span key={index}>{index > 0 ? ', ' : ''}<mark className="flagged">{text.trim()}</mark></span>)}
+      </p>}
       {/*
         A name that differs from the evidence under it looks like a mistake
         unless the reason is on screen: the reviewer's own spelling, learned
@@ -290,7 +324,12 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
           <button type="button" className="primary" disabled={busy} onClick={decides(acceptSuggestedDate)}>Use date &amp; rename</button>
         </div>
       </div>}
-      {item.confidence !== undefined && <p className={`confidence-readout confidence ${item.status}`}><span className="field-label">Confidence</span><ConfidenceMeter value={item.confidence} status={item.status} variant="panel" /></p>}
+      {/*
+        The model's figure for its own reading. It no longer has a column:
+        a small model overstates it, and what decides review is the checks
+        above. Kept here for anyone who wants it.
+      */}
+      {item.confidence !== undefined && <p className={`confidence-readout confidence ${item.status}`}><span className="field-label">Model's confidence</span><ConfidenceMeter value={item.confidence} status={item.status} variant="panel" /></p>}
       {/*
         Which local model read it, in a quiet line: worth knowing when two
         models can, and the reason a reading may change by itself - one the
@@ -299,6 +338,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       */}
       {item.readBy && <p className="check-hint read-by" aria-label="Read by">{readByLine(item.readBy, !item.approved)}</p>}
       <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+      {flagged.includes('description') && <p className="flag-line" role="note" aria-label="Part of the name to check">Check the description against the document.</p>}
     </section>}
     {/*
       A renamed file becomes `completed`, which made `editable` false and took
@@ -310,14 +350,19 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     {!editable && item.description && <section><h3>Description</h3><p className="settled-description">{item.description}</p>
       <button type="button" className="copy-description" onClick={() => void navigator.clipboard?.writeText(item.description ?? '')}><Icon icon={ClipboardCopy} />Copy description</button></section>}
     {evidence.length > 0 && <section className="evidence"><h3>Evidence</h3>
-      <p className="section-lead">Text found in the document that supports this name.</p>
-      <dl className="evidence-list">{evidence.map(({ label, quotes }) => <div className="evidence-item" key={label}>
-        <dt className="field-label">{label}</dt>
-        <dd>{quotes.map((quote) => <q key={quote}>{quote}</q>)}</dd>
-      </div>)}</dl></section>}
+      <p className="section-lead">{verbatim
+        ? 'Lines from the document behind each part of this name.'
+        : 'The model\'s reading of the document, in its own words. These are not lines matched in the document, so check them against it.'}</p>
+      <dl className="evidence-list">{evidence.map(({ label, field, quotes }) => {
+        const doubted = flagged.includes(field);
+        return <div className={`evidence-item${doubted ? ' flagged' : ''}`} key={label}>
+          <dt className="field-label">{doubted && <Icon icon={CircleAlert} />}{label}{doubted && <span className="sr-only"> (check this)</span>}</dt>
+          <dd>{quotes.map((quote) => verbatim ? <q key={quote}>{quote}</q> : <span className="reading" key={quote}>{quote}</span>)}</dd>
+        </div>;
+      })}</dl></section>}
     {/* Settled, a reason is no longer why the item waits - "already had this name" is a note about what happened. */}
     {/* A waiting document is not in review: its reason says why it waits (a document in doubt, to be read again once Intern has shown it can read). */}
-    {item.reason && <section className={`note${item.status === 'failed' ? ' note--failed' : completed || item.status === 'waiting' ? '' : ' note--review'}`}><h3>{item.status === 'failed' ? 'Failure details' : completed ? 'Note' : item.status === 'waiting' ? 'Why it is waiting' : 'Reason for review'}</h3><p>{item.reason}</p>
+    {item.reason && !reviewNote && <section className="note"><h3>{completed ? 'Note' : item.status === 'waiting' ? 'Why it is waiting' : 'Note'}</h3><p>{item.reason}</p>
       {/*
         The sentence says "a document that was filed already"; this says
         which one, so the person can open it and compare rather than take
@@ -365,4 +410,16 @@ export function readByLine(reading: ModelReading, pending: boolean): string {
   if (reading.escalated) return `${read}, after a second look.`;
   if (reading.provisional && pending) return `${read}. Provisional — will be re-read by the accurate model.`;
   return read;
+}
+
+const FIELD_WORDS: Record<ReasonField, string> = { date: 'date', type: 'document type', parties: 'parties', description: 'description' };
+
+/** "date", "date and parties", "date, document type and parties". */
+function listOf(words: string[]): string {
+  return words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
+}
+
+/** The flagged parts of a name, one per field, in the order the name reads. */
+function flaggedNameParts(name: string, flagged: readonly ReasonField[]): Array<{ field: ReasonField; text: string }> {
+  return nameParts(name, flagged).flatMap((part) => part.flagged && part.field && part.text.trim() ? [{ field: part.field, text: part.text }] : []);
 }

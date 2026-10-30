@@ -255,7 +255,11 @@ describe('TauriBridge', () => {
 
     expect(items[0]).not.toHaveProperty('errorCode');
     expect(items[0].reason).toBe('The model reported low confidence in its own proposal.');
+    // The codes the sentence came from say which part of the name is in doubt.
+    expect(items[0].reasonCodes).toEqual(['LOW_CONFIDENCE']);
     expect(items[1]).toMatchObject({ errorCode: 'DUPLICATE', reason: 'Duplicate of 2024 Filed.pdf' });
+    // Free text names no code.
+    expect(items[1]).not.toHaveProperty('reasonCodes');
     expect(items[2]).toMatchObject({ filedName: '2024-03-01 Lease (2).pdf', filedPath: 'C:\\Filed\\2024-03-01 Lease (2).pdf', keptOriginal: false, parked: false });
     expect(items[3]).toMatchObject({ keptOriginal: true });
     expect(items[3]).not.toHaveProperty('filedName');

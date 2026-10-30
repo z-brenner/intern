@@ -59,7 +59,7 @@ describe('a document that repeats a filed one', () => {
     render(<App bridge={createInMemoryBridge({ items: [rescan] })} />);
     await selectRow(await screen.findByRole('row', { name: /Scan 0051.pdf/i }));
 
-    const reason = screen.getByRole('heading', { name: 'Reason for review' }).closest('section')!;
+    const reason = screen.getByRole('heading', { name: 'What to check' }).closest('section')!;
     expect(reason).toHaveTextContent('This looks like a document that was filed already. Approve to file it as well, keep the original, or remove it.');
     expect(within(reason).getByLabelText('Filed already as')).toHaveTextContent('2024-04-12 Employment Agreement between John Smith and Acme Corporation.pdf (filed from Front desk)');
     // The usual choices stay: it is a person's call, not Intern's.

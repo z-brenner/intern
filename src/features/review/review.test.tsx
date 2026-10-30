@@ -138,7 +138,7 @@ describe('review actions', () => {
     expect(feedback).not.toHaveTextContent('Re-analyze');
     fireEvent.click(within(feedback).getByRole('button', { name: 'Dismiss' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rename all ready' }));
     const batch = await screen.findByRole('alert', { name: 'Action error' });
     expect(batch).toHaveTextContent('could not be applied. The file changed after it was analyzed, so this name may no longer fit it. Use Analyze again');
     expect(batch).not.toHaveTextContent('Re-analyze');
@@ -398,7 +398,8 @@ describe('review actions', () => {
     expect(toggle).toHaveAttribute('aria-controls', initialDrawer.id);
     await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveFocus());
     expect(screen.getByRole('banner')).toHaveAttribute('inert');
-    expect(screen.getByRole('navigation', { name: 'Queue navigation' })).toHaveAttribute('inert');
+    // The view switch is part of the queue the drawer makes inert.
+    expect(screen.getByRole('navigation', { name: 'Queue navigation' }).closest('[inert]')).not.toBeNull();
 
     const lastAction = screen.getByRole('button', { name: 'More review actions' });
     lastAction.focus();
@@ -439,7 +440,7 @@ describe('review actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pause queue' }));
 
     await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Review item' })).not.toBeInTheDocument());
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Apply all ready' })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Rename all ready' })).toHaveFocus());
   });
 
   it('saves the automatic high-confidence rename setting', async () => {

@@ -1,4 +1,4 @@
-import { ClipboardCopy, PanelRight } from 'lucide-react';
+import { CircleCheck, ClipboardCopy, Ellipsis, PanelRight, Trash2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { DropZone } from './components/DropZone';
@@ -10,7 +10,8 @@ import { QueueTable, findCell } from './components/QueueTable';
 import { ReviewInspector } from './components/ReviewInspector';
 import { SettingsDialog } from './components/SettingsDialog';
 import { SetupScreen } from './components/SetupScreen';
-import { Sidebar } from './components/Sidebar';
+import { QueueProgress } from './components/QueueProgress';
+import { ViewSwitch } from './components/ViewSwitch';
 import { Toast } from './components/Toast';
 import { ViewEmpty } from './components/ViewEmpty';
 import { GUIDE_URL } from './lib/bridge';
@@ -31,6 +32,8 @@ import { describeBlock, selectionBounds } from './features/queue/grid';
 import type { ColumnKey } from './features/queue/grid';
 import { createGridStore, selectionOf } from './features/queue/gridStore';
 import { useQueue } from './features/queue/useQueue';
+import { useBatchProgress } from './features/queue/batch';
+import { requestAttentionIfUnfocused, setTaskbarProgress } from './lib/windowSignals';
 import { isParked, itemActions, keptOriginal, nextUndecided, undecidedOrder } from './features/review/actions';
 import { useReviewShortcuts } from './features/review/useReviewShortcuts';
 import type { ReviewInspectorHandle } from './features/review/useReviewShortcuts';
@@ -124,6 +127,10 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const [focusRequest, setFocusRequest] = useState<{ id: string; target: 'row' | 'reveal' | 'filename' | 'heading' }>();
   const [view, setView] = useState<QueueView>('queue');
   const [filter, setFilter] = useState('');
+  // "Show only ready": the rows Rename all ready would rename, and no others.
+  const [readyOnly, setReadyOnly] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [lastUpdateCheck, setLastUpdateCheck] = useState<Date>();
   const [selectedId, setSelectedId] = useState<string>();
   // The Details panel opens and closes only by its own buttons - the
   // toolbar's Details toggle, its close button, and Enter or F2 on the
@@ -203,7 +210,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     const check = async () => {
       try {
         const status = await bridge.checkForUpdate();
-        if (active) setUpdateStatus(status);
+        if (active) { setUpdateStatus(status); setLastUpdateCheck(new Date()); }
       } catch {
         // A missed check says nothing about whether an update exists; the
         // manual button in Settings still works, and the next scheduled
@@ -227,7 +234,8 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // the current view by anything a person is likely to remember: the name the
   // file arrived with, the name it was given, or a word from its description.
   const query = filter.trim().toLowerCase();
-  const shown = (list: QueueItem[]) => list.filter((item) => inCurrentView(item) && (!query || matchesQuery(item, query)));
+  const readyFilter = readyOnly && view === 'queue';
+  const shown = (list: QueueItem[]) => list.filter((item) => inCurrentView(item) && (!query || matchesQuery(item, query)) && (!readyFilter || item.status === 'ready'));
   const visible = shown(items);
   const filterShown = filtered.length > FILTER_THRESHOLD || query.length > 0;
   const selected = items.find((item) => item.id === selectedId);
@@ -250,6 +258,23 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // or already renamed is deliberately out of reach of the discard action.
   const waitingItems = items.filter((item) => item.status === 'waiting');
   const queueStatus = queueStatusAnnouncement(items, paused);
+  // The run as a whole, for the strip above the table and the taskbar
+  // button; a run of several that ends with the window in the background
+  // flashes the taskbar, once.
+  const batch = useBatchProgress(items, () => { void requestAttentionIfUnfocused(); });
+  useEffect(() => {
+    void setTaskbarProgress(batch ? { status: paused ? 'paused' : 'normal', progress: batch.total ? (batch.done / batch.total) * 100 : 0 } : { status: 'none' });
+  }, [batch?.done, batch?.total, paused, Boolean(batch)]);
+  // Nothing left to show under "ready only" turns it off, rather than
+  // leaving an empty table behind a filter nobody can see is on.
+  useEffect(() => { if (readyOnly && !items.some((item) => item.status === 'ready')) setReadyOnly(false); }, [readyOnly, items]);
+  // The More menu closes on a click anywhere outside it, as a menu does.
+  useEffect(() => {
+    if (!moreOpen) return;
+    const close = (event: PointerEvent) => { if (!(event.target as Element | null)?.closest?.('.more-menu')) setMoreOpen(false); };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [moreOpen]);
   // A row's cell in the column focus rests in: where focus goes back to in the table.
   const rowCell = (id: string) => findCell(document, { id, column: activeColumn() });
   const rowTrigger = (id: string) => { const element = rowCell(id); return element ? { element, itemId: id } : null; };
@@ -690,6 +715,8 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     reviewTrigger.current = null;
     setSelectedId(targetId);
   };
+  const addFiles = () => { if (selection) void importSelection(async () => ({ files: await selection.pickFiles() })); };
+  const addFolder = () => { if (selection) void importSelection(async () => ({ folder: await selection.pickFolder() })); };
   // Tauri's own drag-drop is on, so on the desktop a dropped file never
   // reaches the drop zone's HTML5 handler: the paths arrive as a window event
   // instead. That path used to call the bridge straight from BrowserApp, with
@@ -790,8 +817,9 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       </div>
       {renameApplying && (!updateInstalling || updateProgress?.fraction === 1) && <p className="check-hint">Waiting for a rename to finish</p>}
     </div>}
-    <AppHeader inert={drawerOpen} busy={actionPending} paused={paused} hosted={settings.modelSource === 'hosted'} inputFolder={inputName} onAddFiles={() => { if (selection) void importSelection(async () => ({ files: await selection.pickFiles() })); }} onAddFolder={() => { if (selection) void importSelection(async () => ({ folder: await selection.pickFolder() })); }} onTogglePause={() => void (async () => { if (await runQueueAction(() => paused ? bridge.resumeQueue() : bridge.pauseQueue(), `Queue ${paused ? 'resumed' : 'paused'}.`)) setPaused(!paused); })()} />
-    <Sidebar inert={drawerOpen} active={view} items={items} onChange={(next) => { focusRestoreVersion.current += 1; reviewTrigger.current = null; setView(next); setSelectedId(undefined); clearCellSelection(); }} onSettings={openSettings} onHelp={() => void openGuide()} />
+    <AppHeader inert={drawerOpen} busy={actionPending} paused={paused} inputFolder={inputName}
+      privacy={{ hosted: settings.modelSource === 'hosted', hostedService: hostedService(settings), modelDownloaded: modelReady(model.setup), automaticUpdateChecks, lastUpdateCheck }}
+      onSettings={openSettings} onHelp={() => void openGuide()} onAddFiles={addFiles} onAddFolder={addFolder} onTogglePause={() => void (async () => { if (await runQueueAction(() => paused ? bridge.resumeQueue() : bridge.pauseQueue(), `Queue ${paused ? 'resumed' : 'paused'}.`)) setPaused(!paused); })()} />
     <div className="workspace"><section className="queue-panel" aria-label="Queue items" inert={drawerOpen || undefined}>
       {queueError && <div className="note note--failed" role="alert" aria-label="Queue connection error">
         <p>{queueError.kind === 'subscription' ? 'Live queue updates are unavailable.' : 'The queue could not be refreshed.'} {describeActionError(queueError.cause)} {items.length > 0 ? 'Showing the last loaded items.' : 'Queue contents may not be available yet.'}</p>
@@ -820,16 +848,31 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
         four column headings with nothing under them. The same drop target
         grows into the whole panel and says what to do with it.
       */}
-      <DropZone variant={items.length === 0 ? 'hero' : 'bar'} inputFolder={inputName} outputFolder={outputName} automaticRename={Boolean(settings.automaticRename)} verifiedInbox={verifiedInbox} onDrop={(payload) => { if (selection) void importSelection(() => selection.resolveDrop(payload)); }} />
-      {items.length > 0 && <div className="queue-toolbar">
-        {/*
-          What the Needs Review page used to collect, counted where the work
-          is. A click goes to the next one, in table order after the selected
-          row; it selects, like any click in the table, and opens nothing.
-        */}
-        {view === 'queue' && needReview.length > 0 && <button type="button" className="need-review" title="Go to the next document that needs review" onClick={goToNextReview}>
-          {needReview.length} {needReview.length === 1 ? 'needs' : 'need'} review
-        </button>}
+      {/*
+        An empty queue is the first thing a new user sees, and it used to be
+        four column headings with nothing under them. The same drop target
+        grows into the whole panel and says what to do with it. With work in
+        the queue the queue itself is the drop target.
+      */}
+      {items.length === 0 && <DropZone variant="hero" inputFolder={inputName} outputFolder={outputName} automaticRename={Boolean(settings.automaticRename)} verifiedInbox={verifiedInbox} onDrop={(payload) => { if (selection) void importSelection(() => selection.resolveDrop(payload)); }}
+        onChooseFiles={selection ? addFiles : undefined} onChooseFolder={selection ? addFolder : undefined} />}
+      {items.length > 0 && <DropZone variant="panel" inputFolder={inputName} onDrop={(payload) => { if (selection) void importSelection(() => selection.resolveDrop(payload)); }}>
+      <div className="queue-toolbar">
+        <ViewSwitch active={view} items={items} onChange={(next) => { focusRestoreVersion.current += 1; reviewTrigger.current = null; setView(next); setSelectedId(undefined); clearCellSelection(); setMoreOpen(false); }} />
+        <div className="toolbar-filters">
+          {/*
+            What the Needs Review page used to collect, counted where the work
+            is. A click goes to the next one, in table order after the selected
+            row; it selects, like any click in the table, and opens nothing.
+          */}
+          {view === 'queue' && needReview.length > 0 && <button type="button" className="need-review" title="Go to the next document that needs review" onClick={goToNextReview}>
+            {needReview.length} {needReview.length === 1 ? 'needs' : 'need'} review
+          </button>}
+          {/* Exactly the rows Rename all ready will rename, to look over first. */}
+          {view === 'queue' && readyItems.length > 0 && <button type="button" className="ready-filter" aria-pressed={readyFilter} title="Show only the documents Rename all ready will rename" onClick={() => { setReadyOnly(!readyOnly); clearCellSelection(); }}>
+            <Icon icon={CircleCheck} />{readyItems.length} ready
+          </button>}
+        </div>
         <div className="queue-actions">
           {/*
             Copies what Ctrl+C copies: the selected cells, or with none
@@ -846,16 +889,24 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
             history only touches finished items, and dropping a waiting item
             was one click each. Four hundred items meant four hundred clicks,
             so the count is shown here to make the scale of what is being
-            dropped explicit.
+            dropped explicit. It cannot be undone, so it sits behind More,
+            away from the primary button it used to stand beside.
           */}
-          {view === 'queue' && waitingItems.length > 0 && <button type="button" aria-label="Discard waiting items" disabled={actionPending} onClick={() => void (async () => { const dropped = waitingItems.length; await runQueueAction(() => bridge.discardWaiting(), `Discarded ${dropped} waiting ${dropped === 1 ? 'item' : 'items'}.`); })()}>Discard waiting <span>{waitingItems.length}</span></button>}
-          {view === 'queue' && readyItems.length > 0 && <button type="button" className="primary" aria-label="Apply all ready" disabled={actionPending} onClick={() => void applyAllReady()}>Apply all ready <span>{readyItems.length}</span></button>}
+          {view === 'queue' && waitingItems.length > 0 && <div className="more-menu" onKeyDown={(event) => { if (event.key === 'Escape' && moreOpen) { event.stopPropagation(); setMoreOpen(false); event.currentTarget.querySelector<HTMLButtonElement>('button')?.focus(); } }}>
+            <button type="button" className="icon-button" aria-label="More queue actions" aria-haspopup="menu" aria-expanded={moreOpen} title="More queue actions" onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>
+            {moreOpen && <div role="menu" aria-label="More queue actions">
+              <button type="button" role="menuitem" aria-label="Discard waiting items" disabled={actionPending} onClick={() => void (async () => { setMoreOpen(false); const dropped = waitingItems.length; await runQueueAction(() => bridge.discardWaiting(), `Discarded ${dropped} waiting ${dropped === 1 ? 'item' : 'items'}.`); })()}><Icon icon={Trash2} />Discard waiting <span>{waitingItems.length}</span></button>
+            </div>}
+          </div>}
+          {view === 'queue' && readyItems.length > 0 && <button type="button" className="primary" aria-label="Rename all ready" disabled={actionPending} onClick={() => void applyAllReady()}>Rename all ready <span>{readyItems.length}</span></button>}
           {view === 'completed' && filtered.length > 0 && <>
             <button type="button" disabled={actionPending} onClick={(event) => openHistory(event.currentTarget)}>History</button>
-            <button type="button" disabled={actionPending} onClick={() => void (async () => { if (await runQueueAction(() => bridge.clearHistory(), 'History cleared.')) queueMicrotask(() => document.querySelector<HTMLButtonElement>('.sidebar button[data-view="completed"]')?.focus()); })()}>Clear history</button>
+            <button type="button" disabled={actionPending} onClick={() => void (async () => { if (await runQueueAction(() => bridge.clearHistory(), 'History cleared.')) queueMicrotask(() => document.querySelector<HTMLButtonElement>('.view-switch button[data-view="completed"]')?.focus()); })()}>Clear history</button>
           </>}
         </div>
-      </div>}
+      </div>
+      {/* A stopped queue says why in its own note above; "Reading…" would contradict it. */}
+      {view === 'queue' && !pipelineError && <QueueProgress progress={batch} paused={paused} />}
       {filterShown && <div className="queue-filter" role="search">
         <input type="search" aria-label="Filter queue" placeholder="Filter by filename or description" value={filter} onChange={(event) => { setFilter(event.target.value); clearCellSelection(); }} onKeyDown={(event) => {
           // Escape clears the filter first; only an already-empty box lets the
@@ -868,7 +919,8 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
         : query
           ? <p className="queue-filter-empty" role="status">No items match “{filter.trim()}”.</p>
           : <ViewEmpty view={view} />)}
-      <p className="item-count">{query ? `${visible.length} of ${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}` : `${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}`}</p></section>
+      <p className="item-count">{query || readyFilter ? `${visible.length} of ${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}` : `${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}`}</p>
+      </DropZone>}</section>
       {/*
         At the foot of the queue, beside the panel rather than in it: the
         panel is inert under the narrow drawer, and an error in an inert
@@ -924,6 +976,12 @@ function useVerifiedInbox(bridge: DesktopBridge, managed: boolean, inputFolder: 
     return () => { active = false; };
   }, [bridge, managed, inputFolder]);
   return verified;
+}
+
+/** Who a hosted model's requests go to, as the privacy badge names it. */
+function hostedService(settings: AppSettings): string | undefined {
+  if (settings.hostedProvider === 'anthropic') return 'Anthropic';
+  try { return new URL(settings.hostedBaseUrl).host || undefined; } catch { return undefined; }
 }
 
 /** "Drop to copy 3 files into Input": a drop copies into the input folder, named when it is known. */

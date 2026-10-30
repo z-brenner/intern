@@ -19,7 +19,7 @@ import type {
   UpdateProgressListener,
   UpdateStatus,
 } from './bridge';
-import { humanizeReason } from './reasons';
+import { humanizeReason, reasonCodes } from './reasons';
 
 /**
  * The update found by the last check, held so that installing it cannot race a
@@ -621,6 +621,9 @@ function normalizeItem(item: QueueItemDto): QueueItem {
     // The sentence above is for people; the code is what decides which
     // actions the backend will accept, so it is kept as sent.
     ...(item.errorCode ? { errorCode: item.errorCode } : {}),
+    // And the codes the sentence was made from, which say which part of
+    // the name the review is about.
+    ...(reasonCodes(item.reason ?? '').length ? { reasonCodes: reasonCodes(item.reason ?? '') } : {}),
     ...(typeof item.filedName === 'string' && item.filedName ? { filedName: item.filedName } : {}),
     ...(typeof item.filedPath === 'string' && item.filedPath ? { filedPath: item.filedPath } : {}),
     ...(item.keptOriginal === undefined ? {} : { keptOriginal: item.keptOriginal }),

@@ -30,7 +30,7 @@ describe('rename history', () => {
   it('offers no History button outside a nonempty Completed view', async () => {
     render(<App bridge={createInMemoryBridge()} />);
 
-    await screen.findByRole('button', { name: 'Apply all ready' });
+    await screen.findByRole('button', { name: 'Rename all ready' });
     expect(screen.queryByRole('button', { name: 'History' })).not.toBeInTheDocument();
   });
 

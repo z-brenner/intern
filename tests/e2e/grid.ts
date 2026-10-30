@@ -7,7 +7,7 @@ import type { Locator, Page } from '@playwright/test';
   a person does.
 */
 
-type Column = 'original' | 'status' | 'proposed' | 'description' | 'confidence';
+type Column = 'original' | 'status' | 'proposed' | 'description' | 'check';
 
 /** A row's cell, found by the row's original filename. */
 export function queueCell(page: Page, originalFilename: string, column: Column = 'original'): Locator {

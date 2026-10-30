@@ -59,11 +59,11 @@ test('a dragged range copies with Ctrl+C into separate cells, without Status', a
 
 test('Shift+click, Ctrl+A and the keyboard select cells; Escape clears', async ({ page }) => {
   await queueCell(page, 'Scan 0102.pdf', 'description').click();
-  await queueCell(page, 'Scan 0103.pdf', 'confidence').click({ modifiers: ['Shift'] });
+  await queueCell(page, 'Scan 0103.pdf', 'check').click({ modifiers: ['Shift'] });
   await page.keyboard.press('ControlOrMeta+C');
   expect((await readClipboard(page)).text).toBe([
-    'Invoice INV-3301 from Fabrikam Inc. for February consulting hours.\t81%',
-    'Notice terminating the services agreement with Contoso Ltd.\t95%',
+    'Invoice INV-3301 from Fabrikam Inc. for February consulting hours.\tDate could be day- or month-first',
+    'Notice terminating the services agreement with Contoso Ltd.\tAll checks passed',
   ].join('\r\n'));
 
   await page.keyboard.press('Shift+ArrowDown');
@@ -84,19 +84,19 @@ test('the Copy button copies the whole table with headings when nothing is selec
   await page.getByRole('button', { name: 'Copy table' }).click();
   const copied = await readClipboard(page);
   const lines = copied.text.split('\r\n');
-  expect(lines[0]).toBe('Original filename\tProposed filename\tDescription\tConfidence');
-  expect(lines[1]).toBe('Scan 0101.pdf\t2024-02-01 Engagement Letter with Northwind Traders.pdf\tEngagement letter between Northwind Traders and the firm for 2024 advisory work.\t74%');
+  expect(lines[0]).toBe('Original filename\tProposed filename\tDescription\tCheck');
+  expect(lines[1]).toBe('Scan 0101.pdf\t2024-02-01 Engagement Letter with Northwind Traders.pdf\tEngagement letter between Northwind Traders and the firm for 2024 advisory work.\tModel unsure of its reading');
   expect(lines).toHaveLength(8);
-  expect(copied.cells[0]).toEqual(['Original filename', 'Proposed filename', 'Description', 'Confidence']);
+  expect(copied.cells[0]).toEqual(['Original filename', 'Proposed filename', 'Description', 'Check']);
   expect(copied.cells).toHaveLength(8);
   await expect(page.getByRole('status', { name: 'Action status' })).toHaveText('Copied the table, 7 rows.');
 });
 
 test('the Copy button copies a selection, and leaves the Details panel as it was', async ({ page }) => {
   const panel = await openDetails(page);
-  await queueCell(page, 'Scan 0104.pdf', 'confidence').click();
+  await queueCell(page, 'Scan 0104.pdf', 'check').click();
   await expect(panel).toContainText('Scan 0104.pdf');
   await page.getByRole('button', { name: 'Copy selection' }).click();
-  expect((await readClipboard(page)).text).toBe('69%');
+  expect((await readClipboard(page)).text).toBe('Model unsure of its reading');
   await expect(panel).toBeVisible();
 });

@@ -154,7 +154,9 @@ describe('queue interactions', () => {
     const bridge = createInMemoryBridge();
     render(<App bridge={bridge} />);
 
-    const discard = await screen.findByRole('button', { name: 'Discard waiting items' });
+    // It cannot be undone, so it is behind More, away from Rename all ready.
+    fireEvent.click(await screen.findByRole('button', { name: 'More queue actions' }));
+    const discard = screen.getByRole('menuitem', { name: 'Discard waiting items' });
     expect(discard).toHaveTextContent('3');
 
     fireEvent.click(discard);
@@ -167,15 +169,30 @@ describe('queue interactions', () => {
     expect(remaining.some((item) => item.status === 'review')).toBe(true);
     expect(remaining.some((item) => item.status === 'ready')).toBe(true);
     expect(remaining.some((item) => item.status === 'completed')).toBe(true);
-    expect(screen.queryByRole('button', { name: 'Discard waiting items' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Discard waiting items' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'More queue actions' })).not.toBeInTheDocument();
+  });
+
+  it('closes the More menu from outside it, and with Escape back to its button', async () => {
+    render(<App bridge={createInMemoryBridge()} />);
+    const more = await screen.findByRole('button', { name: 'More queue actions' });
+    fireEvent.click(more);
+    expect(screen.getByRole('menu', { name: 'More queue actions' })).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('menu', { name: 'More queue actions' })).not.toBeInTheDocument();
+
+    fireEvent.click(more);
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Discard waiting items' }), { key: 'Escape' });
+    expect(screen.queryByRole('menu', { name: 'More queue actions' })).not.toBeInTheDocument();
+    expect(more).toHaveFocus();
   });
 
   it('offers no discard action when nothing is waiting', async () => {
     const items = (await createInMemoryBridge().listItems()).filter((item) => item.status !== 'waiting');
     render(<App bridge={createInMemoryBridge({ items })} />);
 
-    await screen.findByRole('button', { name: 'Apply all ready' });
-    expect(screen.queryByRole('button', { name: 'Discard waiting items' })).not.toBeInTheDocument();
+    await screen.findByRole('button', { name: 'Rename all ready' });
+    expect(screen.queryByRole('button', { name: 'More queue actions' })).not.toBeInTheDocument();
   });
 
   it('uses restrained extension-aware document icons', async () => {
@@ -221,7 +238,7 @@ describe('queue interactions', () => {
     const approve = vi.fn(base.approve);
     render(<App bridge={{ ...base, approve }} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rename all ready' }));
 
     await waitFor(() => expect(approve).toHaveBeenCalledTimes(3));
     expect(approve.mock.calls.map(([id]) => id)).toEqual(['employment', 'nda', 'service']);
@@ -235,7 +252,7 @@ describe('queue interactions', () => {
     });
     render(<App bridge={{ ...base, approve }} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rename all ready' }));
 
     expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('2 renames applied. 1 could not be applied. Destination is locked.');
     expect(screen.getByRole('row', { name: /NDA - Acme Corp/i })).toHaveTextContent('Ready');
@@ -297,7 +314,7 @@ describe('queue interactions', () => {
     render(<App bridge={{ ...base, approve }} />);
 
     await selectRow(await screen.findByRole('row', { name: /Employment Agreement/i }));
-    fireEvent.click(screen.getByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rename all ready' }));
     await selectRow(screen.getByRole('row', { name: /Lease Agreement - 123 Main St/i }));
     finish?.();
 
@@ -510,7 +527,7 @@ describe('queue interactions', () => {
     });
     render(<App bridge={{ ...base, approve }} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rename all ready' }));
 
     for (const step of [1, 2, 3]) {
       await waitFor(() => expect(screen.getByRole('group', { name: 'Action progress' })).toHaveTextContent(`Applying ${step} of 3…`));
@@ -535,7 +552,7 @@ describe('queue interactions', () => {
       await base.undo(id);
     });
     render(<App bridge={{ ...base, undo }} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rename all ready' }));
     fireEvent.click(within(await screen.findByRole('group', { name: 'Action result' })).getByRole('button', { name: 'Undo these 3 renames' }));
 
     // One at a time, as the backend undoes them: the next waits on the first.
@@ -562,7 +579,7 @@ describe('queue interactions', () => {
       await base.undo(id);
     });
     render(<App bridge={{ ...base, undo }} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rename all ready' }));
     fireEvent.click(within(await screen.findByRole('group', { name: 'Action result' })).getByRole('button', { name: 'Undo these 3 renames' }));
 
     expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('Undid 2 renames. 1 could not be undone. The filed copy changed after it was renamed.');
@@ -610,7 +627,7 @@ describe('queue interactions', () => {
     });
     render(<App bridge={{ ...base, approve }} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rename all ready' }));
 
     const result = await screen.findByRole('group', { name: 'Action result' });
     expect(result).toHaveTextContent('Renamed 1 document. 2 will be renamed when the queue is free.');
@@ -645,7 +662,7 @@ describe('queue interactions', () => {
     const undo = vi.fn(base.undo);
     render(<App bridge={{ ...base, undo }} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rename all ready' }));
 
     const result = await screen.findByRole('group', { name: 'Action result' });
     expect(result).toHaveTextContent('Renamed 2 documents. 1 already had its name.');
@@ -699,7 +716,7 @@ describe('queue interactions', () => {
     const { bridge, release } = eventAfterReply();
     render(<App bridge={bridge} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rename all ready' }));
 
     const result = await screen.findByRole('group', { name: 'Action result' });
     expect(result).toHaveTextContent('Renamed 3 documents.');

@@ -19,7 +19,7 @@ describe('BrowserApp', () => {
 
     render(<BrowserApp />);
 
-    expect(await screen.findByText('0 items')).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Drop documents here' })).toBeVisible();
     expect(screen.queryByText('Lease Agreement - 123 Main St.pdf')).not.toBeInTheDocument();
     window.history.replaceState({}, '', '/');
   });

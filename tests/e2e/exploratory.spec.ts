@@ -200,16 +200,17 @@ test('pause, resume, apply all ready, and discard waiting all report what they d
   await page.getByRole('button', { name: /Resume queue/i }).click();
   await expect(page.getByRole('button', { name: /Pause queue/i })).toBeVisible();
 
-  await page.getByRole('button', { name: /Apply all ready/i }).click();
+  await page.getByRole('button', { name: /Rename all ready/i }).click();
   await shot(page, 'apply-all-ready');
   await page.getByRole('button', { name: /^Completed/ }).click();
   await expect(page.getByRole('row')).not.toHaveCount(1);
   await shot(page, 'completed-after-apply-all');
 
   await page.getByRole('button', { name: /^Queue/ }).click();
-  const discard = page.getByRole('button', { name: /Discard waiting/i });
-  if (await discard.isVisible()) {
-    await discard.click();
+  const more = page.getByRole('button', { name: 'More queue actions' });
+  if (await more.isVisible()) {
+    await more.click();
+    await page.getByRole('menuitem', { name: /Discard waiting/i }).click();
     await shot(page, 'discard-waiting');
   }
 });
