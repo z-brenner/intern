@@ -180,6 +180,39 @@ cancel drift.
 - Replies matched the Linux capture for 6–7 of 26 on either runtime: a different CPU changes
   the arithmetic as much as a different runtime does.
 
+## The app's flags on upstream, on laptop code paths (2026-10-30)
+
+The app's flags (`server.rs` `MEASURED_FLAGS`) were measured on Prism, and `-ub 256` won only on
+the AVX2 code path most laptops load. Upstream's prefill is different code, so they were measured
+again, on that path. The host has AVX-512 and AMX, which typical laptops lack, so upstream b11946
+ran with only one of its CPU libraries present:
+- `haswell` is AVX2, as on older Intel and AMD Zen 2–3;
+- `alderlake` is AVX2 with VNNI, as on Intel's 12th generation on.
+
+Each row is the app's flags, 4 threads, with one setting changed, on the same 26 requests. Raw
+numbers are in `battery-upstream-laptop-paths.json`.
+
+| AVX2 (`haswell`) | Time per document | Prefill (median) | Decode (median) | Replies identical |
+| --- | ---: | ---: | ---: | ---: |
+| **App's flags**, three runs | **19.1 s, 20.6 s, 19.2 s** | 10.0–11.0 s | 7.3–7.6 s | 26/26 |
+| `-ub 512` | 19.2 s | 10.5 s | 6.7 s | 5/26 |
+| `-ub 128` | 19.3 s | 10.2 s | 7.2 s | 7/26 |
+| `--poll 50` (spinning) | 19.8 s | 10.2 s | 7.6 s | 26/26 |
+
+| AVX2 with VNNI (`alderlake`) | Time per document | Prefill (median) | Decode (median) | Replies identical |
+| --- | ---: | ---: | ---: | ---: |
+| App's flags | 19.7 s | 10.5 s | 7.5 s | reference |
+| `-ub 512` | 19.3 s | 10.5 s | 6.9 s | 5/26 |
+
+- **The flags stay.** The same flags ran 19.1–20.6 s across three runs, and every change falls
+  inside that spread. Prism's 13–14% from `-ub 256` does not appear on upstream; neither does a
+  loss.
+- **The batch size changes most replies** (5–7 of 26 identical), so a change there would need
+  an accuracy run as well as a speed win. Polling changes none, and gains nothing.
+- **Threads were not changed.** The app gives the server half the logical processors, between 2
+  and 12, to leave the rest of the machine responsive. On a 4-core machine without hyper-threading
+  that is 2 of its 4 cores; that is a choice about the user's machine, not a tuning result.
+
 ## Reproduce
 
 ```bash
@@ -196,6 +229,11 @@ EVERY=3 MODEL=... LLAMA_SERVER=... scripts/bonsai-eval/replay-server.sh out/pris
   --spec-type draft-mtp -md Qwen3.5-2B-mtp-Q8_0.gguf
 # Variants: STRIP_LOGPROBS=1; PARALLEL=2 CTX=16384 CONCURRENCY=2; --spec-type ngram-mod|ngram-simple;
 # --spec-type draft-simple -md Qwen3.5-0.8B-Q4_K_M.gguf
+
+# 3. The laptop code paths: a copy of upstream's bin/ with one libggml-cpu-*.so (haswell or
+# alderlake), the 26 saved requests, all of them.
+WIRE=bench/reports/speed-linux-cpu-2026-10-29/requests EVERY=1 THREADS=4 MODEL=... \
+LLAMA_SERVER=b11946-only-haswell/llama-server scripts/bonsai-eval/replay-server.sh out/haswell-ub512 -ub 512
 ```
 
 The MTP head is the `mtp.*` tensors of `Qwen/Qwen3.5-2B` (`mtp_num_hidden_layers` 1),

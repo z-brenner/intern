@@ -73,6 +73,10 @@ impl DocumentClass {
             "contract",
             "lease",
             "statement of work",
+            // Filers agreeing to file one Schedule 13D or 13G for all of
+            // them (Rule 13d-1(k)): an agreement among them, whatever its
+            // title calls it.
+            "joint filing",
             "terms",
             "license",
             "licence",
@@ -1320,6 +1324,9 @@ mod tests {
                 DocumentClass::Agreement,
             ),
             ("Approval Email", DocumentClass::Email),
+            // CUAD's Schedule 13G exhibit: an agreement among its filers.
+            ("Joint Filing Statement", DocumentClass::Agreement),
+            ("Joint Filing Agreement", DocumentClass::Agreement),
             ("Letter of Resignation", DocumentClass::Letter),
             ("New Patient Intake Form", DocumentClass::Form),
             ("Vendor Registration Form", DocumentClass::Form),

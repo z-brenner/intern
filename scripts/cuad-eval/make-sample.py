@@ -1,4 +1,4 @@
-"""Builds a pinned CUAD sample (sample.json, sample-heldout.json) from CUAD's own files.
+"""Builds a pinned CUAD sample (sample.json and its held-out siblings) from CUAD's own files.
 
 Laboratory tooling; the app does not call it. Usage:
 
@@ -11,8 +11,8 @@ tree-Part_I.json and so on, from
     https://huggingface.co/api/datasets/theatticusproject/cuad/tree/REVISION/CUAD_v1/full_contract_pdf/PART?recursive=true
 
 The sample is every 12th contract of the 510, sorted by file name, starting at OFFSET: 0 gave
-sample.json, which the CUAD rules were written from; 6 gives sample-heldout.json, which none of
-them were. A contract without a PDF is left out. Each PDF is downloaded into PDF_DIR and pinned
+sample.json, which #45's CUAD rules were written from; 6 gave sample-heldout.json, which #47's
+were written from; 3 gives sample-third.json, which none of them were. A contract without a PDF is left out. Each PDF is downloaded into PDF_DIR and pinned
 by its size and SHA-256 (the dataset stores them as plain Git objects, so the tree gives no SHA-256).
 """
 import csv

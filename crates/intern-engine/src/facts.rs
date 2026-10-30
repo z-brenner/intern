@@ -437,10 +437,15 @@ pub fn validate_facts_at(
     // says: a bare generic word that no title of the document completed
     // (read_type has tried) names no kind a person could file by, so the
     // name waits for a person rather than being filed. Ported from #26.
-    if document_type
-        .as_deref()
-        .is_some_and(|value| matches!(normalize(value).trim(), "letter" | "document" | "agreement"))
-    {
+    // An amendment or an addendum alone says as little: which agreement it
+    // changes is the name's point (CUAD's "AMENDMENT NO. 3", which names the
+    // agreement it amends only in its first paragraph).
+    if document_type.as_deref().is_some_and(|value| {
+        matches!(
+            normalize(value).trim(),
+            "letter" | "document" | "agreement" | "amendment" | "addendum"
+        )
+    }) {
         push(&mut reasons, ReviewReason::TypeMissing);
     }
     if document_type.is_none() {
@@ -5251,6 +5256,37 @@ PELLWORTH COUNTY WATER AUTHORITY\nBy:\nName: Barnaby Quist\nTitle: General Manag
         };
         let outcome = check(facts, &whole(&index), &index);
         assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
+        assert_ne!(outcome.status, ProposalStatus::Ready);
+    }
+
+    /// CUAD's cuad-15 of the third sample: "AMENDMENT NO. 3", which names
+    /// the agreement it amends only in its first paragraph, typed a bare
+    /// "Amendment". Which agreement it changes is the name's point.
+    #[test]
+    fn a_bare_amendment_goes_to_review() {
+        let index = index_of(
+            "AMENDMENT NO. 3\n\nDated as of February 19, 2007\n\n\
+             Reference is hereby made to that certain Wireless Content License Agreement Number 12965 \
+             between Fox Mobile Entertainment, Inc. and Glu Mobile Inc.",
+        );
+        let line = id_of(&index, "Reference");
+        let facts = ModelFacts {
+            document_type: Some("Amendment".into()),
+            type_evidence: vec![id_of(&index, "AMENDMENT NO")],
+            document_date: Some("2007-02-19".into()),
+            date_evidence: vec![id_of(&index, "Dated as of")],
+            parties: vec![
+                party("Glu Mobile Inc.", None, &[line.clone()]),
+                party("Fox Mobile Entertainment, Inc.", None, &[line]),
+            ],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::TypeMissing),
+            "{:?}",
+            outcome.reasons
+        );
         assert_ne!(outcome.status, ProposalStatus::Ready);
     }
 
