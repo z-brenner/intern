@@ -1577,7 +1577,14 @@ fn read_type<'a>(scope: &ValidationScope<'a>, cited: &[String], value: &str) -> 
         && let Some((phrase, unit, line)) = title_units(scope).find_map(|unit| {
             title_lines(scope, unit).into_iter().find_map(|line| {
                 let phrase = title_phrase(&line, head)?;
-                (title_like(unit, &line) && words(&phrase).len() > 1)
+                // Never another document's name: "Pursuant to Master
+                // Services Agreement" names the agreement this one is under.
+                let line_words = words(&line);
+                let phrase_words = words(&phrase);
+                let names_this = phrase_positions(&line_words, &phrase_words)
+                    .into_iter()
+                    .any(|at| names_document_at(&line_words, at, at + phrase_words.len(), &line));
+                (title_like(unit, &line) && phrase_words.len() > 1 && names_this)
                     .then(|| (phrase, unit, line.trim().to_owned()))
             })
         })
@@ -5303,6 +5310,32 @@ PELLWORTH COUNTY WATER AUTHORITY\nBy:\nName: Barnaby Quist\nTitle: General Manag
             Some("Strategic Alliance Agreement")
         );
         assert!(!outcome.reasons.contains(&ReviewReason::TypeMissing));
+
+        // Never from another document's name: an order "Pursuant to Master
+        // License Agreement" is no Master License Agreement.
+        let index = index_of(
+            "Pursuant to Master License Agreement\n\n\
+             This order is made on October 1, 2008 between Intricon Corporation and \
+             Dynamic Hearing Pty Ltd.\n\nAGREEMENT\n\n1. Services.",
+        );
+        let line = id_of(&index, "This order");
+        let heading = index
+            .units()
+            .iter()
+            .find(|unit| unit.text.trim() == "AGREEMENT")
+            .expect("the bare heading")
+            .id
+            .clone();
+        let facts = ModelFacts {
+            document_type: Some("Agreement".into()),
+            type_evidence: vec![heading],
+            document_date: Some("2008-10-01".into()),
+            date_evidence: vec![line],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some("Agreement"));
+        assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
     }
 
     /// CUAD's cuad-15 of the third sample: "AMENDMENT NO. 3", which names
