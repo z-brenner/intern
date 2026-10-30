@@ -23,3 +23,6 @@ src-tauri/resources/runtime/
 # Local agent tooling state: session-scoped scratch, never release input.
 .crux/
 .omc/
+
+# Python bytecode from the laboratory scripts.
+__pycache__/

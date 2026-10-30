@@ -1,0 +1,419 @@
+{
+ "source": "CUAD v1 (The Atticus Project), https://huggingface.co/datasets/theatticusproject/cuad",
+ "license": "CC BY 4.0",
+ "revision": "a3c393f5d103fd0c516374e4fdff676c8176dcb1",
+ "selection": "Every 12th of the 510 contracts in master_clauses.csv, sorted by file name, starting at the 7th; a contract without a PDF is left out.",
+ "answers": "Document Name, Parties, Agreement Date and Effective Date as CUAD gives them in master_clauses.csv, verbatim.",
+ "contracts": [
+  {
+   "id": "cuad-00",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Reseller/ADIANUTRITION,INC_04_01_2005-EX-10.D2-RESELLER AGREEMENT.PDF",
+   "size": 61336,
+   "sha256": "b6e4a8f20ee8db27266a36529d89d7dd4f0bf23df655f6101702b90a1a5620cd",
+   "document_name": "Reseller Agreement",
+   "parties": "PivX Corporation (\"PivX\"); Detto Technologies (\"Detto\")",
+   "agreement_date": "[]/[]/2004",
+   "effective_date": "[]/[]/2004"
+  },
+  {
+   "id": "cuad-01",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Agency Agreements/AMERICANPHYSICIANSCAPITALINC_03_31_2003-EX-10.26-AGENCY AGREEMENT.PDF",
+   "size": 58829,
+   "sha256": "46f238cd6392fe8f0733c5b286d7c6db2d146c20affc68c91476f0c2360e6951",
+   "document_name": "AGENCY AGREEMENT",
+   "parties": "Mutual Insurance Corporation of America (MICOA); Stratton, Cheeseman & Walsh-Nevada, Inc. (\"Agency\"); (sometimes commonly referred to as the Parties)",
+   "agreement_date": "5/25/99",
+   "effective_date": "5/25/99"
+  },
+  {
+   "id": "cuad-02",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Supply/AgapeAtpCorp_20191202_10-KA_EX-10.1_11911128_EX-10.1_Supply Agreement.pdf",
+   "size": 178486,
+   "sha256": "623d1896671b5e948c55988edc44cdd74d0a3e0056e54aa3a266ff4b1480bfb0",
+   "document_name": "ODM SUPPLY AGREEMENT",
+   "parties": "ORGANIC PREPARATIONS INC. (\"the Manufacturer\"); AGAPE ATP INTERNATIONAL HOLDING LIMITED (\"the Customer\")",
+   "agreement_date": "1/15/18",
+   "effective_date": "1/15/18"
+  },
+  {
+   "id": "cuad-03",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Maintenance/AtnInternationalInc_20191108_10-Q_EX-10.1_11878541_EX-10.1_Maintenance Agreement.pdf",
+   "size": 477104,
+   "sha256": "70d0b708cb1858d18ebfc2711a44595a0e8f7d5256b305cf0d65a4fdb57a37cd",
+   "document_name": "Network Build and Maintenance Agreement ",
+   "parties": "Commnet Wireless, LLC (\"Vendor\"); AT&T Mobility LLC (\"AT&T\") (\"Party\" or in the plural as the \"Parties.\")",
+   "agreement_date": "7/31/19",
+   "effective_date": "7/31/19"
+  },
+  {
+   "id": "cuad-04",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Development/BIOAMBERINC_04_10_2013-EX-10.34-DEVELOPMENT AGREEMENT (1).pdf",
+   "size": 112177,
+   "sha256": "08676c1ea03a5e316cd1f2d737cfb77cc5f45678e15b0ccf06ac20a48f81863c",
+   "document_name": "DEVELOPMENT AGREEMENT",
+   "parties": "Cargill, Incorporated (\"Cargill\"); Bioamber S.A.S (\"Bioamber\"); (individually as \"Party\", collectively as \"Parties\")",
+   "agreement_date": "4/15/10",
+   "effective_date": "4/15/10"
+  },
+  {
+   "id": "cuad-05",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Outsourcing/BNLFINANCIALCORP_03_30_2007-EX-10.8-OUTSOURCING AGREEMENT.PDF",
+   "size": 142954,
+   "sha256": "906cb15e60f4796fcaee54112956397cd7a06975b14659381e17f6e88d0d3743",
+   "document_name": "Outsourcing Agreement",
+   "parties": "Virtual Item Processing Systems, Inc. (\"VIP\"); Brokers National Life Assurance Company (\"BNL\")",
+   "agreement_date": "5/1/06",
+   "effective_date": "5/1/06"
+  },
+  {
+   "id": "cuad-06",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Reseller/BravatekSolutionsInc_20170418_8-K_EX-10.1_10205739_EX-10.1_Reseller Agreement.pdf",
+   "size": 156568,
+   "sha256": "fa0947b28a7ac9a78dcb1f47c6090a2a173cb66db62d92fa05f4d017918744af",
+   "document_name": "  RESELLER AGREEMENT",
+   "parties": "i3 Integrative Creative Solutions, LLC (\"i3 ICS\", \"Reseller\"); Bravatek Solutions, Inc. (\"BVTK\", \"Company\")(\"party\" and collectively \"parties\")",
+   "agreement_date": "4/7/17",
+   "effective_date": "4/7/17"
+  },
+  {
+   "id": "cuad-07",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Strategic Alliance/COOLTECHNOLOGIES,INC_10_25_2017-EX-10.71-Strategic Alliance Agreement.PDF",
+   "size": 99586,
+   "sha256": "29430de07c93623cb6ebae2f403bb70a0c59723806534e45ce246ab62c1aef64",
+   "document_name": "Strategic Alliance Agreement",
+   "parties": "Cool Technologies Inc. (\"COOL TECH\"); VETERAN TECHNOLOGY GROUP, LLC (\"VET TECH\")",
+   "agreement_date": "5/26/17",
+   "effective_date": "5/26/17"
+  },
+  {
+   "id": "cuad-08",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Manufacturing/Cerus Corporation - FIRST AMEND TO SUPPLY AND MANUFACTURING AGREEMENT.PDF",
+   "size": 175109,
+   "sha256": "64d4b2c029e910d378998d29734ab11e67a2aabdd3f991e0d2a613e38e9a1343",
+   "document_name": "FIRST AMENDMENT TO SUPPLY AND MANUFACTURING AGREEMENT",
+   "parties": "Cerus Corporation (\"Cerus\"); Porex Corporation (\"Porex\")",
+   "agreement_date": "6/22/18",
+   "effective_date": "4/1/18"
+  },
+  {
+   "id": "cuad-09",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Outsourcing/DRAGONSYSTEMSINC_01_08_1999-EX-10.17-OUTSOURCING AGREEMENT.PDF",
+   "size": 46840,
+   "sha256": "e6eaaa183efc4072b32cc96b8cb49538317d10a9853cf1230bf6654122305dcb",
+   "document_name": "OUTSOURCING AGREEMENT",
+   "parties": "(Dragon Systems, Inc. (\"Dragon Systems\"); Modus Media International (\"MMI\")",
+   "agreement_date": "1/19/98",
+   "effective_date": "1/19/98"
+  },
+  {
+   "id": "cuad-10",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Collaboration/ELFBEAUTY,INC_07_02_2020-EX-10.1-COOPERATION AGREEMENT.PDF",
+   "size": 183516,
+   "sha256": "cec12c2c8da1983578cb6893b504bae576bc940f49ece0775eab29b81c7d3439",
+   "document_name": "Cooperation Agreement (",
+   "parties": "e.l.f. Beauty, Inc. (\"Company\", \"Party\"); Marathon Partners Equity Management, LLC (\"Marathon Partners\", \"Party\", collectively with Marathon Partners L.P., Marathon Focus Fund L.P., Marathon Partners LUX Fund, L.P., Cibelli Research & Management, LLC, and Mario Cibelli, the \"Marathon Parties\"); Marathon Partners L.P. (\"Party\", collectively with Marathon Partners Equity Management, LLC, Marathon Focus Fund L.P.,Marathon Partners LUX Fund, L.P., Cibelli Research & Management, LLC, and Mario Cibelli, the \"Marathon Parties\"); Marathon Focus Fund L.P.  (\"Party\", collectively with Marathon Partners Equity Management, LLC, Marathon Partners L.P., Marathon Partners LUX Fund, L.P., Cibelli Research & Management, LLC, and Mario Cibelli, the \"Marathon Parties\"); Marathon Partners LUX Fund, L.P. (\"Party\", collectively with Marathon Partners Equity Management, LLC, Marathon Partners L.P., Marathon Focus Fund L.P., Cibelli Research & Management, LLC, and Mario Cibelli, the \"Marathon Parties\"); Cibelli Research & Management, LLC (\"Party\", collectively with Marathon Partners Equity Management, LLC, Marathon Partners L.P., Marathon Focus Fund L.P., Marathon Partners LUX Fund, L.P., and Mario Cibelli, the \"Marathon Parties\"); Mario Cibelli (\"Party\", collectively with Marathon Partners Equity Management, LLC, Marathon Partners L.P., Marathon Focus Fund L.P., Marathon Partners LUX Fund, L.P., and Cibelli Research & Management, LLC, the \"Marathon Parties\")",
+   "agreement_date": "7/1/20",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-11",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Co_Branding/EdietsComInc_20001030_10QSB_EX-10.4_2606646_EX-10.4_Co-Branding Agreement.pdf",
+   "size": 141144,
+   "sha256": "2982db831b823da1eeca18d68049da85bf4a8dc9d60b0dac30014b4ba814a53e",
+   "document_name": "CO-BRANDING AGREEMENT",
+   "parties": "WOMEN.COM NETWORKS, INC. (\"Women.com\"); EDIETS.COM, INC. (\"eDiets\")",
+   "agreement_date": "5/22/00",
+   "effective_date": "5/22/00"
+  },
+  {
+   "id": "cuad-12",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Service/FEDERATEDGOVERNMENTINCOMESECURITIESINC_04_28_2020-EX-99.SERV AGREE-SERVICES AGREEMENT_SECONDAMENDMENT.pdf",
+   "size": 53867,
+   "sha256": "c2aa328d1773a05653521920f08b92be952a9e9d116e938a230a5cda0a935d48",
+   "document_name": "SECOND AMENDMENT TO SERVICES AGREEMENT",
+   "parties": "FEDERATED INVESTMENT MANAGEMENT COMPANY (\"Adviser\"); FEDERATED ADVISORY SERVICES COMPANY (\"FASC\")",
+   "agreement_date": "3/1/16",
+   "effective_date": "3/1/16"
+  },
+  {
+   "id": "cuad-13",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Distributor/FuseMedicalInc_20190321_10-K_EX-10.43_11575454_EX-10.43_Distributor Agreement.pdf",
+   "size": 168013,
+   "sha256": "692444f7ad492a7a15297115d7af9b44412d616570f4df9c72243895a8f7df93",
+   "document_name": "Distributorship agreement",
+   "parties": "Signature Orthopaedics Pty Ltd; CPM Medical Consultants, LLC",
+   "agreement_date": "3/29/18",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-14",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Sponsorship/GSVINC_05_15_1998-EX-10-SPONSORSHIP AGREEMENT.PDF",
+   "size": 75017,
+   "sha256": "606cd42319aead539d391dbf4ccd3365ab8325833c7a1eab2a613c1ba2e761df",
+   "document_name": "SPONSORSHIP AGREEMENT",
+   "parties": "Excite, Inc.\"Excite\"; CyberShop \"Client\"",
+   "agreement_date": "3/31/98",
+   "effective_date": "3/31/98"
+  },
+  {
+   "id": "cuad-15",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Service/GpaqAcquisitionHoldingsInc_20200123_S-4A_EX-10.8_11951679_EX-10.8_Service Agreement.pdf",
+   "size": 271405,
+   "sha256": "7837df24989af83a369b3f1e8cf7aaf8b2cb38d85faef493496dac19830debde",
+   "document_name": "SPONSORSHIP AND SERVICES AGREEMENT",
+   "parties": "HOF Village, LLC (\"HOFV\");  National Football Museum, Inc. d/b/a Pro Football Hall of Fame (\"PFHOF\"(“PFHOF” and, together with HOFV, the “HOF Entities”); Constellation NewEnergy, Inc., on behalf of itself and its retail affiliates and subsidiaries (collectively, “Constellation”); HOFV and/or PFHOF, and Constellation, (“Party” and, collectively, as the “Parties”)",
+   "agreement_date": "12/19/18",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-16",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Outsourcing/HUBEIMINKANGPHARMACEUTICALLTD_09_19_2006-EX-10.1-OUTSOURCING AGREEMENT.PDF",
+   "size": 139974,
+   "sha256": "d9d1b4c2d23686efa40898b2d544190f1756c01b4f737a5325a2ee4454326706",
+   "document_name": "PHOTO RETOUCHING OUTSOURCING AGREEMENT",
+   "parties": "(DGT Corp. (\"DGT\"); Dolphin Industries Limited (\"Dolphin\")",
+   "agreement_date": "6/1/06",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-17",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Maintenance/IMAGEWARESYSTEMSINC_12_20_1999-EX-10.22-MAINTENANCE AGREEMENT.PDF",
+   "size": 59648,
+   "sha256": "daf1af3c0df2d727ca18d50d18922119f24af641c671a9f7fc407b71c4396c27",
+   "document_name": "MAINTENANCE AGREEMENT",
+   "parties": "SAGEM S.A. (\"MORPHO\"); XIMAGE corporation (\"XIMAGE\")",
+   "agreement_date": "1/31/94",
+   "effective_date": "12/10/93"
+  },
+  {
+   "id": "cuad-18",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Sponsorship/IVILLAGEINC_03_17_1999-EX-10.16-SPONSORSHIP AGREEMENT.PDF",
+   "size": 59481,
+   "sha256": "4e2c22cdb0d26d3aac404bc89687a6aa60d1ec58b1d2da93a6ab0befed1a268f",
+   "document_name": "Sponsorship Agreement",
+   "parties": "J. Walter Thompson (\"FMM\"); iVillage, Inc. (\"iVillage\")(referred to generically as a \"Party\", orcollectively as \"Parties\")",
+   "agreement_date": "12/18/98",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-19",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Reseller/IpassInc_20181203_8-K_EX-99.1_11445874_EX-99.1_Reseller Agreement.pdf",
+   "size": 328013,
+   "sha256": "c1eb7b17df6592490e5ec9a13f5356d52026f0fb86ab37bf6839cb0b4b10d105",
+   "document_name": "CHANNEL PARTNER RESELLER AGREEMENT",
+   "parties": "IPASS INC. (\"iPass\"); Pareteum Corporation (\"Channel Partner\")",
+   "agreement_date": "4/25/18",
+   "effective_date": "4/25/18"
+  },
+  {
+   "id": "cuad-20",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Marketing/LECLANCHÉ S.A. - JOINT DEVELOPMENT AND MARKETING AGREEMENT.PDF",
+   "size": 1063465,
+   "sha256": "85cf41e9dffa50d7ec46f7d65c5035b47513f4a0ce912e2418c33597b8727879",
+   "document_name": "JOINT DEVELOPMENT AND MARKETING AGREEMENT",
+   "parties": "LECLANCHÉ S.A. (\"Leclanché\"); OAK RIDGE ENERGY TECHNOLOGIES INC (\"Oak Ridge\"); (each a \"Party\"” and together \"Parties\")",
+   "agreement_date": "4/6/14",
+   "effective_date": "4/6/14"
+  },
+  {
+   "id": "cuad-21",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/License_Agreements/LejuHoldingsLtd_20140121_DRS (on F-1)_EX-10.26_8473102_EX-10.26_Content License Agreement1.pdf",
+   "size": 224717,
+   "sha256": "a062c0d4fdaa3213b6638704171de288dd6d885901d13c21359a86f7cb9df184",
+   "document_name": "DOMAIN NAME AND CONTENT LICENSE AGREEMENT",
+   "parties": "Beijing SINA Internet Information Service Co., Ltd (\"Licensor\"); Beijing Yisheng Leju Information Services Co., Ltd (\"Licensee\" and together with Licensor, the \"Parties\" and each a \"Party\")",
+   "agreement_date": "",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-22",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Transportation/MARTINMIDSTREAMPARTNERSLP_01_23_2004-EX-10.3-TRANSPORTATION SERVICES AGREEMENT.PDF",
+   "size": 91115,
+   "sha256": "220221db2436db0cf6967e9fe107ee41b73c0902031516a8591865d21477c563",
+   "document_name": "MARINE TRANSPORTATION AGREEMENT",
+   "parties": "Martin Operating Partnership L.P. (\"Owner\"); Midstream Fuel Service LLC (\"Charterer\")",
+   "agreement_date": "12/23/03",
+   "effective_date": "12/23/03"
+  },
+  {
+   "id": "cuad-23",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Transportation/MPLXLP_06_17_2015-EX-10.1-TRANSPORTATION SERVICES AGREEMENT.PDF",
+   "size": 1452180,
+   "sha256": "7fa6d1466b4c82afb06e35b204a2825ccc4010129f77fa11682409137b89976a",
+   "document_name": "TRANSPORTATION SERVICES AGREEMENT",
+   "parties": "Marathon Petroleum Company LP (\"Shipper\"); Marathon Pipe Line LLC (\"MPL\"); Marathon Petroleum Company LP and Marathon Pipe Line LLC (jointly as \"Parties\" and individually as a \"Party\")",
+   "agreement_date": "6/11/15",
+   "effective_date": "6/11/15"
+  },
+  {
+   "id": "cuad-24",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Sponsorship/N2KINC_10_16_1997-EX-10.16-SPONSORSHIP AGREEMENT.PDF",
+   "size": 76346,
+   "sha256": "3953c584128911fc482f27450a7f8d6078cf170605d23ebb14b559a8af5a338e",
+   "document_name": "SPONSORSHIP AGREEMENT",
+   "parties": "Excite, Inc. (\"Excite\"); N2K, Inc. (\"Sponsor\")",
+   "agreement_date": "9/23/97",
+   "effective_date": "9/23/97"
+  },
+  {
+   "id": "cuad-25",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Outsourcing/NEXSTARFINANCEHOLDINGSINC_03_27_2002-EX-10.26-OUTSOURCING AGREEMENT.PDF",
+   "size": 141818,
+   "sha256": "7c6f3ef030583bede515631ebf02c55cf2de8ccb83bba9373a4d46512e0ebc8a",
+   "document_name": "OUTSOURCING AGREEMENT",
+   "parties": "WYZZ, Inc. and WYZZ Licensee, Inc. (collectively \"WYZZ\"); Peoria, L.L.C. (\"NEXSTAR\")",
+   "agreement_date": "11/28/01",
+   "effective_date": "12/1/01"
+  },
+  {
+   "id": "cuad-26",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Outsourcing/OFGBANCORP_03_28_2007-EX-10.23-OUTSOURCING AGREEMENT.PDF",
+   "size": 291223,
+   "sha256": "a42e82a22b576b402cda7a519fbb485b4ca0fc800d02b87a9e1f9d4871d708b5",
+   "document_name": "TECHNOLOGY OUTSOURCING AGREEMENT",
+   "parties": "Oriental Financial Group Inc. (\"Customer\"); Melavante Corporation (\"Melavante\")",
+   "agreement_date": "1/26/07",
+   "effective_date": "1/26/07"
+  },
+  {
+   "id": "cuad-28",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/License_Agreements/PacificapEntertainmentHoldingsInc_20051115_8-KA_EX-1.01_4300894_EX-1.01_Content License Agreement.pdf",
+   "size": 146156,
+   "sha256": "6df0d71376b2413a549aac7352fd47eb61bcc2cd735ce1a2e0a9fbc438dff9b8",
+   "document_name": "CONTENT LICENSE AGREEMENT",
+   "parties": "PACIFICAP ENTERTAINMENT (\"Licensor\"); THE HENRY FILM AND ENTERTAINMENT CORPORATION (\"Licensee\")",
+   "agreement_date": "11/3/05",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-29",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Endorsement/PerformanceSportsBrandsInc_20110909_S-1_EX-10.10_7220214_EX-10.10_Endorsement Agreement.pdf",
+   "size": 116932,
+   "sha256": "712b3c44f6a512fdc12491db578c35563972b24a89922ecb6d246c6b5d97f697",
+   "document_name": "ENDORSEMENT AGREEMENT",
+   "parties": "Golfers Incorporated (\"Company\"); Andy North (\"North\")",
+   "agreement_date": "2/21/11",
+   "effective_date": "2/21/11"
+  },
+  {
+   "id": "cuad-30",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Joint Venture _ Filing/QBIOMEDINC_04_08_2020-EX-99.1-JOINT FILING AGREEMENT.PDF",
+   "size": 85141,
+   "sha256": "ff671f3f4b61fdf26dcaf83801f8502de5c80bc3e28ea400dffa1dc9e57bb9be",
+   "document_name": "JOINT FILING AGREEMENT",
+   "parties": "YA II PN, Ltd.; YA Global Investments II (U.S.), Ltd.; Yorkville Advisors Global, LP; Yorkville Advisors Global II, LLC; YAII GP, LP; Yorkville Advisors GP, LLC; D-Beta One EQ, Ltd.; D-Beta One Blocker EQ, Ltd.;\nD-Beta One Growth and Opportunity Fund Offshore, LP; D-Beta One GP, LLC; Delta Beta Advisors, LP",
+   "agreement_date": "4/8/20",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-31",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Transportation/RangeResourcesLouisianaInc_20150417_8-K_EX-10.5_9045501_EX-10.5_Transportation Agreement.pdf",
+   "size": 309578,
+   "sha256": "9ae3b024ee3a9d07bdd4bfc07df6a0da1e2aeddf735dbf8a0251543268d4052c",
+   "document_name": "TRANSPORTATION SERVICES AGREEMENT",
+   "parties": "PennTex North Louisiana Operating, LLC (\"Carrier\"); MRD Operating LLC (\"Shipper\")(\"Party\", or collectively as the \"Parties\")",
+   "agreement_date": "4/14/15",
+   "effective_date": "4/14/15"
+  },
+  {
+   "id": "cuad-32",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Supply/SEASPINEHOLDINGSCORP_10_10_2018-EX-10.1-SUPPLY AGREEMENT.PDF",
+   "size": 203145,
+   "sha256": "664231d429358c81c9a6cfd78b46c0566d990a37aaa77eafd9ef92a5224554ea",
+   "document_name": "SUPPLY AGREEMENT",
+   "parties": "Integra LifeSciences Corporation (\"Integra\"); PcoMed, LLC (\"PcoMed\")",
+   "agreement_date": "5/15/13",
+   "effective_date": "5/15/13"
+  },
+  {
+   "id": "cuad-33",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Consulting Agreements/SPHERE3DCORP_06_24_2020-EX-10.12-CONSULTING AGREEMENT.PDF",
+   "size": 94914,
+   "sha256": "09e74a8f5e3e9a23f50b94a1844b2baebd3c381119dd0e849d2b1ca6c389002d",
+   "document_name": "CONSULTING AGREEMENT",
+   "parties": "GROUPE PARAMEUS CORP (\"Consultant\"); Sphere 3D Corp. (\"Company\")",
+   "agreement_date": "6/1/20",
+   "effective_date": "6/1/20"
+  },
+  {
+   "id": "cuad-34",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Outsourcing/SYKESHEALTHPLANSERVICESINC_04_24_1998-EX-10.14-OUTSOURCING AGREEMENT.PDF",
+   "size": 49340,
+   "sha256": "b7968837b8cd9064bf319e31c13a66340c2f6c2d8a77c21ec243fbb3cfda0fd1",
+   "document_name": "OUTSOURCING AGREEMENT",
+   "parties": "Sykes HealthPlan Services, Inc. (\"SHPS\"); HealthPlan Services, Inc. (\"HFS\")",
+   "agreement_date": "1/1/98",
+   "effective_date": "1/1/98"
+  },
+  {
+   "id": "cuad-35",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Franchise/SoupmanInc_20150814_8-K_EX-10.1_9230148_EX-10.1_Franchise Agreement2.pdf",
+   "size": 116986,
+   "sha256": "2d1f96ee2f01403ad3a29477e16249bd9bd6f7caee88ef5ff138384be33d7563",
+   "document_name": "GUARANTEES OF MASTER FRANCHISE AGREEMENT",
+   "parties": "Kiosk Concepts, Inc. (\"Franchisor\"); (\"Master Franchisee\"); (\"Guarantors\")",
+   "agreement_date": "",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-36",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Service/THERAVANCEBIOPHARMA,INC_05_08_2020-EX-10.2-SERVICE AGREEMENT.PDF",
+   "size": 132401,
+   "sha256": "589abac559ba97b6a8688e97e0b324bf6c32a62c4a864f4c4c791520d7f092e9",
+   "document_name": "SERVICE AGREEMENT",
+   "parties": "Theravance Biopharma UK Limited (\"Employer\"); Brett Haumann (\"Executive\")",
+   "agreement_date": "4/1/20",
+   "effective_date": "4/1/20"
+  },
+  {
+   "id": "cuad-37",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Marketing/TodosMedicalLtd_20190328_20-F_EX-4.10_11587157_EX-4.10_Marketing Agreement_ Reseller Agreement.pdf",
+   "size": 197615,
+   "sha256": "e0e2e96e105138d030e44a2d0d94072264bb166a54ac1f7272fd6cff952bf578",
+   "document_name": "MARKETING AND RESELLER AGREEMENT",
+   "parties": "Todos Medical Ltd. (\"Todos\"); Care G. B. Plus Ltd. (\"Reseller\")",
+   "agreement_date": "12/20/18",
+   "effective_date": "12/20/18"
+  },
+  {
+   "id": "cuad-38",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Manufacturing/VAPOTHERM, INC. - Manufacturing and Supply Agreement.PDF",
+   "size": 201921,
+   "sha256": "1987a265e93224ea3b7b6e1baaddea13978bd830fc2677b0c44e5ee3316f06f8",
+   "document_name": "Manufacturing and Supply Agreement",
+   "parties": "VAPOTHERM, INC (\"Vapotherm\"); MEDICA S.p.A. (\"Medica\")",
+   "agreement_date": "1/1/13",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-39",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Sponsorship/VITAMINSHOPPECOMINC_09_13_1999-EX-10.26-SPONSORSHIP AGREEMENT.PDF",
+   "size": 100981,
+   "sha256": "25f9bab4851b434110a05281147e2029f104426604be710e4312d250182011c7",
+   "document_name": "SPONSORSHIP AGREEMENT",
+   "parties": "Excite, Inc. (\"Excite\"); Vitamin Shoppe Industries Inc. (\"Client\")",
+   "agreement_date": "9/23/98",
+   "effective_date": "9/23/98"
+  },
+  {
+   "id": "cuad-40",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Hosting/WEBHELPCOMINC_03_22_2000-EX-10.8-HOSTING AGREEMENT.PDF",
+   "size": 54877,
+   "sha256": "3bac7992f63a3d29f314538d3089ee723a15f79dc2049a4b082f7b7eb2d430e8",
+   "document_name": "HOSTING AGREEMENT",
+   "parties": "eGain Communications Corporation (\"eGain\"); Eliance Corporation (\"Customer\")",
+   "agreement_date": "",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-41",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Maintenance/XACCT Technologies, Inc.SUPPORT AND MAINTENANCE AGREEMENT.PDF",
+   "size": 49119,
+   "sha256": "4efb5d7e762f53cba7bf984cb496992cc20272c7b99ddca5a00ce3b91687eb21",
+   "document_name": "Support and Maintenance Agreement",
+   "parties": "XACCT Technologies, Inc. (\"XACCT\"); [] (\"Licensee\")",
+   "agreement_date": "[]/[]/2000",
+   "effective_date": "[]/[]/2000"
+  }
+ ]
+}
