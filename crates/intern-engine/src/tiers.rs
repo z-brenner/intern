@@ -159,6 +159,48 @@ pub fn server_options(tier: ModelTier) -> ServerOptions {
     }
 }
 
+/// The llama.cpp build a tier's server is started from. Intern ships two,
+/// and runs one server at a time whichever it is: a change of tier stops one
+/// and starts the other, as it always has.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServerRuntime {
+    /// PrismML's fork, `prism-b10826-c9c34bc`: the only build that reads the
+    /// PQ2_0 tensors Bonsai's weights are stored in.
+    Prism,
+    /// ggml-org's llama.cpp `b11946`, about 1,100 builds past the one Prism
+    /// forked from. It read Qwen3.5 2B 19% faster than Prism on Linux, at the
+    /// same accuracy (`bench/reports/speed-linux-cpu-2026-10-29`), and 25%
+    /// faster on Windows, but cannot read Bonsai.
+    Upstream,
+}
+
+/// The folder, inside the sidecar folder, that holds the upstream runtime.
+/// Both builds name their CPU backends alike (`ggml-cpu-*`) and load them
+/// from beside their own llama-server, so they cannot share one folder.
+/// Prism's stays where the one runtime always was.
+pub const UPSTREAM_RUNTIME_FOLDER: &str = "llama-upstream";
+
+impl ServerRuntime {
+    /// The folder this runtime's llama-server is in, relative to the sidecar
+    /// folder: `None` for the sidecar folder itself.
+    pub const fn subfolder(self) -> Option<&'static str> {
+        match self {
+            Self::Prism => None,
+            Self::Upstream => Some(UPSTREAM_RUNTIME_FOLDER),
+        }
+    }
+}
+
+/// The runtime `tier`'s server is started from: Prism for the fast tier,
+/// since nothing else reads its weights, and upstream for the accurate one,
+/// which it reads faster.
+pub const fn server_runtime(tier: ModelTier) -> ServerRuntime {
+    match tier {
+        ModelTier::Fast => ServerRuntime::Prism,
+        ModelTier::Accurate => ServerRuntime::Upstream,
+    }
+}
+
 /// How long a loaded model may sit without a document before it is unloaded,
 /// giving its memory back to the machine. The next document loads it again,
 /// which costs seconds; holding a gigabyte or two all day for nothing costs
@@ -347,13 +389,39 @@ pub fn escalation_with(
     unsure.then_some(EscalationReason::LowTokenConfidence)
 }
 
+/// The token probability below which an accurate reading goes to review
+/// instead of being filed: the least probable token of its date or of a
+/// party's name ([`crate::domain::TokenConfidence::min`]). The model naming
+/// a date or a party it would rather not have written is the one signal
+/// validation cannot see, since the value it chose is still in the text.
+///
+/// On the 77-document evaluation (Qwen3.5 2B, the packaged runtime, after
+/// the party rules of October 2026) it sent 15 of the 65 ready readings to
+/// review: 7 of the 11 wrong names among them, and 8 right ones. The value
+/// was chosen on the fixture corpus (`docs/model-candidates.md`), not on
+/// those documents.
+pub const REVIEW_BELOW_TOKEN_CONFIDENCE: Option<f32> = Some(0.5);
+
+/// The token probability below which `tier`'s readings go to review. A fast
+/// reading always goes to review ([`hold_fast_reading`]), so only the
+/// accurate tier has one.
+pub fn review_below_token_confidence(tier: ModelTier) -> Option<f32> {
+    match tier {
+        ModelTier::Accurate => REVIEW_BELOW_TOKEN_CONFIDENCE,
+        ModelTier::Fast => None,
+    }
+}
+
 /// Whether `tier`'s requests should ask the server for token probabilities:
-/// only a reading the cascade may escalate on them. The server pays a softmax
-/// over the vocabulary for every generated token, so no other reading asks.
+/// a reading the review gate judges by them, or one the cascade may escalate
+/// on them. The server pays a softmax over the vocabulary for every
+/// generated token (about 1-2% of a reading's time), so no other reading
+/// asks.
 pub fn wants_token_confidence(tier: ModelTier) -> bool {
-    matches!(AUTOMATIC_STRATEGY, AutomaticStrategy::Cascade)
-        && tier == ModelTier::Fast
-        && ESCALATION.below_token_confidence.is_some()
+    review_below_token_confidence(tier).is_some()
+        || (matches!(AUTOMATIC_STRATEGY, AutomaticStrategy::Cascade)
+            && tier == ModelTier::Fast
+            && ESCALATION.below_token_confidence.is_some())
 }
 
 /// The memory available for a model to load into, in bytes, or `None` when
@@ -755,12 +823,14 @@ mod tests {
     }
 
     #[test]
-    fn token_probabilities_are_asked_for_only_where_they_can_escalate() {
-        assert!(!wants_token_confidence(A));
+    fn token_probabilities_are_asked_for_only_where_something_reads_them() {
+        assert_eq!(review_below_token_confidence(A), Some(0.5));
+        assert_eq!(review_below_token_confidence(F), None);
+        assert!(wants_token_confidence(A), "the review gate reads them");
         assert_eq!(
             wants_token_confidence(F),
             AUTOMATIC_STRATEGY == Cascade,
-            "AccurateFirst never escalates, so never pays for them"
+            "a fast reading is always reviewed, and AccurateFirst never escalates"
         );
     }
 
@@ -778,6 +848,16 @@ mod tests {
             assert_eq!(options.extra_arguments, tier_server_flags(tier));
         }
         assert_eq!(IDLE_UNLOAD_AFTER.as_secs(), 600);
+    }
+
+    /// Only Prism reads Bonsai's weights; the accurate model is read faster
+    /// by upstream, from a folder of its own beside Prism's.
+    #[test]
+    fn each_tier_runs_on_its_own_runtime() {
+        assert_eq!(server_runtime(F), ServerRuntime::Prism);
+        assert_eq!(server_runtime(A), ServerRuntime::Upstream);
+        assert_eq!(ServerRuntime::Prism.subfolder(), None);
+        assert_eq!(ServerRuntime::Upstream.subfolder(), Some("llama-upstream"));
     }
 
     #[test]

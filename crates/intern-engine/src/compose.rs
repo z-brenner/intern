@@ -159,7 +159,7 @@ pub struct Relation {
 
 /// The side a document is "about": the client, customer, tenant, employee,
 /// borrower, licensee or buyer.
-const SUBSTANTIVE: &[PartyRole] = &[
+pub(crate) const SUBSTANTIVE: &[PartyRole] = &[
     PartyRole::Client,
     PartyRole::Customer,
     PartyRole::Tenant,
@@ -220,6 +220,10 @@ pub struct RelationCues {
     /// Whether the document names its first two parties as its two sides:
     /// "by and between A and B".
     pub between: bool,
+    /// The two sides of a case the document is filed in, as its caption
+    /// names them - the one bringing it, then the one answering it - by
+    /// their places in the cast.
+    pub caption: Option<(usize, usize)>,
 }
 
 /// The filename's parties and joining word, from the document's class and
@@ -298,6 +302,23 @@ pub fn relation_from_roles(
         }),
         _ => None,
     };
+    // A court document - a notice of hearing, a motion, an order - is
+    // filed under the case: between its two sides, the one bringing it
+    // first. A letter or an email about the case is still correspondence,
+    // and an invoice for it still comes from its issuer.
+    if let Some((bringing, answering)) = cues.caption
+        && !matches!(
+            class,
+            DocumentClass::Letter | DocumentClass::Email | DocumentClass::Issued
+        )
+        && let (Some(a), Some(b)) = (parties.get(bringing), parties.get(answering))
+    {
+        return Relation {
+            relation: PartyRelation::Between,
+            parties: vec![a.name.clone(), b.name.clone()],
+            basis: format!("{}: the case's two sides", class.as_str()),
+        };
+    }
     match class {
         DocumentClass::Agreement | DocumentClass::Amendment => match parties {
             [a, b, ..] => Relation {
@@ -312,12 +333,21 @@ pub fn relation_from_roles(
             if let Some(issuer) = with(&[PartyRole::Issuer]) {
                 return one(PartyRelation::From, issuer, "the issuer");
             }
-            if contains_word(&lowered, "purchase order")
-                && let Some(buyer) = with(&[PartyRole::Buyer])
+            // An order is issued by the side buying - its buyer, client or
+            // customer - and sent to its vendor, which never issues it.
+            let order = contains_word(&lowered, "purchase order");
+            if order
+                && let Some(buyer) =
+                    with(&[PartyRole::Buyer, PartyRole::Client, PartyRole::Customer])
             {
                 return one(PartyRelation::From, buyer, "the buyer issues an order");
             }
-            if let Some(seller) = with(&[PartyRole::Vendor, PartyRole::Seller, PartyRole::Sender]) {
+            let issuing: &[PartyRole] = if order {
+                &[PartyRole::Sender]
+            } else {
+                &[PartyRole::Vendor, PartyRole::Seller, PartyRole::Sender]
+            };
+            if let Some(seller) = with(issuing) {
                 return one(PartyRelation::From, seller, "the vendor");
             }
             if let Some(index) = cues.issuer
@@ -436,7 +466,15 @@ pub fn relation_from_roles(
             if let Some(party) = with(SUBSTANTIVE) {
                 return one(PartyRelation::For, party, "the party it is about");
             }
+            // A record is kept for the one it was made for: a policy for the
+            // insured, a report or a review for its client - not "to" them,
+            // which reads as correspondence. A third party whose role nothing
+            // settles may be the one it is about (a certificate's insured,
+            // whose holder it is sent to), and then the recipient stays "to".
             if let Some(party) = with(&[PartyRole::Recipient, PartyRole::Addressee]) {
+                if unassigned().is_none() {
+                    return one(PartyRelation::For, party, "the party it was made for");
+                }
                 return one(PartyRelation::To, party, "the recipient");
             }
             if let Some(party) = counterpart(true) {
@@ -1221,6 +1259,38 @@ mod tests {
     }
 
     #[test]
+    fn an_order_is_from_the_side_buying_never_from_its_vendor() {
+        let order = |parties: &[(&str, Option<PartyRole>)]| {
+            relation_from_roles(
+                DocumentClass::Issued,
+                Some("Purchase Order"),
+                &cast(parties),
+                RelationCues::default(),
+            )
+        };
+        let relation = order(&[
+            ("Ridgewell Textiles Ltd.", Some(PartyRole::Vendor)),
+            ("Thornbury Outdoor Gear Co.", Some(PartyRole::Client)),
+        ]);
+        assert_eq!(relation.relation, PartyRelation::From);
+        assert_eq!(relation.parties, vec!["Thornbury Outdoor Gear Co."]);
+        // An order naming only its vendor names no issuer.
+        let relation = order(&[("Ridgewell Textiles Ltd.", Some(PartyRole::Vendor))]);
+        assert_ne!(relation.relation, PartyRelation::From);
+        // An invoice is still from its vendor.
+        let invoice = relation_from_roles(
+            DocumentClass::Issued,
+            Some("Invoice"),
+            &cast(&[
+                ("Ridgewell Textiles Ltd.", Some(PartyRole::Vendor)),
+                ("Thornbury Outdoor Gear Co.", Some(PartyRole::Client)),
+            ]),
+            RelationCues::default(),
+        );
+        assert_eq!(invoice.parties, vec!["Ridgewell Textiles Ltd."]);
+    }
+
+    #[test]
     fn the_class_of_a_type_tests_the_families_that_contain_other_families_words_first() {
         for (kind, class) in [
             ("Data Processing Addendum", DocumentClass::Amendment),
@@ -1268,6 +1338,44 @@ mod tests {
     }
 
     #[test]
+    fn a_record_is_for_the_one_it_was_made_for_unless_a_third_party_may_be_its_subject() {
+        let review = cast(&[
+            ("Harbor Analytics LLC", Some(PartyRole::Issuer)),
+            (
+                "Pemberly Falls Distribution Co.",
+                Some(PartyRole::Recipient),
+            ),
+        ]);
+        let relation = relation_from_roles(
+            DocumentClass::Record,
+            Some("Quarterly Business Review"),
+            &review,
+            RelationCues::default(),
+        );
+        assert_eq!(relation.relation, PartyRelation::For);
+        assert_eq!(relation.parties, vec!["Pemberly Falls Distribution Co."]);
+        // A certificate is about its insured and sent to its holder.
+        let certificate = cast(&[
+            ("Ostergaard Roofing Contractors LLC", None),
+            (
+                "Hartsfield & Quail Insurance Brokers",
+                Some(PartyRole::Issuer),
+            ),
+            (
+                "Calloway Crossing Shopping Center LLC",
+                Some(PartyRole::Recipient),
+            ),
+        ]);
+        let relation = relation_from_roles(
+            DocumentClass::Record,
+            Some("Certificate of Liability Insurance"),
+            &certificate,
+            RelationCues::default(),
+        );
+        assert_eq!(relation.relation, PartyRelation::To);
+    }
+
+    #[test]
     fn an_unsupported_role_never_decides_the_relation() {
         let mut parties = cast(&[
             ("Halvorsen Fixture Works LLC", Some(PartyRole::Customer)),
@@ -1291,11 +1399,41 @@ mod tests {
             &parties,
             RelationCues {
                 issuer: Some(0),
-                between: false,
+                ..RelationCues::default()
             },
         );
         assert_eq!(relation.relation, PartyRelation::From);
         assert_eq!(relation.parties, vec!["Halvorsen Fixture Works LLC"]);
+    }
+
+    #[test]
+    fn a_case_files_its_court_documents_between_its_sides_but_not_its_letters() {
+        let parties = cast(&[
+            ("Tavistock Boatworks, Inc.", Some(PartyRole::Recipient)),
+            ("Gilchrist Harbor Marine Supply, LLC", None),
+        ]);
+        let cues = RelationCues {
+            caption: Some((1, 0)),
+            ..RelationCues::default()
+        };
+        let relation = relation_from_roles(
+            DocumentClass::Notice,
+            Some("Notice of Hearing"),
+            &parties,
+            cues,
+        );
+        assert_eq!(relation.relation, PartyRelation::Between);
+        assert_eq!(
+            relation.parties,
+            vec![
+                "Gilchrist Harbor Marine Supply, LLC",
+                "Tavistock Boatworks, Inc."
+            ]
+        );
+        let relation = relation_from_roles(DocumentClass::Letter, Some("Letter"), &parties, cues);
+        assert_eq!(relation.relation, PartyRelation::To);
+        let relation = relation_from_roles(DocumentClass::Issued, Some("Invoice"), &parties, cues);
+        assert_ne!(relation.relation, PartyRelation::Between);
     }
 
     #[test]

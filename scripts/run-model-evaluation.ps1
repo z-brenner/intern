@@ -8,7 +8,9 @@
     local model tier - the accurate one by default, which is what Automatic
     reads with on a machine with the memory for it - asks it the way the app
     does (the tier's prompt profile),
-    starts the packaged llama.cpp server text-only on a loopback port with a
+    starts the packaged llama.cpp server the app runs that tier on (upstream
+    llama.cpp in llama-upstream\ for the accurate tier, the PrismML fork at
+    the runtime's root for the fast one) text-only on a loopback port with a
     random key, runs every generated fixture through `intern-evaluate`, and
     records accuracy, review rate, latency, and peak model memory.
 
@@ -91,8 +93,13 @@ function Get-FreePort {
 }
 
 $ModelPath = Get-PinnedModel -Spec $ModelSpec -Directory $ModelDirectory
-$Server = Join-Path $Runtime "llama-server.exe"
-if (-not (Test-Path -LiteralPath $Server -PathType Leaf)) { throw "Staged runtime has no llama-server.exe" }
+# The llama.cpp build the app runs the tier on: upstream llama.cpp, in the
+# runtime's llama-upstream folder, for the accurate model; the PrismML fork at
+# the runtime's root, whose PQ2_0 kernels the Bonsai model needs, for the fast
+# one. Each loads the DLLs installed beside it.
+$ServerRelative = if ($Tier -eq "accurate") { "llama-upstream/llama-server.exe" } else { "llama-server.exe" }
+$Server = [IO.Path]::GetFullPath((Join-Path $Runtime $ServerRelative))
+if (-not (Test-Path -LiteralPath $Server -PathType Leaf)) { throw "Staged runtime has no $ServerRelative for the $Tier tier" }
 
 $Port = Get-FreePort
 $ApiKey = -join ((1..32) | ForEach-Object { "{0:x2}" -f (Get-Random -Minimum 0 -Maximum 256) })

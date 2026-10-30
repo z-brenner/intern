@@ -14,6 +14,7 @@ const SENTENCES: Record<string, string> = {
   TYPE_UNSUPPORTED: 'The proposed document type does not appear verbatim in the document.',
   TYPE_INFERRED: 'The model gave no document type, so the document\'s own title was used; check that it names the document.',
   PARTY_UNSUPPORTED: 'A proposed party could not be found in the document.',
+  PARTY_MISSING: 'Only one side of the agreement was found. Check who the other party is.',
   DESCRIPTION_UNSUPPORTED: 'The description asserts something the document does not contain.',
   DESCRIPTION_INVALID: 'The description was not a single usable sentence.',
   LOW_CONFIDENCE: 'The model reported low confidence in its own proposal.',

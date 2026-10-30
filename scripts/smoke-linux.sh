@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # The Linux smoke: a package-shaped runtime checked against its inventory,
-# llama-server run from it, and the parser worker driven through the release
-# fixtures with it - and, when asked, the desktop app started under Xvfb and
-# the whole pipeline run without a window on a real model. Nothing here needs
-# a display, a desktop session or root. See docs/linux.md.
+# both of its llama-servers run from it - Prism's in runtime/, for the fast
+# tier, and upstream's in runtime/llama-upstream/, for the accurate one - and
+# the parser worker driven through the release fixtures with it - and, when
+# asked, the desktop app started under Xvfb and the whole pipeline run without
+# a window on a real model. Nothing here needs a display, a desktop session or
+# root. See docs/linux.md.
 #
 # Usage:
-#   scripts/smoke-linux.sh [--runtime DIR] [--app PATH] [--model GGUF]
+#   scripts/smoke-linux.sh [--runtime DIR] [--app PATH] [--model GGUF [--tier TIER]]
 #
 #   --runtime DIR  a package-shaped runtime (DIR/runtime, DIR/licenses) to
 #                  check: /usr/lib/Intern once the package is installed, or a
@@ -19,9 +21,14 @@
 #                  its window, writes no startup error, and that killing it
 #                  outright leaves none of its processes running.
 #   --model GGUF   also run the real pipeline without a window: start the
-#                  runtime's llama-server on GGUF with the flags the app
-#                  uses, and name a fixture with intern-analyze (INTERN_ANALYZE,
-#                  or built with cargo).
+#                  llama-server the app runs GGUF's tier on, with the flags the
+#                  app uses, and name a fixture with intern-analyze
+#                  (INTERN_ANALYZE, or built with cargo).
+#   --tier TIER    the tier GGUF is for, fast or accurate: the fast tier runs
+#                  on Prism's runtime/llama-server, the accurate tier on
+#                  upstream's runtime/llama-upstream/llama-server. Without it,
+#                  the tier src-tauri/resources/model-manifest.json gives a
+#                  file of GGUF's name.
 #
 # Needs the generated fixtures (npm run fixtures) and Node; --app also needs
 # xvfb-run, dbus-run-session and xwininfo (packages xvfb, dbus, x11-utils).
@@ -36,14 +43,43 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUNTIME_ROOT=""
 APP=""
 MODEL=""
+TIER=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --runtime) RUNTIME_ROOT="${2:?--runtime needs a folder}"; shift 2 ;;
     --app) APP="${2:?--app needs a path}"; shift 2 ;;
     --model) MODEL="${2:?--model needs a GGUF file}"; shift 2 ;;
+    --tier) TIER="${2:?--tier needs fast or accurate}"; shift 2 ;;
     *) usage ;;
   esac
 done
+case "$TIER" in
+  "" | fast | accurate) ;;
+  *) echo "--tier is fast or accurate, not $TIER" >&2; exit 2 ;;
+esac
+if [ -n "$TIER" ] && [ -z "$MODEL" ]; then
+  echo "--tier names the tier of the --model GGUF; give that too" >&2
+  exit 2
+fi
+if [ -n "$MODEL" ]; then
+  [ -f "$MODEL" ] || { echo "no model at $MODEL" >&2; exit 1; }
+  if [ -z "$TIER" ]; then
+    TIER="$(node -e '
+      const [, manifest, name] = process.argv;
+      const { models } = JSON.parse(require("fs").readFileSync(manifest, "utf8"));
+      const model = models.find((candidate) => candidate.files.some((file) => file.name === name));
+      if (model) console.log(model.tier);
+    ' "$ROOT/src-tauri/resources/model-manifest.json" "$(basename "$MODEL")")"
+    case "$TIER" in
+      fast | accurate) ;;
+      "")
+        echo "$(basename "$MODEL") is no model file in src-tauri/resources/model-manifest.json;" >&2
+        echo "say which tier's llama-server runs it with --tier fast or --tier accurate" >&2
+        exit 2 ;;
+      *) echo "model-manifest.json gives $(basename "$MODEL") the tier $TIER, which this smoke has no llama-server for" >&2; exit 1 ;;
+    esac
+  fi
+fi
 
 WORK="$(mktemp -d)"
 SERVER=""
@@ -71,23 +107,47 @@ else
   RUNTIME_ROOT="$WORK/stage"
 fi
 RUNTIME="$RUNTIME_ROOT/runtime"
+# The two llama.cpp builds, each in a folder of its own: Prism's in runtime/
+# itself, which the fast tier runs on, and upstream's, which the accurate
+# tier runs on.
+FAST_LLAMA="$RUNTIME"
+ACCURATE_LLAMA="$RUNTIME/llama-upstream"
 
-step "Starting llama-server from the runtime"
-# From another folder, so the CPU backends are found beside the binary and
-# not in the working directory.
-(cd / && "$RUNTIME/llama-server" --version) 2>&1 | tail -n 2
-# Verbose enough (-lv 4) to log which CPU backend it loaded, and from where.
-devices="$(cd / && "$RUNTIME/llama-server" -lv 4 --list-devices 2>&1)" || {
-  printf '%s\n' "$devices" >&2
-  echo "llama-server could not list its devices" >&2
-  exit 1
+# Starts DIR/llama-server and checks it runs on its own build: the two builds
+# carry libraries and CPU backends of the same names, and each server must
+# load the ones beside it.
+check_llama_server() {
+  local dir="$1" label="$2" library arrow resolved devices
+  step "Starting $label llama-server from ${dir#"$RUNTIME_ROOT/"}"
+  # From another folder, so the CPU backends are found beside the binary and
+  # not in the working directory.
+  (cd / && "$dir/llama-server" --version) 2>&1 | tail -n 2
+  while read -r library arrow resolved _; do
+    [ "$arrow" = "=>" ] || continue
+    if [ "$resolved" = "not" ]; then
+      echo "$dir/llama-server needs $library, which is neither beside it nor installed" >&2
+      exit 1
+    fi
+    if [ -e "$dir/$library" ] && [ "$(readlink -f "$resolved")" != "$(readlink -f "$dir/$library")" ]; then
+      echo "$dir/llama-server loads $library from $resolved, not from beside itself" >&2
+      exit 1
+    fi
+  done < <(ldd "$dir/llama-server")
+  # Verbose enough (-lv 4) to log which CPU backend it loaded, and from where.
+  devices="$(cd / && "$dir/llama-server" -lv 4 --list-devices 2>&1)" || {
+    printf '%s\n' "$devices" >&2
+    echo "$dir/llama-server could not list its devices" >&2
+    exit 1
+  }
+  if ! grep -qF "load_backend: loaded CPU backend from $dir/libggml-cpu-" <<< "$devices"; then
+    printf '%s\n' "$devices" >&2
+    echo "$dir/llama-server loaded no CPU backend from $dir" >&2
+    exit 1
+  fi
+  grep -o 'loaded CPU backend from .*' <<< "$devices"
 }
-if ! grep -qF "load_backend: loaded CPU backend from $RUNTIME/libggml-cpu-" <<< "$devices"; then
-  printf '%s\n' "$devices" >&2
-  echo "llama-server loaded no CPU backend from $RUNTIME" >&2
-  exit 1
-fi
-grep -o 'loaded CPU backend from .*' <<< "$devices"
+check_llama_server "$FAST_LLAMA" "Prism's (fast tier)"
+check_llama_server "$ACCURATE_LLAMA" "upstream's (accurate tier)"
 
 step "Driving the parser worker through the release fixtures"
 if ! command -v tesseract > /dev/null && [ ! -x "$RUNTIME/tesseract" ]; then
@@ -97,8 +157,12 @@ node "$ROOT/scripts/smoke-worker.mjs" --worker "$RUNTIME/intern-worker" --runtim
 
 # --- the pipeline, headless -------------------------------------------------
 if [ -n "$MODEL" ]; then
-  step "Naming a fixture through the real pipeline with $(basename "$MODEL")"
-  [ -f "$MODEL" ] || { echo "no model at $MODEL" >&2; exit 1; }
+  # The server the app runs that tier on.
+  case "$TIER" in
+    fast) MODEL_LLAMA="$FAST_LLAMA" ;;
+    accurate) MODEL_LLAMA="$ACCURATE_LLAMA" ;;
+  esac
+  step "Naming a fixture through the real pipeline with $(basename "$MODEL") on the $TIER tier's ${MODEL_LLAMA#"$RUNTIME_ROOT/"}/llama-server"
   if [ -z "${INTERN_ANALYZE:-}" ]; then
     (cd "$ROOT" && cargo build --release --locked -p intern-engine --bin intern-analyze)
     TARGET="${CARGO_TARGET_DIR:-target}"
@@ -111,7 +175,7 @@ if [ -n "$MODEL" ]; then
   [ "$THREADS" -lt 2 ] && THREADS=2
   [ "$THREADS" -gt 12 ] && THREADS=12
   # The flags the app starts it with (crates/intern-engine/src/server.rs).
-  "$RUNTIME/llama-server" --host 127.0.0.1 --port "$PORT" --api-key "$KEY" --model "$MODEL" \
+  "$MODEL_LLAMA/llama-server" --host 127.0.0.1 --port "$PORT" --api-key "$KEY" --model "$MODEL" \
     --parallel 1 --ctx-size 8192 --n-gpu-layers 0 \
     --threads "$THREADS" --threads-batch "$THREADS" --jinja --no-webui --no-mmproj \
     > "$WORK/llama-server.log" 2>&1 &

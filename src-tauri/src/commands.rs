@@ -367,10 +367,51 @@ impl RuntimeProcess for LlamaServer {
     }
 }
 
-/// llama-server from beside Intern's own executable, over the model in the
-/// app's data folder.
+/// The llama-server of each runtime Intern ships ([`tiers::ServerRuntime`]).
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ServerExecutables {
+    prism: PathBuf,
+    upstream: PathBuf,
+}
+
+impl ServerExecutables {
+    /// Each runtime's llama-server in the sidecar folder: Prism's in the
+    /// folder itself, where the one runtime always was, and upstream's in
+    /// [`tiers::UPSTREAM_RUNTIME_FOLDER`]. Nothing here looks for either:
+    /// one that is missing - a dev checkout, an install from before upstream
+    /// shipped - fails to start as any server that will not start does, and
+    /// its tier is set aside while the other reads.
+    fn in_sidecar_directory(directory: &Path) -> Self {
+        let name = if cfg!(windows) {
+            "llama-server.exe"
+        } else {
+            "llama-server"
+        };
+        let of = |runtime: tiers::ServerRuntime| {
+            runtime
+                .subfolder()
+                .map_or_else(|| directory.to_path_buf(), |folder| directory.join(folder))
+                .join(name)
+        };
+        Self {
+            prism: of(tiers::ServerRuntime::Prism),
+            upstream: of(tiers::ServerRuntime::Upstream),
+        }
+    }
+
+    /// The llama-server `tier`'s model runs on.
+    fn for_tier(&self, tier: ModelTier) -> &Path {
+        match tiers::server_runtime(tier) {
+            tiers::ServerRuntime::Prism => &self.prism,
+            tiers::ServerRuntime::Upstream => &self.upstream,
+        }
+    }
+}
+
+/// llama-server from the sidecar folder - the runtime the tier runs on -
+/// over the model in the app's data folder.
 struct LlamaLauncher {
-    executable: PathBuf,
+    servers: ServerExecutables,
     model_directory: PathBuf,
 }
 
@@ -380,10 +421,10 @@ impl RuntimeLauncher for LlamaLauncher {
     /// projector for this model is 668,227,264 bytes - 637 MiB - which every
     /// user would download and hold resident for a path almost nothing takes.
     ///
-    /// Each tier gets its own server options ([`tiers::server_options`]) and
-    /// is asked the way its manifest entry's prompt profile says; the fast
-    /// tier asks for token probabilities only when the cascade can escalate
-    /// on them.
+    /// Each tier gets its own runtime ([`tiers::server_runtime`]) and server
+    /// options ([`tiers::server_options`]), and is asked the way its manifest
+    /// entry's prompt profile says; the fast tier asks for token
+    /// probabilities only when the cascade can escalate on them.
     fn launch(
         &self,
         manifest: &ModelManifest,
@@ -392,7 +433,7 @@ impl RuntimeLauncher for LlamaLauncher {
         let pinned = manifest.tier(tier).ok_or_else(manifest_names_no_model)?;
         let model = pinned.model().ok_or_else(manifest_names_no_model)?;
         let server = LlamaServer::start(
-            &self.executable,
+            self.servers.for_tier(tier),
             &self.model_directory.join(&model.name),
             None,
             &tiers::server_options(tier),
@@ -403,9 +444,13 @@ impl RuntimeLauncher for LlamaLauncher {
             manifest.served_model_name.clone(),
         )?
         .with_token_confidence(tiers::wants_token_confidence(tier));
+        let mut engine = Engine::new(client).with_prompt_profile(pinned.prompt_profile);
+        if let Some(threshold) = tiers::review_below_token_confidence(tier) {
+            engine = engine.with_min_token_confidence(threshold);
+        }
         Ok(LaunchedRuntime {
             process: Box::new(server),
-            engine: Engine::new(client).with_prompt_profile(pinned.prompt_profile),
+            engine,
         })
     }
 }
@@ -434,25 +479,25 @@ struct VerifiedFile {
 /// Where a model that passed its digest - and, it says, its self-test -
 /// says so, beside the models themselves.
 const VERIFICATION_STAMP: &str = ".verified.json";
-/// 2 records each tier's file on its own, and whether that file has passed
-/// the self-test as well as its digest. A stamp of 1 named the one model
-/// earlier builds pinned, and vouches for nothing now.
-const VERIFICATION_STAMP_SCHEMA: u32 = 2;
+/// 3 records, with each tier's file, the server binary of the runtime that
+/// tier runs on: the two tiers run on two runtimes. A stamp of 2 recorded
+/// one server binary for every file, and one of 1 named the one model
+/// earlier builds pinned; neither vouches for anything now.
+const VERIFICATION_STAMP_SCHEMA: u32 = 3;
 
 /// What a launch needs to know to trust the installed models without reading
 /// them again: each file as it was when its digest passed, whether it has
-/// passed the self-test too, the server binary that ran the self-test, and
-/// the build that did the checking. A changed build or server binary vouches
-/// for nothing; a changed file vouches for nothing about that file. Either
-/// sends it through the full check again.
+/// passed the self-test too, the server binary it runs on, and the build that
+/// did the checking. A changed build vouches for nothing; a changed file, or
+/// a changed server binary of the runtime its tier runs on
+/// ([`tiers::server_runtime`]), vouches for nothing about that file. Either
+/// sends it through the full check again, and the other tier keeps its entry.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VerificationStamp {
     schema_version: u32,
     app_version: String,
     files: Vec<StampedFile>,
-    server_len: u64,
-    server_modified_nanos: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -464,6 +509,10 @@ struct StampedFile {
     /// The digest the manifest pins, which the file was checked against. A
     /// new pin is a different model, whatever the file's size and date.
     sha256: String,
+    /// The size and date of the llama-server the file's tier runs on, as it
+    /// was when the file was checked: the binary the self-test exercised.
+    server_len: u64,
+    server_modified_nanos: u64,
     /// The model has passed the semantic self-test, not only its digest. A
     /// model downloaded in the background is digest-checked at once and
     /// self-tested the first time it is loaded.
@@ -472,12 +521,15 @@ struct StampedFile {
 }
 
 impl StampedFile {
-    /// Whether this records the same file, as it is, under the same pin.
+    /// Whether this records the same file, as it is, under the same pin,
+    /// on the same server binary.
     fn same_file(&self, other: &Self) -> bool {
         self.name == other.name
             && self.len == other.len
             && self.modified_nanos == other.modified_nanos
             && self.sha256 == other.sha256
+            && self.server_len == other.server_len
+            && self.server_modified_nanos == other.server_modified_nanos
     }
 }
 
@@ -579,7 +631,9 @@ enum ReadFailure {
 /// when the local model was set aside, handed back - rather than as a server
 /// fault, so nothing restarts the server a second time for it.
 struct RuntimeModel {
-    executable: PathBuf,
+    /// Each runtime's server binary, read here only for the stamp: the
+    /// launcher starts them.
+    servers: ServerExecutables,
     model_directory: PathBuf,
     manifest: ModelManifest,
     app_version: String,
@@ -626,17 +680,17 @@ struct RuntimeModel {
 
 impl RuntimeModel {
     fn new(
-        executable: PathBuf,
+        servers: ServerExecutables,
         model_directory: PathBuf,
         manifest: ModelManifest,
         preference: Box<dyn Fn() -> ModelPreference + Send + Sync>,
     ) -> Self {
         let launcher = Arc::new(LlamaLauncher {
-            executable: executable.clone(),
+            servers: servers.clone(),
             model_directory: model_directory.clone(),
         });
         Self::with_parts(
-            executable,
+            servers,
             model_directory,
             manifest,
             launcher,
@@ -647,7 +701,7 @@ impl RuntimeModel {
     }
 
     fn with_parts(
-        executable: PathBuf,
+        servers: ServerExecutables,
         model_directory: PathBuf,
         manifest: ModelManifest,
         launcher: Arc<dyn RuntimeLauncher>,
@@ -656,7 +710,7 @@ impl RuntimeModel {
         senses: RuntimeSenses,
     ) -> Self {
         Self {
-            executable,
+            servers,
             model_directory,
             manifest,
             app_version,
@@ -973,33 +1027,28 @@ impl RuntimeModel {
         self.model_directory.join(VERIFICATION_STAMP)
     }
 
-    /// A stamp with no files, as this build over this server binary would
-    /// write it, or `None` when the server binary cannot be read.
-    fn stamp_header(&self) -> Option<VerificationStamp> {
-        let server = std::fs::metadata(&self.executable).ok()?;
-        Some(VerificationStamp {
+    /// A stamp with no files, as this build would write it.
+    fn stamp_header(&self) -> VerificationStamp {
+        VerificationStamp {
             schema_version: VERIFICATION_STAMP_SCHEMA,
             app_version: self.app_version.clone(),
             files: Vec::new(),
-            server_len: server.len(),
-            server_modified_nanos: modified_nanos(&server)?,
-        })
+        }
     }
 
-    /// The stored stamp, when this build wrote it over this server binary.
-    /// Any other stamp vouches for nothing.
+    /// The stored stamp, when this build wrote it. Any other stamp vouches
+    /// for nothing.
     fn stored_stamp(&self) -> Option<VerificationStamp> {
-        let header = self.stamp_header()?;
         let bytes = std::fs::read(self.stamp_path()).ok()?;
         let stored: VerificationStamp = serde_json::from_slice(&bytes).ok()?;
-        (stored.schema_version == header.schema_version
-            && stored.app_version == header.app_version
-            && stored.server_len == header.server_len
-            && stored.server_modified_nanos == header.server_modified_nanos)
+        (stored.schema_version == VERIFICATION_STAMP_SCHEMA
+            && stored.app_version == self.app_version)
             .then_some(stored)
     }
 
-    /// The stamp entry `tier`'s file would earn as `state` describes it.
+    /// The stamp entry `tier`'s file would earn as `state` describes it, on
+    /// the server binary its tier runs on as that is now: `None` when that
+    /// binary cannot be read, which vouches for nothing.
     fn stamp_entry(
         &self,
         tier: ModelTier,
@@ -1012,11 +1061,14 @@ impl RuntimeModel {
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
             .and_then(|since| u64::try_from(since.as_nanos()).ok())?;
+        let server = std::fs::metadata(self.servers.for_tier(tier)).ok()?;
         Some(StampedFile {
             name: file.name.clone(),
             len: state.len,
             modified_nanos: modified,
             sha256: file.sha256.clone(),
+            server_len: server.len(),
+            server_modified_nanos: modified_nanos(&server)?,
             self_tested,
         })
     }
@@ -1045,12 +1097,10 @@ impl RuntimeModel {
         if self.file_state(tier).as_ref() != Some(state) {
             return;
         }
-        let (Some(mut stamp), Some(entry)) = (
-            self.stamp_header(),
-            self.stamp_entry(tier, state, self_tested),
-        ) else {
+        let Some(entry) = self.stamp_entry(tier, state, self_tested) else {
             return;
         };
+        let mut stamp = self.stamp_header();
         stamp.files = self.current_entries(Some(&entry.name));
         stamp.files.push(entry);
         self.write_stamp(&stamp);
@@ -1066,19 +1116,18 @@ impl RuntimeModel {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let name = self.tier_file(tier).map(|file| file.name.clone());
         let kept = self.current_entries(name.as_ref());
-        match self.stamp_header() {
-            Some(mut stamp) if !kept.is_empty() => {
-                stamp.files = kept;
-                self.write_stamp(&stamp);
-            }
-            _ => {
-                let _ = std::fs::remove_file(self.stamp_path());
-            }
+        if kept.is_empty() {
+            let _ = std::fs::remove_file(self.stamp_path());
+        } else {
+            let mut stamp = self.stamp_header();
+            stamp.files = kept;
+            self.write_stamp(&stamp);
         }
     }
 
     /// The stored stamp's entries that still describe a file this manifest
-    /// pins, as it is on disk now, other than `except`.
+    /// pins, as it is on disk now and on its tier's server binary as that
+    /// is now, other than `except`.
     fn current_entries(&self, except: Option<&String>) -> Vec<StampedFile> {
         let Some(stored) = self.stored_stamp() else {
             return Vec::new();
@@ -1185,10 +1234,11 @@ impl RuntimeModel {
     /// this session's own check, or by reading it - and a tier whose file
     /// fails is set aside while the others are used. Then the tier the next
     /// document would be read by is started. A model that passed the
-    /// semantic self-test under this build, this server binary, and its
-    /// current size and date is started without one: it costs seconds of CPU
-    /// at every sign-in, and nothing it checks has changed. Anything else is
-    /// self-tested, and only a model that passes is stamped as having passed.
+    /// semantic self-test under this build, the server binary it runs on,
+    /// and its current size and date is started without one: it costs
+    /// seconds of CPU at every sign-in, and nothing it checks has changed.
+    /// Anything else is self-tested, and only a model that passes is stamped
+    /// as having passed.
     /// An accurate model that fails is set aside and the fast one started in
     /// its place.
     fn start_verified(&self, cancellation: &CancellationToken) -> Result<(), CommandError> {
@@ -3090,7 +3140,9 @@ fn starts_a_new_watch(previous: &AppSettings, settings: &AppSettings) -> bool {
 }
 
 /// The folder llama-server and the parser worker are started from, which the
-/// worker also loads PDFium, ONNX Runtime, and the OCR models from.
+/// worker also loads PDFium, ONNX Runtime, and the OCR models from. Prism's
+/// llama-server is in it and upstream's in a folder of its own inside it
+/// ([`ServerExecutables::in_sidecar_directory`]).
 ///
 /// The Windows installer puts them beside Intern itself. A Linux package keeps
 /// them out of `/usr/bin` - where `llama-server` would collide with a
@@ -3150,11 +3202,6 @@ impl AppState {
         } else {
             "intern-worker"
         };
-        let server_name = if cfg!(windows) {
-            "llama-server.exe"
-        } else {
-            "llama-server"
-        };
         let model_directory = data.join("models");
         let settings = SettingsStore::new(data.join("settings.json"));
         // Read at every document, so a choice made in Settings takes effect
@@ -3162,7 +3209,7 @@ impl AppState {
         // is Intern's own choice, as it is for everything else.
         let preference_settings = settings.clone();
         let runtime = Arc::new(RuntimeModel::new(
-            executable_directory.join(server_name),
+            ServerExecutables::in_sidecar_directory(&executable_directory),
             model_directory,
             ModelManifest::embedded()?,
             Box::new(move || {
@@ -7667,7 +7714,27 @@ mod quit_tests {
 mod runtime_directory_tests {
     use std::path::{Path, PathBuf};
 
-    use super::runtime_directory_from;
+    use intern_engine::ModelTier;
+
+    use super::{ServerExecutables, runtime_directory_from};
+
+    /// Prism's llama-server is in the sidecar folder, where the one runtime
+    /// always was, and upstream's in a folder of its own inside it; each
+    /// tier's server is its runtime's.
+    #[test]
+    fn each_runtime_is_in_its_own_folder_of_the_sidecar_folder() {
+        let sidecar = Path::new("/usr/lib/Intern/runtime");
+        let name = if cfg!(windows) {
+            "llama-server.exe"
+        } else {
+            "llama-server"
+        };
+        let servers = ServerExecutables::in_sidecar_directory(sidecar);
+        assert_eq!(servers.prism, sidecar.join(name));
+        assert_eq!(servers.upstream, sidecar.join("llama-upstream").join(name));
+        assert_eq!(servers.for_tier(ModelTier::Fast), servers.prism);
+        assert_eq!(servers.for_tier(ModelTier::Accurate), servers.upstream);
+    }
 
     /// Off Windows the sidecars are in the resources' `runtime` folder, unless
     /// `INTERN_RUNTIME_DIR` names another - and an empty one names nothing.
@@ -8346,9 +8413,9 @@ mod runtime_tests {
     use intern_queue::{AnalyzerBoundary, ModelFailure, ModelSource};
 
     use super::{
-        CommandError, LaunchedRuntime, ProgressThrottle, RuntimeLauncher, RuntimeModel,
-        RuntimeProcess, RuntimeSenses, SetupManager, SetupStateDto, SetupStatus,
-        VERIFICATION_STAMP, launch_local_model,
+        CommandError, LaunchedRuntime, LlamaLauncher, ProgressThrottle, RuntimeLauncher,
+        RuntimeModel, RuntimeProcess, RuntimeSenses, ServerExecutables, SetupManager,
+        SetupStateDto, SetupStatus, VERIFICATION_STAMP, launch_local_model,
     };
 
     /// Bytes chosen once and hashed offline; the digest below is theirs, so
@@ -8715,8 +8782,8 @@ mod runtime_tests {
         }
     }
 
-    /// A scratch data folder with the model and a server binary installed,
-    /// removed when the test ends.
+    /// A scratch data folder with the model and both runtimes' server
+    /// binaries installed, removed when the test ends.
     struct Install {
         root: PathBuf,
     }
@@ -8728,8 +8795,18 @@ mod runtime_tests {
             let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(root.join("models")).unwrap();
             std::fs::write(root.join("models").join("model.gguf"), MODEL_BYTES).unwrap();
-            std::fs::write(root.join("llama-server"), b"server binary").unwrap();
-            Self { root }
+            let install = Self { root };
+            let servers = install.servers();
+            for server in [&servers.prism, &servers.upstream] {
+                std::fs::create_dir_all(server.parent().unwrap()).unwrap();
+                std::fs::write(server, b"server binary").unwrap();
+            }
+            install
+        }
+
+        /// Each runtime's llama-server, where an install puts them.
+        fn servers(&self) -> ServerExecutables {
+            ServerExecutables::in_sidecar_directory(&self.root)
         }
 
         fn model(&self) -> PathBuf {
@@ -8771,14 +8848,26 @@ mod runtime_tests {
             app_version: &str,
             world: &World,
         ) -> Arc<RuntimeModel> {
+            let launcher = Arc::new(FakeLauncher {
+                rig: Arc::clone(rig),
+            });
+            self.runtime_on(launcher, rig, app_version, world)
+        }
+
+        /// A launch of this install whose servers `launcher` starts.
+        fn runtime_on(
+            &self,
+            launcher: Arc<dyn RuntimeLauncher>,
+            rig: &Arc<Rig>,
+            app_version: &str,
+            world: &World,
+        ) -> Arc<RuntimeModel> {
             let counted = Arc::clone(rig);
             Arc::new(RuntimeModel::with_parts(
-                self.root.join("llama-server"),
+                self.servers(),
                 self.root.join("models"),
                 manifest(),
-                Arc::new(FakeLauncher {
-                    rig: Arc::clone(rig),
-                }),
+                launcher,
                 Box::new(
                     move |_path: &Path, _file: &ModelFile| -> Result<(), EngineError> {
                         counted
@@ -8950,8 +9039,9 @@ mod runtime_tests {
         assert_eq!((hashes, self_tests), (1, 1));
         assert_eq!(relaunch("1.1.0").0, 0);
 
-        // A new server binary, which is what the self-test exercised.
-        std::fs::write(install.root.join("llama-server"), b"a newer server binary").unwrap();
+        // A new server binary, which is what the self-test exercised: Prism's,
+        // which the fast model runs on.
+        std::fs::write(install.servers().prism, b"a newer server binary").unwrap();
         let (hashes, self_tests, _) = relaunch("1.1.0");
         assert_eq!((hashes, self_tests), (1, 1));
 
@@ -10294,8 +10384,16 @@ mod runtime_tests {
         let request = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
         gate.wait_reached();
         *rig.launch_gate.lock().unwrap() = None;
+        // The cancel marks the request overtaken before it waits for the
+        // load; wait for that mark, not for a guess at how soon a thread
+        // runs, or a slow runner opens the gate first and the document
+        // completes.
+        let asked = runtime.generation.load(Ordering::SeqCst);
         let canceling = Arc::clone(&runtime);
         let cancel = std::thread::spawn(move || canceling.cancel());
+        while runtime.generation.load(Ordering::SeqCst) == asked {
+            std::thread::yield_now();
+        }
         std::thread::sleep(Duration::from_millis(50));
         assert!(!cancel.is_finished(), "the cancel waits for the load");
         gate.open();
@@ -10492,13 +10590,217 @@ mod runtime_tests {
         );
         let rewritten: serde_json::Value =
             serde_json::from_slice(&std::fs::read(install.stamp()).unwrap()).unwrap();
-        assert_eq!(rewritten["schemaVersion"], 2);
+        assert_eq!(rewritten["schemaVersion"], 3);
         assert_eq!(
             rewritten["files"].as_array().unwrap().len(),
             1,
             "{rewritten}"
         );
         assert_eq!(rewritten["files"][0]["name"], "model.gguf");
+    }
+
+    /// The stamp written by the build that ran both models on one runtime
+    /// recorded one server binary for every file. It vouches for nothing,
+    /// and is replaced by one that records each file's own.
+    #[test]
+    fn a_stamp_from_the_one_runtime_build_vouches_for_nothing() {
+        let install = Install::new("one-runtime-stamp");
+        verified(&install.runtime(&Rig::new(), "1.0.0"));
+        let mut stamp: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(install.stamp()).unwrap()).unwrap();
+        let file = stamp["files"][0].as_object_mut().unwrap();
+        let server_len = file.remove("serverLen").unwrap();
+        let server_modified = file.remove("serverModifiedNanos").unwrap();
+        stamp["schemaVersion"] = serde_json::json!(2);
+        stamp["serverLen"] = server_len;
+        stamp["serverModifiedNanos"] = server_modified;
+        std::fs::write(install.stamp(), serde_json::to_vec(&stamp).unwrap()).unwrap();
+
+        let rig = Rig::new();
+        verified(&install.runtime(&rig, "1.0.0"));
+        assert_eq!(
+            (rig.hash_count(), rig.proposals.load(Ordering::SeqCst)),
+            (1, 1)
+        );
+        let rewritten: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(install.stamp()).unwrap()).unwrap();
+        assert_eq!(rewritten["schemaVersion"], 3);
+        assert_eq!(rewritten.get("serverLen"), None, "{rewritten}");
+        assert_eq!(
+            rewritten["files"][0]["serverLen"],
+            b"server binary".len(),
+            "{rewritten}"
+        );
+    }
+
+    /// Each tier's entry in the stamp records the server binary of the
+    /// runtime it runs on, so a new upstream build sends only the accurate
+    /// model through its checks again, and a new Prism build only the fast
+    /// one.
+    #[test]
+    fn a_new_runtime_binary_vouches_for_nothing_only_about_its_own_tier() {
+        let install = Install::new("stamp-runtimes");
+        install.install_accurate();
+        let launch = |preference: ModelPreference| {
+            let rig = Rig::new();
+            let world = World::new();
+            world.prefer(preference);
+            verified(&install.runtime_in(&rig, "1.0.0", &world));
+            (rig.hash_count(), rig.proposals.load(Ordering::SeqCst))
+        };
+        let stamped = || {
+            let runtime = install.runtime(&Rig::new(), "1.0.0");
+            (
+                runtime.stamped(ModelTier::Fast),
+                runtime.stamped(ModelTier::Accurate),
+            )
+        };
+        // Both digests, then each model's self-test the first time it loads.
+        assert_eq!(launch(ModelPreference::Fast), (2, 1));
+        assert_eq!(launch(ModelPreference::Accurate), (0, 1));
+        assert_eq!(stamped(), (Some(true), Some(true)));
+
+        std::fs::write(install.servers().upstream, b"a newer upstream build").unwrap();
+        assert_eq!(stamped(), (Some(true), None));
+        assert_eq!(launch(ModelPreference::Accurate), (1, 1));
+        assert_eq!(launch(ModelPreference::Fast), (0, 0));
+
+        std::fs::write(install.servers().prism, b"a newer prism build").unwrap();
+        assert_eq!(stamped(), (None, Some(true)));
+        assert_eq!(launch(ModelPreference::Fast), (1, 1));
+        assert_eq!(launch(ModelPreference::Accurate), (0, 0));
+    }
+
+    /// The real launcher for the accurate model, the fake for the fast one.
+    struct RealAccurateLauncher {
+        real: LlamaLauncher,
+        fake: FakeLauncher,
+    }
+
+    impl RuntimeLauncher for RealAccurateLauncher {
+        fn launch(
+            &self,
+            manifest: &ModelManifest,
+            tier: ModelTier,
+        ) -> Result<LaunchedRuntime, CommandError> {
+            match tier {
+                ModelTier::Accurate => self.real.launch(manifest, tier),
+                ModelTier::Fast => self.fake.launch(manifest, tier),
+            }
+        }
+    }
+
+    /// An install without upstream - a dev checkout, or one from before it
+    /// shipped - launches, and its accurate model fails to start exactly as
+    /// one whose Prism server is missing does: set aside for the session
+    /// while the fast model reads. Prism's server is not started in its place.
+    #[test]
+    fn a_missing_runtime_fails_to_start_as_a_missing_prism_does() {
+        let install = Install::new("missing-runtime");
+        install.install_accurate();
+        let servers = install.servers();
+        std::fs::remove_dir_all(servers.upstream.parent().unwrap()).unwrap();
+        #[cfg(unix)]
+        stand_in_server(&servers.prism);
+        let launcher = || LlamaLauncher {
+            servers: servers.clone(),
+            model_directory: install.root.join("models"),
+        };
+        let Err(upstream_missing) = launcher().launch(&manifest(), ModelTier::Accurate) else {
+            panic!("a missing upstream server started");
+        };
+        assert_eq!(upstream_missing.code, "MODEL_SERVER_START_FAILED");
+        #[cfg(unix)]
+        assert_eq!(stand_in_ran_in(&servers.prism), Vec::<PathBuf>::new());
+
+        let rig = Rig::new();
+        let runtime = install.runtime_on(
+            Arc::new(RealAccurateLauncher {
+                real: launcher(),
+                fake: FakeLauncher {
+                    rig: Arc::clone(&rig),
+                },
+            }),
+            &rig,
+            "1.0.0",
+            &World::new(),
+        );
+        verified(&runtime);
+        assert_eq!(
+            runtime.tier_failure(ModelTier::Accurate).as_deref(),
+            Some("MODEL_SERVER_START_FAILED")
+        );
+        assert_eq!(runtime.loaded_tier(), Some(ModelTier::Fast));
+        assert_eq!(launched(&rig), [ModelTier::Fast]);
+        #[cfg(unix)]
+        assert_eq!(stand_in_ran_in(&servers.prism), Vec::<PathBuf>::new());
+
+        std::fs::remove_file(&servers.prism).unwrap();
+        let Err(prism_missing) = launcher().launch(&manifest(), ModelTier::Fast) else {
+            panic!("a missing Prism server started");
+        };
+        assert_eq!(
+            (upstream_missing.code, upstream_missing.message),
+            (prism_missing.code, prism_missing.message)
+        );
+    }
+
+    /// Makes `server` a stand-in llama-server that notes, beside itself, the
+    /// folder it was started in, and exits - so no launch of it succeeds.
+    #[cfg(unix)]
+    fn stand_in_server(server: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::write(server, "#!/bin/sh\npwd -P >> \"$0.ran\"\n").unwrap();
+        std::fs::set_permissions(server, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// The folders the stand-in at `server` was started in, once each: a
+    /// launch tries a server that exits more than once.
+    #[cfg(unix)]
+    fn stand_in_ran_in(server: &Path) -> Vec<PathBuf> {
+        let mut folders = std::fs::read_to_string(format!("{}.ran", server.display()))
+            .unwrap_or_default()
+            .lines()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
+        folders.dedup();
+        folders
+    }
+
+    /// Each tier's server is started from its own runtime, in that runtime's
+    /// folder: the fast model's from Prism's, the accurate model's from
+    /// upstream's.
+    #[cfg(unix)]
+    #[test]
+    fn each_tier_is_launched_on_its_own_runtime_in_its_folder() {
+        let install = Install::new("launch-runtimes");
+        install.install_accurate();
+        let servers = install.servers();
+        stand_in_server(&servers.prism);
+        stand_in_server(&servers.upstream);
+        let launcher = LlamaLauncher {
+            servers: servers.clone(),
+            model_directory: install.root.join("models"),
+        };
+        let root = install.root.canonicalize().unwrap();
+
+        let Err(error) = launcher.launch(&manifest(), ModelTier::Fast) else {
+            panic!("the stand-in server exits");
+        };
+        assert_eq!(error.code, "MODEL_SERVER_START_FAILED");
+        assert_eq!(stand_in_ran_in(&servers.prism), [root.clone()]);
+        assert_eq!(stand_in_ran_in(&servers.upstream), Vec::<PathBuf>::new());
+
+        let Err(error) = launcher.launch(&manifest(), ModelTier::Accurate) else {
+            panic!("the stand-in server exits");
+        };
+        assert_eq!(error.code, "MODEL_SERVER_START_FAILED");
+        assert_eq!(
+            stand_in_ran_in(&servers.upstream),
+            [root.join("llama-upstream")]
+        );
+        assert_eq!(stand_in_ran_in(&servers.prism), [root]);
     }
 
     /// The real llama-server through a whole lifecycle: start and verify,
@@ -10530,8 +10832,12 @@ mod runtime_tests {
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
         std::os::unix::fs::symlink(PathBuf::from(&model), directory.join(&name)).unwrap();
+        // The server named runs that model, whichever runtime it is.
         let runtime = Arc::new(RuntimeModel::new(
-            PathBuf::from(server),
+            ServerExecutables {
+                prism: PathBuf::from(&server),
+                upstream: PathBuf::from(&server),
+            },
             directory.clone(),
             manifest,
             Box::new(|| ModelPreference::Fast),

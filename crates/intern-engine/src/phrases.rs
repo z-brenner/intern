@@ -201,18 +201,33 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
     // is all capitals - and never across a connector (the noun would be a
     // complement then), a company's legal form or an organization's noun.
     let style = writing(tokens[at]);
-    let mut start = at;
-    while start > 0 {
-        let previous = tokens[start - 1];
-        let word = core(previous);
-        if breaks(previous)
-            || previous.ends_with(':')
+    let stops_left = |token: &str| {
+        let word = core(token);
+        breaks(token)
+            || token.ends_with(':')
             || TITLE_STOPS.contains(&word.as_str())
             || LEFT_STOPS.contains(&word.as_str())
             || CONNECTORS.contains(&word.as_str())
             || ORGANIZATION_ENDINGS.contains(&word.trim_end_matches('.'))
-            || writing(previous) != style
+            || writing(token) != style
+    };
+    let mut start = at;
+    while start > 0 {
+        let previous = tokens[start - 1];
+        let word = core(previous);
+        // An agreement is named for what it joins: "Purchase and Sale
+        // Agreement", "Co-Branding and Advertising Agreement". Any other
+        // kind stops at "and" - "Availability and Price List" is a price
+        // list.
+        if word == "and"
+            && matches!(head, "agreement" | "contract")
+            && start >= 2
+            && !stops_left(tokens[start - 2])
         {
+            start -= 1;
+            continue;
+        }
+        if stops_left(previous) {
             break;
         }
         start -= 1;
@@ -243,12 +258,20 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
             }
         }
     }
+    // A comma inside the title is the title's own ("Software License,
+    // Customization and Maintenance Agreement"); only its ends lose
+    // punctuation.
+    let last = end - start - 1;
     let phrase = tokens[start..end]
         .iter()
-        .map(|token| {
-            token
-                .trim_start_matches(['#', '*', '(', '"', '\u{201c}'])
-                .trim_end_matches([':', ',', ';', '.', '*', ')', '"', '\u{201d}'])
+        .enumerate()
+        .map(|(at, token)| {
+            let token = token.trim_start_matches(['#', '*', '(', '"', '\u{201c}']);
+            if at == last {
+                token.trim_end_matches([':', ',', ';', '.', '*', ')', '"', '\u{201d}'])
+            } else {
+                token.trim_end_matches([':', ';', '.', '*', ')', '"', '\u{201d}'])
+            }
         })
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>()
@@ -646,6 +669,21 @@ mod tests {
                 "# Mutual Non-Disclosure Agreement",
                 "agreement",
                 Some("Mutual Non-Disclosure Agreement"),
+            ),
+            (
+                "CO-BRANDING AND ADVERTISING AGREEMENT",
+                "agreement",
+                Some("Co-branding and Advertising Agreement"),
+            ),
+            (
+                "This Purchase and Sale Agreement",
+                "agreement",
+                Some("Purchase and Sale Agreement"),
+            ),
+            (
+                "SOFTWARE LICENSE, CUSTOMIZATION AND MAINTENANCE AGREEMENT",
+                "agreement",
+                Some("Software License, Customization and Maintenance Agreement"),
             ),
             (
                 "SETTLEMENT AGREEMENT AND MUTUAL RELEASE",

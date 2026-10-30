@@ -1400,6 +1400,12 @@ fn is_initial(word: &str) -> bool {
     core.chars().count() == 1 && core.chars().all(char::is_uppercase)
 }
 
+/// [`organizations`] for validation, which reads a header line the index
+/// read whole.
+pub(crate) fn organizations_in(text: &str) -> Vec<String> {
+    organizations(text)
+}
+
 /// Likely organizations: a run of capitalized words - "&", "and" and "of"
 /// may join them - that ends on an organization word ("LLC", "Bank",
 /// "Cooperative") where the name ends: before punctuation, a lower-case

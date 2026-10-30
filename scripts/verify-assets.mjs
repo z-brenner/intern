@@ -7,12 +7,18 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_MANIFEST = resolve(REPOSITORY_ROOT, 'src-tauri/resources/runtime-assets.json');
 const EXPECTED_DOWNLOADS = Object.freeze({
-  // The PrismML fork of llama.cpp: its PQ2_0 kernels are what the quick
-  // Bonsai 2 model needs, and the 77-document evaluation ran Qwen3.5 2B on
-  // the same build with the same results. Its Windows CPU archive carries no
-  // license text, so the fork's MIT LICENSE at the same tag is pinned too.
+  // The PrismML fork of llama.cpp, which the fast model runs on: its PQ2_0
+  // kernels are what the quick Bonsai 2 model needs. Its Windows CPU archive
+  // carries no license text, so the fork's MIT LICENSE at the same tag is
+  // pinned too.
   'llama.cpp': { version: 'prism-b10826-c9c34bc', archive: 'llama-prism-b10826-c9c34bc-bin-win-cpu-x64.zip', url: 'https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10826-c9c34bc/llama-prism-b10826-c9c34bc-bin-win-cpu-x64.zip', size: 19_559_127, sha256: '1e88ab9e858b5c2dbc30cf847947a9f923b53511ba0baf0b265353ebe1f4daa6' },
   'llama.cpp-license': { version: 'prism-b10826-c9c34bc', archive: 'llama.cpp-LICENSE.txt', url: 'https://raw.githubusercontent.com/PrismML-Eng/llama.cpp/prism-b10826-c9c34bc/LICENSE', size: 1_078, sha256: '94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d' },
+  // Upstream llama.cpp, which the accurate model runs on, installed in its
+  // own llama-upstream folder. Its Windows CPU archive carries no llama.cpp
+  // license either; the LICENSE at b11946 is byte for byte the fork's, so the
+  // pin above covers both builds. It does carry LLVM's OpenMP runtime, which
+  // its CPU build imports, and that runtime's license.
+  'llama.cpp-upstream': { version: 'b11946', archive: 'llama-b11946-bin-win-cpu-x64.zip', url: 'https://github.com/ggml-org/llama.cpp/releases/download/b11946/llama-b11946-bin-win-cpu-x64.zip', size: 24_376_086, sha256: '8a702bb07c873b133c56eb3acd92a48d7c5c9ad339c6435eddc5185e46e1a043' },
   pdfium: { version: 'chromium/7881', archive: 'pdfium-win-x64.tgz', url: 'https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7881/pdfium-win-x64.tgz', size: 3_733_154, sha256: '73cc0de638ac2095e7445bf56a38200a5b7c7ca0e9f4ba144598f2457377ac08' },
   'eng.traineddata': { version: '87416418657359cb625c412a48b6e1d6d41c29bd', archive: 'eng.traineddata', url: 'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/eng.traineddata', size: 4_113_088, sha256: '7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2' },
   'osd.traineddata': { version: '87416418657359cb625c412a48b6e1d6d41c29bd', archive: 'osd.traineddata', url: 'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/osd.traineddata', size: 10_562_727, sha256: '9cf5d576fcc47564f11265841e5ca839001e7e6f38ff7f7aacf46d15a96b00ff' },

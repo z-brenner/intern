@@ -27,6 +27,27 @@ it('scores the corpus with the exact model the app installs, text-only', async (
   expect(script).toContain('--prompt-profile');
 });
 
+// Each tier is scored on the llama.cpp build the app runs it on: upstream
+// llama.cpp from the runtime's llama-upstream folder for the accurate model,
+// which is what the release and QA runs score, and the PrismML fork at the
+// runtime's root for the fast one. Both workflows hand over the runtime root.
+it('scores each tier on the llama-server the app runs it on', async () => {
+  const [script, release, qa] = await Promise.all([
+    readFile('scripts/run-model-evaluation.ps1', 'utf8'),
+    readFile('.github/workflows/release.yml', 'utf8'),
+    readFile('.github/workflows/qa.yml', 'utf8'),
+  ]);
+  expect(script).toMatch(/\[ValidateSet\("fast", "accurate"\)\]\[string\]\$Tier = "accurate"/);
+  expect(script).toContain('$ServerRelative = if ($Tier -eq "accurate") { "llama-upstream/llama-server.exe" } else { "llama-server.exe" }');
+  expect(script).toContain('$Server = [IO.Path]::GetFullPath((Join-Path $Runtime $ServerRelative))');
+  expect(script).not.toContain('Join-Path $Runtime "llama-server.exe"');
+  expect(script).toContain('Start-Process -FilePath $Server ');
+  for (const workflow of [release, qa]) {
+    expect(workflow).toMatch(/-RuntimeDirectory \$env:INTERN(?:_QA)?_RUNTIME_STAGE `/);
+    expect(workflow).not.toMatch(/run-model-evaluation\.ps1[^\n]*-Tier\b/);
+  }
+});
+
 it('the evaluator drives the shipping extraction, distillation, and validation path', async () => {
   const source = await readFile('crates/intern-engine/src/bin/intern-evaluate.rs', 'utf8');
   expect(source).toContain('SupervisedWorker');

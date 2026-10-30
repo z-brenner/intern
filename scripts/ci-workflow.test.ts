@@ -110,7 +110,9 @@ describe('the Rust (Ubuntu) job', () => {
     const windowsPlaceholders = [...windows.matchAll(/New-Item -ItemType File (src-tauri\\resources\\\S+compile-placeholder\.\w+)/g)]
       .map((match) => match[1].replaceAll('\\', '/'));
     const linuxPlaceholders = [...linux.matchAll(/touch (src-tauri\/resources\/\S+compile-placeholder\.\w+)/g)].map((match) => match[1]);
-    expect(windowsPlaceholders).toHaveLength(5);
+    expect(windowsPlaceholders).toHaveLength(6);
+    // Upstream llama.cpp's folder, a directory resource of its own.
+    expect(windowsPlaceholders).toContain('src-tauri/resources/native/llama-upstream/compile-placeholder.dll');
     expect(linuxPlaceholders.sort()).toEqual(windowsPlaceholders.sort());
   });
 
@@ -124,6 +126,35 @@ describe('the Rust (Ubuntu) job', () => {
     const linux = stepsOf(jobOf(await ci(), 'rust-ubuntu')).find((step) => step.includes('compile-placeholder'))!;
     expect(linux).toMatch(/^ {10}mkdir -p .* src-tauri\/resources\/runtime$/m);
     expect(linux).toMatch(/^ {10}touch src-tauri\/resources\/runtime\/compile-placeholder$/m);
+  });
+});
+
+describe('the Windows builds', () => {
+  // The release and QA builds stage the same placeholders as CI's Windows job
+  // and take every one of them away again before the real assets are fetched:
+  // one left behind would be bundled into the installer, and one missing would
+  // stop the desktop crate compiling.
+  it('creates and removes the same placeholders in every Windows build', async () => {
+    const created = (step: string) => [...step.matchAll(/New-Item -ItemType File (src-tauri\\resources\\\S+compile-placeholder\.\w+)/g)].map((match) => match[1]).sort();
+    const removed = (step: string) => [...step.matchAll(/Remove-Item (src-tauri\\resources\\\S+compile-placeholder\.\w+)/g)].map((match) => match[1]).sort();
+    const jobs = [
+      ['ci.yml', jobOf(await ci(), 'windows-release-gates')],
+      ['release.yml', jobOf(await readFile('.github/workflows/release.yml', 'utf8'), 'release')],
+      ['qa.yml', jobOf(await readFile('.github/workflows/qa.yml', 'utf8'), 'windows-whole-product-qa')],
+    ] as const;
+    const reference = created(stepsOf(jobs[0][1]).find((step) => step.includes('New-Item -ItemType File src-tauri\\resources\\'))!);
+    expect(reference).toHaveLength(6);
+    for (const [name, job] of jobs) {
+      const steps = stepsOf(job);
+      const stage = steps.findIndex((step) => step.includes('New-Item -ItemType File src-tauri\\resources\\'));
+      // The invocation, not the cache steps whose keys hash the script.
+      const fetch = steps.findIndex((step) => step.includes('./scripts/fetch-windows-assets.ps1'));
+      expect(stage, name).toBeGreaterThanOrEqual(0);
+      expect(fetch, name).toBeGreaterThan(stage);
+      expect(created(steps[stage]), name).toEqual(reference);
+      expect(removed(steps[fetch]), name).toEqual(reference);
+      expect(steps[fetch].indexOf('Remove-Item'), name).toBeLessThan(steps[fetch].indexOf('./scripts/fetch-windows-assets.ps1'));
+    }
   });
 });
 

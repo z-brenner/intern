@@ -19,6 +19,14 @@
       "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
     },
     {
+      "id": "llama.cpp-upstream",
+      "version": "b11946",
+      "archive": "llama-b11946-bin-win-cpu-x64.zip",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11946/llama-b11946-bin-win-cpu-x64.zip",
+      "size": 24376086,
+      "sha256": "8a702bb07c873b133c56eb3acd92a48d7c5c9ad339c6435eddc5185e46e1a043"
+    },
+    {
       "id": "pdfium",
       "version": "chromium/7881",
       "archive": "pdfium-win-x64.tgz",

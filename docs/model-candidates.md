@@ -22,7 +22,7 @@ carry over:
 2. **A confidence signal from the model's own probabilities.** This was new. It
    is built and described below.
 
-## 1. Token confidence (built, off by default)
+## 1. Token confidence (on for the accurate model since October 2026)
 
 **What it is.** `ModelClient::with_token_confidence(true)` adds `"logprobs": true,
 "top_logprobs": 1` to the request. `client::token_confidence` reads the reported
@@ -46,9 +46,11 @@ written is the signal.
   one without logprobs and one with, gave byte-identical proposals for all 21
   fixtures.
 * **Readiness.** `Engine::with_min_token_confidence(t)` sends a proposal whose
-  `min` is below `t` to review with `LOW_CONFIDENCE`. Nothing sets it. The app
-  constructs `ModelClient` without token confidence, and `validate.rs` is
-  untouched and remains the grounding backstop.
+  `min` is below `t` to review with `LOW_CONFIDENCE`. Until October 2026 nothing
+  set it. The app now asks for token probabilities on the accurate model's
+  requests and sets `t` to `tiers::REVIEW_BELOW_TOKEN_CONFIDENCE` (0.5); see
+  [the InternBench calibration](#calibrated-on-internbench-october-2026) below.
+  `validate.rs` is untouched and remains the grounding backstop.
 
 **Live result** (this machine: Ryzen 7 PRO 8840U, llama.cpp b10361 Windows CPU,
 8 threads, 8,192 context, packaged runtime). Recorded with `--token-confidence`
@@ -74,17 +76,57 @@ already routes all three to review. Replaying that recording with a threshold:
 | 0.5 | 18/19 | 42% | no change: everything below 0.5 was already in review |
 | 0.7 | 15/19 | 58% | catches board-deck's wrong party, but also sends nda and termination-notice to review while they are correct |
 
-**Verdict.** The signal is real and it ranks the misreads lowest. On 19 documents
+**Verdict (fixture corpus).** The signal is real and it ranks the misreads lowest. On 19 documents
 it does not catch anything the verbatim checks miss without also costing correct
-ready files, so it stays data only. Calibrate it again when the corpus has more
-"ready but wrong" cases.
+ready files, so it stayed data only until a corpus with more "ready but wrong"
+cases could calibrate it. InternBench is that corpus.
 
-**Latency.** Not separable from noise in this run. Mean inference was 20.7 s
-without logprobs (first run, cold), 17.2 s with them, and 15.1 s for a repeat
-without them on a warm server. llama.cpp sorts the whole vocabulary once per
-generated token to report a probability, so expect a cost of a few percent. That
-cost should be measured with `llama-bench`-style repeated runs before the flag is
-turned on in the app.
+### Calibrated on InternBench (October 2026)
+
+InternBench's 77 documents have many more ready-but-wrong readings than the
+fixture corpus. Below are two recorded Qwen3.5 2B runs on the packaged runtime (Prism b10826, 4
+threads, Linux). Run A was recorded on October 27, run B on October 29. Both are re-scored with the party and
+issuer rules of October 2026, with `--min-token-confidence` applied to their
+recorded probabilities. "Unsafe" counts wrong names marked ready; "lost" counts
+right names the gate sends to review.
+
+| Threshold | A: ready | A: unsafe | A: lost | B: ready | B: unsafe | B: lost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| unset | 65 | 9 | 0 | 64 | 8 | 0 |
+| 0.3 | 65 | 9 | 0 | 64 | 8 | 0 |
+| **0.5** | **50** | **3** | **9** | **48** | **4** | **12** |
+| 0.7 | 27 | 1 | 30 | 32 | 2 | 26 |
+| 0.9 | 9 | 1 | 48 | 8 | 0 | 48 |
+
+At 0.5 the gate takes half to two thirds of the wrong names out of the files
+written unattended. The cost is 9–12 right names a person now confirms, about
+two right names per wrong one caught. The threshold is the one the fixture corpus suggested,
+not one read off these documents. Above 0.5 the cost climbs steeply.
+
+Other ways of reading the same probabilities were tried on run B: the party names alone, the
+first token of each name, the type, the role words, and the date. None caught
+more wrong names for the same number of right ones sent to review, so the gate
+keeps the date-and-party minimum. Published work agrees that such a signal ranks errors
+without verifying them: log-probability confidence on document extraction
+reaches AUROC 0.62–0.64 on 12–27B models (ConfBench, arXiv 2608.01792).
+
+The app therefore asks the accurate model for token probabilities and sends a
+reading whose least probable date or party token is below 0.5 to review. The
+fast model's readings are held for review whatever their probabilities, so it
+does not ask. `intern-bench run --min-token-confidence 0.5` scores a run the same
+way. A live run with the flag asks the server for probabilities, and a replay
+applies the gate to the probabilities its recording kept. `bench/recording.json`
+kept none, so its CI baseline is unchanged.
+
+**Latency.** The first fixture-corpus run could not separate the cost from
+noise. Mean inference was 20.7 s without logprobs (first run, cold), 17.2 s with
+them, and 15.1 s for a repeat without them on a warm server. It was then measured
+on the packaged runtime (Prism b10826, 4 threads, Linux). The same 26 recorded
+InternBench requests were replayed against a warm server, once as recorded with
+`logprobs` and once with it stripped (`scripts/bonsai-eval/replay-requests.py
+--strip-logprobs`). They took 23.71 s and 23.72 s per request. Generation alone was
+7.40 s against 7.28 s at the median, and all 26 replies were byte-identical. The cost
+is within noise.
 
 **Reproduce.**
 

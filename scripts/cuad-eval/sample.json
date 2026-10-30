@@ -1,0 +1,429 @@
+{
+ "source": "CUAD v1 (The Atticus Project), https://huggingface.co/datasets/theatticusproject/cuad",
+ "license": "CC BY 4.0",
+ "revision": "a3c393f5d103fd0c516374e4fdff676c8176dcb1",
+ "selection": "Every 12th of the 510 contracts in master_clauses.csv, sorted by file name; the one without a PDF is left out.",
+ "answers": "Document Name, Parties, Agreement Date and Effective Date as CUAD gives them in master_clauses.csv, verbatim.",
+ "contracts": [
+  {
+   "id": "cuad-00",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Co_Branding/2ThemartComInc_19990826_10-12G_EX-10.10_6700288_EX-10.10_Co-Branding Agreement_ Agency Agreement.pdf",
+   "size": 109658,
+   "sha256": "db445255a65067160b9e9a7cf23afbd3379a715d000b0576fa8e7f64982e523c",
+   "document_name": "CO-BRANDING AND ADVERTISING AGREEMENT",
+   "parties": "I-ESCROW, INC.  (\"i-Escrow\" ); 2THEMART.COM, INC. (\"2TheMart\")",
+   "agreement_date": "6/21/99",
+   "effective_date": "6/21/99"
+  },
+  {
+   "id": "cuad-01",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Franchise/AIRTECHINTERNATIONALGROUPINC_05_08_2000-EX-10.4-FRANCHISE AGREEMENT.PDF",
+   "size": 106449,
+   "sha256": "0d9366515ac2c431134596f3fb88620a6e9f3685e0d516512f52d202dd68459d",
+   "document_name": "FRANCHISE AGREEMENT",
+   "parties": "Airsopure International Group, Inc. (\"AIRSOPURE\" or \"we\" or \"us\" or \"our\"); [] (\"You\" or \"Franchisee\" or \"Your\")",
+   "agreement_date": "[]/[]/2000",
+   "effective_date": "[]/[]/2000"
+  },
+  {
+   "id": "cuad-02",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Outsourcing/ASPIRITYHOLDINGSLLC_05_07_2012-EX-10.6-OUTSOURCING AGREEMENT.PDF",
+   "size": 122686,
+   "sha256": "c9b99e5bbe7713568de11ba6555ff9f0a2d4b182a73b50a75a9bd2c6fb43af3e",
+   "document_name": "OUTSOURCING AGREEMENT",
+   "parties": "Twin Cities Power Holdings, LLC (\"Company\"); Redwater LLC (\"Contractor\")",
+   "agreement_date": "[]/[]/2012",
+   "effective_date": "[]/[]/2012"
+  },
+  {
+   "id": "cuad-03",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Sponsorship/ArcGroupInc_20171211_8-K_EX-10.1_10976103_EX-10.1_Sponsorship Agreement.pdf",
+   "size": 159195,
+   "sha256": "0bc652ae6ab3a7a3c6415671980b954c4acabf5aa5f05e6a298d419160c09508",
+   "document_name": "JACKSONVILLE JAGUARS SPONSORSHIP AGREEMENT",
+   "parties": "Jacksonville Jaguars, LLC (\"Club\"); The ARC Group, Inc. (\"Sponser\")",
+   "agreement_date": "11/27/17",
+   "effective_date": "4/1/18"
+  },
+  {
+   "id": "cuad-04",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Agency Agreements/BANUESTRAFINANCIALCORP_09_08_2006-EX-10.16-AGENCY AGREEMENT.PDF",
+   "size": 150277,
+   "sha256": "7ce2c3beb03ac5ef977cb9b40a7af66b4fc17cb56fbeeb83e4aea3416f4f121d",
+   "document_name": "AGENCY AGREEMENT",
+   "parties": "El Banco Financial Corporation (the \"Company\"); sales agent (the \"Agent\" or \"you\")",
+   "agreement_date": "[]/[]/2006",
+   "effective_date": "[]/[]/2006"
+  },
+  {
+   "id": "cuad-05",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Joint Venture _ Filing/BLACKROCKMUNIHOLDINGSINVESTMENTQUALITYFUND_04_07_2020-EX-99.01-JOINT FILING AGREEMENT.PDF",
+   "size": 76268,
+   "sha256": "9761145d563ef18fdda5338cd3f8439e9a78f2cd21c618d0c62705739ee366e3",
+   "document_name": "JOINT FILING AGREEMENT",
+   "parties": "Bank of America Corporatino, Banc of America Preferred Funding Corporation",
+   "agreement_date": "4/7/20",
+   "effective_date": "4/7/20"
+  },
+  {
+   "id": "cuad-06",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Manufacturing/BellringBrandsInc_20190920_S-1_EX-10.12_11817081_EX-10.12_Manufacturing Agreement2.pdf",
+   "size": 116609,
+   "sha256": "c0cc47b84088ef147b795b084b7df61adffe426aff10bc26379303681742460f",
+   "document_name": "AMENDMENT NO. 1\n\nMANUFACTURING AGREEMENT",
+   "parties": "Stremick's Heritage Foods, LLC (\"Heritage\"); Premier Nutrition Corporation (\"Premier\")",
+   "agreement_date": "6/11/18",
+   "effective_date": "6/11/18"
+  },
+  {
+   "id": "cuad-07",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Hosting/CHANGEPOINTCORP_03_08_2000-EX-10.6-LICENSE AND HOSTING AGREEMENT.PDF",
+   "size": 162550,
+   "sha256": "38c558681f151ce76793fef1dd5637b713bbdf9165d28b2b6c475021b9a0b521",
+   "document_name": "License and Hosting Agreement",
+   "parties": "Corio Inc. (\"CORIO\"); Changepoint, Inc. (\"CHANGEPOINT\")",
+   "agreement_date": "12/13/99",
+   "effective_date": "12/13/99"
+  },
+  {
+   "id": "cuad-08",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Maintenance/CardlyticsInc_20180112_S-1_EX-10.16_11002987_EX-10.16_Maintenance Agreement1.pdf",
+   "size": 394482,
+   "sha256": "4765b84564a06932e38726ee204da005bc9c141870ef2138a1957f7ab5891909",
+   "document_name": " Software License, Customization and Maintenance Agreement",
+   "parties": "Cardlytics, Inc. (“Supplier”);  Bank of America, N.A. (“Bank of America”);",
+   "agreement_date": "11/4/10",
+   "effective_date": "11/4/10"
+  },
+  {
+   "id": "cuad-09",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Development/ConformisInc_20191101_10-Q_EX-10.6_11861402_EX-10.6_Development Agreement.pdf",
+   "size": 262917,
+   "sha256": "1898e7e28a41e73106b3def7876002da7428d79bd42971bdddfbea6570947f82",
+   "document_name": "DEVELOPMENT AGREEMENT",
+   "parties": "Howmedica Ostenonics Corp. (\"Stryker\"); Conformis, Inc. (\"Conformis\"); Stryker and Conformis (“Parties” and   individually as a “Party.”)",
+   "agreement_date": "9/30/19",
+   "effective_date": "9/30/19"
+  },
+  {
+   "id": "cuad-10",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/License_Agreements/DataCallTechnologies_20060918_SB-2A_EX-10.9_944510_EX-10.9_Content License Agreement.pdf",
+   "size": 54491,
+   "sha256": "7bd483e4fddbb817419d73402ac6080ea0a15afd2eb0a9f7e7593c60ee71276c",
+   "document_name": "                           CONTENT LICENSING AGREEMENT",
+   "parties": "Data Call Technologies, Inc (\"Licensor\"); PLAN_B MEDIA AG (\"plan_b\")",
+   "agreement_date": "3/24/06",
+   "effective_date": "4/1/06"
+  },
+  {
+   "id": "cuad-11",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Strategic Alliance/ENTRUSTINC_07_24_1998-EX-10.5-STRATEGIC ALLIANCE AGREEMENT.PDF",
+   "size": 72980,
+   "sha256": "940e859d4be0000693b6c36772498467eb5267d634efc6b92112840455d00f25",
+   "document_name": "STRATEGIC ALLIANCE AGREEMENT",
+   "parties": "NORTHERN TELECOM LIMITED (\"NTL\"); ENTRUST TECHNOLOGIES INC. (\"ETI\")",
+   "agreement_date": "12/31/96",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-12",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Development/EtonPharmaceuticalsInc_20191114_10-Q_EX-10.1_11893941_EX-10.1_Development Agreement.pdf",
+   "size": 247649,
+   "sha256": "713dd19746ead7a3f5f2d1d3f23b81c3beb3485eba8b267845fb76af7d53bee9",
+   "document_name": "EXCLUSIVE LICENSE AND PRODUCT DEVELOPMENT AGREEMENT",
+   "parties": "Eton Pharmaceuticals, Inc. (“ETON”); Aucta Pharmaceuticals, Inc.(“Aucta”)",
+   "agreement_date": "6/12/19",
+   "effective_date": "9/2/19"
+  },
+  {
+   "id": "cuad-13",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Supply/FUSIONPHARMACEUTICALSINC_06_05_2020-EX-10.17-Supply Agreement - FUSION.PDF",
+   "size": 163344,
+   "sha256": "0af3ed902cd8bddacd6dcbd12849ddf1756a3672389e0bc1e2f636b0d6387c44",
+   "document_name": "SUPPLY AGREEMENT",
+   "parties": "Centre for Probe Development and Commercialization (\"CPDC\"); FUSION Pharmaceuticals Inc. (\"FUSION\"); (together \"Parties\", each a \"Party\")",
+   "agreement_date": "",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-14",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Promotion/GOCALLINC_03_30_2000-EX-10.7-Promotion Agreement.PDF",
+   "size": 56171,
+   "sha256": "96b3cd38ce895b65ca700c4fed9f746c5479c984429c9997e34c932481abc514",
+   "document_name": "Promotion Agreement",
+   "parties": "Go Call, Inc. (\"Go Call\"); PageMaster Corporation",
+   "agreement_date": "3/12/99",
+   "effective_date": "6/1/99"
+  },
+  {
+   "id": "cuad-15",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/License_Agreements/GluMobileInc_20070319_S-1A_EX-10.09_436630_EX-10.09_Content License Agreement1.pdf",
+   "size": 327959,
+   "sha256": "fee1c562facd69bcb9d76c614d36fc83bf9d69f8299d6a2bdb83e09789807c93",
+   "document_name": "WIRELESS CONTENT LICENSE AGREEMENT",
+   "parties": "Twentieth Century Fox Licensing & Merchandising (\"Fox\"); Sorrent, Inc (\"Licensee\")(\"parties\" and each individually as a \"party)",
+   "agreement_date": "12/16/04",
+   "effective_date": "12/16/04"
+  },
+  {
+   "id": "cuad-16",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Hosting/HEALTHGATEDATACORP_11_24_1999-EX-10.1-HOSTING AND MANAGEMENT AGREEMENT - Escrow Agreement.pdf",
+   "size": 71125,
+   "sha256": "6cea0f3bf3f61e2fbdd57388b97571423e58b83b5a9e46ca4fd32653bd1df050",
+   "document_name": "ESCROW AGREEMENT",
+   "parties": "NCC ESCROW INTERNATIONAL LIMITED (\"NCC\")",
+   "agreement_date": "",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-17",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Maintenance/HerImports_20161018_8-KA_EX-10.14_9765707_EX-10.14_Maintenance Agreement.pdf",
+   "size": 133480,
+   "sha256": "09f0aa439b6f1b49e8c46972498520d8218b117fa366a4a30ac131e0dc068c3a",
+   "document_name": "SOFTWARE MAINTENANCE AGREEMENT",
+   "parties": "Leader Act Ltd (“LEADER”); EZJR, Inc. (“EZJR”);",
+   "agreement_date": "10/13/16",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-18",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Strategic Alliance/INTELLIGENTHIGHWAYSOLUTIONS,INC_01_18_2018-EX-10.1-Strategic Alliance Agreement.PDF",
+   "size": 88472,
+   "sha256": "f9a387ed7292227f0f8f6aaffc102831089c8d8a2b0a900d33b4b3c4a04ec70e",
+   "document_name": "Strategic Alliance Agreement",
+   "parties": "Bravatek Solutions, Inc. (\"Bravatek\"); Fazync LLC (\"Fazync\")",
+   "agreement_date": "1/10/18",
+   "effective_date": "1/10/18"
+  },
+  {
+   "id": "cuad-19",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Co_Branding/ImpresseCorp_20000322_S-1A_EX-10.11_5199234_EX-10.11_Co-Branding Agreement.pdf",
+   "size": 140076,
+   "sha256": "e5811ba26708c1dad49c49ccc8eb932e2ae64146c0dbd0be4b253c6611d2d106",
+   "document_name": "CO-BRANDING AGREEMENT",
+   "parties": "VerticalNet, Inc. (\"VerticalNet\"); Impresse Corporation (\"Impresse\")",
+   "agreement_date": "3/3/00",
+   "effective_date": "3/3/00"
+  },
+  {
+   "id": "cuad-20",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Joint Venture/KIROMICBIOPHARMA,INC_04_08_2020-EX-10.28-JOINT VENTURE AGREEMENT.PDF",
+   "size": 139882,
+   "sha256": "7034a3296659047868461016374198e10c2c2b29d5a8c2eb0afbc71cf0be5c00",
+   "document_name": "JOINT VENTURE AGREEMENT",
+   "parties": "KIROMIC BIOPHARMA Inc.; MOLIPHARMA S.R.L. (\"Party\" and, together, the \"Parties\")",
+   "agreement_date": "4/2/20",
+   "effective_date": "4/2/20"
+  },
+  {
+   "id": "cuad-21",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Sponsorship/LOOKSMARTLTD_07_20_2012-EX-99.(D)(I)-SPONSORSHIP AGREEMENT.PDF",
+   "size": 65815,
+   "sha256": "08c1cd4967f70fb7580fc4a899734217eef7a1f2f3dd3e59563649b0ee832afd",
+   "document_name": "SPONSORSHIP AGREEMENT",
+   "parties": "PEEK Investments LLC (\"Purchaser\"); Platinum Partners Value Arbitrage Fund L.P (\"Sponser\"); Snowy August Fund ILP (\"Sponser\")",
+   "agreement_date": "7/16/12",
+   "effective_date": "7/16/12"
+  },
+  {
+   "id": "cuad-22",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Marketing/Loop Industries, Inc. - Marketing Agreement.PDF",
+   "size": 165415,
+   "sha256": "b7feeec5eaba37206b343de07f3dd1343a9074aa1eeb14a4d49fcc79270bf65c",
+   "document_name": "Marketing Agreement",
+   "parties": "Loop Industries, Inc. (\"Loop\"); Indorama Loop Technologies, LLC (\"Joint Venture Company”); Loop and Joint Venture Company (individually a \"Party, together they are the \"Parties\")",
+   "agreement_date": "09/[]/2018",
+   "effective_date": "09/[]/2018"
+  },
+  {
+   "id": "cuad-23",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Joint Venture _ Filing/MFAFINANCIAL,INC_07_06_2020-EX-99.D-JOINT FILING AGREEMENT.PDF",
+   "size": 77234,
+   "sha256": "a3f07b15f6ab32a6f46341d6d4d519b85257f8338ccfee73b0345e1b96712205",
+   "document_name": "JOINT FILING AGREEMENT",
+   "parties": "ATHENE ANNUITY AND LIFE COMPANY; ATHENE ANNUITY & LIFE ASSURANCE COMPANY; ATHENE USA CORPORATION; ATHENE LIFE RE LTD.; ATHENE HOLDING LTD.; APOLLO INSURANCE SOLUTIONS GROUP LP; AISG GP LTD.; APOLLO LIFE ASSET, L.P.; APOLLO LIFE ASSET GP, LLC.; APOLLO CAPITAL MANAGEMENT, L.P.; APOLLO CAPITAL MANAGEMENT GP, LLC; APOLLO MANAGEMENT HOLDINGS, L.P.; APOLLO MANAGEMENT HOLDINGS GP, LLC; OMAHA EQUITY AGGREGATOR, L.P.; AP OMAHA ADVISORS, LLC; APOLLO HYBRID VALUE ADVISORS, L.P.; APOLLO HYBRID VALUE CAPITAL MANAGEMENT, LLC; APH HOLDINGS, L.P.; APOLLO PRINCIPAL HOLDINGS III GP, LTD.",
+   "agreement_date": "7/6/20",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-24",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Development/Microgenics Corporation - Collaborative Development and Commercialization Agreement.PDF",
+   "size": 496023,
+   "sha256": "fe2b71211dd6c1602aec36fadd7bc47b17398625d198c531c4d30cb24e79102a",
+   "document_name": "Collaborative Development and Commercialization Agreement",
+   "parties": "Microgenics Corporation (\"Microgenics\"); Achaogen Inc. (\"Achaogen\"); (individually \"Party\" and collectively \"Parties\")",
+   "agreement_date": "4/26/16",
+   "effective_date": "4/26/16"
+  },
+  {
+   "id": "cuad-25",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Distributor/NEONSYSTEMSINC_03_01_1999-EX-10.5-DISTRIBUTOR AGREEMENT_New.pdf",
+   "size": 86024,
+   "sha256": "259c057c3177899d1cdf70fd77212537c07c8f31414ddd3bad21e8f5937e3e50",
+   "document_name": "DISTRIBUTOR AGREEMENT",
+   "parties": "Peregrine/Bridge Transfer Corporation (\"Licensor\"); Neon Systems, Inc. (\"Licensee\")",
+   "agreement_date": "1/1/96",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-26",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Co_Branding/NeoformaInc_19991202_S-1A_EX-10.26_5224521_EX-10.26_Co-Branding Agreement.pdf",
+   "size": 176956,
+   "sha256": "72f393359cb96a1a7d5048b026cb4e17aa5e65a47454f407f3652a50d4538383",
+   "document_name": "CO-BRANDING AGREEMENT",
+   "parties": "VerticalNet, Inc. (\"VerticalNet\"); Neoforma.com, Inc. (\"Neoforma\")",
+   "agreement_date": "11/19/99",
+   "effective_date": "11/19/99"
+  },
+  {
+   "id": "cuad-27",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Joint Venture _ Filing/ONEMAINHOLDINGS,INC_02_20_2020-EX-99.D-JOINT FILING AGREEMENT.PDF",
+   "size": 80622,
+   "sha256": "22fb54fbba2ee54534ab6ef7428ca13f523764ff10eaffbb1e0f79a60e1e6bee",
+   "document_name": "JOINT FILING AGREEMENT",
+   "parties": "UNIFORM INVESTCO LP; UNIFORM INVESTCO GP LLC; THE VÄRDE FUND VI-A, L.P.; VÄRDE INVESTMENT PARTNERS, L.P.; VÄRDE INVESTMENT PARTNERS (OFFSHORE) MASTER, L.P.; VÄRDE INVESTMENT PARTNERS G.P., LLC; THE VÄRDE SKYWAY MASTER FUND, L.P.;THE VÄRDE SKYWAY FUND G.P., L.P.; THE VÄRDE SKYWAY FUND UGP, LLC; THE VÄRDE FUND XII (MASTER), L.P.; THE VÄRDE FUND XII G.P., L.P.; THE VÄRDE FUND XII UGP, LLC; VÄRDE CREDIT PARTNERS MASTER, L.P.",
+   "agreement_date": "2/20/20",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-29",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Co_Branding/PcquoteComInc_19990721_S-1A_EX-10.11_6377149_EX-10.11_Co-Branding Agreement1.pdf",
+   "size": 60048,
+   "sha256": "9489c53aec25f6209147d9d665c1319a0f20d5297b6f1ea1bd0d1c63c6e3531a",
+   "document_name": "CO-BRANDING AGREEMENT",
+   "parties": "PC QUOTE, INC. (\"PCQ\"); AB Wately, Inc. and all of its subsidiaries and related companies (\"ABW\" )",
+   "agreement_date": "10/11/96",
+   "effective_date": "10/11/96"
+  },
+  {
+   "id": "cuad-30",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Outsourcing/PhotronicsInc_20171219_10-QA_EX-10.28_10982650_EX-10.28_Outsourcing Agreement.pdf",
+   "size": 164768,
+   "sha256": "c9e8c673a22051250dcf6e5167502343044ac75763f119764b8f717f8457b472",
+   "document_name": "OUTSOURCING AGREEMENT",
+   "parties": "Photronics, Inc. (“Photronics”); Dai Nippon Printing Co., Ltd. (“DNP”); Photronics DNP Photomask Corporation (“PDMC”); Xiamen American Japan Photronics Mask Co., Ltd. (\"Company\"); Phototronics and DNP (\"Shareholder\" and collectively as \"Shareholders\"); Shareholder and PDMC (\"Supplier\" and collectively as the Suppliers\")",
+   "agreement_date": "5/16/17",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-31",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Service/RISEEDUCATIONCAYMANLTD_04_17_2020-EX-4.23-SERVICE AGREEMENT.PDF",
+   "size": 134418,
+   "sha256": "07e7051d85e64d75574d78a9d170de8849314f73a873945f04012437b12323d0",
+   "document_name": "SERVICE AGREEMENT",
+   "parties": "Rise (Tianjin) Education Information Consulting Co., Ltd. (\"Service Provider\"); [*] (\"Service Recipient\")",
+   "agreement_date": "",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-32",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Supply/ReynoldsConsumerProductsInc_20191115_S-1_EX-10.18_11896469_EX-10.18_Supply Agreement.pdf",
+   "size": 233403,
+   "sha256": "085f382aa806423ae3aa53a841bacc0cf4648add7a2e03b3e63785ab48f571d9",
+   "document_name": "MASTER SUPPLY AGREEMENT",
+   "parties": "REYNOLDS CONSUMER PRODUCTS LLC (\"Seller\"); PACTIV LLC (\"Buyer\")(\"Party\" and collectively at times as the \"Parties\")",
+   "agreement_date": "11/1/19",
+   "effective_date": "11/1/19"
+  },
+  {
+   "id": "cuad-33",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Consulting Agreements/SLINGERBAGINC_05_27_2020-EX-10.7-CONSULTING AGREEMENT.PDF",
+   "size": 136955,
+   "sha256": "a95b0b747addd873972b680db69f0d2519141f8c9a4f9ece60f1720e3f3645de",
+   "document_name": "CONSULTING AGREEMENT",
+   "parties": "Slinger Bag Inc. (the \"Company\"); Aitan Zacharin ( the \"Consultant\")",
+   "agreement_date": "04/30/[]",
+   "effective_date": "04/30/[]"
+  },
+  {
+   "id": "cuad-34",
+   "path": "CUAD_v1/full_contract_pdf/Part_II/Commercial Contracts (Part II-A)/Sponsorship/STAMPSCOMINC_06_24_1999-EX-10.18-SPONSORSHIP AGREEMENT.PDF",
+   "size": 74686,
+   "sha256": "d751292c7a041d17c78642107f95ebf5816ca6cabb7e0939e36a03ef4249edc8",
+   "document_name": "Sponsorship Agreement",
+   "parties": "Intuit Inc. (\"Intuit\"); Stamps.com Inc. (\"Client\")",
+   "agreement_date": "5/14/99",
+   "effective_date": "5/14/99"
+  },
+  {
+   "id": "cuad-35",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Promotion/SigaTechnologiesInc_20190603_8-K_EX-10.1_11695818_EX-10.1_Promotion Agreement.pdf",
+   "size": 409969,
+   "sha256": "61faf0deb528449f54b4183562084d6e807ea7beea7f141a9be753d21fa4be4f",
+   "document_name": "PROMOTION AGREEMENT",
+   "parties": "SIGA TECHNOLOGIES, INC. (\"SIGA\"); MERIDIAN MEDICAL TECHNOLOGIES, INC. (\"MMT\")(\"Party\" and collectively as the \"Parties\")",
+   "agreement_date": "5/31/19",
+   "effective_date": "5/31/19"
+  },
+  {
+   "id": "cuad-36",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Affiliate_Agreements/SteelVaultCorp_20081224_10-K_EX-10.16_3074935_EX-10.16_Affiliate Agreement.pdf",
+   "size": 81269,
+   "sha256": "188efe38ab1c503183e853ee80857ec2b14cb8e3b3c4b7b770ed64d7ebee8e50",
+   "document_name": "MARKETING AFFILIATE AGREEMENT",
+   "parties": "Equidata, Inc. (“Equidata”); National Credit Report.com, LLC (“Marketing Affiliate”)",
+   "agreement_date": "10/1/08",
+   "effective_date": "10/1/08"
+  },
+  {
+   "id": "cuad-37",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Development/TRUENORTHENERGYCORP_02_08_2007-EX-10.1-DEVELOPMENT AGREEMENT.PDF",
+   "size": 177548,
+   "sha256": "a606b03e22a9208f0391876342194a23e8e23e1706fcb21f41f8cf41f08318b7",
+   "document_name": "DEVELOPMENT AGREEMENT (“",
+   "parties": "BP America Production Company (\"BP\"); True North Energy Corp. (\"Company\")(individually as a “Party” and collectively, the “Parties”)",
+   "agreement_date": "1/1/07",
+   "effective_date": "1/1/07"
+  },
+  {
+   "id": "cuad-38",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Collaboration/URSCORPNEW_03_17_2014-EX-99-COOPERATION AGREEMENT.PDF",
+   "size": 104595,
+   "sha256": "adca259dfa2cc11b8779df7e5cefe647337011dc0c2a57b3d1fd54e05c5de2f0",
+   "document_name": "COOPERATION AGREEMENT",
+   "parties": "JANA Partners LLC (\"JANA\"); URS Corporation (\"Company\")",
+   "agreement_date": "3/13/14",
+   "effective_date": ""
+  },
+  {
+   "id": "cuad-39",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Maintenance/VERTEXENERGYINC_08_14_2014-EX-10.24-OPERATION AND MAINTENANCE AGREEMENT.PDF",
+   "size": 514171,
+   "sha256": "3236d0b861fb5deff80982858b667b4b556077f4f913f097cfe3f62a3c875671",
+   "document_name": "OPERATIONS AND MAINTENANCE AGREEMENT",
+   "parties": "MAGELLAN TERMINALS HOLDINGS, L.P. (\"Owner\"); OMEGA REFINING , LLC (\" Omega or Operator\"); Individually as \"Party\" and collectively as \"Parties\"",
+   "agreement_date": "11/3/10",
+   "effective_date": "11/3/10"
+  },
+  {
+   "id": "cuad-40",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/License_Agreements/VirtuosoSurgicalInc_20191227_1-A_EX1A-6 MAT CTRCT_11933379_EX1A-6 MAT CTRCT_License Agreement.pdf",
+   "size": 197269,
+   "sha256": "e0662f69d153fc3fb97351871313886aaae50d0d923c38c2be3cd7a20a8086f6",
+   "document_name": "NON-EXCLUSIVE LICENSE AGREEMENT- FOR SALES",
+   "parties": "The John Hopkins University (\"JHU\"); Virtuoso Surgical, Inc. (\"Company\")",
+   "agreement_date": "5/3/16",
+   "effective_date": "5/11/16"
+  },
+  {
+   "id": "cuad-41",
+   "path": "CUAD_v1/full_contract_pdf/Part_III/Reseller/WORLDWIDESTRATEGIESINC_11_02_2005-EX-10-RESELLER AGREEMENT.PDF",
+   "size": 107633,
+   "sha256": "a509401f251726f012c7fd8f6606a9c32ee7e959258721936ed7aa4d72de9798",
+   "document_name": "Reseller Agreement",
+   "parties": "Touchstar Software Corporation (\"TouchStar\"); Worldwide Strategies (\"Reseller\")",
+   "agreement_date": "09/14/200[]",
+   "effective_date": "09/14/200[]"
+  },
+  {
+   "id": "cuad-42",
+   "path": "CUAD_v1/full_contract_pdf/Part_I/Marketing/XpresspaGroupInc_20190401_10-K_EX-10.28_11599457_EX-10.28_Marketing Agreement.pdf",
+   "size": 216432,
+   "sha256": "f58e78e987e71bdb8c3756fa5d0980b04a667bb47ba016c4e5c435e3cd88745d",
+   "document_name": "PRODUCT SALE AND MARKETING AGREEMENT",
+   "parties": "Calm.com, Inc. (\"Calm\"); XpresSpa Group, Inc. (\"XPSA\")(\"Party\" and collectively as the \"Parties\")",
+   "agreement_date": "11/12/18",
+   "effective_date": "11/12/18"
+  }
+ ]
+}

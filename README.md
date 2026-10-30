@@ -547,10 +547,11 @@ results.
 
 ## Windows runtime assets and installer
 
-From PowerShell on Windows, fetch the exact llama.cpp build (the PrismML fork's
-`prism-b10826-c9c34bc` release, which both local models run on), PDFium
-chromium/7881, Tesseract 5.5.2, tessdata, ONNX Runtime 1.30.0 and OCR model
-assets ([OCR](docs/ocr.md) says which models and why):
+From PowerShell on Windows, fetch the exact llama.cpp builds (the PrismML fork's
+`prism-b10826-c9c34bc` release, which the fast model runs on, and upstream
+llama.cpp `b11946`, which the accurate model runs on), PDFium chromium/7881,
+Tesseract 5.5.2, tessdata, ONNX Runtime 1.30.0 and OCR model assets
+([OCR](docs/ocr.md) says which models and why):
 
 ```powershell
 cargo build --locked -p intern-worker --release --features windows-native
@@ -567,12 +568,18 @@ byte length and committed SHA-256 digest match. The fetcher checks out the exact
 vcpkg baseline, stages only required executables/DLLs/trained data and the full
 upstream/vcpkg license closure, and records both source and packaged paths plus a
 digest for every file in `src-tauri/resources/runtime-assets.json`.
+Each llama.cpp build ships as its `llama-server` and exactly the DLLs it loads:
+the fork's beside `Intern.exe`, and upstream's in a `llama-upstream` folder of
+its own, since the two builds' DLLs share names. Upstream's also needs LLVM's
+OpenMP runtime, `libomp.dll`, which ships there with its license.
 Tauri produces a per-user NSIS installer. To smoke-test a clean installer:
 
 ```powershell
 ./scripts/smoke-installer.ps1 -InstallerPath target/release/bundle/nsis/Intern_0.1.0-alpha.12_x64-setup.exe
 ```
 
+The smoke test also starts both installed servers with `--version`, each from
+its own folder, which fails if a DLL either one imports is missing.
 The installer includes third-party notices and the generated `licenses/`
 inventory but never includes `.gguf` model files. Local model weights are
 installed separately under the user's local application data only after explicit
@@ -591,7 +598,8 @@ under Xvfb ([Linux](docs/linux.md)). Runtime and dependency caches are
 keyed by lockfiles and the runtime asset manifest.
 
 `scripts/run-model-evaluation.ps1` scores the whole gold corpus through the
-shipping pipeline with the exact pinned model and real inference, and
+shipping pipeline with the exact pinned model and real inference, on the
+llama.cpp build the app runs that model's tier on, and
 `scripts/validate-model-evaluation.mjs` gates on date, type, and party
 accuracy, on description specificity, on never filing a document under a date
 the corpus marks as a trap, and on the review rate. Specificity is held over the

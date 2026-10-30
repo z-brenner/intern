@@ -185,6 +185,11 @@ The other checks:
 - **Roles.** A role is supported when the document states it next to the
   name:
   - a label (`Bill To:`, `Landlord:`, `| Tenant |`, `Dear`);
+  - for a client, a table's column header over the name too: an insured,
+    policyholder, member, patient or subscriber is the client an insurance
+    or a health plan's document is for (`| Named insured |` over
+    `| Delacroix Bakehouse LLC |`), on whoever's form it is. A label naming
+    a group of staff (`Crew member`, `Board member`) names no role;
   - a defined term (`("Tenant")`, `, as Lender`);
   - a page-one letterhead, for an issuer or a sender, that opens its line
     and, in a letter that greets someone (`Dear`), stands before the
@@ -233,7 +238,26 @@ The other checks:
 - **Who is a party.** Someone named only on a `cc:` line is copied in, and
   someone who signs for an organization among the parties (a name, a job
   title, then the organization) acts for it: both stay on record, with role
-  other, and neither is ever a filename's party. A notice or a letter
+  other, and neither is ever a filename's party. So does someone the
+  document names only by the job they do for it: after a staff label or a
+  column header naming a job (`Examined by`, `Winemaker`, `Crew lead`, an
+  issued document's `Buyer:`), the `Name:` of a `By:`/`Title:` block, or
+  with a post right beside the name (`Beckett Halloran (President)`). A bare
+  signature mark (`/s/`, a `Signature` column) counts only outside letters
+  and emails, and never for the one the document labels as its sender:
+  anyone signs their own letter. A label or column header that names the one the
+  document is about (`Employee name`, `Patient`, `Dear`, `To:`) or a
+  "between" clause keeps a person a party, whatever else they are. When
+  the reply named no organization and no such subject beside the staff, the
+  others are staff too, and the organization they act for takes their
+  place: the two a first-page "between" clause names for an agreement or
+  an amendment, else the one organization at the head of the first page,
+  else the one a letterhead unit names (with an "of" phrase the index cut
+  off restored: `Saltash Point Museum of Art`). A record whose staff the
+  reply named beside another organization still comes from that first-page
+  organization, as its issuer: a museum's loan condition report, its
+  conservator the examiner, is from the museum, not the lender whose
+  painting it examines. A notice or a letter
   whose reply names no one it is addressed to takes as its addressee the
   name its first page's `To:` field opens with; an `Attn:` line names the
   person who reads it for the addressee and never does.
@@ -284,19 +308,38 @@ and an addendum is an amendment.
 `relation_from_roles` uses supported roles only. Parties are taken in the
 order the document first names them.
 
+Before the table, a court document is filed under its case: when the
+document has a court's, a tribunal's or an arbitration's heading on its
+first page, sets the case out as "A v. B" and labels one party a plaintiff,
+petitioner, appellant or claimant and another a defendant, respondent or
+appellee right beside its name ("Plaintiff Gilchrist Harbor Marine Supply,
+LLC", "Tavistock Boatworks, Inc., Defendant"), the filename reads `between`
+them, the side bringing the case first. A letter or an email about a case
+keeps the table's correspondence rules, and an invoice or a statement for it
+still comes from its issuer. A role's or a field's own label is never part
+of a name: the index's "Plaintiff Gilchrist Harbor Marine Supply, LLC" does
+not complete the reply's "Gilchrist Harbor Marine Supply, LLC", nor "Account
+Name Calm.com, Inc." its "Calm.com, Inc.".
+
+An agreement or an amendment that names only one party goes to review with
+`PARTY_MISSING`: an agreement has two sides at least, so the reply lost one.
+
 | Class | Relation |
 | --- | --- |
 | Agreement, amendment | `between` the first two parties; one party, `with` |
-| Issued | `from` the issuer; for a purchase order, the buyer; then the vendor, seller or sender; then the party the issuer and customer cues name, or the one party at the head of the first page before any customer cue; then the side opposite a supported customer. The customer alone is never the filename's party. A reply that names no one takes the one organization at the head of the first page as the issuer |
+| Issued | `from` the issuer; for a purchase order, the side buying (buyer, client or customer), never its vendor; otherwise the vendor, seller or sender; then the party the issuer and customer cues name, or the one party at the head of the first page before any customer cue; then the side opposite a supported customer. The customer alone is never the filename's party. A reply that proposed a type but named no one who could issue it takes the one organization at the head of the first page as the issuer, read before the kind of document its line names ("Halvorsen Fixture Works LLC INVOICE"), even when the type had to come from the title |
 | Notice | `for` the party it is about; else `to` the recipient; else `from` the issuer; else `for` the counterpart of a provider; else `from` the provider; two parties marked other read `between` |
 | Letter | `to` the addressee; else `from` the sender; else `for` the party it is about, or the provider's counterpart; else `from` the provider |
 | Email | `from` the sender; else `to` the addressee |
-| Record | one party: `for` it if it is the party the record is about, else `from` it. Two or more: `for` the party it is about; else `to` the recipient; else `for` the provider's counterpart; else `from` the issuer |
+| Record | one party: `for` it if it is the party the record is about, else `from` it. Two or more: `for` the party it is about; else the recipient - `for` it (a policy for the insured, a review for its client), but `to` it when another party with no settled role may be the one it is about (a certificate's insured, its holder the recipient); else `for` the provider's counterpart; else `from` the issuer |
 | Form | `between` the two parties the document names "by and between"; else `for` the filer (issuer or sender, then employee, tenant, vendor or customer) |
 | Unknown | `between` a bilateral pair, or the two named "by and between"; else `from` the issuer; else `to` the addressee |
 
 "The party it is about" means a client, customer, tenant, employee,
-borrower, licensee or buyer. When nothing settles the relation, the first
+borrower, licensee or buyer. In a record or a notice, a reply's bare
+"recipient" or "addressee" gives way to such a role when the document's own
+label gives it one: a report "Prepared for Cobalt Basin Water Authority" is
+`for` the authority, not `to` it, whoever else the reply named. When nothing settles the relation, the first
 party is kept with no joining word (`Invoice - Acme`). A relation is never
 guessed.
 

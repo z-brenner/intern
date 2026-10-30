@@ -11,6 +11,9 @@
 //! --prompt-profile NAME           ask the model as a manifest profile does
 //!                                 (bonsai_2); none by default, as the
 //!                                 recordings of record were made
+//! --min-token-confidence X        send a reading whose least probable date
+//!                                 or party token is below X to review, as
+//!                                 the app does with the accurate model
 //! ```
 //!
 //! The evidence pipeline's own measurements are here too
@@ -38,6 +41,7 @@ pub const KEYS: &[&str] = &[
     "retrieval-tier",
     "context-tokens",
     "prompt-profile",
+    "min-token-confidence",
 ];
 
 /// How a run's engine is configured.
@@ -52,6 +56,11 @@ pub struct EngineSettings {
     /// How the model is asked (the evidence pipeline's alone); `None` asks
     /// as the recordings of record were made.
     pub profile: Option<PromptProfile>,
+    /// [`Engine::with_min_token_confidence`]'s threshold, for a run scored
+    /// as the app scores the accurate model's readings. A live run asks for
+    /// token probabilities when it is set. Scoring alone: it is not in a
+    /// recording's header, so it stales nothing.
+    pub min_token_confidence: Option<f32>,
 }
 
 impl Default for EngineSettings {
@@ -61,6 +70,7 @@ impl Default for EngineSettings {
             retrieval: RetrievalConfig::default(),
             context_tokens: None,
             profile: None,
+            min_token_confidence: None,
         }
     }
 }
@@ -101,15 +111,30 @@ impl EngineSettings {
                     })?,
             );
         }
+        if let Some(value) = values.get("min-token-confidence") {
+            settings.min_token_confidence = Some(
+                value
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|threshold| (0.0..=1.0).contains(threshold))
+                    .ok_or_else(|| {
+                        format!("--min-token-confidence must be between 0 and 1, not {value}")
+                    })?,
+            );
+        }
         Ok(settings)
     }
 
     /// An engine configured with these settings.
     pub fn configure(&self, engine: Engine) -> Engine {
-        engine
+        let engine = engine
             .with_pipeline(self.pipeline)
             .with_retrieval(self.retrieval.clone())
-            .with_prompt_profile(self.profile)
+            .with_prompt_profile(self.profile);
+        match self.min_token_confidence {
+            Some(threshold) => engine.with_min_token_confidence(threshold),
+            None => engine,
+        }
     }
 
     /// The context prompts are fitted to: the one given, or the app's.
@@ -272,8 +297,10 @@ mod tests {
             ("id-style", "ordinal"),
             ("retrieval-tier", "dense"),
             ("context-tokens", "16384"),
+            ("min-token-confidence", "0.5"),
         ]))
         .unwrap();
+        assert_eq!(settings.min_token_confidence, Some(0.5));
         assert_eq!(settings.pipeline, Pipeline::Evidence);
         assert_eq!(settings.retrieval.id_style, IdStyle::Ordinal);
         assert_eq!(
@@ -294,6 +321,8 @@ mod tests {
             ("context-tokens", "12"),
             // The reply budget alone is 1,024 tokens.
             ("context-tokens", "1024"),
+            ("min-token-confidence", "1.5"),
+            ("min-token-confidence", "half"),
         ] {
             assert!(
                 EngineSettings::parse(&values(&[(key, value)])).is_err(),
