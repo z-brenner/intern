@@ -70,7 +70,9 @@ export function useBatchProgress(items: QueueItem[], onFinished?: (done: number)
     const current = run.current ?? (active ? { done: new Set<string>(), seen: new Set<string>() } : undefined);
     for (const item of items) {
       if (reading(item)) {
-        if (!since.current.has(item.id)) since.current.set(item.id, at);
+        // A start is a change too: the strip's clock counts from it, and
+        // nothing else may render again while one long reading runs.
+        if (!since.current.has(item.id)) { since.current.set(item.id, at); changed = true; }
         current?.seen.add(item.id);
       } else {
         const started = since.current.get(item.id);

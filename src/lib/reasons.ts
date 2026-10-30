@@ -170,6 +170,7 @@ const SHORT: Record<string, string> = {
   TYPE_UNSUPPORTED: 'Type not in document',
   TYPE_INFERRED: 'Type taken from its title',
   PARTY_UNSUPPORTED: 'Party not found',
+  PARTY_MISSING: 'Other party not found',
   DESCRIPTION_UNSUPPORTED: 'Description not supported',
   DESCRIPTION_INVALID: 'Description unusable',
   LOW_CONFIDENCE: 'Model unsure of its reading',

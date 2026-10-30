@@ -1,12 +1,13 @@
-"""Fetches the pinned CUAD sample (sample.json) and writes it as an InternBench corpus.
+"""Fetches a pinned CUAD sample and writes it as an InternBench corpus.
 
 Laboratory tooling; the app does not call it. Usage:
 
-    python3 -I scripts/cuad-eval/fetch-sample.py OUT_DIR
+    python3 -I scripts/cuad-eval/fetch-sample.py OUT_DIR [SAMPLE.json]
 
-writes OUT_DIR/corpus/cuad-NN.pdf (each checked against its pinned size and SHA-256) and
-OUT_DIR/gold.json, a minimal InternBench gold from CUAD's own answers. A live run then records
-it like any corpus:
+writes the sample (sample.json, unless another in this folder is named, such as
+sample-heldout.json) as OUT_DIR/corpus/cuad-NN.pdf, each checked against its pinned size and
+SHA-256, and OUT_DIR/gold.json, a minimal InternBench gold from CUAD's own answers. A live run
+then records it like any corpus:
 
     CORPUS=OUT_DIR/corpus GOLD=OUT_DIR/gold.json MANIFEST= MODEL=... LLAMA_SERVER=... \\
       scripts/run-internbench.sh OUT_DIR/run -- --min-token-confidence 0.5
@@ -34,10 +35,11 @@ BASE = "https://huggingface.co/datasets/theatticusproject/cuad/resolve"
 
 
 def main():
-    if len(sys.argv) != 2:
-        sys.exit("usage: fetch-sample.py OUT_DIR")
+    if len(sys.argv) not in (2, 3):
+        sys.exit("usage: fetch-sample.py OUT_DIR [SAMPLE.json]")
     out = sys.argv[1]
-    sample = json.load(open(os.path.join(HERE, "sample.json"), encoding="utf-8"))
+    name = sys.argv[2] if len(sys.argv) == 3 else "sample.json"
+    sample = json.load(open(os.path.join(HERE, os.path.basename(name)), encoding="utf-8"))
     corpus = os.path.join(out, "corpus")
     os.makedirs(corpus, exist_ok=True)
     documents = []

@@ -42,6 +42,7 @@ upstream llama.cpp runtime reads prompts 36% faster than the packaged one.
 | **A record or a notice is for the side its label names** (deterministic, `facts.rs`): a reply's bare "recipient" gives way to a client, tenant or other side-it-is-about role that the document's own label gives the party ("Prepared for ...") | The watershed report right on the 3 runs that had it wrong and ready; committed 67 → 68, 4 → 3; no other document changed on 10 runs | **Shipped** |
 | **A record its staff made comes from the organization they act for** (deterministic, `facts.rs`): when the reply named staff (an examiner, an inspector) and another organization, the first page's organization is added as the record's issuer | The loan condition report right on 6 of 10 runs (all were wrong and ready), and one maintenance record; committed 68 → 69, 3 → 2; no other document changed | **Shipped** |
 | **Real contracts (CUAD sample, 42 SEC filings; `bench/reports/cuad-sample-2026-10-29`): a field's label never completes a name; a defined term dates the document it defines; an agreement naming one party goes to review (`PARTY_MISSING`); an agreement's title reads across "and" and shortens to the agreement it ends on** (deterministic) | CUAD, adjudicated: names 28 → 30 of 42, **wrong names ready 5 → 2**, exact types 34 → 37. InternBench unchanged on all 10 recordings (Qwen runs exactly; three other models' runs shorten one title the gold also accepts) | **Shipped** |
+| **Held-out real contracts (41 more CUAD filings, none in the first sample; `bench/reports/cuad-heldout-2026-10-30`): an agreement's title stops only at a legal form, so "Supply", "Services" and "Agency" stay in it; a title wrapped over two headings is read whole; an agreement left with one side takes the other from its own "between" clause; "the 22 day of June 2018" states a date; an email's header block supports the type "Email"** (deterministic) | Main on the held-out sample, adjudicated: 24/41 (59%) right, **no wrong name ready**. After: **32/41 (78%), still none**; ready 16 → 22. First sample unchanged. InternBench committed recording 69 → 71 (the seed agreement's title; the approval email), unsafe unchanged | **Shipped** |
 | A date stated only on a running header or footer is the copy's, not the document's (CUAD's EDGAR "Source:" stamp) | Missed the stamp it targeted, which runs into a different paragraph on each page; read line by line, it withheld a correct date a contract repeats in its own header | Rejected |
 | Always file a record "for" its recipient (drop the "to" when a third party may be its subject) | Fixed the property policy on 4 runs, but a certificate whose insured is unlabelled would be filed "for" its holder, which no gold accepts | Rejected |
 | **Review gate on token probability** (least probable date or party token below 0.5 goes to review; `docs/model-candidates.md`) | Unsafe 9 → 3 and 8 → 4 on two production-runtime runs, for 9 and 12 right names sent to review; about +1–2% time | **Shipped** |
@@ -181,8 +182,9 @@ change the name).
 
 ## Still to measure
 
-- A held-out set of real documents. The CUAD sample (42 real contracts, above) is a first one:
-  real contracts are harder (71% of names right against InternBench's 90%) and fail in ways
-  the synthetic set does not have (filing stamps, definitions of other agreements, templates,
-  many-party filings). It covers only contracts; letters, invoices, notices and forms have no
-  real-document check yet, and the CUAD rules above were themselves written from this sample.
+- A held-out set of real documents. The first CUAD sample (42 contracts) found failures the
+  synthetic set does not have (filing stamps, definitions of other agreements, templates,
+  many-party filings). A second, held out from the rules written for the first, measured how
+  they carry: no wrong name filed, 59% named right against 71% on the first. Its own fixes are
+  now in-sample too, so a third sample is the next honest check. Both cover only contracts;
+  letters, invoices, notices and forms have no real-document check yet.

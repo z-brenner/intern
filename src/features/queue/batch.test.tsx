@@ -40,6 +40,12 @@ describe('the queue run', () => {
     expect(finished).toHaveBeenCalledWith(3);
   });
 
+  it('has the start of a document that begins on its own, with nothing else changing', () => {
+    vi.setSystemTime(4_000);
+    const { result } = renderHook(() => useBatchProgress([doc('a', 'processing'), doc('b', 'waiting')]));
+    expect(result.current).toMatchObject({ current: { id: 'a' }, startedAt: 4_000 });
+  });
+
   it('does not time a document sent back to waiting, or count it done', () => {
     const { result, rerender } = renderHook(({ items }) => useBatchProgress(items), { initialProps: { items: [doc('a', 'processing'), doc('b', 'waiting')] } });
     act(() => { vi.setSystemTime(5_000); });

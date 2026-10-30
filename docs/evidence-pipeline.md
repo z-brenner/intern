@@ -226,7 +226,20 @@ The other checks:
   a title of the same kind stands in, for review (`TYPE_INFERRED`), or
   the type is unsupported. A title set in capitals that OCR scattered
   (`DElIvery RECeIPt DR-771`) and the kind a letter's `Re:` line opens
-  with (`Re: Offer of Employment - ...`) are titles too.
+  with (`Re: Offer of Employment - ...`) are titles too. A title phrase
+  runs back from its noun to the start of the line, a connector, or the
+  end of an issuer's name: for most kinds an organization's noun or legal
+  form (`WRENFIELD RESTAURANT SUPPLY INVOICE` is an Invoice), for an
+  agreement or a contract only a legal form, since an agreement is named
+  for what it is about (`TRANSPORTATION SERVICES AGREEMENT`). A heading
+  that is only the kind of document is read with the heading just above
+  it when that is in the same capitals and names no organization: a cover
+  page's `JOINT DEVELOPMENT AND MARKETING` over `AGREEMENT`, never a
+  letterhead's `WRENFIELD SUPPLY`. An email states its kind by its header
+  block, not in words: a reply's "Email" is supported when the first page
+  opens with `From:` and two of `To:`, `Cc:`, `Date:`, `Sent:` and
+  `Subject:`. Such an email is dated by its header's `Date:` or `Sent:`,
+  never by a date its text asks for or a message it quotes.
 - **Names.** A party's name loses a field's label, a street address or a
   second name that the layout ran into it (`PrOperty 47 JUniper LOOP Cedar
   Finch Properties Llc`); a legal form ends an organization's name. A name
@@ -323,6 +336,11 @@ Name Calm.com, Inc." its "Calm.com, Inc.".
 
 An agreement or an amendment that names only one party goes to review with
 `PARTY_MISSING`: an agreement has two sides at least, so the reply lost one.
+When the one it kept is one of the two organizations the agreement's own
+"between" clause names (one that "This ... Agreement" opens, never a
+recital's), the clause's other organization is taken as the other side
+first. A clause that names a third organization (a side's parent or
+affiliate) gives none, nor does any clause when no party is left.
 
 | Class | Relation |
 | --- | --- |

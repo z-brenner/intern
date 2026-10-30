@@ -2,9 +2,10 @@
 
 Laboratory tooling; the app does not call it. Usage:
 
-    python3 -I scripts/cuad-eval/score.py REPORT.json [--all]
+    python3 -I scripts/cuad-eval/score.py REPORT.json [--all] [--sample sample-heldout.json]
 
-prints the totals, then every document that is not right (all of them with --all).
+prints the totals, then every document that is not right (all of them with --all). The sample
+is sample.json unless --sample names another, such as sample-heldout.json, in this folder.
 
 - Type: exact when Intern's words are CUAD's Document Name's; lenient when every word of
   Intern's (two or more) is in it and both end on the same noun.
@@ -87,8 +88,9 @@ def names(name, party):
 
 def main():
     if len(sys.argv) < 2:
-        sys.exit("usage: score.py REPORT.json [--all]")
-    contracts = {c["id"]: c for c in json.load(open(os.path.join(HERE, "sample.json"), encoding="utf-8"))["contracts"]}
+        sys.exit("usage: score.py REPORT.json [--all] [--sample SAMPLE.json]")
+    sample = sys.argv[sys.argv.index("--sample") + 1] if "--sample" in sys.argv else "sample.json"
+    contracts = {c["id"]: c for c in json.load(open(os.path.join(HERE, sample), encoding="utf-8"))["contracts"]}
     rows = []
     for record in json.load(open(sys.argv[1], encoding="utf-8"))["records"]:
         contract = contracts[record["id"]]

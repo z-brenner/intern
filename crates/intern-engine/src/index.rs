@@ -63,7 +63,7 @@ const CLOSING_UNITS: u32 = 3;
 /// How many units after a signature cue still read as the signature block.
 const SIGNATURE_REACH: u32 = 12;
 /// The legal forms among [`ORGANIZATION_ENDINGS`].
-const LEGAL_FORMS: &[&str] = &[
+pub(crate) const LEGAL_FORMS: &[&str] = &[
     "inc",
     "incorporated",
     "llc",
