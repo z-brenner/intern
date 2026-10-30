@@ -991,19 +991,20 @@ pub fn validate_facts_at(
             },
         );
     }
-    // An agreement names its two sides in its opening "between" clause.
-    // When the reply kept only one side - the other written as the document
-    // never writes it, or left out - and that side is one of the two the
-    // clause names, the clause's other organization is the other side. With
-    // no side left, nothing anchors the clause to this agreement rather than
-    // to one a recital mentions, and none is taken from it.
+    // An agreement names its two sides in its opening "between" clause
+    // ("This Agreement is made ... by and between"). When the reply kept
+    // only one side - the other written as the document never writes it,
+    // or left out - and that side is one of the two the clause names, the
+    // clause's other organization is the other side. A recital's
+    // "between" names another agreement's sides, and with no side left
+    // nothing ties a clause to this agreement: neither is used.
     if matches!(class, DocumentClass::Agreement | DocumentClass::Amendment)
         && let [only] = parties
             .iter()
             .filter(|party| !party.copied && !party.signatory)
             .collect::<Vec<_>>()
             .as_slice()
-        && let [first, second] = between_organizations(scope).as_slice()
+        && let [first, second] = opening_clause_organizations(scope).as_slice()
     {
         let only = normalize_loosely(&only.name);
         let other = if normalize_loosely(&first.0) == only {
@@ -1522,6 +1523,9 @@ fn title_lines(scope: &ValidationScope<'_>, unit: &EvidenceUnit) -> Vec<String> 
                 && !above.running
                 && capitals(&above.text)
                 && !above.text.trim_end().ends_with([':', '.'])
+                // A letterhead's "WRENFIELD SUPPLY" over "AGREEMENT" is a
+                // company, not the first half of the title.
+                && !names_an_organization(above)
         });
     match above {
         Some(above)
@@ -1574,6 +1578,28 @@ fn read_type_words<'a>(
     cited: &[String],
     value: &str,
 ) -> TypeReading<'a> {
+    // An email says what it is by its header block, never in words: the
+    // reply's "Email" is the document's own when the first page opens
+    // with one.
+    if matches!(
+        normalize(value).trim(),
+        "email" | "e-mail" | "e mail" | "email message"
+    ) && let Some((unit, line)) = email_header(scope)
+    {
+        let support = if cited.contains(&unit.id) {
+            Support::Cited
+        } else {
+            Support::Context
+        };
+        return TypeReading::Stated {
+            found: Found {
+                support,
+                unit: Some(unit),
+                line: Some(line),
+                miscited: 0,
+            },
+        };
+    }
     let value_words = words(value);
     let Some(head) = head_noun(&value_words).map(str::to_owned) else {
         return TypeReading::Unsupported;
@@ -1652,6 +1678,38 @@ fn read_type_words<'a>(
         }
     }
     TypeReading::Unsupported
+}
+
+/// The fields an email's header block holds besides its sender.
+const EMAIL_FIELDS: &[&str] = &["to", "cc", "date", "sent", "subject"];
+
+/// The "From:" line an email's header block opens its first page with, and
+/// its unit: a "From:" among the page's first three lines, and two more of
+/// its fields ([`EMAIL_FIELDS`]) among its first eight. A message quoted
+/// further down - a reply's "From: ... Sent: ..." - is no header of this
+/// document's.
+fn email_header<'a>(scope: &ValidationScope<'a>) -> Option<(&'a EvidenceUnit, String)> {
+    let first_page = scope.context_units().map(|unit| unit.page).min()?;
+    let lines = scope
+        .context_units()
+        .filter(|unit| unit.page == first_page && !unit.running)
+        .flat_map(|unit| unit.text.lines().map(move |line| (unit, line.trim())))
+        .filter(|(_, line)| !line.is_empty())
+        .take(8)
+        .collect::<Vec<_>>();
+    let field = |line: &str| {
+        let (label, _) = line.split_once(':')?;
+        Some(label.trim().to_lowercase())
+    };
+    let (unit, from) = lines
+        .iter()
+        .take(3)
+        .find(|(_, line)| field(line).as_deref() == Some("from"))?;
+    let others = lines
+        .iter()
+        .filter(|(_, line)| field(line).is_some_and(|label| EMAIL_FIELDS.contains(&label.as_str())))
+        .count();
+    (others >= 2).then(|| (*unit, (*from).to_owned()))
 }
 
 /// The context's title units: the units at the head of its first page and
@@ -3515,12 +3573,62 @@ fn with_of_phrase(unit: &EvidenceUnit, span: &str) -> String {
 /// The two organizations a first-page "between" clause names, in its
 /// order, as the document writes them, with their unit.
 fn between_organizations<'a>(scope: &ValidationScope<'a>) -> Vec<(String, &'a EvidenceUnit)> {
+    between_organizations_where(scope, |_| true)
+}
+
+/// [`between_organizations`], from a "between" that introduces the document
+/// itself ([`opens_this_agreement`]), never one a recital names.
+fn opening_clause_organizations<'a>(
+    scope: &ValidationScope<'a>,
+) -> Vec<(String, &'a EvidenceUnit)> {
+    between_organizations_where(scope, opens_this_agreement)
+}
+
+/// Whether the words before a "between" open the document's own clause -
+/// "This Outsourcing Agreement ... is made and entered into ... by and" -
+/// rather than name another agreement: "WHEREAS, the Share Purchase
+/// Agreement".
+fn opens_this_agreement(before: &str) -> bool {
+    let words = before.split_whitespace().collect::<Vec<_>>();
+    let recent = &words[words.len().saturating_sub(40)..];
+    if recent
+        .iter()
+        .any(|word| matches!(*word, "whereas" | "recital" | "recitals"))
+    {
+        return false;
+    }
+    recent.iter().enumerate().any(|(at, word)| {
+        *word == "this"
+            && recent[at + 1..].iter().take(6).any(|next| {
+                matches!(
+                    next.trim_matches(|c: char| !c.is_alphanumeric()),
+                    "agreement"
+                        | "amendment"
+                        | "contract"
+                        | "addendum"
+                        | "lease"
+                        | "license"
+                        | "licence"
+                )
+            })
+    })
+}
+
+/// [`between_organizations`], from the "between"s whose preceding words
+/// (loosely normalized, in the same unit) `accept` takes.
+fn between_organizations_where<'a>(
+    scope: &ValidationScope<'a>,
+    accept: impl Fn(&str) -> bool,
+) -> Vec<(String, &'a EvidenceUnit)> {
     let Some(first_page) = scope.context_units().map(|unit| unit.page).min() else {
         return Vec::new();
     };
     for unit in scope.context_units().filter(|unit| unit.page == first_page) {
         let text = normalize_loosely(&unit.text);
         for at in whole_positions(&text, "between") {
+            if !accept(&text[..at]) {
+                continue;
+            }
             let after = window_forward(&text, at, 300);
             let mut named = unit
                 .features
@@ -5167,6 +5275,26 @@ PELLWORTH COUNTY WATER AUTHORITY\nBy:\nName: Barnaby Quist\nTitle: General Manag
             Some("Joint Development and Marketing Agreement")
         );
         assert!(!outcome.reasons.contains(&ReviewReason::TypeMissing));
+
+        // A company's heading above "AGREEMENT" is a letterhead, not half
+        // of the title: the bare "Agreement" waits for a person.
+        let index = index_of(
+            "WRENFIELD SUPPLY\n\nAGREEMENT\n\n\
+             This Agreement is made on April 6, 2014 between Wrenfield Supply and \
+             Oak Ridge Energy Technologies, Inc.",
+        );
+        let line = id_of(&index, "This Agreement");
+        let facts = ModelFacts {
+            document_type: Some("Agreement".into()),
+            type_evidence: vec![id_of(&index, "AGREEMENT")],
+            document_date: Some("2014-04-06".into()),
+            date_role: Some(DateRole::Execution),
+            date_evidence: vec![line],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some("Agreement"));
+        assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
     }
 
     const SOW_UNDER_MSA: &str = "STATEMENT OF WORK NO. 7\n\n\
@@ -7735,6 +7863,71 @@ is in effect.";
             vec!["Beijing Leju Services Co., Ltd."]
         );
         assert!(outcome.reasons.contains(&ReviewReason::PartyMissing));
+
+        // Nor does a recital's clause that names the side the reply kept:
+        // CRIC is a party to the share purchase, not to this license.
+        const KEPT_IN_RECITAL: &str = "LICENSE AGREEMENT\n\n\
+This License Agreement is made on March 3, 2014 by SINA Corporation.\n\n\
+WHEREAS, the Share Purchase Agreement between SINA Corporation and CRIC Holdings Limited \
+is in effect.";
+        let (outcome, _) = facts_for(KEPT_IN_RECITAL, |index| ModelFacts {
+            document_type: Some("License Agreement".into()),
+            type_evidence: vec![id_of(index, "LICENSE")],
+            document_date: Some("2014-03-03".into()),
+            date_evidence: vec![id_of(index, "This License")],
+            parties: vec![party(
+                "SINA Corporation",
+                None,
+                &[id_of(index, "This License")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.parties, vec!["SINA Corporation"]);
+        assert!(outcome.reasons.contains(&ReviewReason::PartyMissing));
+    }
+
+    /// InternBench's email-approval-thread: the reply typed it "email",
+    /// which no line says; its header block does.
+    #[test]
+    fn an_email_is_typed_by_its_header_block() {
+        const EMAIL: &str = "From: Signe Holmqvist <signe@pemberly.example>\n\
+To: Saul Ravenscroft <saul@pemberly.example>\n\
+Date: Tue, 17 Mar 2026 09:42:11 -0500\n\
+Subject: RE: Approval needed: fleet monitoring renewal\n\n\
+Saul,\n\nApproved. Please issue the purchase order today.\n\nSigne";
+        let (outcome, _) = facts_for(EMAIL, |index| ModelFacts {
+            document_type: Some("email".into()),
+            type_evidence: vec![id_of(index, "From: Signe")],
+            document_date: Some("2026-03-17".into()),
+            date_evidence: vec![id_of(index, "Date: Tue")],
+            parties: vec![party(
+                "Signe Holmqvist",
+                Some(PartyRole::Sender),
+                &[id_of(index, "From: Signe")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some("Email"));
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        // A letter is no email, nor is one that only quotes an email's
+        // header below its own text.
+        const LETTER: &str = "Dear Mr. Ravenscroft,\n\n\
+We approve the renewal of the fleet monitoring subscription as of March 17, 2026.\n\n\
+Signe Holmqvist\n\n\
+From: Saul Ravenscroft\nSent: Monday, March 9, 2026\nTo: Signe Holmqvist\nSubject: Renewal";
+        let (outcome, _) = facts_for(LETTER, |index| ModelFacts {
+            document_type: Some("email".into()),
+            type_evidence: vec![id_of(index, "Dear Mr.")],
+            document_date: Some("2026-03-17".into()),
+            date_evidence: vec![id_of(index, "We approve")],
+            ..ModelFacts::default()
+        });
+        assert!(outcome.reasons.contains(&ReviewReason::TypeUnsupported));
     }
 
     #[test]

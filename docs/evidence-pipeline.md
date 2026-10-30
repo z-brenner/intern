@@ -233,8 +233,12 @@ The other checks:
   agreement or a contract only a legal form, since an agreement is named
   for what it is about (`TRANSPORTATION SERVICES AGREEMENT`). A heading
   that is only the kind of document is read with the heading just above
-  it when that is in the same capitals: a cover page's `JOINT DEVELOPMENT
-  AND MARKETING` over `AGREEMENT`.
+  it when that is in the same capitals and names no organization: a cover
+  page's `JOINT DEVELOPMENT AND MARKETING` over `AGREEMENT`, never a
+  letterhead's `WRENFIELD SUPPLY`. An email states its kind by its header
+  block, not in words: a reply's "Email" is supported when the first page
+  opens with `From:` and two of `To:`, `Cc:`, `Date:`, `Sent:` and
+  `Subject:`.
 - **Names.** A party's name loses a field's label, a street address or a
   second name that the layout ran into it (`PrOperty 47 JUniper LOOP Cedar
   Finch Properties Llc`); a legal form ends an organization's name. A name
@@ -331,10 +335,10 @@ Name Calm.com, Inc." its "Calm.com, Inc.".
 
 An agreement or an amendment that names only one party goes to review with
 `PARTY_MISSING`: an agreement has two sides at least, so the reply lost one.
-When the one it kept is one of the two organizations the opening "between"
-clause names, the clause's other organization is taken as the other side
-first. With no party left, the clause is not used: a recital's "between" may
-name another agreement's sides.
+When the one it kept is one of the two organizations the agreement's own
+"between" clause names (one that "This ... Agreement" opens, never a
+recital's), the clause's other organization is taken as the other side
+first. With no party left, no clause is used.
 
 | Class | Relation |
 | --- | --- |
