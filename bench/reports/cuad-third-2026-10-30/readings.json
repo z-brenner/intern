@@ -1,5 +1,5 @@
 {
- "note": "Per-contract readings of the third CUAD sample (scripts/cuad-eval/sample-third.json), which no rule was written from: Qwen3.5-2B Q4_K_M on llama.cpp b11946, the app flags, review gate 0.5, one live run replayed. before = main at #47, after = this change.",
+ "note": "Per-contract readings of the third CUAD sample (scripts/cuad-eval/sample-third.json), which no rule was written from: Qwen3.5-2B Q4_K_M on llama.cpp b11946, the app flags, review gate 0.5, one live run replayed. before = main at #47 (unseen), after = with the amendment, joint-filing and cited-bare-heading rules.",
  "contracts": [
   {
    "id": "cuad-00",
@@ -497,17 +497,15 @@
     ]
    },
    "after": {
-    "type": "Agreement",
+    "type": "Strategic Alliance Agreement",
     "date": "2008-10-01",
     "parties": [
      "IntriCon Corporation",
      "Dynamic Hearing Pty Ltd"
     ],
     "relation": "between",
-    "ready": false,
-    "reasons": [
-     "TYPE_MISSING"
-    ]
+    "ready": true,
+    "reasons": []
    }
   },
   {

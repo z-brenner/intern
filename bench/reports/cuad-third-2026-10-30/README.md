@@ -46,9 +46,15 @@ the earlier samples had shown, and this change sends both to review:
 | cuad-15 | Filed as a bare "Amendment". Its title is "AMENDMENT NO. 3", and it names the agreement it amends only in its first paragraph. The first sample's cuad-06 failed the same way | A bare "Amendment" or "Addendum" goes to review, as a bare "Agreement", "Letter" or "Document" already did: which agreement it changes is the name's point | To review (first sample's cuad-06 too) |
 | cuad-39 | A Schedule 13G "JOINT FILING STATEMENT" filed for one of its five filers. "Statement" made it a record, which names one party | A joint filing statement or agreement is an agreement among its filers (Rule 13d-1(k)), so it is named between two of them, or goes to review with one | Between two of its filers |
 
-**Still wrong (all to review, 8):**
-- **A bare type** (18, 15): "Agreement" under a cover-page title that did not complete it, and
-  cuad-15's "Amendment" above.
+**Afterwards, from this sample (so in-sample for it).** cuad-18 was typed a bare "Agreement",
+citing page 2's heading "AGREEMENT", under the cover page's "Strategic Alliance Agreement". A
+bare kind was completed from the document's title only when the reply's word stood in running
+text; a cited heading that is itself the bare kind now completes it too. cuad-18 is right and
+ready. Neither earlier sample nor InternBench changes. That makes this sample 35/42 (83%)
+adjudicated; 79% stays the unseen figure.
+
+**Still wrong (all to review, 7):**
+- **A bare "Amendment"** (15), above.
 - **One party, the other unreachable** (14, 08, 29): the party's name is not as the contract
   writes it, or the contract is a schedule or a statement of work under another agreement.
 - **Parties** (21): the model wrote both parties as the contract never does.

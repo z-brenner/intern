@@ -1563,18 +1563,32 @@ fn read_type<'a>(scope: &ValidationScope<'a>, cited: &[String], value: &str) -> 
     // A bare kind - "Agreement", "Minutes", "Declaration" - is the
     // document's title when a title of the same kind says more: "Seed
     // Production and Supply Agreement", "Commercial Package Policy
-    // Declarations".
+    // Declarations". So it is when the line the reply cited is a heading
+    // that is the bare kind itself - a later page's "AGREEMENT" under a
+    // cover page's "Strategic Alliance Agreement".
     let value_words = words(value);
-    if let ([head], TypeReading::Stated { found }) = (value_words.as_slice(), &reading)
+    let bare = match &reading {
+        TypeReading::Stated { .. } => true,
+        TypeReading::Title { phrase, .. } => words(phrase).len() == 1,
+        _ => false,
+    };
+    if let [head] = value_words.as_slice()
+        && bare
         && let Some((phrase, unit, line)) = title_units(scope).find_map(|unit| {
             title_lines(scope, unit).into_iter().find_map(|line| {
                 let phrase = title_phrase(&line, head)?;
-                (title_like(unit, &line) && words(&phrase).len() > 1)
+                // Never another document's name: "Pursuant to Master
+                // Services Agreement" names the agreement this one is under.
+                let line_words = words(&line);
+                let phrase_words = words(&phrase);
+                let names_this = phrase_positions(&line_words, &phrase_words)
+                    .into_iter()
+                    .any(|at| names_document_at(&line_words, at, at + phrase_words.len(), &line));
+                (title_like(unit, &line) && phrase_words.len() > 1 && names_this)
                     .then(|| (phrase, unit, line.trim().to_owned()))
             })
         })
     {
-        let _ = found;
         return TypeReading::Title {
             phrase,
             found: Found {
@@ -5257,6 +5271,71 @@ PELLWORTH COUNTY WATER AUTHORITY\nBy:\nName: Barnaby Quist\nTitle: General Manag
         let outcome = check(facts, &whole(&index), &index);
         assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
         assert_ne!(outcome.status, ProposalStatus::Ready);
+    }
+
+    /// CUAD's cuad-18 of the third sample: the reply typed "Agreement",
+    /// citing a later page's heading "AGREEMENT", under the cover page's
+    /// "Strategic Alliance Agreement".
+    #[test]
+    fn a_bare_kind_citing_a_bare_heading_is_read_as_the_cover_title() {
+        let index = index_of(
+            "Strategic Alliance Agreement\n\nIntricon Corporation\n\nand\n\n\
+             Dynamic Hearing Pty Ltd\n\n\
+             This Agreement is made on October 1, 2008 between Intricon Corporation and \
+             Dynamic Hearing Pty Ltd.\n\nAGREEMENT\n\n1. Definitions.",
+        );
+        let line = id_of(&index, "This Agreement");
+        let heading = index
+            .units()
+            .iter()
+            .find(|unit| unit.text.trim() == "AGREEMENT")
+            .expect("the bare heading")
+            .id
+            .clone();
+        let facts = ModelFacts {
+            document_type: Some("Agreement".into()),
+            type_evidence: vec![heading],
+            document_date: Some("2008-10-01".into()),
+            date_role: Some(DateRole::Execution),
+            date_evidence: vec![line.clone()],
+            parties: vec![
+                party("Intricon Corporation", None, &[line.clone()]),
+                party("Dynamic Hearing Pty Ltd", None, &[line]),
+            ],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Strategic Alliance Agreement")
+        );
+        assert!(!outcome.reasons.contains(&ReviewReason::TypeMissing));
+
+        // Never from another document's name: an order "Pursuant to Master
+        // License Agreement" is no Master License Agreement.
+        let index = index_of(
+            "Pursuant to Master License Agreement\n\n\
+             This order is made on October 1, 2008 between Intricon Corporation and \
+             Dynamic Hearing Pty Ltd.\n\nAGREEMENT\n\n1. Services.",
+        );
+        let line = id_of(&index, "This order");
+        let heading = index
+            .units()
+            .iter()
+            .find(|unit| unit.text.trim() == "AGREEMENT")
+            .expect("the bare heading")
+            .id
+            .clone();
+        let facts = ModelFacts {
+            document_type: Some("Agreement".into()),
+            type_evidence: vec![heading],
+            document_date: Some("2008-10-01".into()),
+            date_evidence: vec![line],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some("Agreement"));
+        assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
     }
 
     /// CUAD's cuad-15 of the third sample: "AMENDMENT NO. 3", which names
