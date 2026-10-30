@@ -9,6 +9,7 @@
 
 use crate::cues::{NOT_A_TITLE, ORGANIZATION_ENDINGS, TYPE_NOUNS};
 use crate::evidence::normalize;
+use crate::index::LEGAL_FORMS;
 
 /// The lower-case words of `text`, split at anything that is not a letter
 /// or a digit: "NON-DISCLOSURE Agreement:" is `non disclosure agreement`.
@@ -200,15 +201,25 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
     // To the left, words written the way the noun is - a title in capitals
     // is all capitals - and never across a connector (the noun would be a
     // complement then), a company's legal form or an organization's noun.
+    // An agreement is named for what it is about, which an organization's
+    // noun often is: a "Supply Agreement", a "Transportation Services
+    // Agreement", an "Agency Agreement". Only a company's legal form ends
+    // one.
     let style = writing(tokens[at]);
+    let named_for_its_subject = matches!(head, "agreement" | "contract");
     let stops_left = |token: &str| {
         let word = core(token);
+        let ending = word.trim_end_matches('.');
         breaks(token)
             || token.ends_with(':')
             || TITLE_STOPS.contains(&word.as_str())
             || LEFT_STOPS.contains(&word.as_str())
             || CONNECTORS.contains(&word.as_str())
-            || ORGANIZATION_ENDINGS.contains(&word.trim_end_matches('.'))
+            || if named_for_its_subject {
+                LEGAL_FORMS.contains(&ending) || matches!(ending, "corporation" | "company")
+            } else {
+                ORGANIZATION_ENDINGS.contains(&ending)
+            }
             || writing(token) != style
     };
     let mut start = at;
@@ -219,11 +230,7 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
         // Agreement", "Co-Branding and Advertising Agreement". Any other
         // kind stops at "and" - "Availability and Price List" is a price
         // list.
-        if word == "and"
-            && matches!(head, "agreement" | "contract")
-            && start >= 2
-            && !stops_left(tokens[start - 2])
-        {
+        if word == "and" && named_for_its_subject && start >= 2 && !stops_left(tokens[start - 2]) {
             start -= 1;
             continue;
         }
@@ -689,6 +696,35 @@ mod tests {
                 "SETTLEMENT AGREEMENT AND MUTUAL RELEASE",
                 "agreement",
                 Some("Settlement Agreement and Mutual Release"),
+            ),
+            // An agreement named for what an organization's noun names.
+            (
+                "SEED PRODUCTION AND SUPPLY AGREEMENT",
+                "agreement",
+                Some("Seed Production and Supply Agreement"),
+            ),
+            (
+                "TRANSPORTATION SERVICES AGREEMENT",
+                "agreement",
+                Some("Transportation Services Agreement"),
+            ),
+            ("AGENCY AGREEMENT", "agreement", Some("Agency Agreement")),
+            // A company's legal form still ends it, and other kinds still
+            // stop at the noun that ends their issuer's name.
+            (
+                "Wrenfield Supply Co. Agreement",
+                "agreement",
+                Some("Agreement"),
+            ),
+            (
+                "ACME CORPORATION SERVICES AGREEMENT",
+                "agreement",
+                Some("Services Agreement"),
+            ),
+            (
+                "WRENFIELD RESTAURANT SUPPLY INVOICE",
+                "invoice",
+                Some("Invoice"),
             ),
             (
                 "NOTICE OF SPECIAL MEETING OF MEMBERS",

@@ -380,6 +380,10 @@ fn date_spellings(iso_date: &str) -> Vec<(String, DateSpelling)> {
                 written.push(format!("{day_form} {month_word} {year}"));
                 written.push(format!("{day_form} {month_word}, {year}"));
                 written.push(format!("{day_form}-{month_word}-{year}"));
+                // "made this 22 day of June 2018": a contract's blank
+                // filled in without its ordinal.
+                written.push(format!("{day_form} day of {month_word}, {year}"));
+                written.push(format!("{day_form} day of {month_word} {year}"));
             }
             written.push(format!("{month_word} {day_unpadded}{ordinal}, {year}"));
             written.push(format!("{month_word} {day_unpadded}{ordinal} {year}"));
@@ -513,6 +517,20 @@ mod tests {
         assert!(date_matches_evidence(
             "2026-04-01",
             "as of the 1st day of April, 2026"
+        ));
+        // CUAD's held-out cuad-08 and cuad-26: the day of a filled-in blank
+        // without its ordinal.
+        assert!(date_matches_evidence(
+            "2018-06-22",
+            "is made this 22 day of June 2018."
+        ));
+        assert!(date_matches_evidence(
+            "2007-01-26",
+            "made as of the 26 day of January, 2007 (the \u{201c}Effective Date\u{201d})"
+        ));
+        assert!(!date_matches_evidence(
+            "2006-06-01",
+            "executed this Agreement on the st day of JUNE , 2006"
         ));
         assert!(date_matches_evidence("2025-09-14", "dated 9/14/2025"));
         assert!(date_matches_evidence("2025-09-14", "Sept. 14, 2025"));

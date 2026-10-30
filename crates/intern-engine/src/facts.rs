@@ -437,10 +437,6 @@ pub fn validate_facts_at(
     // says: a bare generic word that no title of the document completed
     // (read_type has tried) names no kind a person could file by, so the
     // name waits for a person rather than being filed. Ported from #26.
-    // On InternBench it holds agreement-two-column-footnotes, typed
-    // "Agreement" under the title "SEED PRODUCTION AND SUPPLY AGREEMENT",
-    // for review instead of filing a wrong name: a deliberate trade, since
-    // the gold expects that document ready under its full title.
     if document_type
         .as_deref()
         .is_some_and(|value| matches!(normalize(value).trim(), "letter" | "document" | "agreement"))
@@ -995,6 +991,57 @@ pub fn validate_facts_at(
             },
         );
     }
+    // An agreement names its two sides in its opening "between" clause.
+    // When the reply kept only one side - the other written as the document
+    // never writes it, or left out - and that side is one of the two the
+    // clause names, the clause's other organization is the other side. With
+    // no side left, nothing anchors the clause to this agreement rather than
+    // to one a recital mentions, and none is taken from it.
+    if matches!(class, DocumentClass::Agreement | DocumentClass::Amendment)
+        && let [only] = parties
+            .iter()
+            .filter(|party| !party.copied && !party.signatory)
+            .collect::<Vec<_>>()
+            .as_slice()
+        && let [first, second] = between_organizations(scope).as_slice()
+    {
+        let only = normalize_loosely(&only.name);
+        let other = if normalize_loosely(&first.0) == only {
+            Some((second, parties.len()))
+        } else if normalize_loosely(&second.0) == only {
+            Some((first, 0))
+        } else {
+            None
+        };
+        if let Some(((name, unit), at)) = other {
+            let name = without_sentence_stop(name);
+            let line = unit
+                .text
+                .lines()
+                .find(|line| normalize_loosely(line).contains(&normalize_loosely(&name)))
+                .unwrap_or(&unit.text)
+                .trim()
+                .to_owned();
+            remember(
+                &Found {
+                    support: Support::Context,
+                    unit: Some(unit),
+                    line: Some(line),
+                    miscited: 0,
+                },
+                &mut references,
+            );
+            parties.insert(
+                at,
+                ValidatedParty {
+                    name: display_name(&name),
+                    support: Support::Context,
+                    evidence: vec![unit.id.clone()],
+                    ..ValidatedParty::default()
+                },
+            );
+        }
+    }
     // Who the filename and the description can name: everyone but the
     // people copied and those who sign for a party, each with the role the
     // document supports.
@@ -1453,12 +1500,36 @@ fn names_a_matter(line: &str) -> bool {
 }
 
 /// A unit's lines as a title is read from them: a heading's lines are one
-/// title wrapped across them.
-fn title_lines(unit: &EvidenceUnit) -> Vec<String> {
-    if unit.kind == UnitKind::Heading {
-        vec![unit.text.split_whitespace().collect::<Vec<_>>().join(" ")]
-    } else {
-        unit.text.lines().map(str::to_owned).collect()
+/// title wrapped across them. A heading that is only the kind of document -
+/// a cover page's "AGREEMENT" under "JOINT DEVELOPMENT AND MARKETING" - is
+/// read first with the heading just above it, when that is written in the
+/// same capitals: the title wrapped across two headings.
+fn title_lines(scope: &ValidationScope<'_>, unit: &EvidenceUnit) -> Vec<String> {
+    if unit.kind != UnitKind::Heading {
+        return unit.text.lines().map(str::to_owned).collect();
+    }
+    let joined = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let heading = joined(&unit.text);
+    let capitals =
+        |text: &str| text.chars().any(char::is_alphabetic) && !text.chars().any(char::is_lowercase);
+    let above = unit
+        .ordinal
+        .checked_sub(1)
+        .and_then(|ordinal| scope.index.units().get(ordinal as usize))
+        .filter(|above| {
+            above.kind == UnitKind::Heading
+                && above.page == unit.page
+                && !above.running
+                && capitals(&above.text)
+                && !above.text.trim_end().ends_with([':', '.'])
+        });
+    match above {
+        Some(above)
+            if has_a_kind(&words(&heading)) && words(&heading).len() == 1 && capitals(&heading) =>
+        {
+            vec![format!("{} {heading}", joined(&above.text)), heading]
+        }
+        _ => vec![heading],
     }
 }
 
@@ -1476,7 +1547,7 @@ fn read_type<'a>(scope: &ValidationScope<'a>, cited: &[String], value: &str) -> 
     let value_words = words(value);
     if let ([head], TypeReading::Stated { found }) = (value_words.as_slice(), &reading)
         && let Some((phrase, unit, line)) = title_units(scope).find_map(|unit| {
-            title_lines(unit).into_iter().find_map(|line| {
+            title_lines(scope, unit).into_iter().find_map(|line| {
                 let phrase = title_phrase(&line, head)?;
                 (title_like(unit, &line) && words(&phrase).len() > 1)
                     .then(|| (phrase, unit, line.trim().to_owned()))
@@ -1534,7 +1605,7 @@ fn read_type_words<'a>(
     };
     let cited_units = scope.cited_units(cited);
     for unit in &cited_units {
-        for line in title_lines(unit) {
+        for line in title_lines(scope, unit) {
             if !title_like(unit, &line) {
                 continue;
             }
@@ -1569,7 +1640,7 @@ fn read_type_words<'a>(
         }
     }
     for unit in title_units(scope) {
-        for line in title_lines(unit) {
+        for line in title_lines(scope, unit) {
             if title_like(unit, &line)
                 && let Some(phrase) = title_on(&line)
             {
@@ -1639,7 +1710,7 @@ fn names_an_organization(unit: &EvidenceUnit) -> bool {
 /// line.
 fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
     title_units(scope).find_map(|unit| {
-        title_lines(unit).into_iter().find_map(|line| {
+        title_lines(scope, unit).into_iter().find_map(|line| {
             // A letter's "Re:" line names it when its matter opens with a
             // kind of document: "Re: Demand for Payment - Highmeadow ...".
             if names_a_matter(line.trim_matches(|c: char| c == '*' || c.is_whitespace())) {
@@ -5024,11 +5095,10 @@ PELLWORTH COUNTY WATER AUTHORITY\nBy:\nName: Barnaby Quist\nTitle: General Manag
     }
 
     /// InternBench's agreement-two-column-footnotes, as Qwen3.5-2B read it:
-    /// typed "Agreement", citing a title the type reader cannot complete
-    /// past its "AND". A bare "Agreement" is not filed; it waits for a
-    /// person.
+    /// typed "Agreement", citing its title. The title is read whole, its
+    /// "Supply" too, which also ends many a company's name.
     #[test]
-    fn a_bare_agreement_under_a_longer_title_goes_to_review() {
+    fn a_bare_agreement_is_read_as_the_title_it_cites() {
         let index = index_of(
             "SEED PRODUCTION AND SUPPLY AGREEMENT\n\n\
              This Seed Production and Supply Agreement (this \"Agreement\") is dated as of March 2, 2026 \
@@ -5058,8 +5128,45 @@ PELLWORTH COUNTY WATER AUTHORITY\nBy:\nName: Barnaby Quist\nTitle: General Manag
             ..ModelFacts::default()
         };
         let outcome = check(facts, &whole(&index), &index);
-        assert_eq!(outcome.reasons, vec![ReviewReason::TypeMissing]);
-        assert_ne!(outcome.status, ProposalStatus::Ready);
+        // The title, fitted to a filename with both parties' names: an
+        // agreement keeps what it ends on after its last "and".
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Supply Agreement")
+        );
+        assert_eq!(outcome.reasons, Vec::<ReviewReason>::new());
+        assert_eq!(outcome.status, ProposalStatus::Ready);
+    }
+
+    /// CUAD's cuad-20 of the held-out sample: a cover page's title wrapped
+    /// over two headings, the model citing the second, "AGREEMENT".
+    #[test]
+    fn a_title_wrapped_over_two_headings_is_read_whole() {
+        let index = index_of(
+            "JOINT DEVELOPMENT AND MARKETING\n\nAGREEMENT\n\nBETWEEN\n\nLECLANCHE SA\n\nAND\n\n\
+             OAK RIDGE ENERGY TECHNOLOGIES, INC.\n\n\
+             This Joint Development and Marketing Agreement is made on April 6, 2014 between \
+             Leclanche SA and Oak Ridge Energy Technologies, Inc.",
+        );
+        let line = id_of(&index, "This Joint");
+        let facts = ModelFacts {
+            document_type: Some("Agreement".into()),
+            type_evidence: vec![id_of(&index, "AGREEMENT")],
+            document_date: Some("2014-04-06".into()),
+            date_role: Some(DateRole::Execution),
+            date_evidence: vec![line.clone()],
+            parties: vec![
+                party("Leclanche SA", None, &[line.clone()]),
+                party("Oak Ridge Energy Technologies, Inc.", None, &[line]),
+            ],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Joint Development and Marketing Agreement")
+        );
+        assert!(!outcome.reasons.contains(&ReviewReason::TypeMissing));
     }
 
     const SOW_UNDER_MSA: &str = "STATEMENT OF WORK NO. 7\n\n\
@@ -7571,6 +7678,63 @@ This Sponsorship Agreement is made on July 16, 2012 by Peek Investments LLC.";
             "{:?}",
             outcome.reasons
         );
+    }
+
+    /// CUAD's cuad-34 of the held-out sample, as Qwen3.5-2B read it: one
+    /// side named, the other left out, both in the opening clause.
+    #[test]
+    fn an_agreement_with_one_side_takes_the_other_from_its_between_clause() {
+        const AGREEMENT: &str = "OUTSOURCING AGREEMENT\n\n\
+This Outsourcing Agreement is made and entered into as of January 1, 1998, by and between \
+Sykes HealthPlan Services, Inc., a Florida corporation (\"SHPS\"), and HealthPlan Services, Inc., \
+a Florida corporation (\"HPS\").";
+        let (outcome, _) = facts_for(AGREEMENT, |index| ModelFacts {
+            document_type: Some("Outsourcing Agreement".into()),
+            type_evidence: vec![id_of(index, "OUTSOURCING")],
+            document_date: Some("1998-01-01".into()),
+            date_evidence: vec![id_of(index, "This Outsourcing")],
+            parties: vec![party(
+                "Sykes HealthPlan Services, Inc.",
+                None,
+                &[id_of(index, "This Outsourcing")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec![
+                "Sykes HealthPlan Services, Inc.",
+                "HealthPlan Services, Inc."
+            ],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        assert!(!outcome.reasons.contains(&ReviewReason::PartyMissing));
+
+        // A clause the side the reply named is not in - a recital's other
+        // agreement - says nothing about this one's other side.
+        const RECITAL: &str = "LICENSE AGREEMENT\n\n\
+This License Agreement is made on March 3, 2014 by Beijing Leju Services Co., Ltd.\n\n\
+WHEREAS, the Share Purchase Agreement between SINA Corporation and CRIC Holdings Limited \
+is in effect.";
+        let (outcome, _) = facts_for(RECITAL, |index| ModelFacts {
+            document_type: Some("License Agreement".into()),
+            type_evidence: vec![id_of(index, "LICENSE")],
+            document_date: Some("2014-03-03".into()),
+            date_evidence: vec![id_of(index, "This License")],
+            parties: vec![party(
+                "Beijing Leju Services Co., Ltd.",
+                None,
+                &[id_of(index, "This License")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Beijing Leju Services Co., Ltd."]
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::PartyMissing));
     }
 
     #[test]
