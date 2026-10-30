@@ -35,8 +35,8 @@ export function AppHeader({ paused, inert, busy, privacy, inputFolder = '', onAd
     */}
     <div className="header-actions">
       <span className="header-note" id="add-destination" title={`Files you add are copied into ${into}. The originals stay where they are.`}>Copied into <strong>{into}</strong></span>
-      <button type="button" aria-describedby="add-destination" onClick={onAddFiles}><Icon icon={FilePlus2} /><span className="button-label">Add files</span></button>
-      <button type="button" aria-describedby="add-destination" onClick={onAddFolder}><Icon icon={FolderOpen} /><span className="button-label">Add folder</span></button>
+      <button type="button" aria-describedby="add-destination" title="Add files" onClick={onAddFiles}><Icon icon={FilePlus2} /><span className="button-label">Add files</span></button>
+      <button type="button" aria-describedby="add-destination" title="Add folder" onClick={onAddFolder}><Icon icon={FolderOpen} /><span className="button-label">Add folder</span></button>
       {/*
         Pause says so in words. As a bare two-bar glyph it read as a layout
         control, and a paused queue looked the same as a running one.

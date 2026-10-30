@@ -19,6 +19,18 @@ describe('the Check column', () => {
     expect(shortReason(['NOT_A_CODE'])).toBeUndefined();
   });
 
+  it('has a few words for every review code the engine raises (ReviewReason::code)', () => {
+    const codes = [
+      'DATE_MISSING', 'DATE_UNSUPPORTED', 'TYPE_MISSING', 'TYPE_UNSUPPORTED', 'TYPE_INFERRED',
+      'PARTY_UNSUPPORTED', 'PARTY_MISSING', 'DESCRIPTION_UNSUPPORTED', 'DESCRIPTION_INVALID',
+      'LOW_CONFIDENCE', 'MODEL_REQUESTED_REVIEW', 'PARSER_WARNING', 'DATE_IMPLAUSIBLE',
+      'DATE_IS_DEADLINE', 'DATE_AMBIGUOUS', 'FAST_MODEL_READING',
+    ];
+    for (const code of codes) expect(shortReason([code]), code).toBeDefined();
+    expect(shortReason(['PARTY_MISSING'])).toEqual({ text: 'Other party not found', more: 0 });
+    expect(itemFlaggedFields(review({ reasonCodes: ['PARTY_MISSING'] }))).toEqual(['parties']);
+  });
+
   it('says what to check for a review, and that the checks passed for a ready row', () => {
     const ambiguous = review({ reasonCodes: ['DATE_AMBIGUOUS'], reason: 'The date is written only as numbers that could be read day-first or month-first. Check which one the document means.' });
     expect(checkCell(ambiguous)).toEqual({ text: 'Date could be day- or month-first', more: 0, tone: 'review', title: ambiguous.reason });

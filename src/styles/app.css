@@ -643,7 +643,8 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
   .private { padding: 0 9px; }
   .private .private-detail { display: none; }
   .header-actions { gap: 4px; }
-  .header-actions button:not(.icon-button) .button-label { display: none; }
+  /* Hidden from sight only: the label stays the button's accessible name. */
+  .header-actions button:not(.icon-button) .button-label { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .queue-panel { padding-top: 12px; }
   .table-wrap th, .table-wrap td { padding-left: 8px; padding-right: 8px; }
   .table-wrap th.col-status { width: 188px; }

@@ -221,4 +221,15 @@ test.describe('whole-product browser QA', () => {
     await page.keyboard.press('Escape');
     await expect(trigger).toBeFocused();
   });
+
+  test('keeps the header buttons named at the window\'s narrowest, 800 pixels', async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 600 });
+    await page.goto('/');
+    // The words are out of sight at this width, the icons alone showing;
+    // they still name the buttons.
+    for (const name of ['Add files', 'Add folder', 'Pause queue']) {
+      await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
+    }
+    await expect(page.getByRole('button', { name: 'Add files', exact: true }).locator('.button-label')).toHaveCSS('position', 'absolute');
+  });
 });

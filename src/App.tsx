@@ -235,7 +235,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // file arrived with, the name it was given, or a word from its description.
   const query = filter.trim().toLowerCase();
   const readyFilter = readyOnly && view === 'queue';
-  const shown = (list: QueueItem[]) => list.filter((item) => inCurrentView(item) && (!query || matchesQuery(item, query)) && (!readyFilter || item.status === 'ready'));
+  const shown = (list: QueueItem[]) => list.filter((item) => inCurrentView(item) && (!query || matchesQuery(item, query)) && (!readyFilter || renamesWithAllReady(item)));
   const visible = shown(items);
   const filterShown = filtered.length > FILTER_THRESHOLD || query.length > 0;
   const selected = items.find((item) => item.id === selectedId);
@@ -246,7 +246,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // the page's badge carried is not lost with it. Counted from the rows the
   // filter leaves, the same rows the count's button steps through.
   const needReview = visible.filter((item) => item.status === 'review');
-  const readyItems = items.filter((item) => item.status === 'ready' && item.proposedFilename && item.copyOf === undefined);
+  const readyItems = items.filter(renamesWithAllReady);
   // Installing an update hands Intern to the installer, which closes it. A
   // rename in its applying stage is the one piece of work that cannot be
   // canceled, and closing underneath it leaves the journal to finish the move
@@ -267,7 +267,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   }, [batch?.done, batch?.total, paused, Boolean(batch)]);
   // Nothing left to show under "ready only" turns it off, rather than
   // leaving an empty table behind a filter nobody can see is on.
-  useEffect(() => { if (readyOnly && !items.some((item) => item.status === 'ready')) setReadyOnly(false); }, [readyOnly, items]);
+  useEffect(() => { if (readyOnly && !items.some(renamesWithAllReady)) setReadyOnly(false); }, [readyOnly, items]);
   // The More menu closes on a click anywhere outside it, as a menu does.
   useEffect(() => {
     if (!moreOpen) return;
@@ -1001,6 +1001,13 @@ export const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 /** A rename in its applying stage: the file is moving, and that cannot be canceled. */
 const applyingRename = (item: QueueItem) => item.status === 'processing' && item.cancelable === false;
+
+/**
+ * What Rename all ready renames: a ready proposal of its own. An exact copy
+ * staged as ready is filed by its own path, not by this button, so the
+ * button's count, the "ready" filter and the filter's reset all use this.
+ */
+const renamesWithAllReady = (item: QueueItem) => item.status === 'ready' && Boolean(item.proposedFilename) && item.copyOf === undefined;
 /** How often an install that is waiting on a rename asks the queue again. A move takes moments. */
 const RENAME_SETTLE_POLL_MS = 250;
 
