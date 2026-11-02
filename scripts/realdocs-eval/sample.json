@@ -3011,7 +3011,7 @@
    "kind": "notice",
    "format": "txt",
    "text_layer": "text",
-   "pages": null,
+   "pages": 1,
    "categories": [
     "notice",
     "government",
@@ -3142,7 +3142,7 @@
    "kind": "notice",
    "format": "txt",
    "text_layer": "text",
-   "pages": null,
+   "pages": 1,
    "categories": [
     "notice",
     "government",
