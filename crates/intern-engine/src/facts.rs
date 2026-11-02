@@ -8776,6 +8776,36 @@ The merger needs a majority of votes cast.";
         );
     }
 
+    /// An invoice dated by an unlabeled dateline, its items in a table with
+    /// a bare "Date" column and amounts with no currency sign: an item's
+    /// date is never the invoice's (Codex's case on #51).
+    #[test]
+    fn an_items_date_column_never_dates_the_invoice() {
+        let (outcome, _) = facts_for(
+            "Corvane Office Supply LLC\n\nINVOICE\n\nMarch 31, 2026\n\n\
+             Bill To: Pellham Dental Group\n\n\
+             | Date | Description | Amount |\n| March 15, 2026 | Services | 1600.00 |",
+            |index| ModelFacts {
+                document_type: Some("Invoice".into()),
+                type_evidence: vec![id_of(index, "INVOICE")],
+                document_date: Some("2026-03-31".into()),
+                date_evidence: vec![id_of(index, "March 31, 2026")],
+                parties: vec![party(
+                    "Corvane Office Supply LLC",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "Corvane")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-03-31"),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
     /// A date in a field of its own stands, whatever other date a field
     /// names: InternBench's purchase order is dated by its "PO Date", and a
     /// quotation's "dated" in a sentence is never the order's.

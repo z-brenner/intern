@@ -511,7 +511,9 @@ pub(crate) fn date_fields(
             if reference_introduced(&normalized, position) {
                 continue;
             }
-            let label = field_label(&window_before(&normalized, position)).or_else(|| {
+            let on_line = field_label(&window_before(&normalized, position));
+            let in_column = on_line.is_none();
+            let label = on_line.or_else(|| {
                 above
                     .as_deref()
                     .and_then(|above| cell_header(&normalized, above, position))
@@ -519,8 +521,11 @@ pub(crate) fn date_fields(
             let Some(label) = label.filter(|label| names_a_date(label)) else {
                 continue;
             };
+            // A column headed only "Date" is as often a line item's as the
+            // document's ("| Date | Description | Amount |"): a column names
+            // the document's own date only when its header says whose.
             let own = OWN_FIELD_LABELS.contains(&label.as_str())
-                || labels_the_issue_date(&format!("{label}:"));
+                || (labels_the_issue_date(&format!("{label}:")) && !(in_column && label == "date"));
             fields.push(DateField {
                 date,
                 line: line.trim().to_owned(),
@@ -573,17 +578,35 @@ fn field_dates_on(normalized: &str, order: Option<NumericOrder>) -> Vec<(String,
     found
 }
 
-/// Whether a line carries an amount of money: a currency sign before a
-/// digit, as a line item's row does.
+/// Whether a line carries an amount of money, as a line item's row does: a
+/// currency sign before a digit, or a number written with two decimals
+/// ("1600.00", "1,248.00") whether or not a sign goes with it.
 fn carries_an_amount(normalized: &str) -> bool {
-    normalized
+    let signed = normalized
         .char_indices()
         .filter(|(_, character)| matches!(character, '$' | '€' | '£'))
         .any(|(at, character)| {
             normalized[at + character.len_utf8()..]
                 .trim_start()
                 .starts_with(|next: char| next.is_ascii_digit())
-        })
+        });
+    signed
+        || normalized
+            .split(|character: char| {
+                !(character.is_ascii_digit() || matches!(character, '.' | ','))
+            })
+            .map(|token| token.trim_end_matches([',', '.']))
+            .any(|token| {
+                token.split_once('.').is_some_and(|(whole, cents)| {
+                    !whole.is_empty()
+                        && whole.starts_with(|first: char| first.is_ascii_digit())
+                        && whole
+                            .chars()
+                            .all(|character| character.is_ascii_digit() || character == ',')
+                        && cents.len() == 2
+                        && cents.chars().all(|character| character.is_ascii_digit())
+                })
+            })
 }
 
 /// The label of the field a date fills, when the wording before it ends in
