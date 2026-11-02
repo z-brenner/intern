@@ -177,6 +177,30 @@ invoice whose first party the reply calls the customer names no one.
 - **First set:** the spreadsheet of outstanding invoices goes to review.
 - **Everywhere else:** InternBench (ten recordings) and CUAD (three samples) are unchanged.
 
+## Afterwards: a notice dated at its end (in-sample)
+
+Two of the wrong names still ready were notices dated by an event: a deposition and a
+technical conference. Each dates itself at its end, on page 2, and #51's own-date rule read only
+the first page. It now reads the document's own pages, up to the first page that opens as an
+attachment ("EXHIBIT A", "SCHEDULE A", "Attachment 1"). An exhibit's or a schedule's "Dated:"
+still never dates the document. The rest of the rule stands:
+- the reply's date must have no field;
+- exactly one own date must be found;
+- a letter's dateline always stands.
+
+| | Before | After |
+|---|---:|---:|
+| This set: right, adjudicated | 14/60 | **16/60** |
+| This set: wrong names ready | 4 | **3** |
+
+**What changed:**
+- **This set:**
+  - FERC's notice of technical conference is right and ready.
+  - The Lehman notice of bankruptcy is right; it stays in review.
+  - The deposition notice, the KUSA-TV invoice and (in the first set) a notice of appeal now
+    carry their own dates; their other faults remain.
+- **Everywhere else:** CUAD and InternBench are unchanged.
+
 **Speed.** p50 13.3 s per document, p95 37 s, at most 75 s, on a 4-core x86-64 host.
 
 ## Reproduce

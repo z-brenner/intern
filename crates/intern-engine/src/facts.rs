@@ -181,11 +181,11 @@ impl ScopeView {
 }
 
 /// The one date a letter, a notice or an invoice gives its own date's field
-/// on its first page, with the line it stands on - when `date` has no field
+/// on its own pages, with the line it stands on - when `date` has no field
 /// anywhere in the document but a line item's ([`date_fields`]). The model
 /// need not have been shown it: retrieval can leave a header line out. An
-/// exhibit or an enclosure further on carries its own "Dated:", and it is
-/// never this document's.
+/// exhibit or a schedule attached after the document carries its own
+/// "Dated:", and it is never this document's ([`attachments_from`]).
 fn own_date_field(scope: &ValidationScope<'_>, date: &str) -> Option<(String, String)> {
     let order = numeric_date_order(scope.document());
     let rows = |units: &[&EvidenceUnit]| {
@@ -218,14 +218,19 @@ fn own_date_field(scope: &ValidationScope<'_>, date: &str) -> Option<(String, St
     {
         return None;
     }
+    // The document's own pages: up to the first page that opens as an
+    // attachment. A court notice signs and dates itself at its end, on page
+    // two or later; the exhibit or the schedule after it carries dates of
+    // its own.
     let first_page = units.iter().map(|unit| unit.page).min()?;
-    let on_first = units
+    let attached = attachments_from(&units, first_page);
+    let own_pages = units
         .iter()
         .copied()
-        .filter(|unit| unit.page == first_page)
+        .filter(|unit| attached.is_none_or(|page| unit.page < page))
         .collect::<Vec<_>>();
     let mut own: Vec<(String, String)> = Vec::new();
-    for field in date_fields(&rows(&on_first), order) {
+    for field in date_fields(&rows(&own_pages), order) {
         if field.own && !field.line_item && !own.iter().any(|(existing, _)| *existing == field.date)
         {
             own.push((field.date, field.line));
@@ -236,6 +241,45 @@ fn own_date_field(scope: &ValidationScope<'_>, date: &str) -> Option<(String, St
         _ => None,
     }
 }
+
+/// The first page after the first that opens as an attachment - "EXHIBIT
+/// A", "SCHEDULE B", "Attachment 1" - on its own short line.
+fn attachments_from(units: &[&EvidenceUnit], first_page: usize) -> Option<usize> {
+    let mut pages = units
+        .iter()
+        .map(|unit| unit.page)
+        .filter(|page| *page > first_page)
+        .collect::<Vec<_>>();
+    pages.dedup();
+    pages.into_iter().find(|page| {
+        units
+            .iter()
+            .find(|unit| unit.page == *page)
+            .and_then(|unit| {
+                unit.text
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+            })
+            .is_some_and(|line| {
+                let words = words(line);
+                words.len() <= 4
+                    && words.first().is_some_and(|word| {
+                        ATTACHMENT_WORDS.contains(&word.trim_end_matches(['.', ':']))
+                    })
+            })
+    })
+}
+
+/// Words a page that starts an attachment opens on.
+const ATTACHMENT_WORDS: &[&str] = &[
+    "exhibit",
+    "schedule",
+    "attachment",
+    "appendix",
+    "annex",
+    "enclosure",
+];
 
 /// The two views validation reads an evidence-pipeline reply against: what
 /// the model was shown, and the whole document.
@@ -8945,6 +8989,49 @@ The merger needs a majority of votes cast.";
         assert_ne!(
             outcome.proposal.document_date.as_deref(),
             Some("2009-08-07")
+        );
+    }
+
+    /// A notice of deposition in the held-out real set, as Qwen3.5-2B read
+    /// it: dated by the deposition it sets, though it dates itself at its
+    /// end, on page two. The schedule attached after it carries a "Dated:" of
+    /// its own, which is never the notice's.
+    #[test]
+    fn a_notice_dated_at_its_end_takes_that_date_and_not_a_schedules() {
+        let index = EvidenceIndex::build(&DocumentSource::from_pages(vec![
+            crate::domain::SourcePage::new(
+                1,
+                "UNITED STATES DISTRICT COURT\n\nWINDROW.COM, INC., Plaintiff,\nv.\n\
+                 CASCADE WEB SERVICES LLC, Defendant.\n\nNOTICE OF DEPOSITION\n\n\
+                 PLEASE TAKE NOTICE that Plaintiff will take the deposition of Defendant \
+                 on October 21, 2008 at 9:00 a.m.",
+                PageOrigin::PlainText,
+            ),
+            crate::domain::SourcePage::new(
+                2,
+                "Dated: September 3, 2008\n\nBy: /s/ Counsel for Plaintiff",
+                PageOrigin::PlainText,
+            ),
+            crate::domain::SourcePage::new(
+                3,
+                "SCHEDULE A\n\nDefinitions\n\nDated: January 5, 2007",
+                PageOrigin::PlainText,
+            ),
+        ]));
+        let context = whole(&index);
+        let facts = ModelFacts {
+            document_type: Some("Notice of Deposition".into()),
+            type_evidence: vec![id_of(&index, "NOTICE OF DEPOSITION")],
+            document_date: Some("2008-10-21".into()),
+            date_evidence: vec![id_of(&index, "PLEASE TAKE NOTICE")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &context, &index);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2008-09-03"),
+            "{:?}",
+            outcome.reasons
         );
     }
 
