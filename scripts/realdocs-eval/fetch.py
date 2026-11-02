@@ -2,11 +2,12 @@
 
 Laboratory tooling; the app does not call it. Usage:
 
-    python3 -I scripts/realdocs-eval/fetch.py OUT_DIR
+    python3 -I scripts/realdocs-eval/fetch.py OUT_DIR [SAMPLE.json]
 
 writes OUT_DIR/corpus/<id>.<ext>, each checked against its pinned size and SHA-256, and
-OUT_DIR/gold.json, the sample's own gold in InternBench's schema. A live run then records and
-scores it like any corpus, with InternBench's own filename score:
+OUT_DIR/gold.json, the sample's own gold in InternBench's schema. SAMPLE.json is sample.json, the
+first set, by default, or sample-heldout.json, the held-out set no rule was written from. A live
+run then records and scores it like any corpus, with InternBench's own filename score:
 
     CORPUS=OUT_DIR/corpus GOLD=OUT_DIR/gold.json MANIFEST= MODEL=... LLAMA_SERVER=... \\
       scripts/run-internbench.sh OUT_DIR/run -- --min-token-confidence 0.5
@@ -29,10 +30,11 @@ USER_AGENT = "Intern document-naming evaluation (https://github.com/z-brenner/in
 
 
 def main():
-    if len(sys.argv) != 2:
-        sys.exit("usage: fetch.py OUT_DIR")
+    if len(sys.argv) not in (2, 3):
+        sys.exit("usage: fetch.py OUT_DIR [SAMPLE.json]")
     out = sys.argv[1]
-    sample = json.load(open(os.path.join(HERE, "sample.json"), encoding="utf-8"))
+    name = sys.argv[2] if len(sys.argv) == 3 else "sample.json"
+    sample = json.load(open(os.path.join(HERE, os.path.basename(name)), encoding="utf-8"))
     corpus = os.path.join(out, "corpus")
     os.makedirs(corpus, exist_ok=True)
     documents, failed = [], []

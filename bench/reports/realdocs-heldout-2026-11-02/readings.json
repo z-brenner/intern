@@ -1,0 +1,2210 @@
+{
+ "classes": {
+  "generic_type": "type generic or missing (\"Document\", a bare \"Letter\" or \"Notice\")",
+  "person": "a person named instead of the organization",
+  "relation_missing": "the joining word missing, the party not the issuer (\"Type - Addressee\")",
+  "customer": "an invoice's customer named instead of its issuer, or no issuer",
+  "case_sides": "a court filing's sides not as its caption and body give them",
+  "event_date": "a date the document mentions, not its own",
+  "missing_date": "no date read",
+  "other_document": "type names another document or a wrong kind",
+  "other_party": "a party the document only mentions, or a label read as a name",
+  "ocr": "OCR: a misread name or a hand it cannot read",
+  "unreadable": "the file could not be opened (TIFF with FillOrder 2)"
+ },
+ "states": {
+  "before": "main after #50, before #51's rules",
+  "after": "with #51's rules, which no document of this set informed",
+  "followup": "with #51 and the one follow-up this set showed (a reply's unconfirmed customer role no longer counts in the header-issuer rule); in-sample for this set"
+ },
+ "readings": [
+  {
+   "id": "real2-invoice-01",
+   "kind": "invoice",
+   "format": "tiff",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1995-12-04 Ticket Subscription Invoice from USTA.tif",
+    "1995-12-04 Invoice from USTA.tif",
+    "1995-12-04 Ticket Subscription Invoice from USTA National Tennis Center Incorporated.tif"
+   ],
+   "before": {
+    "filename": "1995-12-04 Ticket Subscription Invoice from Philip Morris.tif",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "1995-12-04 Ticket Subscription Invoice from Philip Morris.tif",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "PARTY_UNSUPPORTED",
+     "DESCRIPTION_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "1995-12-04 Ticket Subscription Invoice from Philip Morris.tif",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "customer"
+   ]
+  },
+  {
+   "id": "real2-invoice-02",
+   "kind": "invoice",
+   "format": "tiff",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1995-07-20 Invoice from The New York Academy of Sciences.tif",
+    "1995-07-20 Original Invoice from The New York Academy of Sciences.tif",
+    "1995-07-20 Invoice from New York Academy of Sciences.tif"
+   ],
+   "before": {
+    "filename": null,
+    "readiness": "failed",
+    "status": "extraction_failed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": null,
+    "readiness": "failed",
+    "status": "extraction_failed",
+    "review_reasons": [],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": null,
+    "readiness": "failed",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "unreadable"
+   ]
+  },
+  {
+   "id": "real2-invoice-03",
+   "kind": "statement",
+   "format": "tiff",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1996-02-15 Statement from The Hearst Corporation.tif",
+    "1996-02-15 Statement of Account from The Hearst Corporation.tif",
+    "1996-02-15 Statement from Marie ClaireHearst.tif"
+   ],
+   "before": {
+    "filename": "Invoice from Marie ClaireHearst.tif",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Invoice from Marie ClaireHearst.tif",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "DATE_UNSUPPORTED",
+     "DESCRIPTION_UNSUPPORTED"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "Invoice from Marie ClaireHearst.tif",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "ocr",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real2-invoice-04",
+   "kind": "invoice",
+   "format": "tiff",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1989-03-06 Invoice from International Union of Biochemistry.tif"
+   ],
+   "before": {
+    "filename": null,
+    "readiness": "failed",
+    "status": "extraction_failed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": null,
+    "readiness": "failed",
+    "status": "extraction_failed",
+    "review_reasons": [],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": null,
+    "readiness": "failed",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "unreadable"
+   ]
+  },
+  {
+   "id": "real2-invoice-05",
+   "kind": "invoice",
+   "format": "tiff",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1996-03-04 Invoice from Marketing Visions, Inc.tif"
+   ],
+   "before": {
+    "filename": "1996-03-04 Invoice from Marketing Visions, Inc.tif",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "1996-03-04 Invoice from Marketing Visions, Inc.tif",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "right",
+    "scorer": "right"
+   },
+   "followup": {
+    "filename": "1996-03-04 Invoice from Marketing Visions, Inc.tif",
+    "readiness": "needs_review",
+    "adjudicated": "right"
+   },
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real2-invoice-06",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1882-10-01 Bill from Charles Williams, Jr.jpg",
+    "1882-10-01 Invoice from Charles Williams, Jr.jpg",
+    "1882-10-01 Receipt from Charles Williams, Jr.jpg"
+   ],
+   "before": {
+    "filename": "Bill from Charles Williams Jr.jpg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Bill from National Bell Telephone Co.jpg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_INFERRED",
+     "DATE_UNSUPPORTED",
+     "PARSER_WARNING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "Bill from Charles Williams Jr.jpg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "customer",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real2-invoice-07",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1897-01-02 Bill from Pollok & Mauro.jpg",
+    "1897-01-02 Invoice from Pollok & Mauro.jpg",
+    "1897-01-02 Receipt from Pollok & Mauro.jpg"
+   ],
+   "before": {
+    "filename": "Document from Alexander Graham Bell.jpg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Document from Alexander Graham Bell.jpg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_UNSUPPORTED",
+     "DESCRIPTION_INVALID",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "Document from Alexander Graham Bell.jpg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "customer",
+    "generic_type",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real2-invoice-08",
+   "kind": "receipt",
+   "format": "jpg",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1864-12-31 Receipt from The United States Telegraph Company.jpg",
+    "1864-12-31 Bill from The United States Telegraph Company.jpg",
+    "1864-12-31 Invoice from The United States Telegraph Company.jpg"
+   ],
+   "before": {
+    "filename": "1864-12-31 Document from cbachinglon.jpg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "1864-12-31 Document from cbachinglon.jpg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_IMPLAUSIBLE",
+     "PARSER_WARNING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "1864-12-31 Document from cbachinglon.jpg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "ocr"
+   ]
+  },
+  {
+   "id": "real2-invoice-09",
+   "kind": "receipt",
+   "format": "jpg",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1860-10-02 Receipt from The Adams Express Company.jpg",
+    "1860-10-02 Express Receipt from The Adams Express Company.jpg",
+    "1860-10-02 Shipping Receipt from The Adams Express Company.jpg"
+   ],
+   "before": {
+    "filename": "Contract between Adams Express Company and Gustavus V. Town.jpg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Contract between Adams Express Company and Gustavus V. Town.jpg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "Contract between Adams Express Company and Gustavus V. Town.jpg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "other_document",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real2-invoice-10",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "1923-11-22 Invoice from Times-Mirror Printing & Binding House.pdf",
+    "1923-11-22 Corrected Invoice from Times-Mirror Printing & Binding House.pdf",
+    "1923-11-22 Bill from Times-Mirror Printing & Binding House.pdf"
+   ],
+   "before": {
+    "filename": "Corrected Invoice from Times-Mirror Printing S Binding House.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Corrected Invoice from Times-Mirror Printing S Binding House.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "DATE_UNSUPPORTED",
+     "DESCRIPTION_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "Corrected Invoice from Times-Mirror Printing S Binding House.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "ocr",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real2-invoice-11",
+   "kind": "statement",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "1920-01-13 Statement from Grace Bros. Brewing Co.pdf",
+    "1920-01-13 Statement of Account from Grace Bros. Brewing Co.pdf",
+    "1920-01-13 Bill from Grace Bros. Brewing Co.pdf"
+   ],
+   "before": {
+    "filename": "Statement.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Statement.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "DATE_UNSUPPORTED",
+     "PARTY_UNSUPPORTED",
+     "PARTY_MISSING",
+     "DESCRIPTION_INVALID",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "Statement.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "customer",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real2-invoice-12",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "1895-12-09 Bill from Geo. P. McNear.pdf",
+    "1895-12-09 Invoice from Geo. P. McNear.pdf",
+    "1895-12-09 Billhead from Geo. P. McNear.pdf"
+   ],
+   "before": {
+    "filename": "Document.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Document.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_UNSUPPORTED",
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "Document.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real2-invoice-13",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2012-06-08 Invoice from Puffbox Ltd.pdf",
+    "2012-06-08 Invoice from Puffbox Limited.pdf",
+    "2012-06-08 Invoice from Puffbox.pdf"
+   ],
+   "before": {
+    "filename": "2012-06-08 Invoice from PUFFBOX LTD.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2012-06-08 Invoice from PUFFBOX LTD.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "DESCRIPTION_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "right",
+    "scorer": "right"
+   },
+   "followup": {
+    "filename": "2012-06-08 Invoice from PUFFBOX LTD.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "right"
+   },
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real2-invoice-14",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2010-08-25 Invoice from Royal Images.pdf"
+   ],
+   "before": {
+    "filename": "2010-08-25 Invoice - Mike Murphy.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2010-08-25 Invoice from Our Bank.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "review_reasons": [],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2010-08-25 Invoice.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "other_party"
+   ]
+  },
+  {
+   "id": "real2-invoice-15",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2024-10-20 Invoice from KUSA-TV.pdf",
+    "2024-10-20 Invoice from KUSA.pdf",
+    "2024-10-20 Invoice from 9NEWS.pdf"
+   ],
+   "before": {
+    "filename": "2024-10-14 Invoice - KUSA-TV.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2024-10-14 Invoice.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "PARTY_MISSING"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2024-10-14 Invoice.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "customer",
+    "event_date"
+   ]
+  },
+  {
+   "id": "real2-letter-01",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2008-12-05 Approval Letter to Cleary Gottlieb Steen & Hamilton LLP.pdf",
+    "2008-12-05 Letter to Cleary Gottlieb Steen & Hamilton LLP.pdf",
+    "2008-12-05 Approval Letter to BNP Paribas.pdf"
+   ],
+   "before": {
+    "filename": "2008-12-05 Letter to Fortis Bank Belgium.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2008-12-05 Letter to Cleary Gottlieb Steen & Hamilton LLP.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "right",
+    "scorer": "right"
+   },
+   "followup": {
+    "filename": "2008-12-05 Letter to Cleary Gottlieb Steen & Hamilton LLP.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "right"
+   },
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real2-letter-02",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2007-06-25 Letter to Proskauer Rose LLP.pdf",
+    "2007-06-25 Cover Letter to Proskauer Rose LLP.pdf",
+    "2007-06-25 Notice Letter to Proskauer Rose LLP.pdf"
+   ],
+   "before": {
+    "filename": "2007-06-25 Letter - Edward R. Gallion.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2007-06-25 Letter - Edward R. Gallion.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2007-06-25 Letter - Edward R. Gallion.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person"
+   ]
+  },
+  {
+   "id": "real2-letter-03",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2015-04-06 Enforcement Letter to Packaging Specialties, Inc.pdf",
+    "2015-04-06 Letter to Packaging Specialties, Inc.pdf",
+    "2015-04-06 Enforcement Letter from U.S. Department of Energy.pdf"
+   ],
+   "before": {
+    "filename": "2015-04-06 Document - Robert Syme.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2015-04-06 Document - Robert Syme.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2015-04-06 Document - Robert Syme.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person"
+   ]
+  },
+  {
+   "id": "real2-letter-04",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "1974-12-20 Advisory Opinion to ARP Industries, Inc.pdf",
+    "1974-12-20 Letter to ARP Industries, Inc.pdf",
+    "1974-12-20 Response Letter to ARP Industries, Inc.pdf"
+   ],
+   "before": {
+    "filename": "Document - Michael A. Brown.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Document - Michael A. Brown.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "Document - Michael A. Brown.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real2-letter-05",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2014-06-30 Extension Letter to PricewaterhouseCoopers LLP.pdf",
+    "2014-06-30 Letter to PricewaterhouseCoopers LLP.pdf",
+    "2014-06-30 Extension Letter from Department for Communities and Local Government.pdf"
+   ],
+   "before": {
+    "filename": "2014-06-30 Letter - London Borough of Tower Hamlets.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2014-06-30 Letter - London Borough of Tower Hamlets.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2014-06-30 Letter - London Borough of Tower Hamlets.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "other_party"
+   ]
+  },
+  {
+   "id": "real2-letter-06",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2013-09-11 Advice Letter to HM Treasury.pdf",
+    "2013-09-11 Letter to HM Treasury.pdf",
+    "2013-09-11 Advice Letter to Chancellor of the Exchequer.pdf"
+   ],
+   "before": {
+    "filename": "2013-09-11 advice from Clive Maxwell.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2013-09-11 advice from Clive Maxwell.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "TYPE_INFERRED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2013-09-11 advice from Clive Maxwell.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person"
+   ]
+  },
+  {
+   "id": "real2-letter-07",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2018-02-09 Untitled Letter to Collegium Pharmaceutical, Inc.pdf",
+    "2018-02-09 Letter to Collegium Pharmaceutical, Inc.pdf",
+    "2018-02-09 Untitled Letter to Collegium Pharmaceuticals, Inc.pdf"
+   ],
+   "before": {
+    "filename": "2018-02-09 Letter - Collegium Pharmaceutical, Inc.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2018-02-09 Letter - Collegium Pharmaceutical, Inc.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING",
+     "DATE_AMBIGUOUS",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2018-02-09 Letter - Collegium Pharmaceutical, Inc.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "relation_missing"
+   ]
+  },
+  {
+   "id": "real2-letter-08",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2025-09-10 Enforcement Letter to Savannah River Mission Completion, LLC.pdf",
+    "2025-09-10 Letter to Savannah River Mission Completion, LLC.pdf",
+    "2025-09-10 Enforcement Letter from U.S. Department of Energy.pdf"
+   ],
+   "before": {
+    "filename": "2025-09-10 Letter - Dr. Thomas Burns, Jr.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2025-09-10 Letter to Savannah River Mission Completion, LLC.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "right",
+    "scorer": "right"
+   },
+   "followup": {
+    "filename": "2025-09-10 Letter to Savannah River Mission Completion, LLC.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "right"
+   },
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real2-letter-09",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "1997-05-16 Advisory Opinion to Chicago Mercantile Exchange.pdf",
+    "1997-05-16 Letter to Chicago Mercantile Exchange.pdf",
+    "1997-05-16 Opinion Letter to Chicago Mercantile Exchange.pdf"
+   ],
+   "before": {
+    "filename": "1997-05-16 Advisory Opinion - Chicago Mercantile Exchange.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "1997-05-16 Advisory Opinion - Chicago Mercantile Exchange.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "review_reasons": [],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "1997-05-16 Advisory Opinion - Chicago Mercantile Exchange.pdf",
+    "readiness": "ready",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "relation_missing"
+   ]
+  },
+  {
+   "id": "real2-letter-10",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2024-10-07 Letter between Nike, Inc and StockX LLC.pdf",
+    "2024-10-07 Letter to the Court between Nike, Inc and StockX LLC.pdf",
+    "2024-10-07 Letter Request between Nike, Inc and StockX LLC.pdf"
+   ],
+   "before": {
+    "filename": "2024-10-07 Document - Nike, Inc.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2024-10-07 Document - Nike, Inc.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2024-10-07 Document - Nike, Inc.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type"
+   ]
+  },
+  {
+   "id": "real2-letter-11",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2022-12-14 Letter of Comfort to Low Carbon Contracts Company.pdf",
+    "2022-12-14 Letter to Low Carbon Contracts Company.pdf",
+    "2022-12-14 Comfort Letter to Low Carbon Contracts Company.pdf"
+   ],
+   "before": {
+    "filename": "2022-12-14 Notice from Low Carbon Contracts Company.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2022-12-14 Notice from Low Carbon Contracts Company.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "TYPE_MISSING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2022-12-14 Notice from Low Carbon Contracts Company.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "other_document",
+    "relation_missing"
+   ]
+  },
+  {
+   "id": "real2-letter-12",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2025-08-20 Guidance Letter to Pool Reinsurance Company Limited.pdf",
+    "2025-08-20 Letter to Pool Reinsurance Company Limited.pdf",
+    "2025-08-20 Interpretive Letter to Pool Reinsurance Company Limited.pdf"
+   ],
+   "before": {
+    "filename": "2025-08-20 Letter from Gwyneth Nurse.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2025-08-20 Letter from Gwyneth Nurse.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2025-08-20 Letter from Gwyneth Nurse.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person"
+   ]
+  },
+  {
+   "id": "real2-letter-13",
+   "kind": "letter",
+   "format": "odt",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2021-12-14 Remit Letter to Armed Forces’ Pay Review Body.odt",
+    "2021-12-14 Letter to Armed Forces’ Pay Review Body.odt",
+    "2021-12-14 Remit Letter to Armed Forces' Pay Review Body.odt"
+   ],
+   "before": {
+    "filename": "2021-12-14 Letter - Ministry of Defence.odt",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2021-12-14 Letter - Ministry of Defence.odt",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING",
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "right",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2021-12-14 Letter - Ministry of Defence.odt",
+    "readiness": "needs_review",
+    "adjudicated": "right"
+   },
+   "why": "The Ministry wrote it; the gold accepts \"Letter\" \"from\" it. Only the joining word is missing.",
+   "classes": []
+  },
+  {
+   "id": "real2-letter-14",
+   "kind": "letter",
+   "format": "jpg",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1891-04-25 Response Letter to A. G. Bell.jpg",
+    "1891-04-25 Letter to A. G. Bell.jpg",
+    "1891-04-25 Business Letter to A. G. Bell.jpg"
+   ],
+   "before": {
+    "filename": "1891-04-25 Document from The Columbia Phonograph Company.jpg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "1891-04-25 Document from The Columbia Phonograph Company.jpg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_IMPLAUSIBLE",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "1891-04-25 Document from The Columbia Phonograph Company.jpg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real2-letter-15",
+   "kind": "letter",
+   "format": "jpg",
+   "text_layer": "image",
+   "gold_filenames": [
+    "2013-11-29 Response Letter to Baroness Lane-Fox of Soho.jpg",
+    "2013-11-29 Letter to Baroness Lane-Fox of Soho.jpg",
+    "2013-11-29 Thank-You Letter to Baroness Lane-Fox of Soho.jpg"
+   ],
+   "before": {
+    "filename": "2013-11-29 Letter from The Prime Minister.jpg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2013-11-29 Letter from The Prime Minister.jpg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "right",
+    "scorer": "right"
+   },
+   "followup": {
+    "filename": "2013-11-29 Letter from The Prime Minister.jpg",
+    "readiness": "needs_review",
+    "adjudicated": "right"
+   },
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real2-notice-01",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2011-03-03 Notice of Probable Violation for Dakota Gasification Company.pdf",
+    "2011-03-03 Notice of Probable Violation and Proposed Civil Penalty for Dakota Gasification Company.pdf",
+    "2011-03-03 Notice of Violation for Dakota Gasification Company.pdf"
+   ],
+   "before": {
+    "filename": "2011-03-03 Notice of Probable Violation for Dakota Gasification Company.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2011-03-03 Notice of Probable Violation for Dakota Gasification Company.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "review_reasons": [],
+    "adjudicated": "right",
+    "scorer": "right"
+   },
+   "followup": {
+    "filename": "2011-03-03 Notice of Probable Violation for Dakota Gasification Company.pdf",
+    "readiness": "ready",
+    "adjudicated": "right"
+   },
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real2-notice-02",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2015-09-18 Notice of Violation for Volkswagen AG.pdf",
+    "2015-09-18 NOV for Volkswagen AG.pdf",
+    "2015-09-18 Notice for Volkswagen AG.pdf"
+   ],
+   "before": {
+    "filename": "Notice of Violation for David Geanacopoulos.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Notice of Violation to Volkswagen Group of America. Inc.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "Notice of Violation to Volkswagen Group of America. Inc.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "missing_date",
+    "other_party"
+   ]
+  },
+  {
+   "id": "real2-notice-03",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2008-09-16 Notice of Bankruptcy for Lehman Brothers Holdings Inc.pdf",
+    "2008-09-16 Notice of Bankruptcy Filing for Lehman Brothers Holdings Inc.pdf",
+    "2008-09-16 Suggestion of Bankruptcy for Lehman Brothers Holdings Inc.pdf"
+   ],
+   "before": {
+    "filename": "2008-09-15 Notice of Bankruptcy - Lehman Brothers Holdings Inc.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2008-09-15 Notice of Bankruptcy - Lehman Brothers Holdings Inc.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2008-09-15 Notice of Bankruptcy - Lehman Brothers Holdings Inc.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "event_date"
+   ]
+  },
+  {
+   "id": "real2-notice-04",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2008-09-03 Notice of Deposition between Girafa.com, Inc and Amazon Web Services LLC.pdf",
+    "2008-09-03 Notice of Deposition Pursuant to Rule 30(b)(6) between Girafa.com, Inc and Amazon Web Services LLC.pdf",
+    "2008-09-03 Notice to Take Deposition between Girafa.com, Inc and Amazon Web Services LLC.pdf"
+   ],
+   "before": {
+    "filename": "2008-10-21 Notice of Deposition Pursuant to Rule from Girafa.com, Inc.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2008-10-21 Notice of Deposition Pursuant to Rule between Girafa.com, Inc and Amazon.com, Inc.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "review_reasons": [],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2008-10-21 Notice of Deposition Pursuant to Rule between Girafa.com, Inc and Amazon.com, Inc.pdf",
+    "readiness": "ready",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "event_date"
+   ]
+  },
+  {
+   "id": "real2-notice-05",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2008-01-22 Notice of Entry of Order between American Service Insurance Company and NAFTA General Agency.pdf",
+    "2008-01-22 Notice of Entry between American Service Insurance Company and NAFTA General Agency.pdf",
+    "2008-01-22 Notice of Entry of Temporary Restraining Order with American Service Insurance Company.pdf"
+   ],
+   "before": {
+    "filename": "2008-01-22 Notice of Entry of Order from American Service Insurance.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2008-01-22 Notice of Entry of Order between American Service Insurance and NAFTA General Agency.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "right",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2008-01-22 Notice of Entry of Order between American Service Insurance and NAFTA General Agency.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "right"
+   },
+   "why": "Drops \"Company\" from the plaintiff's name; parties, type and date right.",
+   "classes": []
+  },
+  {
+   "id": "real2-notice-06",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2012-04-13 Notice of Settlement between SimpleAir, Inc and Research In Motion Corporation.pdf",
+    "2012-04-13 Notice between SimpleAir, Inc and Research In Motion Corporation.pdf",
+    "2012-04-13 Notice of Settlement between Research In Motion Corporation and SimpleAir, Inc.pdf"
+   ],
+   "before": {
+    "filename": "2012-04-13 Notice of Settlement from SimpleAir, Inc.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2012-04-13 Notice of Settlement from SimpleAir, Inc.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2012-04-13 Notice of Settlement from SimpleAir, Inc.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "case_sides"
+   ]
+  },
+  {
+   "id": "real2-notice-07",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2003-10-20 Notice of Related Action between Synopsys, Inc and Ricoh Company, Ltd.pdf",
+    "2003-10-20 Notice of Related Case between Synopsys, Inc and Ricoh Company, Ltd.pdf",
+    "2003-10-20 Notice of Related Action Currently Pending in the Northern District of California with Synopsys, Inc.pdf"
+   ],
+   "before": {
+    "filename": "2003-10-20 Notice of Related Action for Ricoh Company, Ltd.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2003-10-20 Notice of Related Action for Ricoh Company, Ltd.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "review_reasons": [],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2003-10-20 Notice of Related Action for Ricoh Company, Ltd.pdf",
+    "readiness": "ready",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "case_sides"
+   ]
+  },
+  {
+   "id": "real2-notice-08",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2012-12-20 Notice of Motion between Marylebone PCC Limited—Rose 2 Fund and Millennium Global Investments Ltd.pdf",
+    "2012-12-20 Notice of Motion for Preliminary Approval of Settlement with Marylebone PCC Limited—Rose 2 Fund.pdf",
+    "2012-12-20 Plaintiff's Notice of Motion with Marylebone PCC Limited—Rose 2 Fund.pdf"
+   ],
+   "before": {
+    "filename": "2012-12-20 Notice of Motion between Marylebone PCC Limited and BCP Securities LLC.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2012-12-20 Notice of Motion between Marylebone PCC Limited and BCP Securities LLC.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "right",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2012-12-20 Notice of Motion between Marylebone PCC Limited and BCP Securities LLC.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "right"
+   },
+   "why": "The motion approves the settlement with BCP Securities, a pair the gold accepts; drops the plaintiff fund's series name.",
+   "classes": []
+  },
+  {
+   "id": "real2-notice-09",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2026-04-01 Notice of Intent to Terminate Receivership for Citizens National Bank.pdf",
+    "2026-04-01 Notice to All Interested Parties of Intent to Terminate Receivership for Citizens National Bank.pdf",
+    "2026-04-01 Notice of Termination for Citizens National Bank.pdf"
+   ],
+   "before": {
+    "filename": "2026-04-01 Notice of Intent to Terminate Receivership from Federal Deposit Insurance Corporation.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2026-04-01 Notice of Intent to Terminate Receivership from Federal Deposit Insurance Corporation.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "review_reasons": [],
+    "adjudicated": "right",
+    "scorer": "right"
+   },
+   "followup": {
+    "filename": "2026-04-01 Notice of Intent to Terminate Receivership from Federal Deposit Insurance Corporation.pdf",
+    "readiness": "ready",
+    "adjudicated": "right"
+   },
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real2-notice-10",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2024-06-12 Notice of Technical Conference for Stingray Pipeline Company, L.L.C.pdf",
+    "2024-06-12 Notice of Meeting for Stingray Pipeline Company, L.L.C.pdf",
+    "2024-06-12 Notice for Stingray Pipeline Company, L.L.C.pdf"
+   ],
+   "before": {
+    "filename": "2024-07-17 Notice of Technical Conference for Stingray Pipeline Company, L.L.C.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2024-07-17 Notice of Technical Conference for Stingray Pipeline Company, L.L.C.pdf",
+    "readiness": "ready",
+    "status": "completed",
+    "review_reasons": [],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2024-07-17 Notice of Technical Conference for Stingray Pipeline Company, L.L.C.pdf",
+    "readiness": "ready",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "event_date"
+   ]
+  },
+  {
+   "id": "real2-notice-11",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2020-01-29 Notice of Monetary Penalty for AQA Education.pdf",
+    "2020-01-29 Monetary Penalty Notice for AQA Education.pdf",
+    "2020-01-29 Penalty Notice for AQA Education.pdf"
+   ],
+   "before": {
+    "filename": "2020-01-29 Notice of Monetary Penalty to AQA Education.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2020-01-29 Notice of Monetary Penalty to AQA Education.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "PARTY_UNSUPPORTED"
+    ],
+    "adjudicated": "right",
+    "scorer": "right"
+   },
+   "followup": {
+    "filename": "2020-01-29 Notice of Monetary Penalty to AQA Education.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "right"
+   },
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real2-notice-12",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2022-03-17 Notice of Intention to Impose a Penalty for London & South Eastern Railways Limited.pdf",
+    "2022-03-17 Notice in Accordance with Section 57C of the Railways Act 1993.pdf",
+    "2022-03-17 Notice of Proposed Penalty for London & South Eastern Railways Limited.pdf"
+   ],
+   "before": {
+    "filename": "2022-03-17 Notice - London & South Eastern Railways Limited.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2022-03-17 Notice - London & South Eastern Railways Limited.pdf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2022-03-17 Notice - London & South Eastern Railways Limited.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type"
+   ]
+  },
+  {
+   "id": "real2-notice-13",
+   "kind": "notice",
+   "format": "xlsx",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2017-02-03 Improvement Notice for Statoil (U.K.) Limited.xlsx",
+    "2017-02-03 Details for Improvement Notice for Statoil (U.K.) Limited.xlsx",
+    "2017-02-03 Enforcement Notice for Statoil (U.K.) Limited.xlsx"
+   ],
+   "before": {
+    "filename": "2017-02-03 Improvement Notice for Statoil (U.K.) Limited.xlsx",
+    "readiness": "ready",
+    "status": "completed",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2017-02-03 Improvement Notice for Statoil (U.K.) Limited.xlsx",
+    "readiness": "ready",
+    "status": "completed",
+    "review_reasons": [],
+    "adjudicated": "right",
+    "scorer": "right"
+   },
+   "followup": {
+    "filename": "2017-02-03 Improvement Notice for Statoil (U.K.) Limited.xlsx",
+    "readiness": "ready",
+    "adjudicated": "right"
+   },
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real2-notice-14",
+   "kind": "notice",
+   "format": "doc",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2011-07-20 Notice of Violation for WaveDivision VII, LLC.doc",
+    "2011-07-20 NOV for WaveDivision VII, LLC.doc",
+    "2011-07-20 Notice for WaveDivision VII, LLC.doc"
+   ],
+   "before": {
+    "filename": "2011-07-20 Notice of Violation - Federal Communications Commission.doc",
+    "readiness": "ready",
+    "status": "completed",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2011-07-20 Notice of Violation - Federal Communications Commission.doc",
+    "readiness": "ready",
+    "status": "completed",
+    "review_reasons": [],
+    "adjudicated": "right",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2011-07-20 Notice of Violation - Federal Communications Commission.doc",
+    "readiness": "ready",
+    "adjudicated": "right"
+   },
+   "why": "Issued by the FCC; the gold accepts \"from\" the FCC. Only the joining word is missing.",
+   "classes": []
+  },
+  {
+   "id": "real2-notice-15",
+   "kind": "notice",
+   "format": "txt",
+   "text_layer": "text",
+   "gold_filenames": [
+    "2026-08-12 Notice of Violation for Hispanic Family Christian Network, Inc.txt",
+    "2026-08-12 NOV for Hispanic Family Christian Network, Inc.txt",
+    "2026-08-12 Notice for Hispanic Family Christian Network, Inc.txt"
+   ],
+   "before": {
+    "filename": "2026-08-12 Notice of Violation for Hispanic Family Christian Network, Inc.txt",
+    "readiness": "ready",
+    "status": "completed",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2026-08-12 Notice of Violation for Hispanic Family Christian Network, Inc.txt",
+    "readiness": "ready",
+    "status": "completed",
+    "review_reasons": [],
+    "adjudicated": "right",
+    "scorer": "right"
+   },
+   "followup": {
+    "filename": "2026-08-12 Notice of Violation for Hispanic Family Christian Network, Inc.txt",
+    "readiness": "ready",
+    "adjudicated": "right"
+   },
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real2-office-01",
+   "kind": "letter",
+   "format": "docx",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2023-06-22 Request Letter to Ofsted.docx",
+    "2023-06-22 Letter to Ofsted.docx",
+    "2023-06-22 Request Letter to Ofsted Chief Inspector.docx"
+   ],
+   "before": {
+    "filename": "2023-06-22 Document - Rt Hon Kemi Badenoch MP.docx",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2023-06-22 Document - Rt Hon Kemi Badenoch MP.docx",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2023-06-22 Document - Rt Hon Kemi Badenoch MP.docx",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person"
+   ]
+  },
+  {
+   "id": "real2-office-02",
+   "kind": "letter",
+   "format": "docx",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2019-11-04 Remit and Recommendations Letter to Bank of England.docx",
+    "2019-11-04 Remit Letter to Bank of England.docx",
+    "2019-11-04 Letter to Bank of England.docx"
+   ],
+   "before": {
+    "filename": "2019-11-04 Letter - Mark Carney.docx",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2019-11-04 Letter - Mark Carney.docx",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2019-11-04 Letter - Mark Carney.docx",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person"
+   ]
+  },
+  {
+   "id": "real2-office-03",
+   "kind": "notice",
+   "format": "docx",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2024-07-16 Notice of Variation and Consolidation for Britvic Soft Drinks Limited.docx",
+    "2024-07-16 Notice of Variation for Britvic Soft Drinks Limited.docx",
+    "2024-07-16 Variation Notice for Britvic Soft Drinks Limited.docx"
+   ],
+   "before": {
+    "filename": "2024-07-16 Notice of variation and consolidation with introductory note - Britvic Soft Drinks Limited.docx",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2024-07-16 Notice of variation and consolidation with introductory note - Britvic Soft Drinks Limited.docx",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2024-07-16 Notice of variation and consolidation with introductory note - Britvic Soft Drinks Limited.docx",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "relation_missing"
+   ]
+  },
+  {
+   "id": "real2-office-04",
+   "kind": "notice",
+   "format": "docx",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2014-11-17 Announcement of Consultation from Environment Agency.docx",
+    "2014-11-17 Consultation Notice from Environment Agency.docx",
+    "2014-11-17 Notice from Environment Agency.docx"
+   ],
+   "before": {
+    "filename": "2014-11-17 Notice for Environment Agency.docx",
+    "readiness": "ready",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2014-11-17 Notice for Environment Agency.docx",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2014-11-17 Notice for Environment Agency.docx",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type"
+   ]
+  },
+  {
+   "id": "real2-office-05",
+   "kind": "letter",
+   "format": "odt",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2019-10-18 Advice Letter to Home Office.odt",
+    "2019-10-18 Letter to Home Office.odt",
+    "2019-10-18 Recommendation Letter to Home Office.odt"
+   ],
+   "before": {
+    "filename": "2019-10-18 Advice - ACMD.odt",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2019-10-18 Advice - ACMD.odt",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2019-10-18 Advice - ACMD.odt",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "relation_missing"
+   ]
+  },
+  {
+   "id": "real2-office-06",
+   "kind": "letter",
+   "format": "odt",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2019-10-24 Response Letter to ONS.odt",
+    "2019-10-24 Consultation Response to ONS.odt",
+    "2019-10-24 Letter to ONS.odt"
+   ],
+   "before": {
+    "filename": "2019-10-24 Document.odt",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2019-10-24 Document.odt",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2019-10-24 Document.odt",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type"
+   ]
+  },
+  {
+   "id": "real2-office-07",
+   "kind": "letter",
+   "format": "odt",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2024-03-28 Response Letter to Welsh Government.odt",
+    "2025-03-28 Response Letter to Welsh Government.odt",
+    "2024-03-28 Letter to Welsh Government.odt"
+   ],
+   "before": {
+    "filename": "2024-03-28 Letter - The Rt Hon Liz Kendall MP.odt",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2024-03-28 Letter - The Rt Hon Liz Kendall MP.odt",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2024-03-28 Letter - The Rt Hon Liz Kendall MP.odt",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person"
+   ]
+  },
+  {
+   "id": "real2-office-08",
+   "kind": "notice",
+   "format": "odt",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2026-01-29 Notice of Proposal to Modify Definitive Map Order for North Yorkshire Council.odt",
+    "2026-01-29 Notice of Proposal to Modify for North Yorkshire Council.odt",
+    "2026-01-29 Modification Notice for North Yorkshire Council.odt"
+   ],
+   "before": {
+    "filename": "2026-01-29 Notice of Proposal to Modify Definitive Map Order - North Yorkshire Council.odt",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2026-01-29 Notice of Proposal to Modify Definitive Map Order - North Yorkshire Council.odt",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2026-01-29 Notice of Proposal to Modify Definitive Map Order - North Yorkshire Council.odt",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "relation_missing"
+   ]
+  },
+  {
+   "id": "real2-office-09",
+   "kind": "letter",
+   "format": "doc",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2012-11-29 Cover Letter to National Fire Protection Association, Inc.doc",
+    "2012-11-29 Transmittal Letter to National Fire Protection Association, Inc.doc",
+    "2012-11-29 Letter to National Fire Protection Association, Inc.doc"
+   ],
+   "before": {
+    "filename": "California Electrical Code- Executed Agreement with Debra Rose.doc",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "California Electrical Code- Executed Agreement with Debra Rose.doc",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "DATE_UNSUPPORTED",
+     "PARTY_MISSING"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "California Electrical Code- Executed Agreement with Debra Rose.doc",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "other_document",
+    "person",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real2-office-10",
+   "kind": "letter",
+   "format": "doc",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2011-07-19 Response Letter to John Mann MP.doc",
+    "2011-07-19 Letter to John Mann MP.doc",
+    "2011-07-19 Response Letter to John Mann.doc"
+   ],
+   "before": {
+    "filename": "2011-07-19 Document - SIR GUS O'DONNELL KCB.doc",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2011-07-19 Document - SIR GUS O'DONNELL KCB.doc",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2011-07-19 Document - SIR GUS O'DONNELL KCB.doc",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person"
+   ]
+  },
+  {
+   "id": "real2-office-11",
+   "kind": "letter",
+   "format": "doc",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2013-04-08 Advice Letter to Lord Strathclyde CH PC.doc",
+    "2013-04-08 ACOBA Recommendation to Lord Strathclyde CH PC.doc",
+    "2013-04-08 Recommendation Letter to Lord Strathclyde CH PC.doc"
+   ],
+   "before": {
+    "filename": "2013-04-08 Letter - Lord Lang of Monkton.doc",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2013-04-08 Letter - Lord Lang of Monkton.doc",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2013-04-08 Letter - Lord Lang of Monkton.doc",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person"
+   ]
+  },
+  {
+   "id": "real2-office-12",
+   "kind": "notice",
+   "format": "rtf",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2001-07-25 Notice of the Primary Universal Service Provider for Telstra Corporation Limited.rtf",
+    "2001-07-25 Notice for Telstra Corporation Limited.rtf",
+    "2001-07-25 Notice of the Primary Universal Service Provider.rtf"
+   ],
+   "before": {
+    "filename": "2001-06-01 Notice - Extended Zones.rtf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2001-06-01 Notice - Extended Zones.rtf",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING",
+     "PARTY_UNSUPPORTED"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2001-06-01 Notice - Extended Zones.rtf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "generic_type",
+    "event_date"
+   ]
+  },
+  {
+   "id": "real2-office-13",
+   "kind": "letter",
+   "format": "msg",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2016-04-05 Email to NFPA.msg",
+    "2016-04-05 Request to NFPA.msg",
+    "2016-04-05 Request Letter to NFPA.msg"
+   ],
+   "before": {
+    "filename": "2016-04-05 Agreement between NFPA and Bruce Betts.msg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2016-04-05 Agreement between NFPA and Bruce Betts.msg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_MISSING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2016-04-05 Agreement between NFPA and Bruce Betts.msg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "other_document",
+    "person"
+   ]
+  },
+  {
+   "id": "real2-office-14",
+   "kind": "letter",
+   "format": "msg",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2016-06-21 Email to ICC.msg",
+    "2016-06-21 Cover Email to ICC.msg",
+    "2016-06-21 Cover Letter to ICC.msg"
+   ],
+   "before": {
+    "filename": "2016-06-21 Guide to the - Mark Johnson.msg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2016-06-21 Guide to the - Mark Johnson.msg",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "TYPE_INFERRED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2016-06-21 Guide to the - Mark Johnson.msg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "other_document",
+    "person"
+   ]
+  },
+  {
+   "id": "real2-office-15",
+   "kind": "notice",
+   "format": "txt",
+   "text_layer": "text",
+   "gold_filenames": [
+    "2024-06-21 Public Information Statement from National Weather Service.txt",
+    "2024-06-21 Notice from National Weather Service.txt",
+    "2024-06-21 Statement from National Weather Service.txt"
+   ],
+   "before": {
+    "filename": "2024-06-21 Public Information Statement from NOAA.txt",
+    "readiness": "needs_review",
+    "status": "completed",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2024-06-21 Public Information Statement from NOAA.txt",
+    "readiness": "needs_review",
+    "status": "completed",
+    "review_reasons": [
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "scorer": "wrong"
+   },
+   "followup": {
+    "filename": "2024-06-21 Public Information Statement from NOAA.txt",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "why": null,
+   "classes": [
+    "other_party"
+   ]
+  }
+ ]
+}
