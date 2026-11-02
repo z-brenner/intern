@@ -14,11 +14,12 @@ use crate::domain::{
 use crate::evidence::{
     DateSpelling, NumericOrder, Segments, date_match_positions, date_statements, digest_contains,
     digest_contains_date, digest_contains_loosely, extract_stated_dates, is_valid_iso_date,
-    normalize, normalize_loosely, numeric_date_order, numeric_dates,
+    normalize, normalize_loosely, numeric_date_order,
 };
 use crate::infer::{
     complete_type_from_title, dates_stated_on, infer_date_role, infer_document_type,
-    labels_a_deadline, labels_the_issue_date, repair_issued_relation, window_before, wrapped_lines,
+    labels_a_deadline, labels_the_issue_date, repair_issued_relation, two_digit_year_dates,
+    window_before, wrapped_lines,
 };
 
 /// Below this self-reported confidence a proposal goes to review even when
@@ -490,11 +491,6 @@ pub(crate) struct DateField {
     pub(crate) line_item: bool,
 }
 
-/// The labels that name a date as the document's own only as a field's -
-/// "Released:", "| Notice date |" - since in a sentence they say when
-/// something else happened ("the report released on March 3").
-const OWN_FIELD_LABELS: &[&str] = &["released", "notice date"];
-
 /// Every date the lines give a field ([`DateField`]), references to other
 /// documents aside. Each line comes with the line over it - the one before
 /// it, or a table row's header row - and `order` is how the document writes
@@ -524,8 +520,8 @@ pub(crate) fn date_fields(
             // A column headed only "Date" is as often a line item's as the
             // document's ("| Date | Description | Amount |"): a column names
             // the document's own date only when its header says whose.
-            let own = OWN_FIELD_LABELS.contains(&label.as_str())
-                || (labels_the_issue_date(&format!("{label}:")) && !(in_column && label == "date"));
+            let own =
+                labels_the_issue_date(&format!("{label}:")) && !(in_column && label == "date");
             fields.push(DateField {
                 date,
                 line: line.trim().to_owned(),
@@ -538,41 +534,17 @@ pub(crate) fn date_fields(
 }
 
 /// Every date a normalized line states with its offset, as
-/// [`dates_stated_on`] reads them, and besides the numeric dates with a
-/// two-digit year an invoice's fields are written in ("10/14/12"), read in
-/// the document's `order` with the year in 1970-2069. Each reading must be
-/// one the evidence check finds at that token. The date chips and the
-/// index never read a two-digit year, so only a field's date does.
+/// [`dates_stated_on`] reads them, and the dates with a two-digit year an
+/// invoice's fields are written in ("10/14/12"), as [`two_digit_year_dates`]
+/// reads them: only a field's date is read with one.
 fn field_dates_on(normalized: &str, order: Option<NumericOrder>) -> Vec<(String, usize)> {
     let mut found = dates_stated_on(normalized, order);
-    for token in numeric_dates(normalized) {
-        let [first, second, third] = token.parts;
-        if third.len() != 2 || first.len() > 2 {
-            continue;
-        }
-        let Ok(short) = third.parse::<u32>() else {
-            continue;
-        };
-        let year = if short < 70 {
-            2000 + short
-        } else {
-            1900 + short
-        };
-        let orders = match order {
-            Some(NumericOrder::MonthFirst) => vec![(first, second)],
-            Some(NumericOrder::DayFirst) => vec![(second, first)],
-            None => vec![(first, second), (second, first)],
-        };
-        for (month, day) in orders {
-            let iso = format!("{year}-{month:0>2}-{day:0>2}");
-            if is_valid_iso_date(&iso)
-                && date_match_positions(&iso, normalized).contains(&token.start)
-                && !found
-                    .iter()
-                    .any(|(date, position)| *date == iso && *position == token.start)
-            {
-                found.push((iso, token.start));
-            }
+    for (iso, position) in two_digit_year_dates(normalized, order) {
+        if !found
+            .iter()
+            .any(|(date, at)| *date == iso && *at == position)
+        {
+            found.push((iso, position));
         }
     }
     found
@@ -581,7 +553,7 @@ fn field_dates_on(normalized: &str, order: Option<NumericOrder>) -> Vec<(String,
 /// Whether a line carries an amount of money, as a line item's row does: a
 /// currency sign before a digit, or a number written with two decimals
 /// ("1600.00", "1,248.00") whether or not a sign goes with it.
-fn carries_an_amount(normalized: &str) -> bool {
+pub(crate) fn carries_an_amount(normalized: &str) -> bool {
     let signed = normalized
         .char_indices()
         .filter(|(_, character)| matches!(character, '$' | '€' | '£'))
