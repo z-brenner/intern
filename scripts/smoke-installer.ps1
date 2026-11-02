@@ -131,22 +131,56 @@ public static class InternSmokeWindow {
         }, IntPtr.Zero);
         return found;
     }
+    // Every top-level window the process owns, by class and visibility: what a
+    // launch that never showed its main window had made instead.
+    public static string Describe(int processId) {
+        StringBuilder all = new StringBuilder();
+        EnumWindows((hwnd, lParam) => {
+            uint owner;
+            GetWindowThreadProcessId(hwnd, out owner);
+            if (owner != (uint)processId) { return true; }
+            StringBuilder name = new StringBuilder(64);
+            GetClassName(hwnd, name, name.Capacity);
+            if (all.Length > 0) { all.Append(", "); }
+            all.Append(name.ToString()).Append(IsWindowVisible(hwnd) ? " (visible)" : " (hidden)");
+            return true;
+        }, IntPtr.Zero);
+        return all.Length == 0 ? "none" : all.ToString();
+    }
 }
 "@
     # The window is shown before initialization when the launch is going to
     # show it at all, so its appearing does not mean setup finished. A failed
     # start shows it too, behind a dialog saying why; the startup error log,
     # checked again once the app has exited, is what tells the two apart.
+    #
+    # The window is shown at the very start of setup (src-tauri/src/lib.rs), so
+    # the wait is how long the process takes to get there. A busy shared runner
+    # can take more than thirty seconds the first time a freshly installed app
+    # starts - its binaries scanned on first run, WebView2 making a profile -
+    # and a thirty-second limit failed runs whose changes run nowhere before
+    # the window is shown, then passed on the next commit. Ninety seconds still
+    # fails a launch that never shows its window; the time taken is printed,
+    # and a failure names the windows the process did make.
     $AppProcess = Start-Process -FilePath $App -PassThru
     $AppWindow = [IntPtr]::Zero
-    for ($Attempt = 0; $Attempt -lt 60; $Attempt += 1) {
+    $Launch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($Launch.Elapsed.TotalSeconds -lt 90) {
         Start-Sleep -Milliseconds 500
         $AppProcess.Refresh()
         if ($AppProcess.HasExited) { throw "Installed Intern.exe exited before its window became ready" }
         $AppWindow = [InternSmokeWindow]::Visible($AppProcess.Id)
         if ($AppWindow -ne [IntPtr]::Zero) { break }
     }
-    if ($AppWindow -eq [IntPtr]::Zero) { throw "Installed Intern.exe did not show its main window" }
+    $Waited = [math]::Round($Launch.Elapsed.TotalSeconds, 1)
+    if ($AppWindow -eq [IntPtr]::Zero) {
+        $LaunchChildren = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $($AppProcess.Id)" -ErrorAction SilentlyContinue |
+            ForEach-Object { "$($_.Name)#$($_.ProcessId)" })
+        throw ("Installed Intern.exe did not show its main window within $Waited s. " +
+            "Its windows: $([InternSmokeWindow]::Describe($AppProcess.Id)). " +
+            "Children: $($LaunchChildren -join ', ')")
+    }
+    Write-Host "Installed Intern.exe showed its main window after $Waited s."
     if (Test-Path -LiteralPath $StartupErrorLog) {
         throw "Installed Intern.exe could not start: $(Get-Content -LiteralPath $StartupErrorLog -Raw)"
     }
