@@ -143,6 +143,10 @@ pub struct CastMember {
     pub role: Option<PartyRole>,
     /// Whether validation found support for that role in the document.
     pub role_supported: bool,
+    /// The role the reply proposed, supported or not. It never names a
+    /// party by itself; it only keeps a party the reply called the customer
+    /// out of an issuer's place.
+    pub proposed_role: Option<PartyRole>,
 }
 
 impl CastMember {
@@ -377,7 +381,23 @@ pub fn relation_from_roles(
             }
             // The customer of an issued document is never its filename's
             // party: "Invoice - Quillon Ridge Bakery" reads as Quillon's
-            // invoice. With no issuer to name, none is named.
+            // invoice. With no issuer to name, none is named. The parties
+            // come in the order the document names them, and an issuer
+            // heads its own invoice: when the first is one the reply called
+            // the customer, though nothing in the document confirms it, the
+            // reply named only the customer, or read the two sides the
+            // wrong way round, and the first party left could be either.
+            // None is named, and a person supplies the issuer.
+            if first
+                .proposed_role
+                .is_some_and(|role| RECEIVING.contains(&role))
+            {
+                return Relation {
+                    relation: PartyRelation::None,
+                    parties: Vec::new(),
+                    basis: "issued: the first party is the reply's customer".into(),
+                };
+            }
             match parties.iter().find(|party| !receiving(party)) {
                 Some(party) => Relation {
                     relation: PartyRelation::None,
@@ -1258,6 +1278,7 @@ mod tests {
                 name: (*name).to_owned(),
                 role: *role,
                 role_supported: role.is_some(),
+                proposed_role: *role,
             })
             .collect()
     }
@@ -1394,6 +1415,24 @@ mod tests {
             DocumentClass::Issued,
             Some("Invoice"),
             &parties,
+            RelationCues::default(),
+        );
+        assert_eq!(relation.relation, PartyRelation::None);
+        // Unconfirmed, the reply's "customer" for the first party still
+        // says it may not be the issuer: no one is named, for a person to
+        // supply.
+        assert!(relation.parties.is_empty(), "{relation:?}");
+        // The other way round, the first party is named, with no word.
+        let mut reversed = cast(&[
+            ("Halvorsen Fixture Works LLC", Some(PartyRole::Issuer)),
+            ("Quillon Ridge Bakery, Inc.", Some(PartyRole::Customer)),
+        ]);
+        reversed[0].role_supported = false;
+        reversed[1].role_supported = false;
+        let relation = relation_from_roles(
+            DocumentClass::Issued,
+            Some("Invoice"),
+            &reversed,
             RelationCues::default(),
         );
         assert_eq!(relation.relation, PartyRelation::None);

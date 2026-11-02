@@ -14,7 +14,7 @@ use crate::domain::{
 use crate::evidence::{
     DateSpelling, NumericOrder, Segments, date_match_positions, date_statements, digest_contains,
     digest_contains_date, digest_contains_loosely, extract_stated_dates, is_valid_iso_date,
-    normalize, normalize_loosely, numeric_date_order,
+    normalize, normalize_loosely, numeric_date_order, numeric_dates,
 };
 use crate::infer::{
     complete_type_from_title, dates_stated_on, infer_date_role, infer_document_type,
@@ -471,6 +471,163 @@ pub(crate) fn issue_date_alternates(digest: &impl Segments, date: &str) -> Vec<(
         }
     }
     alternates
+}
+
+/// A date the document gives a field of its own: a label before it ending
+/// in a colon or a table cell's edge ("Released: October 17, 2024",
+/// "| Invoice Date | 02/23/25 |"), or a table's header cell over it ("|
+/// Invoice Date |" over "| 10/14/12 |"). A date a sentence mentions - "the
+/// quotation dated January 22", "on October 20, 2023, ESPN transmitted" -
+/// has no field.
+pub(crate) struct DateField {
+    pub(crate) date: String,
+    pub(crate) line: String,
+    /// The field names the document's own date: "Date", "Dated", "Invoice
+    /// Date", "Released", "Notice date".
+    pub(crate) own: bool,
+    /// The field is a line item's: its row carries an amount ("| 1 10/03/12
+    /// | ... | $1,600.00 |"), so the date is the item's, not the document's.
+    pub(crate) line_item: bool,
+}
+
+/// The labels that name a date as the document's own only as a field's -
+/// "Released:", "| Notice date |" - since in a sentence they say when
+/// something else happened ("the report released on March 3").
+const OWN_FIELD_LABELS: &[&str] = &["released", "notice date"];
+
+/// Every date the lines give a field ([`DateField`]), references to other
+/// documents aside. Each line comes with the line over it - the one before
+/// it, or a table row's header row - and `order` is how the document writes
+/// its numeric dates.
+pub(crate) fn date_fields(
+    lines: &[(String, Option<String>)],
+    order: Option<NumericOrder>,
+) -> Vec<DateField> {
+    let mut fields = Vec::new();
+    for (line, above) in lines {
+        let normalized = normalize(line);
+        let above = above.as_deref().map(normalize);
+        for (date, position) in field_dates_on(&normalized, order) {
+            if reference_introduced(&normalized, position) {
+                continue;
+            }
+            let label = field_label(&window_before(&normalized, position)).or_else(|| {
+                above
+                    .as_deref()
+                    .and_then(|above| cell_header(&normalized, above, position))
+            });
+            let Some(label) = label.filter(|label| names_a_date(label)) else {
+                continue;
+            };
+            let own = OWN_FIELD_LABELS.contains(&label.as_str())
+                || labels_the_issue_date(&format!("{label}:"));
+            fields.push(DateField {
+                date,
+                line: line.trim().to_owned(),
+                own,
+                line_item: carries_an_amount(&normalized),
+            });
+        }
+    }
+    fields
+}
+
+/// Every date a normalized line states with its offset, as
+/// [`dates_stated_on`] reads them, and besides the numeric dates with a
+/// two-digit year an invoice's fields are written in ("10/14/12"), read in
+/// the document's `order` with the year in 1970-2069. Each reading must be
+/// one the evidence check finds at that token. The date chips and the
+/// index never read a two-digit year, so only a field's date does.
+fn field_dates_on(normalized: &str, order: Option<NumericOrder>) -> Vec<(String, usize)> {
+    let mut found = dates_stated_on(normalized, order);
+    for token in numeric_dates(normalized) {
+        let [first, second, third] = token.parts;
+        if third.len() != 2 || first.len() > 2 {
+            continue;
+        }
+        let Ok(short) = third.parse::<u32>() else {
+            continue;
+        };
+        let year = if short < 70 {
+            2000 + short
+        } else {
+            1900 + short
+        };
+        let orders = match order {
+            Some(NumericOrder::MonthFirst) => vec![(first, second)],
+            Some(NumericOrder::DayFirst) => vec![(second, first)],
+            None => vec![(first, second), (second, first)],
+        };
+        for (month, day) in orders {
+            let iso = format!("{year}-{month:0>2}-{day:0>2}");
+            if is_valid_iso_date(&iso)
+                && date_match_positions(&iso, normalized).contains(&token.start)
+                && !found
+                    .iter()
+                    .any(|(date, position)| *date == iso && *position == token.start)
+            {
+                found.push((iso, token.start));
+            }
+        }
+    }
+    found
+}
+
+/// Whether a line carries an amount of money: a currency sign before a
+/// digit, as a line item's row does.
+fn carries_an_amount(normalized: &str) -> bool {
+    normalized
+        .char_indices()
+        .filter(|(_, character)| matches!(character, '$' | '€' | '£'))
+        .any(|(at, character)| {
+            normalized[at + character.len_utf8()..]
+                .trim_start()
+                .starts_with(|next: char| next.is_ascii_digit())
+        })
+}
+
+/// The label of the field a date fills, when the wording before it ends in
+/// one: the words after the last cell edge, colon or number, then a colon
+/// or a cell edge. "invoice date |" gives "invoice date"; "dated:" gives
+/// "dated"; a sentence gives none.
+fn field_label(window: &str) -> Option<String> {
+    let trimmed = window.trim_end();
+    let label = trimmed
+        .strip_suffix(':')
+        .or_else(|| trimmed.strip_suffix('|'))?;
+    let words = label
+        .rsplit(['|', ':', ',', ';', '.', '(', ')'])
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .rev()
+        .take_while(|word| word.chars().all(char::is_alphabetic))
+        .collect::<Vec<_>>();
+    (!words.is_empty() && words.len() <= 4)
+        .then(|| words.into_iter().rev().collect::<Vec<_>>().join(" "))
+}
+
+/// The header cell over the cell of a table row that holds `position`: the
+/// cell at the same place in the row above, both rows written "| a | b |".
+fn cell_header(row: &str, above: &str, position: usize) -> Option<String> {
+    if !row.trim_start().starts_with('|') || !above.trim_start().starts_with('|') {
+        return None;
+    }
+    let column = row.get(..position)?.matches('|').count();
+    above
+        .split('|')
+        .nth(column)
+        .map(str::trim)
+        .filter(|cell| !cell.is_empty())
+        .map(str::to_owned)
+}
+
+/// Whether a field's label is a date's: "Date", "PO Date", "Dated",
+/// "Released", "Notice date".
+fn names_a_date(label: &str) -> bool {
+    label
+        .split_whitespace()
+        .any(|word| matches!(word, "date" | "dated" | "released"))
 }
 
 /// True when the document writes `date` only in numbers that read as two
