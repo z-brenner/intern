@@ -244,10 +244,16 @@ fn own_date_field(scope: &ValidationScope<'_>, date: &str) -> Option<(String, St
 
 /// The first page after the first that opens as an attachment - "EXHIBIT
 /// A", "SCHEDULE B", "Attachment 1" - on its own short line, or followed by
-/// its title: "EXHIBIT A - VERIFIED AMENDED COMPLAINT". A notice's own page
-/// that happens to open on "Exhibit A to the complaint ..." only hides its
-/// fields from the own-date rule, which then leaves the date alone.
+/// its title: "EXHIBIT A - VERIFIED AMENDED COMPLAINT". The heading may sit
+/// under a court's filing stamp ("Case 2:08-cv-01234 Document 12-2 Filed
+/// 09/03/08 Page 1 of 5"), so a page's first few lines are read. A notice's
+/// own page that happens to open on "Exhibit A to the complaint ..." only
+/// hides its fields from the own-date rule, which then leaves the date
+/// alone.
 fn attachments_from(units: &[&EvidenceUnit], first_page: usize) -> Option<usize> {
+    /// How many of a page's first lines can hold its attachment heading:
+    /// the heading, under a filing stamp or a running header.
+    const HEADING_LINES: usize = 4;
     let mut pages = units
         .iter()
         .map(|unit| unit.page)
@@ -257,14 +263,12 @@ fn attachments_from(units: &[&EvidenceUnit], first_page: usize) -> Option<usize>
     pages.into_iter().find(|page| {
         units
             .iter()
-            .find(|unit| unit.page == *page)
-            .and_then(|unit| {
-                unit.text
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())
-            })
-            .is_some_and(|line| {
+            .filter(|unit| unit.page == *page)
+            .flat_map(|unit| unit.text.lines())
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .take(HEADING_LINES)
+            .any(|line| {
                 let words = words(line);
                 words
                     .first()
@@ -9068,6 +9072,43 @@ The merger needs a majority of votes cast.";
             crate::domain::SourcePage::new(
                 2,
                 "EXHIBIT A - VERIFIED AMENDED COMPLAINT FOR DAMAGES\n\nDated: January 5, 2007",
+                PageOrigin::PlainText,
+            ),
+        ]));
+        let context = whole(&index);
+        let facts = ModelFacts {
+            document_type: Some("Notice of Deposition".into()),
+            type_evidence: vec![id_of(&index, "NOTICE OF DEPOSITION")],
+            document_date: Some("2008-10-21".into()),
+            date_evidence: vec![id_of(&index, "PLEASE TAKE NOTICE")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &context, &index);
+        assert_ne!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2007-01-05"),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// An exhibit of a court filing opens under the court's filing stamp,
+    /// and is an attachment all the same.
+    #[test]
+    fn an_exhibit_under_a_filing_stamp_never_dates_the_notice() {
+        let index = EvidenceIndex::build(&DocumentSource::from_pages(vec![
+            crate::domain::SourcePage::new(
+                1,
+                "UNITED STATES DISTRICT COURT\n\nWINDROW.COM, INC., Plaintiff,\nv.\n\
+                 CASCADE WEB SERVICES LLC, Defendant.\n\nNOTICE OF DEPOSITION\n\n\
+                 PLEASE TAKE NOTICE that Plaintiff will take the deposition of Defendant \
+                 on October 21, 2008 at 9:00 a.m.",
+                PageOrigin::PlainText,
+            ),
+            crate::domain::SourcePage::new(
+                2,
+                "Case 2:08-cv-01234 Document 12-2 Filed 09/03/08 Page 1 of 5\n\nEXHIBIT A\n\n\
+                 Dated: January 5, 2007",
                 PageOrigin::PlainText,
             ),
         ]));
