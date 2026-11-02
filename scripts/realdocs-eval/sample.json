@@ -5904,7 +5904,8 @@
      "Shipping Notice",
      "Shipping Confirmation",
      "Notification",
-     "Notice"
+     "Notice",
+     "Email"
     ],
     "document_date": "2002-03-20",
     "acceptable_dates": [],

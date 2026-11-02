@@ -1,0 +1,1313 @@
+{
+ "classes": {
+  "generic_type": "type generic or missing (\"Document\", a bare \"Letter\" or \"Notice\")",
+  "other_document": "type names another document the letter is about or answers",
+  "person": "a person named instead of the organization",
+  "customer": "an invoice's customer named instead of its issuer",
+  "case_sides": "a court filing's two sides not read from its caption",
+  "event_date": "a date the document mentions, not its own",
+  "ocr": "OCR: a misread name, or a historic hand the OCR cannot read",
+  "missing_date": "no date read"
+ },
+ "readings": [
+  {
+   "id": "real-invoice-01",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "filename": "1898-12-31 Document - ABWOODWORTH.jpg",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "DATE_IMPLAUSIBLE",
+    "PARSER_WARNING",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "1898-12-30 Invoice from Woodworth & Co.jpg",
+    "1898-12-30 Bill from Woodworth & Co.jpg"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type",
+    "ocr"
+   ]
+  },
+  {
+   "id": "real-invoice-02",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "filename": "Document from Jacoby Brothers.jpg",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "DATE_UNSUPPORTED",
+    "DESCRIPTION_UNSUPPORTED",
+    "DESCRIPTION_INVALID",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "1897-07-31 Invoice from Jacoby Brothers.jpg",
+    "1897-07-31 Bill from Jacoby Brothers.jpg",
+    "1897-07-31 Invoice from Jacoby Bros.jpg"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type",
+    "ocr",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real-invoice-03",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "filename": "List of Articles - A Deming, Palmer & Co.jpg",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "DATE_UNSUPPORTED",
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "1882-07-21 Invoice from Deming, Palmer & Co.jpg",
+    "1882-07-21 Bill from Deming, Palmer & Co.jpg",
+    "1882-07-21 Receipt from Deming, Palmer & Co.jpg"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "ocr",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real-invoice-04",
+   "kind": "receipt",
+   "format": "jpg",
+   "text_layer": "image",
+   "filename": "Document.jpg",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "DATE_UNSUPPORTED",
+    "PARTY_UNSUPPORTED",
+    "DESCRIPTION_INVALID",
+    "PARSER_WARNING",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "1859-01-13 Receipt from Leesburg Washingtonian.jpg",
+    "1858-11-19 Receipt from Leesburg Washingtonian.jpg",
+    "1859-01-13 Bill from Leesburg Washingtonian.jpg"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type",
+    "ocr",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real-invoice-05",
+   "kind": "receipt",
+   "format": "jpg",
+   "text_layer": "image",
+   "filename": "Document.jpg",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "DATE_UNSUPPORTED",
+    "DESCRIPTION_INVALID",
+    "PARSER_WARNING",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "1983-02-06 Receipt from Snyder Drug.jpg",
+    "1983-02-06 Sales Receipt from Snyder Drug.jpg",
+    "1983-02-06 Register Receipt from Snyder Drug.jpg"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type",
+    "ocr",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real-invoice-06",
+   "kind": "invoice",
+   "format": "tiff",
+   "text_layer": "image",
+   "filename": "1992-12-15 Invoice from Perception Research Services, Inc.tif",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "1992-12-15 Invoice from Perception Research Services, Inc.tif",
+    "1992-12-15 Invoice from Perception Research Services.tif"
+   ],
+   "scorer": "right",
+   "adjudicated": "right",
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real-invoice-07",
+   "kind": "invoice",
+   "format": "tiff",
+   "text_layer": "image",
+   "filename": "1996-08-28 Invoice - Vernon Computer Rentals & Leaging.tif",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "1996-08-28 Invoice from Vernon Computer Rentals & Leasing.tif"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "real-invoice-08",
+   "kind": "invoice",
+   "format": "tiff",
+   "text_layer": "image",
+   "filename": "1997-01-01 Invoice from Terrance V. Jackson.tif",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "1997-01-01 Invoice from Circulation Expertí, Ltd.tif",
+    "1997-01-01 Invoice from Circulation Experti, Ltd.tif",
+    "1997-01-01 Invoice from Circulation Experti Ltd.tif"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "person"
+   ]
+  },
+  {
+   "id": "real-invoice-09",
+   "kind": "invoice",
+   "format": "tiff",
+   "text_layer": "image",
+   "filename": "Document - John Seeley.tif",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "DATE_UNSUPPORTED",
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [],
+   "scorer": null,
+   "adjudicated": null,
+   "why": "An 1865 bill with no legible date; review is the right outcome.",
+   "classes": []
+  },
+  {
+   "id": "real-invoice-10",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2012-09-09 Invoice.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2012-09-09 Invoice from KCNC TV.pdf",
+    "2012-09-09 Invoice from CBS Television Stations.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "customer"
+   ]
+  },
+  {
+   "id": "real-invoice-11",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2010-11-29 Invoice - Carl Malamud.pdf",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2010-11-29 Invoice from C-SPAN Archives.pdf",
+    "2010-11-29 Invoice from C-SPAN.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "customer"
+   ]
+  },
+  {
+   "id": "real-invoice-12",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2012-10-29 Wpxi Official Billing Invoice from Main Street Media Group.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2012-10-28 Official Billing Invoice from WPXI.pdf",
+    "2012-10-28 Invoice from WPXI.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "customer"
+   ]
+  },
+  {
+   "id": "real-invoice-13",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2012-10-03 Invoice from WPTV.pdf",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2012-10-14 Invoice from WPTV.pdf",
+    "2012-10-14 Duplicate Invoice from WPTV.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "event_date"
+   ]
+  },
+  {
+   "id": "real-invoice-14",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-03-30 Invoice from WRAL.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2025-03-30 Invoice from WRAL.pdf",
+    "2025-03-30 Invoice from WRAL-TV.pdf",
+    "2025-03-30 Invoice from Capitol Broadcasting.pdf"
+   ],
+   "scorer": "right",
+   "adjudicated": "right",
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real-invoice-15",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-02-23 Invoice - WBTV.pdf",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2025-02-23 Invoice from WBTV.pdf",
+    "2025-02-23 Duplicate Invoice from WBTV.pdf",
+    "2025-02-23 Invoice from Gray Media.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "right",
+   "why": "WBTV issued it; \"Invoice - WBTV\" reads as WBTV's invoice.",
+   "classes": []
+  },
+  {
+   "id": "real-letter-01",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2008-10-07 Document - Federal Trade Commission.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED"
+   ],
+   "gold_filenames": [
+    "2008-10-07 Closing Letter to Borders Group, Inc.pdf",
+    "2008-10-07 Letter to Borders Group, Inc.pdf",
+    "2008-10-07 Closing Letter to Loeb & Loeb LLP.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type"
+   ]
+  },
+  {
+   "id": "real-letter-02",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2012-06-19 Letter - Joseph Wayland.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2012-06-19 Business Review Request Letter to U.S. Department of Justice, Antitrust Division.pdf",
+    "2012-06-19 Request Letter to U.S. Department of Justice, Antitrust Division.pdf",
+    "2012-06-19 Business Review Request to U.S. Department of Justice, Antitrust Division.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person"
+   ]
+  },
+  {
+   "id": "real-letter-03",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2012-11-30 significant demand - IPXI Holdings, LLC.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "TYPE_INFERRED",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2012-11-30 Business Review Request Letter to U.S. Department of Justice, Antitrust Division.pdf",
+    "2012-11-30 Request Letter to U.S. Department of Justice, Antitrust Division.pdf",
+    "2012-11-30 Business Review Request to U.S. Department of Justice, Antitrust Division.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type"
+   ]
+  },
+  {
+   "id": "real-letter-04",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "Document from United States Environmental Protection Agency.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "DATE_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2011-04-27 Approval of Closure Plan to Kincaid Project Group, Inc.pdf",
+    "2011-04-27 Closure Plan Approval Letter to Kincaid Project Group, Inc.pdf",
+    "2011-04-27 Approval Letter to Kincaid Project Group, Inc.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real-letter-05",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2018-03-02 Warning Letter - Jeffery Coleman.pdf",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2018-03-02 Warning Letter to Toledo Refining Company, LLC.pdf",
+    "2018-03-02 Letter to Toledo Refining Company, LLC.pdf",
+    "2018-03-02 Warning Letter from Pipeline and Hazardous Materials Safety Administration.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "person"
+   ]
+  },
+  {
+   "id": "real-letter-06",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2018-03-08 Warning Letter from Toledo Refining Company LLC.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2018-03-08 Response Letter to Pipeline and Hazardous Materials Safety Administration.pdf",
+    "2018-03-08 Letter to Pipeline and Hazardous Materials Safety Administration.pdf",
+    "2018-03-08 Response to Warning Letter to Pipeline and Hazardous Materials Safety Administration.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "other_document"
+   ]
+  },
+  {
+   "id": "real-letter-07",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-01-31 Letter - TPWR Developer, LLC.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2025-04-28 Approval of SEP Completion Report to TPWR Developer, LLC.pdf",
+    "2025-04-28 SEP Approval Letter to TPWR Developer, LLC.pdf",
+    "2025-04-28 Approval Letter to TPWR Developer, LLC.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type",
+    "event_date"
+   ]
+  },
+  {
+   "id": "real-letter-08",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-05-21 Letter - Teva Pharmaceutical Industries Ltd.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING"
+   ],
+   "gold_filenames": [
+    "2025-05-21 Warning Letter to Teva Pharmaceutical Industries Ltd.pdf",
+    "2025-05-21 Letter to Teva Pharmaceutical Industries Ltd.pdf",
+    "2025-05-21 Orange Book Patent Listing Letter to Teva Pharmaceutical Industries Ltd.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type"
+   ]
+  },
+  {
+   "id": "real-letter-09",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2020-04-16 Letter from Makan Delrahim.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING"
+   ],
+   "gold_filenames": [
+    "2020-04-16 Business Review Letter to Association of Independent Commercial Producers.pdf",
+    "2020-04-16 Letter to Association of Independent Commercial Producers.pdf",
+    "2020-04-16 Response Letter to Association of Independent Commercial Producers.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person"
+   ]
+  },
+  {
+   "id": "real-letter-10",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2022-06-22 Document from Alistair Thompson.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED"
+   ],
+   "gold_filenames": [
+    "2022-06-22 Public Letter to Tarmac.pdf",
+    "2022-06-22 Letter to Tarmac.pdf",
+    "2022-06-22 Breach Letter to Tarmac.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person"
+   ]
+  },
+  {
+   "id": "real-letter-11",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "Letter - Northern and Shell.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "DATE_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2018-06-20 Decision Letter to Reach plc.pdf",
+    "2018-06-20 Letter to Reach plc.pdf",
+    "2018-06-20 Phase 1 Decision Letter to Reach plc.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type",
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real-letter-12",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2024-05-21 Defendants’ Letter to Explain the Need for Redactions - Tod's S.p.A.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2024-05-21 Letter to Explain the Need for Redactions.pdf",
+    "2024-05-21 Letter to United States District Court for the Southern District of New York.pdf",
+    "2024-05-21 Letter Motion to United States District Court for the Southern District of New York.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "right",
+   "why": "The defendants' (Tod's) letter to the court, with its own title; \"- Tod's S.p.A.\" reads as Tod's letter, which it is.",
+   "classes": []
+  },
+  {
+   "id": "real-letter-13",
+   "kind": "letter",
+   "format": "txt",
+   "text_layer": "text",
+   "filename": "2021-11-12 Letter - China Telecom (Americas) Corporation.txt",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2021-11-12 Response Letter to China Telecom (Americas) Corporation.txt",
+    "2021-11-12 Letter to China Telecom (Americas) Corporation.txt",
+    "2021-11-12 Response Letter to Morgan, Lewis & Bockius LLP.txt"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type"
+   ]
+  },
+  {
+   "id": "real-letter-14",
+   "kind": "letter",
+   "format": "txt",
+   "text_layer": "text",
+   "filename": "2013-08-09 Order to Show Cause - Federal Communications Commission.txt",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2013-08-09 Decision Letter to Convergence Entertainment and Communications, LLC.txt",
+    "2013-08-09 Letter to Convergence Entertainment and Communications, LLC.txt",
+    "2013-08-09 Termination Letter to Convergence Entertainment and Communications, LLC.txt"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "other_document"
+   ]
+  },
+  {
+   "id": "real-letter-15",
+   "kind": "letter",
+   "format": "txt",
+   "text_layer": "text",
+   "filename": "2020-03-05 Letter - See CommScope, Inc.txt",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [],
+   "scorer": null,
+   "adjudicated": null,
+   "why": "The text states no date of its own; review is the right outcome.",
+   "classes": []
+  },
+  {
+   "id": "real-notice-01",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2010-04-09 Notice of Appeal from Barclays Capital Inc.pdf",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2010-04-09 Notice of Appeal between Barclays Capital Inc and Theflyonthewall.com, Inc.pdf",
+    "2010-04-09 Notice between Barclays Capital Inc and Theflyonthewall.com, Inc.pdf",
+    "2010-04-09 Notice of Appeal between Theflyonthewall.com, Inc and Barclays Capital Inc.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "case_sides"
+   ]
+  },
+  {
+   "id": "real-notice-02",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2009-09-19 Notice of Appeal - Norfolk Southern Railway Company.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2009-10-13 Notice of Appeal between Sompo Japan Insurance Company of America and Norfolk Southern Railway Company.pdf",
+    "2009-10-13 Notice between Sompo Japan Insurance Company of America and Norfolk Southern Railway Company.pdf",
+    "2009-10-13 Notice of Appeal between Norfolk Southern Railway Company and Sompo Japan Insurance Company of America.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "case_sides",
+    "event_date"
+   ]
+  },
+  {
+   "id": "real-notice-03",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2009-09-01 Notice of Removal between American Tower Management, LLC and Trinity Broadcasting Network, Inc.pdf",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2009-08-31 Notice of Removal between American Tower Management, LLC and Trinity Broadcasting of New York, Inc.pdf",
+    "2009-09-01 Notice of Removal between American Tower Management, LLC and Trinity Broadcasting of New York, Inc.pdf",
+    "2009-08-31 Notice of Removal of Action with American Tower Management, LLC.pdf"
+   ],
+   "scorer": "right",
+   "adjudicated": "right",
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real-notice-04",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2009-11-02 Notice of Dismissal for Cowan, Liebowitz & Latman, P.C.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2009-11-02 Notice of Dismissal between Luxo AS and The Walt Disney Company.pdf",
+    "2009-11-02 Notice of Voluntary Dismissal between Luxo AS and The Walt Disney Company.pdf",
+    "2009-11-02 Notice between Luxo AS and The Walt Disney Company.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "case_sides"
+   ]
+  },
+  {
+   "id": "real-notice-05",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2006-10-25 Notice of Appearance and Demand for Notices and Papers - Delta Mills, Inc.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2006-10-25 Notice of Appearance and Demand for Notices and Papers for Delta Mills, Inc.pdf",
+    "2006-10-25 Notice of Appearance for Delta Mills, Inc.pdf",
+    "2006-10-25 Notice for Delta Mills, Inc.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "case_sides"
+   ]
+  },
+  {
+   "id": "real-notice-06",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2026-06-18 Notice of Voluntary Dismissal with Prejudice - The Washington Star Company, LLC.pdf",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2026-06-18 Notice of Voluntary Dismissal between The Washington Star Company, LLC and NOTUS Media, LLC.pdf",
+    "2026-06-18 Notice of Voluntary Dismissal with Prejudice with The Washington Star Company, LLC.pdf",
+    "2026-06-18 Notice of Dismissal between The Washington Star Company, LLC and NOTUS Media, LLC.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "right",
+   "why": "Filed by the plaintiff, The Washington Star Company; the gold accepts it alone. Only the joining word is missing.",
+   "classes": []
+  },
+  {
+   "id": "real-notice-07",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2024-06-10 Notice of Appeal for Phoenix Metal Co., Ltd.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "DATE_AMBIGUOUS"
+   ],
+   "gold_filenames": [
+    "2024-08-09 Notice of Appeal between Phoenix Metal Co., Ltd and United States.pdf",
+    "2024-08-09 Notice between Phoenix Metal Co., Ltd and United States.pdf",
+    "2024-08-09 Notice of Appeal between United States and Phoenix Metal Co., Ltd.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "case_sides",
+    "event_date"
+   ]
+  },
+  {
+   "id": "real-notice-08",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2008-01-24 Plaintiff’s Notice of Voluntary Dismissal of Wpp Group PLC between PA Advisors, LLC and WPP Group plc.pdf",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2008-01-24 Notice of Voluntary Dismissal between PA Advisors, LLC and Google Inc.pdf",
+    "2008-01-24 Notice of Dismissal between PA Advisors, LLC and Google Inc.pdf",
+    "2008-01-24 Notice between PA Advisors, LLC and Google Inc.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "right",
+   "why": "It dismisses one defendant, WPP Group plc, by name; between the plaintiff and that defendant is as true as the caption's Google.",
+   "classes": []
+  },
+  {
+   "id": "real-notice-09",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2006-11-22 Notice of Intent to Serve Subpoena - The MCGRAW-HILL Companies, Inc.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2006-11-22 Notice of Intent to Serve Subpoena between The McGraw-Hill Companies, Inc and Google Inc.pdf",
+    "2006-11-22 Notice between The McGraw-Hill Companies, Inc and Google Inc.pdf",
+    "2006-11-22 Notice of Intent to Serve Subpoena between Google Inc and The McGraw-Hill Companies, Inc.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "case_sides"
+   ]
+  },
+  {
+   "id": "real-notice-10",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2011-10-05 Notice of Hearing - GSC Recovery IIA GP, L.P.pdf",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2011-10-05 Notice of Hearing for GSC Group, Inc.pdf",
+    "2011-10-05 Notice for GSC Group, Inc.pdf",
+    "2011-10-05 Notice of Hearing from GSC Recovery IIA GP, L.P.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": "Arguable: the movants who gave notice, not the debtor the case is under. Counted wrong.",
+   "classes": [
+    "case_sides"
+   ]
+  },
+  {
+   "id": "real-notice-11",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2005-02-15 Notice of Appointment of Official Committee of Unsecured Creditors - QEP Inc.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2005-02-15 Notice of Appointment of Official Committee of Unsecured Creditors for Tile Outlet, Inc.pdf",
+    "2005-02-15 Notice of Appointment for Tile Outlet, Inc.pdf",
+    "2005-02-15 Notice for Tile Outlet, Inc.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "case_sides"
+   ]
+  },
+  {
+   "id": "real-notice-12",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2018-01-08 Notice from ABC-XYZ Company.pdf",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2018-01-08 CP161 Notice for ABC-XYZ Company.pdf",
+    "2018-01-08 Notice CP161 for ABC-XYZ Company.pdf",
+    "2018-01-08 Notice for ABC-XYZ Company.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type",
+    "customer"
+   ]
+  },
+  {
+   "id": "real-notice-13",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-10-20 Final enforcement notice - Euro Car Parks Limited.pdf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2025-12-10 Final Enforcement Notice for Euro Car Parks Limited.pdf",
+    "2025-12-10 Enforcement Notice for Euro Car Parks Limited.pdf",
+    "2025-12-10 Notice for Euro Car Parks Limited.pdf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "event_date"
+   ]
+  },
+  {
+   "id": "real-notice-14",
+   "kind": "notice",
+   "format": "txt",
+   "text_layer": "text",
+   "filename": "2023-10-20 Notice of Apparent Liability for Forfeiture for ESPN, Inc.txt",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2024-10-17 Notice of Apparent Liability for Forfeiture for ESPN, Inc.txt",
+    "2024-10-10 Notice of Apparent Liability for Forfeiture for ESPN, Inc.txt",
+    "2024-10-17 Notice of Apparent Liability for ESPN, Inc.txt"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "event_date"
+   ]
+  },
+  {
+   "id": "real-notice-15",
+   "kind": "notice",
+   "format": "txt",
+   "text_layer": "text",
+   "filename": "2024-11-21 Notice of Apparent Liability for Forfeiture from Federal Communications Commission.txt",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2024-11-21 Notice of Apparent Liability for Forfeiture for Eken Group Limited.txt",
+    "2024-11-21 Notice of Apparent Liability for Eken Group Limited.txt",
+    "2024-11-21 NAL for Eken Group Limited.txt"
+   ],
+   "scorer": "right",
+   "adjudicated": "right",
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real-office-01",
+   "kind": "letter",
+   "format": "docx",
+   "text_layer": "office",
+   "filename": "2024-01-03 Letter for Common Frequency, Inc.docx",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING"
+   ],
+   "gold_filenames": [
+    "2024-01-03 License Renewal Letter to Common Frequency, Inc.docx",
+    "2024-01-03 Letter to Common Frequency, Inc.docx",
+    "2024-01-03 Letter Decision to Common Frequency, Inc.docx"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type"
+   ]
+  },
+  {
+   "id": "real-office-02",
+   "kind": "notice",
+   "format": "docx",
+   "text_layer": "office",
+   "filename": "2024-01-11 Notice of Apparent Liability for Forfeiture for Nexstar Media Inc.docx",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2024-01-11 Notice of Apparent Liability for Forfeiture for Nexstar Media Inc.docx",
+    "2024-01-11 Notice of Apparent Liability for Nexstar Media Inc.docx",
+    "2024-01-11 NAL for Nexstar Media Inc.docx"
+   ],
+   "scorer": "right",
+   "adjudicated": "right",
+   "why": null,
+   "classes": []
+  },
+  {
+   "id": "real-office-03",
+   "kind": "notice",
+   "format": "doc",
+   "text_layer": "office",
+   "filename": "2010-01-07 Document - MALÅ GeoScience USA, Inc.doc",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED"
+   ],
+   "gold_filenames": [
+    "2010-01-07 Citation to MALÅ GeoScience USA, Inc.doc",
+    "2010-01-07 Citation Letter to MALÅ GeoScience USA, Inc.doc",
+    "2010-01-07 Letter to MALÅ GeoScience USA, Inc.doc"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type"
+   ]
+  },
+  {
+   "id": "real-office-04",
+   "kind": "letter",
+   "format": "rtf",
+   "text_layer": "office",
+   "filename": "2011-07-11 Letter - Ed Richards.rtf",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2011-07-11 Letter to Ofcom.rtf",
+    "2011-07-11 Request Letter to Ofcom.rtf",
+    "2011-07-11 Advice Request Letter to Ofcom.rtf"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person"
+   ]
+  },
+  {
+   "id": "real-office-05",
+   "kind": "letter",
+   "format": "odt",
+   "text_layer": "office",
+   "filename": "2023-12-14 Document - Emeritus Professor of Justice Systems.odt",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2023-12-14 Letter to Lord Chancellor and Secretary of State for Justice.odt",
+    "2023-12-14 Advice Letter to Lord Chancellor and Secretary of State for Justice.odt",
+    "2023-12-14 Advisory Board Letter to Lord Chancellor and Secretary of State for Justice.odt"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type"
+   ]
+  },
+  {
+   "id": "real-office-06",
+   "kind": "letter",
+   "format": "doc",
+   "text_layer": "office",
+   "filename": "2017-01-04 Document - Public Accounts Committee.doc",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED"
+   ],
+   "gold_filenames": [
+    "2017-01-04 Cover Letter to Public Accounts Committee.doc",
+    "2017-01-04 Letter to Public Accounts Committee.doc",
+    "2017-01-04 Submission Letter to Public Accounts Committee.doc"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type"
+   ]
+  },
+  {
+   "id": "real-office-07",
+   "kind": "letter",
+   "format": "docx",
+   "text_layer": "office",
+   "filename": "2020-10-26 Document - Lord Evans of Weardale KCB DL.docx",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED"
+   ],
+   "gold_filenames": [
+    "2020-10-26 Response Letter to Committee on Standards in Public Life.docx",
+    "2020-10-26 Letter to Committee on Standards in Public Life.docx",
+    "2020-10-26 Update Letter to Committee on Standards in Public Life.docx"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "generic_type",
+    "person"
+   ]
+  },
+  {
+   "id": "real-office-08",
+   "kind": "letter",
+   "format": "docx",
+   "text_layer": "office",
+   "filename": "2020-09-10 Statement of Conduct to Angela Rayner MP.docx",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2020-09-10 Letter to Labour Party.docx",
+    "2020-09-10 Joint Letter to Labour Party.docx",
+    "2020-09-10 Update Letter to Labour Party.docx"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "other_document",
+    "person"
+   ]
+  },
+  {
+   "id": "real-office-09",
+   "kind": "invoice",
+   "format": "xls",
+   "text_layer": "office",
+   "filename": "2001-02-08 Invoice from Bank of America.xls",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2001-02-08 Invoice from California Power Exchange.xls",
+    "2001-02-08 Invoice between California Power Exchange and Enron Power Marketing, Inc.xls",
+    "2001-02-08 Invoice between Enron Power Marketing, Inc and California Power Exchange.xls"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "customer"
+   ]
+  },
+  {
+   "id": "real-office-10",
+   "kind": "invoice",
+   "format": "xls",
+   "text_layer": "office",
+   "filename": "2001-04-18 Invoice from EOG RESOURCES, INC.xls",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2001-04-18 Invoice from Transwestern Pipeline Company.xls",
+    "2001-04-18 Invoice between Transwestern Pipeline Company and EOG Resources, Inc.xls",
+    "2001-04-18 Invoice between EOG Resources, Inc and Transwestern Pipeline Company.xls"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "customer"
+   ]
+  },
+  {
+   "id": "real-office-11",
+   "kind": "letter",
+   "format": "xls",
+   "text_layer": "office",
+   "filename": "Invoice from Enron North America.xls",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "DATE_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2001-04-23 Invoice Dispute Letter to Enron North America.xls",
+    "2001-04-23 Letter to Enron North America.xls",
+    "2001-04-23 Volume Statement to Enron North America.xls"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "missing_date"
+   ]
+  },
+  {
+   "id": "real-office-12",
+   "kind": "invoice",
+   "format": "xls",
+   "text_layer": "office",
+   "filename": "2000-03-31 Invoice - Varibus Corporation.xls",
+   "readiness": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "gold_filenames": [
+    "2000-03-31 Invoice from Varibus Corporation.xls",
+    "2000-03-31 Statement from Varibus Corporation.xls",
+    "2000-03-31 Invoice between Varibus Corporation and Enron Capital & Trade Resources Corp.xls"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "right",
+   "why": "Varibus Corporation issued it; \"Invoice - Varibus Corporation\" reads as Varibus's invoice.",
+   "classes": []
+  },
+  {
+   "id": "real-office-13",
+   "kind": "invoice",
+   "format": "xls",
+   "text_layer": "office",
+   "filename": "2001-09-14 Invoice - NorthWestern Generation I, LLC.xls",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2001-09-14 Invoice from Enron North America.xls",
+    "2001-09-14 Invoice between Enron North America and NorthWestern Generation I, LLC.xls",
+    "2001-09-14 Invoice between NorthWestern Generation I, LLC and Enron North America.xls"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "customer"
+   ]
+  },
+  {
+   "id": "real-office-14",
+   "kind": "statement",
+   "format": "xls",
+   "text_layer": "office",
+   "filename": "2000-05-11 Invoice - Enron Corp.xls",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2001-11-26 Outstanding Invoices Statement from Locke Liddell & Sapp LLP.xls",
+    "2001-11-26 Statement of Account from Locke Liddell & Sapp LLP.xls",
+    "2001-11-26 Statement from Locke Liddell & Sapp LLP.xls"
+   ],
+   "scorer": "wrong",
+   "adjudicated": "wrong",
+   "why": null,
+   "classes": [
+    "other_document",
+    "customer",
+    "event_date"
+   ]
+  },
+  {
+   "id": "real-office-15",
+   "kind": "notice",
+   "format": "eml",
+   "text_layer": "text",
+   "filename": "2002-03-20 Email from UPS.eml",
+   "readiness": "ready",
+   "review_reasons": [],
+   "gold_filenames": [
+    "2002-03-20 Ship Notification for Enron Corp.eml",
+    "2002-03-20 Shipment Notification for Enron Corp.eml",
+    "2002-03-20 Shipping Notice for Enron Corp.eml"
+   ],
+   "scorer": "right",
+   "adjudicated": "right",
+   "why": "An email UPS sent on 20 March 2002; InternBench's own email gold accepts \"Email\".",
+   "classes": []
+  }
+ ]
+}
