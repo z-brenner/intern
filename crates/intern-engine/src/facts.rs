@@ -1182,13 +1182,21 @@ pub fn validate_facts_at(
     // organization: its inside address names the person, their title, then
     // the organization they receive it for ("Mr. Jeffery Coleman / Refinery
     // Manager / Toledo Refining Company, LLC"). A reply that named only the
-    // person as the addressee gets the organization in their place.
-    if matches!(class, DocumentClass::Letter | DocumentClass::Notice) {
+    // person as the addressee gets the organization in their place. A
+    // document of no known class laid out as a letter - an agency's
+    // "Advisory Opinion" opening "Dear Mr. O'Kelly:" - is read the same way.
+    if matches!(
+        class,
+        DocumentClass::Letter | DocumentClass::Notice | DocumentClass::Unknown
+    ) {
         let layout = LetterLayout::of(scope);
         for index in 0..parties.len() {
+            // A person the reply called the recipient may already stand as
+            // the organization's signatory, their name and post over its
+            // name read as a signature block: the organization is then a
+            // party already, and only its role is settled here.
             let party = &parties[index];
             if party.copied
-                || party.signatory
                 || is_organization(&party.name)
                 || !party
                     .proposed_role
@@ -1196,13 +1204,50 @@ pub fn validate_facts_at(
             {
                 continue;
             }
-            let Some((name, unit)) = layout.addressee_organization(scope, &party.name) else {
+            let named = parties
+                .iter()
+                .filter(|other| !other.copied && other.name != party.name)
+                .map(|other| other.name.clone())
+                .collect::<Vec<_>>();
+            let Some((name, unit)) = layout.addressee_organization(scope, &party.name, &named)
+            else {
                 continue;
             };
-            if parties
+            if let Some(kept) = parties
                 .iter()
-                .any(|kept| normalize_loosely(&kept.name) == normalize_loosely(&name))
+                .position(|kept| normalize_loosely(&kept.name) == normalize_loosely(&name))
             {
+                // The reply named the organization too, as the letter's
+                // sender: the inside address says it receives the letter.
+                // Any other role - the party a notice is about - stands.
+                let sending = [parties[kept].role, parties[kept].proposed_role]
+                    .into_iter()
+                    .flatten()
+                    .any(|role| matches!(role, PartyRole::Sender | PartyRole::Issuer));
+                if sending && !parties[kept].copied {
+                    remember(
+                        &Found {
+                            support: Support::Context,
+                            unit: Some(unit),
+                            line: Some(name.clone()),
+                            miscited: 0,
+                        },
+                        &mut references,
+                    );
+                    parties[index].signatory = true;
+                    parties[index].role = Some(PartyRole::Other);
+                    let kept = &mut parties[kept];
+                    kept.role = Some(PartyRole::Addressee);
+                    kept.role_support = Support::Context;
+                    kept.document_role = Some(PartyRole::Addressee);
+                    if !kept.evidence.contains(&unit.id) {
+                        kept.evidence.push(unit.id.clone());
+                    }
+                    break;
+                }
+                continue;
+            }
+            if party.signatory {
                 continue;
             }
             remember(
@@ -2867,12 +2912,16 @@ impl LetterLayout {
     /// The organization the inside address names under `person`: the first
     /// of the four lines after the person's own that is an organization's
     /// name and no job title, in a unit of the first page between the
-    /// dateline, when there is one, and the salutation.
+    /// dateline, when there is one, and the salutation. A line that is
+    /// exactly one of the reply's own parties (`replied`) counts too, though
+    /// its name ends on no organization's word: "Chicago Mercantile
+    /// Exchange".
     /// Its lines may be broken by "<br>" in a table's cell.
     fn addressee_organization<'a>(
         self,
         scope: &ValidationScope<'a>,
         person: &str,
+        replied: &[String],
     ) -> Option<(String, &'a EvidenceUnit)> {
         let (salutation, _) = self.salutation?;
         let person = normalize_loosely(person);
@@ -2914,7 +2963,12 @@ impl LetterLayout {
                         .split_whitespace()
                         .any(|word| JOB_TITLE_WORDS.contains(&word))
                 })
-                .find(|line| is_organization(line))
+                .find(|line| {
+                    is_organization(line)
+                        || replied
+                            .iter()
+                            .any(|name| normalize_loosely(name) == normalize_loosely(line))
+                })
                 .map(|line| (line.to_owned(), unit))
         })
     }
@@ -9126,6 +9180,57 @@ The merger needs a majority of votes cast.";
             Some("2007-01-05"),
             "{:?}",
             outcome.reasons
+        );
+    }
+
+    /// An agency's advisory opinion laid out as a letter, to a company's
+    /// counsel: the reply called the company the sender, but the inside
+    /// address under its counsel's name says the opinion is to it.
+    #[test]
+    fn an_advisory_opinion_is_to_the_company_its_inside_address_names() {
+        let (outcome, _) = facts_for(
+            "FEDERAL ELECTION COMMISSION\nWashington, DC 20463\n\nMay 16, 1997\n\n\
+             CERTIFIED MAIL\nRETURN RECEIPT REQUESTED\n\nADVISORY OPINION 1997-5\n\n\
+             Paul B. O\u{2019}Kelly, General Counsel\nChicago Mercantile Exchange\n\
+             30 South Wacker Drive\nChicago, Illinois 60606\n\nDear Mr. O\u{2019}Kelly:\n\n\
+             This responds to your letter dated April 1, 1997, on behalf of the Chicago \
+             Mercantile Exchange (\u{201c}CME\u{201d}) and its separate segregated fund, the \
+             Commodity Futures Political Fund, regarding whether CME members could be \
+             solicited for contributions.",
+            |index| ModelFacts {
+                document_type: Some("Advisory Opinion".into()),
+                type_evidence: vec![id_of(index, "ADVISORY OPINION")],
+                document_date: Some("1997-05-16".into()),
+                date_evidence: vec![id_of(index, "May 16, 1997")],
+                parties: vec![
+                    party(
+                        "Paul B. O'Kelly",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "This responds")],
+                    ),
+                    party(
+                        "Chicago Mercantile Exchange",
+                        Some(PartyRole::Sender),
+                        &[id_of(index, "This responds")],
+                    ),
+                    party(
+                        "Commodity Futures Political Fund",
+                        Some(PartyRole::Sender),
+                        &[id_of(index, "This responds")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::To,
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Chicago Mercantile Exchange".to_owned()]
         );
     }
 
