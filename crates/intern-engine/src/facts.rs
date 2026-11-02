@@ -243,7 +243,10 @@ fn own_date_field(scope: &ValidationScope<'_>, date: &str) -> Option<(String, St
 }
 
 /// The first page after the first that opens as an attachment - "EXHIBIT
-/// A", "SCHEDULE B", "Attachment 1" - on its own short line.
+/// A", "SCHEDULE B", "Attachment 1" - on its own short line, or followed by
+/// its title: "EXHIBIT A - VERIFIED AMENDED COMPLAINT". A notice's own page
+/// that happens to open on "Exhibit A to the complaint ..." only hides its
+/// fields from the own-date rule, which then leaves the date alone.
 fn attachments_from(units: &[&EvidenceUnit], first_page: usize) -> Option<usize> {
     let mut pages = units
         .iter()
@@ -263,12 +266,26 @@ fn attachments_from(units: &[&EvidenceUnit], first_page: usize) -> Option<usize>
             })
             .is_some_and(|line| {
                 let words = words(line);
-                words.len() <= 4
-                    && words.first().is_some_and(|word| {
-                        ATTACHMENT_WORDS.contains(&word.trim_end_matches(['.', ':']))
-                    })
+                words
+                    .first()
+                    .is_some_and(|word| ATTACHMENT_WORDS.contains(&word.as_str()))
+                    && (words.len() <= 4
+                        || words.get(1).is_some_and(|word| names_an_attachment(word)))
             })
     })
+}
+
+/// Whether a word is what an attachment is called by: a letter, a number or
+/// a roman numeral ("A", "12", "IV", "A1").
+fn names_an_attachment(word: &str) -> bool {
+    word.len() == 1
+        || (word.len() <= 3 && word.chars().all(|character| character.is_ascii_digit()))
+        || (word.len() <= 5 && word.chars().all(|character| "ivxlc".contains(character)))
+        || (word.len() <= 3
+            && word.starts_with(|character: char| character.is_ascii_alphabetic())
+            && word[1..]
+                .chars()
+                .all(|character| character.is_ascii_digit()))
 }
 
 /// Words a page that starts an attachment opens on.
@@ -9030,6 +9047,42 @@ The merger needs a majority of votes cast.";
         assert_eq!(
             outcome.proposal.document_date.as_deref(),
             Some("2008-09-03"),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// An exhibit that opens on its title as well as its letter is an
+    /// attachment too: its "Dated:" is the exhibit's, never the notice's.
+    #[test]
+    fn an_exhibit_opening_on_its_title_never_dates_the_notice() {
+        let index = EvidenceIndex::build(&DocumentSource::from_pages(vec![
+            crate::domain::SourcePage::new(
+                1,
+                "UNITED STATES DISTRICT COURT\n\nWINDROW.COM, INC., Plaintiff,\nv.\n\
+                 CASCADE WEB SERVICES LLC, Defendant.\n\nNOTICE OF DEPOSITION\n\n\
+                 PLEASE TAKE NOTICE that Plaintiff will take the deposition of Defendant \
+                 on October 21, 2008 at 9:00 a.m.",
+                PageOrigin::PlainText,
+            ),
+            crate::domain::SourcePage::new(
+                2,
+                "EXHIBIT A - VERIFIED AMENDED COMPLAINT FOR DAMAGES\n\nDated: January 5, 2007",
+                PageOrigin::PlainText,
+            ),
+        ]));
+        let context = whole(&index);
+        let facts = ModelFacts {
+            document_type: Some("Notice of Deposition".into()),
+            type_evidence: vec![id_of(&index, "NOTICE OF DEPOSITION")],
+            document_date: Some("2008-10-21".into()),
+            date_evidence: vec![id_of(&index, "PLEASE TAKE NOTICE")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &context, &index);
+        assert_ne!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2007-01-05"),
             "{:?}",
             outcome.reasons
         );
