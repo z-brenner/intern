@@ -88,6 +88,13 @@ cleanup() {
     kill "$SERVER" 2>/dev/null || true
     wait "$SERVER" 2>/dev/null || true
   fi
+  # A desktop portal the app's session starts (xdg-document-portal) mounts its
+  # document store over FUSE at $XDG_RUNTIME_DIR/doc. When the session ends
+  # first, the mount is left stale - stat fails on it, and `rm` reports "Is a
+  # directory" - so it is unmounted, lazily, before the work directory goes.
+  if grep -qsF " $WORK/run/doc " /proc/self/mounts; then
+    fusermount3 -uz "$WORK/run/doc" 2>/dev/null || fusermount -uz "$WORK/run/doc" 2>/dev/null || true
+  fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT
