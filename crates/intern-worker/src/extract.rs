@@ -2215,8 +2215,12 @@ pub fn extract_image(
     // A TIFF that opens with a thumbnail has its first page further on.
     let image = cancel.timed(
         |timings| &mut timings.image_decode_micros,
-        || match frames.first {
-            Some(directory) => decode_tiff_frame(path, directory, limits),
+        || match frames.first.or_else(|| least_significant_first(path)) {
+            Some(directory) => {
+                let metadata = std::fs::metadata(path).map_err(ExtractionError::io)?;
+                limits.validate_source_size(metadata.len())?;
+                decode_tiff_frame(path, directory, limits)
+            }
             None => load_oriented_image(path, limits),
         },
     )?;
@@ -2541,6 +2545,182 @@ impl TiffFormat {
     }
 }
 
+/// The first directory of a TIFF whose first frame stores its bits least
+/// significant first ([`BitOrderFix`]), which only the frame decoder reads.
+fn least_significant_first(path: &Path) -> Option<u64> {
+    let mut file = BufReader::new(File::open(path).ok()?);
+    let format = TiffFormat::read(&mut file)?;
+    format
+        .bit_order_fix(&mut file, format.first)
+        .map(|_| format.first)
+}
+
+const COMPRESSION: u16 = 259;
+const FILL_ORDER: u16 = 266;
+const STRIP_OFFSETS: u16 = 273;
+const STRIP_BYTE_COUNTS: u16 = 279;
+const TILE_OFFSETS: u16 = 324;
+const TILE_BYTE_COUNTS: u16 = 325;
+
+/// The CCITT compressions a fax or a litigation scan is stored in: modified
+/// Huffman, Group 3 and Group 4.
+const CCITT: [u64; 3] = [2, 3, 4];
+
+/// The most strips or tiles a frame's data is read in here, and the most
+/// entries a directory is read for: a page has a few of each.
+const MAX_SEGMENTS: u64 = 65_536;
+const MAX_FRAME_ENTRIES: u64 = 4_096;
+
+/// What a frame stored with its bits least significant first - FillOrder 2,
+/// as some scanning systems wrote faxes and litigation scans - needs for a
+/// decoder that reads every byte most significant bit first and ignores the
+/// tag, as this one does: each byte of its compressed data read with its
+/// bits reversed, and the tag read as 1. Done as the file is read, never on
+/// disk.
+#[derive(Debug)]
+struct BitOrderFix {
+    /// The frame's strips or tiles, as sorted, disjoint byte ranges.
+    ranges: Vec<(u64, u64)>,
+    /// Where the FillOrder value sits, and the bytes that say 1.
+    fill_order_at: u64,
+    one: [u8; 2],
+}
+
+/// An entry of an image file directory: its tag, type, count, and where its
+/// value field is with the field's bytes.
+struct TiffEntry {
+    tag: u16,
+    kind: u16,
+    count: u64,
+    at: u64,
+    field: [u8; 8],
+}
+
+impl TiffFormat {
+    /// The fix a frame needs when its directory says FillOrder 2 with a
+    /// CCITT compression; `None` for any other frame, or one whose tags
+    /// cannot be read.
+    fn bit_order_fix(&self, file: &mut (impl Read + Seek), directory: u64) -> Option<BitOrderFix> {
+        let count = self.entry_count(file, directory)?;
+        if count > MAX_FRAME_ENTRIES {
+            return None;
+        }
+        let entry_bytes: u64 = if self.big { 20 } else { 12 };
+        let value_at: u64 = if self.big { 12 } else { 8 };
+        let first = directory + if self.big { 8 } else { 2 };
+        let mut entries = Vec::new();
+        let mut entry = [0_u8; 20];
+        for index in 0..count {
+            file.read_exact(&mut entry[..entry_bytes as usize]).ok()?;
+            let tag = self.word([entry[0], entry[1]]);
+            if ![
+                COMPRESSION,
+                FILL_ORDER,
+                STRIP_OFFSETS,
+                STRIP_BYTE_COUNTS,
+                TILE_OFFSETS,
+                TILE_BYTE_COUNTS,
+            ]
+            .contains(&tag)
+            {
+                continue;
+            }
+            let count = if self.big {
+                self.quad(entry[4..12].try_into().ok()?)
+            } else {
+                u64::from(self.long(entry[4..8].try_into().ok()?))
+            };
+            let mut field = [0_u8; 8];
+            let width = (entry_bytes - value_at) as usize;
+            field[..width].copy_from_slice(&entry[value_at as usize..entry_bytes as usize]);
+            entries.push(TiffEntry {
+                tag,
+                kind: self.word([entry[2], entry[3]]),
+                count,
+                at: first + index * entry_bytes + value_at,
+                field,
+            });
+        }
+        let find = |tag: u16| entries.iter().find(|entry| entry.tag == tag);
+        let fill_order = find(FILL_ORDER)?;
+        let compression = find(COMPRESSION)?;
+        if self.values(file, fill_order)?.first() != Some(&2)
+            || !CCITT.contains(self.values(file, compression)?.first()?)
+        {
+            return None;
+        }
+        let (offsets, lengths) = match (find(STRIP_OFFSETS), find(STRIP_BYTE_COUNTS)) {
+            (Some(offsets), Some(lengths)) => (offsets, lengths),
+            _ => (find(TILE_OFFSETS)?, find(TILE_BYTE_COUNTS)?),
+        };
+        let mut ranges = self
+            .values(file, offsets)?
+            .into_iter()
+            .zip(self.values(file, lengths)?)
+            .filter(|(_, length)| *length > 0)
+            .map(|(start, length)| (start, start.saturating_add(length)))
+            .collect::<Vec<_>>();
+        ranges.sort_unstable();
+        // Disjoint, so the reader can find the first range a read touches by
+        // bisection: overlapping strips are merged.
+        let mut disjoint: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+        for (start, end) in ranges {
+            match disjoint.last_mut() {
+                Some(last) if start <= last.1 => last.1 = last.1.max(end),
+                _ => disjoint.push((start, end)),
+            }
+        }
+        Some(BitOrderFix {
+            ranges: disjoint,
+            fill_order_at: fill_order.at,
+            one: if self.big_endian {
+                1_u16.to_be_bytes()
+            } else {
+                1_u16.to_le_bytes()
+            },
+        })
+    }
+
+    /// An entry's values as numbers: SHORT, LONG or LONG8, in its value field
+    /// when they fit there, else where the field points.
+    fn values(&self, file: &mut (impl Read + Seek), entry: &TiffEntry) -> Option<Vec<u64>> {
+        let size: u64 = match entry.kind {
+            3 => 2,
+            4 => 4,
+            16 => 8,
+            _ => return None,
+        };
+        if entry.count == 0 || entry.count > MAX_SEGMENTS {
+            return None;
+        }
+        let total = entry.count * size;
+        let field = if self.big { 8 } else { 4 };
+        let bytes = if total <= field {
+            entry.field[..total as usize].to_vec()
+        } else {
+            let offset = if self.big {
+                self.quad(entry.field)
+            } else {
+                u64::from(self.long(entry.field[..4].try_into().ok()?))
+            };
+            file.seek(SeekFrom::Start(offset)).ok()?;
+            let mut bytes = vec![0_u8; total as usize];
+            file.read_exact(&mut bytes).ok()?;
+            bytes
+        };
+        Some(
+            bytes
+                .chunks_exact(size as usize)
+                .map(|value| match size {
+                    2 => u64::from(self.word([value[0], value[1]])),
+                    4 => u64::from(self.long(value.try_into().unwrap_or_default())),
+                    _ => self.quad(value.try_into().unwrap_or_default()),
+                })
+                .collect(),
+        )
+    }
+}
+
 /// Decodes the TIFF frame whose image file directory is at `directory`.
 ///
 /// Every offset in a TIFF is from the start of the file, so pointing the
@@ -2583,12 +2763,14 @@ fn decode_tiff_frame(
         )
     };
     header[start..start + pointer.len()].copy_from_slice(&pointer);
+    let fix = format.bit_order_fix(&mut file, directory);
     file.seek(SeekFrom::Start(0)).map_err(ExtractionError::io)?;
     let reader = PatchedHeader {
         file,
         header,
         length: length as u64,
         position: 0,
+        fix,
     };
     ImageReader::with_format(BufReader::new(reader), ImageFormat::Tiff)
         .into_decoder()
@@ -2596,12 +2778,15 @@ fn decode_tiff_frame(
         .and_then(|decoder| decode_oriented(decoder, limits))
 }
 
-/// A file read with its first `length` bytes replaced by `header`.
+/// A file read with its first `length` bytes replaced by `header`, and a
+/// frame stored least significant bit first read as the decoder reads one
+/// ([`BitOrderFix`]).
 struct PatchedHeader {
     file: File,
     header: [u8; 16],
     length: u64,
     position: u64,
+    fix: Option<BitOrderFix>,
 }
 
 impl Read for PatchedHeader {
@@ -2613,6 +2798,26 @@ impl Read for PatchedHeader {
                 break;
             }
             *byte = self.header[at as usize];
+        }
+        if let Some(fix) = &self.fix {
+            let (start, end) = (self.position, self.position + read as u64);
+            let first = fix.ranges.partition_point(|(_, until)| *until <= start);
+            for &(from, until) in &fix.ranges[first..] {
+                if from >= end {
+                    break;
+                }
+                let from = (from.max(start) - start) as usize;
+                let until = (until.min(end) - start) as usize;
+                for byte in &mut buffer[from..until] {
+                    *byte = byte.reverse_bits();
+                }
+            }
+            for (index, value) in fix.one.iter().enumerate() {
+                let at = fix.fill_order_at + index as u64;
+                if (start..end).contains(&at) {
+                    buffer[(at - start) as usize] = *value;
+                }
+            }
         }
         self.position += read as u64;
         Ok(read)
@@ -2944,6 +3149,32 @@ mod tiff_chains {
             !frames.beyond_limit,
             "a loop ends the chain; nothing is past it"
         );
+    }
+
+    /// One Group 4 page libtiff stored least significant bit first
+    /// (FillOrder 2), as the scanning system of a 1996 tobacco-litigation
+    /// production did, and the same page stored most significant bit first.
+    /// The decoder alone reads the first backwards; the frame reader reads
+    /// it as the same page.
+    #[test]
+    fn a_fax_stored_least_significant_bit_first_reads_as_the_same_page() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/formats");
+        let (backwards, forwards) = (fixtures.join("fax-lsb.tif"), fixtures.join("fax-msb.tif"));
+        let limits = ResourceLimits::default();
+        let page = load_oriented_image(&forwards, &limits).unwrap().to_rgb8();
+        assert!(
+            load_oriented_image(&backwards, &limits)
+                .map(|image| image.to_rgb8() != page)
+                .unwrap_or(true),
+            "the decoder alone misreads the page"
+        );
+        assert_eq!(least_significant_first(&forwards), None);
+        let first = least_significant_first(&backwards).expect("FillOrder 2, Group 4");
+        let read = decode_tiff_frame(&backwards, first, &limits)
+            .unwrap()
+            .to_rgb8();
+        assert_eq!(read.dimensions(), page.dimensions());
+        assert!(read == page, "the page reads as it was stored");
     }
 }
 
