@@ -2797,9 +2797,9 @@ impl LetterLayout {
     }
 
     /// The organization the inside address names under `person`: the first
-    /// of the three lines after the person's own that is an organization's
-    /// name, in a unit of the first page between the dateline, when there is
-    /// one, and the salutation.
+    /// of the four lines after the person's own that is an organization's
+    /// name and no job title, in a unit of the first page between the
+    /// dateline, when there is one, and the salutation.
     /// Its lines may be broken by "<br>" in a table's cell.
     fn addressee_organization<'a>(
         self,
@@ -2826,11 +2826,19 @@ impl LetterLayout {
             if unit.ordinal == salutation && named >= at {
                 return None;
             }
+            // A job title can end on an organization's word too ("Director
+            // of Corporate Services"): it is the person's post, never the
+            // organization.
             lines
                 .iter()
                 .skip(named + 1)
-                .take(3)
+                .take(4)
                 .map(|line| line.trim_end_matches([',', ';', '|']).trim())
+                .filter(|line| {
+                    !normalize_loosely(line)
+                        .split_whitespace()
+                        .any(|word| JOB_TITLE_WORDS.contains(&word))
+                })
                 .find(|line| is_organization(line))
                 .map(|line| (line.to_owned(), unit))
         })
@@ -8931,6 +8939,32 @@ The merger needs a majority of votes cast.";
         );
         assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
         assert!(!outcome.reasons.contains(&ReviewReason::TypeUnsupported));
+        // A title that ends on an organization's word is the person's post,
+        // never the organization (Codex's case on #51).
+        let (outcome, _) = facts_for(
+            "Pipeline and Hazardous Materials Safety Administration\n\nWARNING LETTER\n\n\
+             March 2, 2018\n\nMr. Jerome Colfax\nDirector of Corporate Services\n\
+             Tollard Refining Company, LLC\n1819 Woodville Road\n\nDear Mr. Colfax:\n\n\
+             A representative of the Administration inspected the pipeline facilities.",
+            |index| ModelFacts {
+                document_type: Some("Warning Letter".into()),
+                type_evidence: vec![id_of(index, "WARNING LETTER")],
+                document_date: Some("2018-03-02".into()),
+                date_evidence: vec![id_of(index, "March 2, 2018")],
+                parties: vec![party(
+                    "Jerome Colfax",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Mr. Jerome Colfax")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Tollard Refining Company, LLC"],
+            "{:?}",
+            outcome.proposal
+        );
         // A person in the letterhead, above the dateline, is the sender's:
         // a reply that called them the recipient never makes the sender's
         // firm the addressee.
