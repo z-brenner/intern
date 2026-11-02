@@ -498,11 +498,15 @@ pub fn validate_facts_at(
     // read from there names what it is about - the order it closes, the
     // statement it encloses - unless it is a kind of letter itself. The
     // name waits for a person.
+    let layout = LetterLayout::of(scope);
     if let Some(unit) = type_unit.and_then(|ordinal| scope.unit_at(ordinal))
-        && LetterLayout::of(scope).below_salutation(unit, type_line.as_deref().unwrap_or_default())
-        && document_type
-            .as_deref()
-            .is_some_and(|value| !words(value).iter().any(|word| word == "letter"))
+        && let Some(value) = document_type.as_deref()
+        && layout.below_salutation(unit, type_line.as_deref().unwrap_or_default())
+        && !words(value).iter().any(|word| word == "letter")
+        // The reply may cite the body's mention of a type the heading above
+        // the salutation states too ("NOTICE OF TERMINATION" over "This
+        // notice of termination confirms ..."): the heading is the type.
+        && !layout.states_above_salutation(scope, value)
     {
         push(&mut reasons, ReviewReason::TypeUnsupported);
     }
@@ -2806,7 +2810,7 @@ impl LetterLayout {
         scope: &ValidationScope<'a>,
         person: &str,
     ) -> Option<(String, &'a EvidenceUnit)> {
-        let (salutation, at) = self.salutation?;
+        let (salutation, _) = self.salutation?;
         let person = normalize_loosely(person);
         scope.context_units().find_map(|unit| {
             // Between the dateline, when there is one, and the salutation:
@@ -2820,20 +2824,27 @@ impl LetterLayout {
                 .flat_map(|line| line.split("<br>"))
                 .map(str::trim)
                 .collect::<Vec<_>>();
-            let named = lines
+            // The address ends at the salutation, when it shares the unit:
+            // what follows "Dear ..." is the letter talking.
+            let end = if unit.ordinal == salutation {
+                lines
+                    .iter()
+                    .position(|line| normalize(line).starts_with("dear "))
+                    .unwrap_or(lines.len())
+            } else {
+                lines.len()
+            };
+            let named = lines[..end]
                 .iter()
                 .position(|line| contains_whole(&normalize_loosely(line), &person))?;
-            if unit.ordinal == salutation && named >= at {
-                return None;
-            }
             // A job title can end on an organization's word too ("Director
             // of Corporate Services"): it is the person's post, never the
-            // organization.
-            lines
+            // organization. A sentence is no name either.
+            lines[named + 1..end]
                 .iter()
-                .skip(named + 1)
                 .take(4)
                 .map(|line| line.trim_end_matches([',', ';', '|']).trim())
+                .filter(|line| line.split_whitespace().count() <= ORGANIZATION_LINE_WORDS)
                 .filter(|line| {
                     !normalize_loosely(line)
                         .split_whitespace()
@@ -2841,6 +2852,32 @@ impl LetterLayout {
                 })
                 .find(|line| is_organization(line))
                 .map(|line| (line.to_owned(), unit))
+        })
+    }
+
+    /// Whether the first page states `value` whole above the salutation,
+    /// where a letter's own title stands, on a line that is no "Re:" line.
+    fn states_above_salutation(self, scope: &ValidationScope<'_>, value: &str) -> bool {
+        let Some((salutation, at)) = self.salutation else {
+            return false;
+        };
+        let wanted = normalize_loosely(value);
+        scope.index.units().iter().any(|unit| {
+            if unit.running || unit.ordinal > salutation {
+                return false;
+            }
+            let lines = unit.text.lines().collect::<Vec<_>>();
+            let above = if unit.ordinal == salutation {
+                &lines[..at.min(lines.len())]
+            } else {
+                &lines[..]
+            };
+            // A "Re:" or "Subject:" line names the matter the letter is
+            // about ("Re: Approval of Trade Credit Application"), never the
+            // letter's own title.
+            above.iter().any(|line| {
+                !names_a_matter(line) && contains_whole(&normalize_loosely(line), &wanted)
+            })
         })
     }
 
@@ -3370,6 +3407,10 @@ fn is_organization(name: &str) -> bool {
         .last()
         .is_some_and(|word| crate::cues::ORGANIZATION_ENDINGS.contains(&word))
 }
+
+/// The most words a line naming an organization in an inside address runs
+/// to: more is a sentence.
+const ORGANIZATION_LINE_WORDS: usize = 10;
 
 /// Words a person's job title is made of.
 const JOB_TITLE_WORDS: &[&str] = &[
@@ -8907,6 +8948,60 @@ The merger needs a majority of votes cast.";
         assert_ne!(outcome.status, ProposalStatus::Ready);
     }
 
+    /// A notice headed with its type, the reply citing the body's mention of
+    /// it below the salutation: the heading states the type, so it stands
+    /// (Codex's case on #51).
+    #[test]
+    fn a_type_its_heading_states_stands_when_the_body_is_cited() {
+        let (outcome, _) = facts_for(
+            "Harlow Street Properties LLC\n\nNOTICE OF TERMINATION\n\nMarch 2, 2026\n\n\
+             Marrow Bakery Inc.\n14 Harlow Street\n\nDear Tenant:\n\n\
+             This notice of termination confirms that your lease ends on April 30, 2026.",
+            |index| ModelFacts {
+                document_type: Some("Notice of Termination".into()),
+                type_evidence: vec![id_of(index, "This notice of termination")],
+                document_date: Some("2026-03-02".into()),
+                date_evidence: vec![id_of(index, "March 2, 2026")],
+                parties: vec![party(
+                    "Marrow Bakery Inc.",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Marrow Bakery")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // A "Re:" line above the salutation names the matter, not the
+        // letter's own title (InternBench's letter approving a trade credit
+        // application).
+        let (outcome, _) = facts_for(
+            "Moonlit Paper Co.\n\nMarch 19, 2026\n\nBriarwood Coffee LLC\n310 Harbor Street\n\n\
+             Re: Approval of Trade Credit Application\nDear Ms. Ambrose:\n\n\
+             Thank you for the trade credit application, which we have approved.",
+            |index| ModelFacts {
+                document_type: Some("Trade Credit Application".into()),
+                type_evidence: vec![id_of(index, "Thank you")],
+                document_date: Some("2026-03-19".into()),
+                date_evidence: vec![id_of(index, "March 19, 2026")],
+                parties: vec![party(
+                    "Briarwood Coffee LLC",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Briarwood")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert!(
+            outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
     /// PHMSA's warning letter in the real set: addressed to the refinery's
     /// manager at the refinery. It is to the company, and its own title above
     /// the salutation is its type.
@@ -8965,16 +9060,43 @@ The merger needs a majority of votes cast.";
             "{:?}",
             outcome.proposal
         );
+        // The address ends at the salutation: a sentence of the body naming
+        // a firm is never the addressee's organization (Codex's case on #51).
+        let (outcome, _) = facts_for(
+            "Corvane Property Group\n\nDEMAND LETTER\n\nMarch 2, 2018\n\n\
+             Ms. Dana Wells\n12 Elm Street\nDear Ms. Wells,\nOn behalf of Pike & Rowe LLP",
+            |index| ModelFacts {
+                document_type: Some("Demand Letter".into()),
+                type_evidence: vec![id_of(index, "DEMAND LETTER")],
+                document_date: Some("2018-03-02".into()),
+                date_evidence: vec![id_of(index, "March 2, 2018")],
+                parties: vec![party(
+                    "Dana Wells",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Dana Wells")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|party| party.to_lowercase().contains("rowe")),
+            "{:?}",
+            outcome.proposal
+        );
         // A person in the letterhead, above the dateline, is the sender's:
         // a reply that called them the recipient never makes the sender's
         // firm the addressee.
         let (outcome, _) = facts_for(
-            "Ansel Pike\nManaging Partner\nPike & Rowe LLP\n\nMarch 2, 2018\n\n\
+            "Ansel Pike\nManaging Partner\nPike & Rowe LLP\n\nDEMAND LETTER\n\nMarch 2, 2018\n\n\
              Ms. Dana Wells\n12 Elm Street\n\nDear Ms. Wells:\n\n\
              We write about the lease of 12 Elm Street.",
             |index| ModelFacts {
-                document_type: Some("Letter".into()),
-                type_evidence: vec![id_of(index, "Dear")],
+                document_type: Some("Demand Letter".into()),
+                type_evidence: vec![id_of(index, "DEMAND LETTER")],
                 document_date: Some("2018-03-02".into()),
                 date_evidence: vec![id_of(index, "March 2, 2018")],
                 parties: vec![party(
@@ -8990,7 +9112,7 @@ The merger needs a majority of votes cast.";
                 .proposal
                 .parties
                 .iter()
-                .any(|party| party.contains("Pike & Rowe")),
+                .any(|party| party.to_lowercase().contains("rowe")),
             "{:?}",
             outcome.proposal
         );
