@@ -118,6 +118,7 @@ fn the_relation_table_gives_every_gold_document_an_accepted_relation() {
                             name: names[index].clone(),
                             role,
                             role_supported: role.is_some(),
+                            proposed_role: role,
                         }
                     })
                     .collect::<Vec<_>>();

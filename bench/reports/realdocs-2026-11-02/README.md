@@ -143,6 +143,48 @@ can see in the document's own text. The twelfth is an OCR misreading:
 
 These are the next work, measured on this set and on a held-out one.
 
+## Afterwards: rules written from this set (in-sample)
+
+Six deterministic validation rules followed, one for each class the unsafe names showed. They
+are measured on the same recording, replayed, so this set no longer measures how they carry:
+a held-out set of the same kinds will.
+
+| Rule | Unsafe names it sends to review or corrects |
+|---|---|
+| **An invoice's customer is never named as its issuer.** When the first party the document names is one the reply called the customer, and nothing confirms an issuer, no party is named and the name goes to review (`PARTY_MISSING`). A party-less invoice always goes to review. | invoice-11, office-13 to review; on InternBench, the remittance advice filed under its recipient on four recordings, and a party-less invoice on one |
+| **A bare "Notice" goes to review**, as a bare "Letter" does. | notice-12 to review; InternBench's rent-increase notice on two weaker models' recordings |
+| **A letter, notice or invoice is dated by its own date field.** This applies when the reply's date has no field anywhere ("On October 20, 2023, ESPN transmitted ...") and the first page gives exactly one own-date field: "Released:", "Dated:", "Date:", an "Invoice Date" column, two-digit years too. A date in any field stands ("PO Date"); a line item's dated row does not count; a later page's "Dated:" (an exhibit) never does. | notice-14 and invoice-13 right and ready |
+| **A type read below a letter's salutation**, other than a kind of letter, **goes to review**: the letter is talking about it. | letter-14 ("Order to Show Cause") and office-08 ("Statement of Conduct") to review; InternBench's letter enclosing a trade credit application on two recordings |
+| **A caption is read as a block** when no label stands beside a name: the parties before "v." down to "Plaintiff(s)", and those after it down to "Defendant(s)", including captions laid out as tables. | notice-01 and notice-06 right and ready; notice-09 right |
+| **A letter to a person at an organization is to the organization**, the one its inside address names under the person's name and title. | letter-05 right and ready ("Warning Letter to Toledo Refining Company, LLC") |
+
+| | Before | After (in-sample) |
+|---|---:|---:|
+| Right, scorer | 6/58 | 12/58 |
+| Right, adjudicated | 11/58 | 15/58 |
+| Marked ready | 19 | 13 |
+| **Wrong names ready** | **12** | **3** |
+
+**The cost.** invoice-15 ("Invoice - WBTV") was right in substance and goes to review without a
+party: the reply called WBTV, its issuer, the recipient.
+
+**The 3 still ready and wrong:**
+- invoice-07: OCR's "Leaging".
+- notice-10: arguable; the movants who gave notice rather than the debtor.
+- office-14: a spreadsheet of outstanding invoices filed as one of them.
+
+**No regressions elsewhere:**
+- **CUAD:** no name changes on any of the three samples.
+- **InternBench:** no right name is lost on any of the ten recordings. Unsafe-ready falls on
+  seven of them; on the committed recording it goes from 2 to 1, and `bench/baseline.json`
+  moves with it.
+
+**What the run also showed.** Retrieval never gave the model the line holding the document's
+own date. notice-14's "Released:" line and invoice-13's invoice-date row were not in its
+context, which is why it took a date it could see. Validation now reads the whole first page
+for it; retrieval keeping a first page's date fields would let the model see it too. That is a
+prompt change, so it needs a live run.
+
 **Speed.** p50 23.9 s per document, p95 54 s. The slowest was a 23-page scanned letter, at
 116 s: OCR alone took 101 s of it. Office, text and spreadsheet files parse in milliseconds.
 
