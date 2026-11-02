@@ -1028,7 +1028,6 @@ pub fn validate_facts_at(
             || labeled_role(scope, &party.name) == Some(PartyRole::Customer)
             || party
                 .role
-                .or(party.proposed_role)
                 .is_some_and(|role| RECEIVING_ROLES.contains(&role))
     });
     if class == DocumentClass::Issued
@@ -8732,6 +8731,38 @@ The merger needs a majority of votes cast.";
             outcome.proposal
         );
         assert!(!outcome.reasons.contains(&ReviewReason::PartyMissing));
+    }
+
+    /// An 1880s bill in the held-out real set, as Qwen3.5-2B read it: its
+    /// issuer, the "Bought of" party at the head of the page, called the
+    /// buyer. The reply's unconfirmed role never makes another company in
+    /// the billhead the issuer: the page's head names the issuer.
+    #[test]
+    fn a_bills_issuer_the_reply_called_its_buyer_still_issues_it() {
+        let (outcome, _) = facts_for(
+            "BILL\n\nBoston, Oct. 1, 1880.\n\nBOUGHT OF CORWIN HASKELL, Jr.\n\n\
+             AUTHORIZED MANUFACTURER FOR\n\nNATIONAL BELL TELEPHONE CO.,\n\n109 COURT STREET.\n\n\
+             To Prof. A. B. Hale\n\nInduction coil, 2.00",
+            |index| ModelFacts {
+                document_type: Some("Bill".into()),
+                type_evidence: vec![id_of(index, "BILL")],
+                parties: vec![party(
+                    "Corwin Haskell, Jr.",
+                    Some(PartyRole::Buyer),
+                    &[id_of(index, "BOUGHT OF")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|party| party.to_lowercase().contains("bell telephone")),
+            "{:?}",
+            outcome.proposal
+        );
     }
 
     /// The IRS's CP161, typed "Notice": one of a hundred kinds the word
