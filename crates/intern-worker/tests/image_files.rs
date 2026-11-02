@@ -449,3 +449,20 @@ fn a_deep_color_image_is_held_to_the_bytes_an_8_bit_one_may_take() {
     extract_image(&rgba, &ocr, &limits, &CancellationToken::new()).unwrap();
     assert_eq!(ocr.pages.lock().unwrap().len(), 1);
 }
+
+/// A Group 4 fax stored least significant bit first (TIFF FillOrder 2), as
+/// some scanning systems stored litigation productions: read, not refused as
+/// corrupt. `tests/fixtures/formats/fax.py` writes it.
+#[test]
+fn a_fax_stored_least_significant_bit_first_is_read() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/formats/fax-lsb.tif");
+    let document = extract_image(
+        &path,
+        &FakeOcr,
+        &ResourceLimits::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    assert_eq!(texts(&document), ["Fax cover sheet"]);
+    assert!(!document.truncated);
+}

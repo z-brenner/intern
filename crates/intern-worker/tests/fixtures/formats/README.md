@@ -21,6 +21,15 @@ and checks that all four facts come out.
 | `ledger.csv` | CSV: comma, double quotes, UTF-8 | `source/ledger.fods` |
 | `ledger-encrypted.xls` | Excel 97-2003, password `intern` | `source/ledger.fods` |
 
+Two fax pages stand apart from the letter: `fax-msb.tif` and `fax-lsb.tif`
+are one Group 4 page stored most and least significant bit first (TIFF
+FillOrder 1 and 2), as some scanning systems stored litigation productions.
+libtiff writes both from one image, so they decode to the same pixels; a
+decoder that ignores FillOrder reads the second backwards. `fax.py`
+regenerates them, with Pillow built against libtiff; these were written by Pillow 12.3 with
+libtiff 4.7.1.
+`src/extract.rs` and `tests/image_files.rs` read them.
+
 The ledger holds a real date cell (2025-04-14) and a formula
 (`=B7+1500`), so the workbook readers show that a stored date comes out as
 the date it means and a formula as the value it last calculated.
