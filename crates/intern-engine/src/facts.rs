@@ -1219,11 +1219,13 @@ pub fn validate_facts_at(
             {
                 // The reply named the organization too, as the letter's
                 // sender: the inside address says it receives the letter.
-                // Any other role - the party a notice is about - stands.
-                let sending = [parties[kept].role, parties[kept].proposed_role]
-                    .into_iter()
-                    .flatten()
-                    .any(|role| matches!(role, PartyRole::Sender | PartyRole::Issuer));
+                // Any other role - the party a notice is about - stands, and
+                // so does a role the document gives it ("Tenant: ..."): the
+                // reply's own role counts only when validation kept none.
+                let sending = parties[kept]
+                    .role
+                    .or(parties[kept].proposed_role)
+                    .is_some_and(|role| matches!(role, PartyRole::Sender | PartyRole::Issuer));
                 if sending && !parties[kept].copied {
                     remember(
                         &Found {
@@ -9231,6 +9233,46 @@ The merger needs a majority of votes cast.";
         assert_eq!(
             outcome.proposal.parties,
             vec!["Chicago Mercantile Exchange".to_owned()]
+        );
+    }
+
+    /// The reply called the inside address's organization the notice's
+    /// issuer, but the notice's own "Tenant:" field says who it is about:
+    /// the role the document gives stands, and the notice stays "for" it.
+    #[test]
+    fn an_inside_address_leaves_a_role_the_document_gives_alone() {
+        let (outcome, _) = facts_for(
+            "HARBORVIEW PROPERTY MANAGEMENT\n\nMarch 2, 2026\n\n\
+             Jane Roe, General Counsel\nKestrel Outfitters LLC\n14 Pier Road\n\
+             Portland, Maine 04101\n\nDear Ms. Roe:\n\nNOTICE OF RENT INCREASE\n\n\
+             Tenant: Kestrel Outfitters LLC\n\nThe monthly rent for Suite 4 will increase \
+             to $4,200 from May 1, 2026.",
+            |index| ModelFacts {
+                document_type: Some("Notice of Rent Increase".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF RENT INCREASE")],
+                document_date: Some("2026-03-02".into()),
+                date_evidence: vec![id_of(index, "March 2, 2026")],
+                parties: vec![
+                    party(
+                        "Jane Roe",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "Dear Ms. Roe")],
+                    ),
+                    party(
+                        "Kestrel Outfitters LLC",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "Tenant: Kestrel")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::For,
+            "{:?} {:?}",
+            outcome.proposal,
+            outcome.reasons
         );
     }
 
