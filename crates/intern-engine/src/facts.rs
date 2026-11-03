@@ -2925,7 +2925,10 @@ impl LetterLayout {
         let Some((salutation, at)) = self.salutation else {
             return false;
         };
-        self.dateline.is_some()
+        // The dateline found among the page's first units counts only above
+        // the greeting: a memo opening "Dear colleagues" may date a section
+        // below it.
+        self.dateline.is_some_and(|dateline| dateline < salutation)
             || scope.index.units().iter().any(|unit| {
                 if unit.running || unit.ordinal > salutation {
                     return false;
@@ -9363,6 +9366,15 @@ The merger needs a majority of votes cast.";
             assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
             assert_eq!(outcome.status, ProposalStatus::NeedsReview);
         }
+        // A greeting with a dateline only below it is no letter's layout
+        // either: a memo opening "Dear colleagues" with a dated section.
+        let (outcome, _) = facts_for(
+            "Dear Mr. Cornell,\n\nAs Attorneys General we write to Target Corporation about \
+             its merchandise decisions.\n\nJune 16, 2023\n\nThe decisions of that day are set \
+             out below.",
+            reply,
+        );
+        assert_eq!(outcome.proposal.document_type, None);
         // A greeting with no dateline over it is no letter's layout: a
         // memo or a report can say "Dear colleagues".
         let (outcome, _) = facts_for(
