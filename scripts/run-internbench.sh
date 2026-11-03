@@ -26,6 +26,13 @@
 #                       set it empty to check nothing)
 #   OUT_DIR             where report.json, report.md, recording.json and the
 #                       server log go (default: target/internbench)
+#   LLAMA_SERVER_ARGS   extra llama-server flags appended after the app's own,
+#                       for a trial of a flag the app does not set (laboratory
+#                       use, as scripts/run-internbench-candidate.sh takes it);
+#                       unset, the server starts exactly as the app starts it
+#   SERVER_MEMORY_FILE  if set, the server's VmHWM and VmRSS lines from
+#                       /proc are written there once the run is over and
+#                       before the server is stopped
 #
 # Extra arguments after `--` go to `intern-bench run`, for example
 # `-- --only invoice-date-in-table,scan-clean-lease-2p --baseline bench/baseline.json`.
@@ -99,11 +106,15 @@ if [ "$CORPUS" = "$DEFAULT_CORPUS" ] && ! corpus_matches_manifest; then
 fi
 mkdir -p "$OUT_DIR"
 
+# Nothing is appended unless LLAMA_SERVER_ARGS is set, so by default the
+# command line is the app's.
+read -r -a EXTRA_SERVER_ARGS <<< "${LLAMA_SERVER_ARGS:-}"
 KEY="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 "$LLAMA_SERVER" --host 127.0.0.1 --port "$PORT" --api-key "$KEY" --model "$MODEL" \
   --parallel 1 --ctx-size 8192 --n-gpu-layers 0 \
   --threads "$THREADS" --threads-batch "$THREADS" --jinja --no-webui --no-mmproj \
   --cache-ram 0 -ub 256 --prio -1 --poll 0 \
+  ${EXTRA_SERVER_ARGS[@]+"${EXTRA_SERVER_ARGS[@]}"} \
   > "$OUT_DIR/llama-server.log" 2>&1 &
 SERVER=$!
 trap 'kill "$SERVER" 2>/dev/null || true; wait "$SERVER" 2>/dev/null || true' EXIT
@@ -124,8 +135,12 @@ status=0
 "$INTERN_BENCH" run --corpus "$CORPUS" --gold "$GOLD" ${MANIFEST_ARGUMENTS[@]+"${MANIFEST_ARGUMENTS[@]}"} \
   --worker "$WORKER" --endpoint "http://127.0.0.1:$PORT/v1/chat/completions" --api-key "$KEY" \
   --model-id intern-local --model-path "$MODEL" --server-pid "$SERVER" \
-  --note "llama-server $THREADS threads, 8192 context, $(uname -sm)" \
+  --note "llama-server $THREADS threads, 8192 context${LLAMA_SERVER_ARGS:+, $LLAMA_SERVER_ARGS}, $(uname -sm)" \
   --record "$OUT_DIR/recording.json" --output "$OUT_DIR/report.json" --markdown "$OUT_DIR/report.md" \
   "$@" || status=$?
+# The server's peak, read while it is still running: the EXIT trap stops it.
+if [ -n "${SERVER_MEMORY_FILE:-}" ]; then
+  grep -E '^VmHWM|^VmRSS' "/proc/$SERVER/status" > "$SERVER_MEMORY_FILE" 2>/dev/null || true
+fi
 echo "report: $OUT_DIR/report.md (JSON: $OUT_DIR/report.json, recording: $OUT_DIR/recording.json)" >&2
 exit "$status"
