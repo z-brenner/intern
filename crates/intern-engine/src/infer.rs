@@ -182,6 +182,10 @@ const ISSUE_LABELS: &[&str] = &[
     "statement date",
     "dated",
 ];
+/// Labels that name the document's own date only as a field's - "Released:
+/// October 17, 2024", "| Notice date | 03/04/2026 |" - since in a sentence
+/// they say when something else happened: "the report released on March 3".
+const OWN_FIELD_LABELS: &[&str] = &["released", "notice date"];
 
 /// How far before a date the wording that names its role can sit. Long
 /// enough for "This First Amendment to Consulting Agreement (this
@@ -358,12 +362,44 @@ pub(crate) fn labels_a_deadline(window: &str) -> bool {
 /// Date:" and "Service Date:" label some other event, and offering the
 /// shipping date as the invoice's would file it under the wrong day at one
 /// click.
+///
+/// "Released" and "Notice date" name the issue date only as a field's label
+/// ([`OWN_FIELD_LABELS`]).
 pub(crate) fn labels_the_issue_date(window: &str) -> bool {
+    names_the_issue_date(window)
+        || (!labels_another_date(window) && is_generic_label(window) && !date_is_qualified(window))
+}
+
+/// Whether the wording before a date names it the date of issue in so many
+/// words - "Invoice Date", "Dated", "Released:" - and not only "Date:", as a
+/// signature block's line does too.
+pub(crate) fn names_the_issue_date(window: &str) -> bool {
     !labels_another_date(window)
         && (ISSUE_LABELS
             .iter()
             .any(|label| rfind_word(window, label).is_some())
-            || (is_generic_label(window) && !date_is_qualified(window)))
+            || labels_an_own_field(window))
+}
+
+/// Whether the wording before a date ends in one of [`OWN_FIELD_LABELS`] as
+/// a field's label: the label's words, then a colon or a table cell's edge.
+fn labels_an_own_field(window: &str) -> bool {
+    let trimmed = window.trim_end();
+    let Some(label) = trimmed
+        .strip_suffix(':')
+        .or_else(|| trimmed.strip_suffix('|'))
+    else {
+        return false;
+    };
+    let label = label.trim_end();
+    OWN_FIELD_LABELS.iter().any(|own| {
+        label.strip_suffix(own).is_some_and(|before| {
+            !before
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric)
+        })
+    })
 }
 
 /// Whether a word stands directly before the last "date" in `window`,
@@ -475,6 +511,50 @@ pub(crate) fn dates_stated_on(
         for reading in numeric_readings(&token, order) {
             if date_match_positions(&reading, normalized).contains(&token.start) {
                 found.push((reading, token.start));
+            }
+        }
+    }
+    found
+}
+
+/// The dates a normalized line writes in numbers with a two-digit year
+/// ("10/14/12"), each with its offset: read in the document's `order`, or
+/// both ways when it has settled none, with the year in 1970-2069. Each
+/// reading must be one the evidence check finds at that token. Its century
+/// is a guess, so [`dates_stated_on`] never reads one: only a date that a
+/// field labels the document's own may be read this way.
+pub(crate) fn two_digit_year_dates(
+    normalized: &str,
+    order: Option<NumericOrder>,
+) -> Vec<(String, usize)> {
+    let mut found: Vec<(String, usize)> = Vec::new();
+    for token in numeric_dates(normalized) {
+        let [first, second, third] = token.parts;
+        if third.len() != 2 || first.len() > 2 {
+            continue;
+        }
+        let Ok(short) = third.parse::<u32>() else {
+            continue;
+        };
+        let year = if short < 70 {
+            2000 + short
+        } else {
+            1900 + short
+        };
+        let orders = match order {
+            Some(NumericOrder::MonthFirst) => vec![(first, second)],
+            Some(NumericOrder::DayFirst) => vec![(second, first)],
+            None => vec![(first, second), (second, first)],
+        };
+        for (month, day) in orders {
+            let iso = format!("{year}-{month:0>2}-{day:0>2}");
+            if is_valid_iso_date(&iso)
+                && date_match_positions(&iso, normalized).contains(&token.start)
+                && !found
+                    .iter()
+                    .any(|(date, position)| *date == iso && *position == token.start)
+            {
+                found.push((iso, token.start));
             }
         }
     }
@@ -907,6 +987,40 @@ mod tests {
 
     fn digest_of(text: &str) -> DocumentDigest {
         distill(&source_from_text(text), DigestBudget::default())
+    }
+
+    /// "Released" and "Notice date" name the document's own date as a
+    /// field's label, and only there: in a sentence they date something
+    /// else. Only a label that names the issue date in so many words does
+    /// for a two-digit year; a bare "Date:" stands by a signature too.
+    #[test]
+    fn released_and_notice_date_label_the_issue_date_only_as_fields() {
+        for window in [
+            "adopted: october 10, 2024 released: ",
+            "released:",
+            "| notice date | ",
+            "notice date: ",
+            "date released: ",
+        ] {
+            assert!(labels_the_issue_date(window), "{window}");
+            assert!(names_the_issue_date(window), "{window}");
+        }
+        for window in [
+            "the report was released on ",
+            "the notice released ",
+            "notice dated ",
+            "| unreleased: ",
+        ] {
+            assert_eq!(
+                labels_the_issue_date(window),
+                window == "notice dated ",
+                "{window}"
+            );
+        }
+        assert!(labels_the_issue_date("date: "));
+        assert!(!names_the_issue_date("date: "));
+        assert!(names_the_issue_date("| invoice date | "));
+        assert!(!names_the_issue_date("due date: "));
     }
 
     /// Replay of the recorded corpus: the model read the statement of work as

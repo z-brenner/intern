@@ -182,11 +182,53 @@ party: the reply called WBTV, its issuer, the recipient.
 **What the run also showed.** Retrieval never gave the model the line holding the document's
 own date. notice-14's "Released:" line and invoice-13's invoice-date row were not in its
 context, which is why it took a date it could see. Validation now reads the whole first page
-for it; retrieval keeping a first page's date fields would let the model see it too. That is a
-prompt change, so it needs a live run.
+for it. Retrieval now keeps those lines too (below).
 
 **Speed.** p50 23.9 s per document, p95 54 s. The slowest was a 23-page scanned letter, at
 116 s: OCR alone took 101 s of it. Office, text and spreadsheet files parse in milliseconds.
+
+## Afterwards: the document's own date in the model's context (live re-run)
+
+The first live run showed that retrieval never gave the model the line holding the document's
+own date. Two changes now put it there:
+- **A "Released:" or "Notice date" field** labels the document's own date for retrieval, as
+  "Invoice Date" and "Dated" already did. In a sentence ("the report released on March 3") it
+  still doesn't.
+- **A date with a two-digit year** ("10/14/12") is read where a field's label names it the
+  date of issue: under an "Invoice Date" column, or after "Invoice Date:", "Dated:" or
+  "Released:". It is not read:
+  - after a bare "Date:", which stands by a signature as often as by the document's own date;
+  - in a row that carries an amount, which is a line item's;
+  - anywhere else. Its century is a guess.
+
+notice-14's "Released:" line now ranks first for the date, ahead of the footnotes that cite
+2023 dates. invoice-13's invoice-date row is now picked. Context date recall on this set goes
+from 51 to 52 of 59. On the held-out set, the three CUAD samples and InternBench it is
+unchanged.
+
+**Five prompts change**, all on the real sets and CUAD. None changes on InternBench or the
+fixtures, whose recordings stay current. The five were run again live, on the same model and
+runtime:
+
+| Document | The model's date, before | After | The name |
+|---|---|---|---|
+| notice-14, FCC notice of apparent liability | 2023-10-20, an event it recounts | 2024-10-10, its adoption date | unchanged: validation dates it by "Released:", right and ready |
+| invoice-13, WPTV | 2012-10-03, an air date | **2012-10-14**, its invoice date | right either way: "Invoice from WPTV", ready, becomes "Invoice - WPTV", in review |
+| held-out invoice-15, KUSA-TV | 2024-10-14 | **2024-10-20**, its invoice date | unchanged: in review with no party |
+| CUAD sample 1, cuad-14 | 1999-03-12 | 1999-03-12 | unchanged; a signature's "Dated: 3/13/99", now in its context, did not move it |
+| CUAD sample 3, cuad-02 | 1992-05-20 | 1992-05-20 | unchanged |
+
+invoice-13 goes to review because its new reply also names the station's client, with one
+token below the 0.5 confidence gate.
+
+**The answer:**
+- **The model now reads the date itself** on two of the three documents where it was wrong.
+- **No name gets better.** Validation's own-date rule (#51) already corrected all three, and
+  one right name goes to review.
+- **What it buys** is the model's reading where that rule does not reach: a document with more
+  than one own-date field, or a kind other than a letter, notice or invoice.
+- **No regressions found.** No name changes on any of InternBench's ten recordings, and no
+  wrong name is marked ready.
 
 ## Reproduce
 

@@ -41,14 +41,14 @@ use crate::domain::{DateRole, DocumentSource, PageOrigin};
 use crate::engine::estimated_tokens;
 use crate::evidence::{NumericOrder, normalize, normalize_loosely, numeric_date_order_of};
 use crate::infer::{
-    dates_stated_on, labels_a_deadline, labels_the_issue_date, role_from_wording, window_before,
-    wrapped_lines,
+    dates_stated_on, labels_a_deadline, labels_the_issue_date, names_the_issue_date,
+    role_from_wording, two_digit_year_dates, window_before, wrapped_lines,
 };
 use crate::structure::{BlockKind, LayoutBlock, TextSource, structured};
 use crate::text::{
     contains_identifier, count_cues, date_signal_count, digit_masked, split_sentences,
 };
-use crate::validate::{reference_introduced, rfind_word};
+use crate::validate::{carries_an_amount, reference_introduced, rfind_word};
 
 /// Paragraphs longer than this are split into sentence-bounded chunks, each
 /// its own unit, unless the index is built with another size.
@@ -1165,6 +1165,12 @@ fn section_tags(heading: &str) -> u16 {
 
 /// Every date a unit states, line by wrapped line, with the wording before
 /// each read the way validation reads it.
+///
+/// A date with a two-digit year ("10/14/12") is read only where a field's
+/// label names it the date of issue - "Invoice Date: 10/14/12", or under an
+/// "Invoice Date" column - in a row that carries no amount. Elsewhere its
+/// century is a guess; a bare "Date:" labels a signature's date as often as
+/// the document's, and a line item's date is the item's.
 fn date_mentions(
     text: &str,
     order: Option<NumericOrder>,
@@ -1173,7 +1179,16 @@ fn date_mentions(
     let mut mentions = Vec::new();
     for line in wrapped_lines(text) {
         let normalized = normalize(&line);
-        for (iso, at) in dates_stated_on(&normalized, order) {
+        let stated = dates_stated_on(&normalized, order)
+            .into_iter()
+            .map(|(iso, at)| (iso, at, false))
+            .chain(
+                two_digit_year_dates(&normalized, order)
+                    .into_iter()
+                    .map(|(iso, at)| (iso, at, true)),
+            )
+            .collect::<Vec<_>>();
+        for (iso, at, two_digit_year) in stated {
             if mentions
                 .iter()
                 .any(|mention: &DateMention| mention.iso == iso && mention.at == at)
@@ -1201,6 +1216,14 @@ fn date_mentions(
                 (!header.is_empty()).then(|| format!("{header}: "))
             });
             let column = |read: fn(&str) -> bool| column_label.as_deref().is_some_and(read);
+            if two_digit_year {
+                let field = window.trim_end().ends_with([':', '|']);
+                let named =
+                    (field && names_the_issue_date(&window)) || column(names_the_issue_date);
+                if !named || carries_an_amount(&normalized) {
+                    continue;
+                }
+            }
             mentions.push(DateMention {
                 column_role: column_label.as_deref().and_then(role_from_wording),
                 column_deadline: column(labels_a_deadline),
@@ -2049,6 +2072,47 @@ mod tests {
         first.layout = Some(layout);
         let stripped = EvidenceIndex::build(&DocumentSource::from_pages(vec![first]));
         assert_eq!(full, stripped);
+    }
+
+    /// A two-digit year is read only where a field's label names the date
+    /// of issue: under an "Invoice Date" column, or after "Invoice Date:".
+    /// Never a signature's bare "Date:", a sentence's "dated", another
+    /// column's dates or a line item's row, which carries an amount.
+    #[test]
+    fn a_two_digit_year_is_read_only_in_an_issue_date_field() {
+        let index = EvidenceIndex::build(&source_from_text(
+            "WPTV\n\n| Invoice # | Invoice Date | Invoice Period |\n| --- | --- | --- |\n| 313674-1 | 10/14/12 | 10/01/12 - 10/09/12 |\n\nInvoice Date: 10/15/12\n\n| Invoice Date | Invoice # | Amount |\n| --- | --- | --- |\n| 10/03/12 | 1042 | $1,600.00 |\n\nThe order dated 10/16/12 was filled.\n\nBy: /s/ Marc B. Resnick\nDate: 10/17/12",
+        ));
+        let read = index
+            .units()
+            .iter()
+            .flat_map(|unit| &unit.features.dates)
+            .map(|mention| mention.iso.as_str())
+            .collect::<Vec<_>>();
+        assert!(read.contains(&"2012-10-14"), "{read:?}");
+        assert!(read.contains(&"2012-10-15"), "{read:?}");
+        for unread in [
+            "2012-10-01",
+            "2012-01-10",
+            "2012-10-09",
+            "2012-10-03",
+            "2012-03-10",
+            "2012-10-16",
+            "2012-10-17",
+        ] {
+            assert!(!read.contains(&unread), "{unread} in {read:?}");
+        }
+        let row = index
+            .units()
+            .iter()
+            .find(|unit| unit.text.contains("313674-1"))
+            .unwrap();
+        assert!(
+            row.features
+                .dates
+                .iter()
+                .all(|mention| mention.column_issue)
+        );
     }
 
     /// A row of dates under a header row: the header names each column's

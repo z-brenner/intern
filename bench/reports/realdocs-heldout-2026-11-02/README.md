@@ -203,6 +203,57 @@ still never dates the document. The rest of the rule stands:
 
 **Speed.** p50 13.3 s per document, p95 37 s, at most 75 s, on a 4-core x86-64 host.
 
+## Afterwards: an inside address, and a title cut at its citation (in-sample)
+
+Two of the three wrong names still ready had faults the document itself settles.
+
+**A letter's inside address names its addressee.** FEC's advisory opinion was filed as
+"Advisory Opinion - Chicago Mercantile Exchange", with no joining word. It is a letter in form.
+Its inside address names CME's general counsel and, under him, CME, above "Dear Mr.
+O'Kelly:". #51's inside-address rule passed it by, for three reasons:
+- the rule read only letters and notices, and an "Advisory Opinion" is neither;
+- "Chicago Mercantile Exchange" ends on no word that marks an organization;
+- the reply had named CME already, as the opinion's sender, and the counsel as its signatory.
+
+Now:
+- **A document of no known class laid out as a letter** is read the same way.
+- **Under the addressed person, a line that is exactly a party the reply named** counts as
+  their organization.
+- **When the reply called that organization the sender or the issuer**, the inside address
+  makes it the addressee. Any other role stands, so a notice about the company it is addressed
+  to stays "for" it.
+
+**A title stops at "pursuant".** The deposition notice was filed as "Notice of Deposition
+Pursuant to Rule". Its title, "NOTICE OF DEPOSITION PURSUANT TO RULE 30(b)(6)", ran on to the
+rule's number, which a type never keeps. "Pursuant" introduces the authority a document is
+given under, not what it is, so a title now stops there.
+
+| | Before | After |
+|---|---:|---:|
+| This set: right, adjudicated | 16/60 | **19/60** |
+| This set: wrong names ready | 3 | **1** |
+
+**What changed:**
+- **This set:**
+  - FEC's advisory opinion is right and ready: "Advisory Opinion to Chicago Mercantile
+    Exchange".
+  - The deposition notice is right and ready: "Notice of Deposition between Girafa.com, Inc
+    and Amazon.com, Inc".
+  - FDA's letter to Collegium is right: "Letter to Collegium Pharmaceutical, Inc.". The reply
+    had called Collegium its issuer. The name stays in review: a bare "Letter" always does.
+  - DOE's enforcement letter names Packaging Specialties, Inc., its addressee, in place of the
+    chief executive the reply named. Its type is still the generic "Document", so it stays in
+    review.
+  - PHMSA's notice of probable violation, which the reply said Dakota Gasification issued, is
+    now "to" Dakota Gasification rather than "for" it. The gold accepts both, and it is right
+    and ready either way.
+- **First set:** the FTC's closing letter names Loeb & Loeb LLP, its addressee, in place of the
+  FTC with no joining word. Its type is still "Document", so it stays in review.
+- **Everywhere else:** CUAD and InternBench (ten recordings) are unchanged.
+
+**The last wrong name ready** is the notice of related action, filed "for" the defendant,
+Ricoh. The reply named only Ricoh, and Intern does not yet add a caption's other side.
+
 ## Reproduce
 
 ```bash

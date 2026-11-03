@@ -129,8 +129,11 @@ pub(crate) fn has_a_kind(words: &[String]) -> bool {
 const LEFT_STOPS: &[&str] = &["this", "the", "a", "an", "our", "your", "its"];
 
 /// Words after which a title line stops naming the document: its date
-/// ("EFFECTIVE SEPTEMBER 1, 2024", "Date reported: ..."), its page.
+/// ("EFFECTIVE SEPTEMBER 1, 2024", "Date reported: ..."), its page, or the
+/// authority it is given under ("NOTICE OF DEPOSITION PURSUANT TO RULE
+/// 30(b)(6)"), which its number would cut to a dangling "Pursuant to Rule".
 const TITLE_STOPS: &[&str] = &[
+    "pursuant",
     "no",
     "number",
     "effective",
@@ -778,6 +781,11 @@ mod tests {
                 Some("Trade Credit Application"),
             ),
             ("Kingsfold Community Bank", "statement", None),
+            (
+                "NOTICE OF DEPOSITION PURSUANT TO RULE 30(b)(6)",
+                "notice",
+                Some("Notice of Deposition"),
+            ),
         ] {
             assert_eq!(title_phrase(line, head).as_deref(), phrase, "{line}");
         }
