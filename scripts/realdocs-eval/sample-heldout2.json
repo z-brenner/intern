@@ -2022,7 +2022,7 @@
       "why": "docket stamp of the agency that filed the copy"
      }
     ],
-    "expected_readiness": "review"
+    "expected_readiness": "needs_review"
    }
   },
   {
@@ -2571,7 +2571,7 @@
       "why": "facility, not a party"
      }
     ],
-    "expected_readiness": "review"
+    "expected_readiness": "needs_review"
    }
   },
   {
@@ -5488,7 +5488,7 @@
       "why": "file creator in metadata"
      }
     ],
-    "expected_readiness": "review"
+    "expected_readiness": "needs_review"
    }
   },
   {
@@ -5601,7 +5601,7 @@
       "why": "GLA case officer"
      }
     ],
-    "expected_readiness": "review"
+    "expected_readiness": "needs_review"
    }
   },
   {
@@ -5668,7 +5668,7 @@
      }
     ],
     "forbidden_parties": [],
-    "expected_readiness": "review"
+    "expected_readiness": "needs_review"
    }
   },
   {
