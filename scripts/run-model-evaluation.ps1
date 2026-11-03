@@ -94,10 +94,11 @@ function Get-FreePort {
 
 $ModelPath = Get-PinnedModel -Spec $ModelSpec -Directory $ModelDirectory
 # The llama.cpp build the app runs the tier on: upstream llama.cpp, in the
-# runtime's llama-upstream folder, for the accurate model; the PrismML fork at
-# the runtime's root, whose PQ2_0 kernels the Bonsai model needs, for the fast
-# one. Each loads the DLLs installed beside it.
-$ServerRelative = if ($Tier -eq "accurate") { "llama-upstream/llama-server.exe" } else { "llama-server.exe" }
+# runtime's llama-upstream folder, for both Qwen3.5 models (tiers.rs
+# server_runtime). The PrismML fork at the runtime's root, whose PQ2_0 kernels
+# the Bonsai models needed, runs nothing the manifest pins. The server loads
+# the DLLs installed beside it.
+$ServerRelative = "llama-upstream/llama-server.exe"
 $Server = [IO.Path]::GetFullPath((Join-Path $Runtime $ServerRelative))
 if (-not (Test-Path -LiteralPath $Server -PathType Leaf)) { throw "Staged runtime has no $ServerRelative for the $Tier tier" }
 

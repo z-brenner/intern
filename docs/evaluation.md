@@ -130,11 +130,11 @@ npm run fixtures
 
 The committed recordings were made with the model and request of the build
 that recorded them, without a prompt profile, and CI replays them that way.
-The app asks both Bonsai models through the `bonsai_2` profile; a recording of
-that request is made with `-PromptProfile bonsai_2` (`--prompt-profile
-bonsai_2` to `intern-evaluate`, `intern-analyze` and InternBench), and replays
-only with the same option, since the profile is part of every prompt's
-identity.
+The Bonsai 2 models an earlier build pinned were asked through the `bonsai_2`
+profile; a recording of that request is made with `-PromptProfile bonsai_2`
+(`--prompt-profile bonsai_2` to `intern-evaluate`, `intern-analyze` and
+InternBench), and replays only with the same option, since the profile is part
+of every prompt's identity. Neither pinned model has a profile.
 
 The script refuses a model whose SHA-256 is not the one `model-manifest.json`
 pins, starts `llama-server` with the flags the app itself uses (one slot, CPU,
@@ -150,13 +150,12 @@ report's summary in `docs/model-bakeoff.md`.
 ## Recording elsewhere
 
 The engine and the worker are portable; only the packaged runtime is not. The
-committed recordings were made on Linux with the same pinned model (Qwen3.5 2B,
-the accurate tier) and an upstream llama.cpp CPU build from source, before the
-runtime moved to the PrismML fork's `prism-b10826-c9c34bc` release; the
-77-document evaluation (`bench/reports/bonsai-linux-cpu-2026-10-27`) found that
-release reads the same model the same way, within run-to-run noise, and the
-same run on upstream `b11946` - the build the accurate model runs on now, Prism
-running only the quick one - read it no less accurately
+committed recordings were made on Linux with the pinned accurate model and an
+upstream llama.cpp CPU build. The 77-document evaluation
+(`bench/reports/bonsai-linux-cpu-2026-10-27`) found the PrismML fork's
+`prism-b10826-c9c34bc` release reads Qwen3.5 2B the same way as a build from
+source, within run-to-run noise, and the same run on upstream `b11946` - the
+build both pinned models run on now - read it no less accurately
 (`bench/reports/speed-linux-cpu-2026-10-29`); the digest pipeline's with PDFium
 `chromium/7881` for Linux, the same pinned `tessdata_fast` files, and the
 distribution's Tesseract 5.3.4 rather than the vcpkg 5.5.2 the installer

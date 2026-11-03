@@ -66,16 +66,15 @@ export function SetupScreen({ setup, busy, canChooseExisting, operationError, on
     <p className="setup-privacy">Your documents and filenames stay on this device. After setup, processing runs fully locally with no network dependency.</p>
     {/*
       The second model is part of what Download fetches, so it is said here,
-      before anything is fetched - that nobody waits for it, and that until
-      it arrives every name waits for a check, which is what the quick
-      model's readings always do.
+      before anything is fetched - that nobody waits for it, and that what
+      the quick model names meanwhile is read again by the accurate one.
     */}
     <details className="setup-details">
       <summary>What gets downloaded</summary>
       <p>{first
         ? `The quick model, ${first.displayName}${size ? ` (${size})` : ''}, to start naming documents`
         : `${size ? `${size} of ` : ''}model files`}, or the matching files if you already have them on this computer.</p>
-      {accurate && accurate.state !== 'ready' && <p>{accurate.displayName}{accurate.totalBytes > 0 ? ` (${formatBytes(accurate.totalBytes)})` : ''}, the accurate model, then follows in the background while you work. Until it arrives, every name waits for you to check it.</p>}
+      {accurate && accurate.state !== 'ready' && <p>{accurate.displayName}{accurate.totalBytes > 0 ? ` (${formatBytes(accurate.totalBytes)})` : ''}, the accurate model, then follows in the background while you work. Until it arrives, the quick model reads, and the accurate one reads those documents again unless you have acted on them.</p>}
     </details>
     {/*
       The other way in. A hosted model needs no download, but it sends the

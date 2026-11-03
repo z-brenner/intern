@@ -29,8 +29,8 @@ export const DEMO_OUTPUT_FOLDER = 'C:\\Intern\\Output';
  * one setup downloads first, which is all a person waits for, and the
  * accurate one that follows behind the window.
  */
-export const FAST_MODEL_BYTES = 517_312_992;
-export const ACCURATE_MODEL_BYTES = 1_280_835_840;
+export const FAST_MODEL_BYTES = 2_740_937_888;
+export const ACCURATE_MODEL_BYTES = 5_680_522_464;
 /** What setup downloads before the first document: the fast model. */
 export const PINNED_MODEL_BYTES = FAST_MODEL_BYTES;
 
@@ -331,7 +331,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // the fast one is in place.
   let accurate: TierSetup = {
     tier: 'accurate',
-    displayName: 'Qwen3.5 2B',
+    displayName: 'Qwen3.5 9B',
     ...(setup.state === 'ready'
       ? { state: 'ready', downloadedBytes: ACCURATE_MODEL_BYTES }
       : { state: 'required', downloadedBytes: 0 }),
@@ -339,13 +339,13 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     ...options.accurate,
   };
   // The quick model's own entry, when it is not the one setup is about: as
-  // after an upgrade from the single-model build, which left only the
-  // accurate model and fetches the quick one only when asked.
+  // when only the accurate model's file was chosen from disk, which leaves
+  // the quick one to be fetched when asked.
   let quick: TierSetup | undefined = options.quick && {
-    tier: 'fast', displayName: 'Bonsai 2 2B', state: 'required', downloadedBytes: 0, totalBytes: FAST_MODEL_BYTES, ...options.quick,
+    tier: 'fast', displayName: 'Qwen3.5 4B', state: 'required', downloadedBytes: 0, totalBytes: FAST_MODEL_BYTES, ...options.quick,
   };
   const tiers = (): TierSetup[] => [
-    quick ? { ...quick } : { tier: 'fast', displayName: 'Bonsai 2 2B', state: setup.state, downloadedBytes: setup.downloadedBytes, totalBytes: setup.totalBytes, error: setup.state === 'failed' ? setup.error : undefined },
+    quick ? { ...quick } : { tier: 'fast', displayName: 'Qwen3.5 4B', state: setup.state, downloadedBytes: setup.downloadedBytes, totalBytes: setup.totalBytes, error: setup.state === 'failed' ? setup.error : undefined },
     { ...accurate },
   ];
   // Without a deployment the demo opens straight into the app; pass 0 to walk

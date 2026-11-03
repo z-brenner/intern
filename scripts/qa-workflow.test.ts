@@ -209,12 +209,14 @@ it('sets a stale sign-off aside on the QA runner before anything else runs', asy
   expect(steps[1]).toContain('node scripts/release-preflight.mjs --set-aside-stale-signoff --root=.');
 });
 
-// CI_RELEASE_DOCS-8. Release bounds its scoring step at an hour because a wedged
-// llama-server once held a job open; QA had no bound and no log.
+// CI_RELEASE_DOCS-8. Release bounds its scoring step because a wedged
+// llama-server once held a job open; QA had no bound and no log. The bound is
+// two and a half hours: Qwen3.5 9B reads the corpus in about five times the
+// 2B's 13 minutes on the runner's two threads.
 it('qa_scoring_has_timeout_and_log', async () => {
   const steps = stepsOf(jobOf(await readFile('.github/workflows/qa.yml', 'utf8'), 'windows-whole-product-qa'));
   const scoring = steps.find((step) => step.includes('run-model-evaluation.ps1'))!;
-  expect(scoring).toMatch(/^ {8}timeout-minutes: 60$/m);
+  expect(scoring).toMatch(/^ {8}timeout-minutes: 150$/m);
   expect(scoring).toContain('-OutputPath docs\\qa\\model-evaluation.json 2>&1 | Tee-Object -FilePath docs\\qa\\logs\\model-evaluation.log');
   expect(scoring).toContain('New-Item -ItemType Directory docs\\qa\\logs -Force');
 });

@@ -195,10 +195,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "PP-OCR runtime tests failed" }
       - name: Score the corpus through the shipping pipeline for this exact commit
         shell: pwsh
-        # Downloads 1.19 GiB and scores the corpus with real inference, about
-        # 11 minutes when healthy. Bounded so a wedged llama-server cannot hold
-        # the job open for hours.
-        timeout-minutes: 60
+        # Downloads 5.29 GiB and scores the corpus with real inference: about
+        # an hour when healthy, since Qwen3.5 9B reads in about five times the
+        # 2B's 13 minutes. Bounded so a wedged llama-server cannot hold the job
+        # open for hours.
+        timeout-minutes: 150
         run: |
           New-Item -ItemType Directory release -Force | Out-Null
           # No $LASTEXITCODE guard: the script is PowerShell, so that variable

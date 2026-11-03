@@ -380,7 +380,7 @@ impl ServerExecutables {
     /// [`tiers::UPSTREAM_RUNTIME_FOLDER`]. Nothing here looks for either:
     /// one that is missing - a dev checkout, an install from before upstream
     /// shipped - fails to start as any server that will not start does, and
-    /// its tier is set aside while the other reads.
+    /// the tier that runs on it is set aside.
     fn in_sidecar_directory(directory: &Path) -> Self {
         let name = if cfg!(windows) {
             "llama-server.exe"
@@ -421,10 +421,10 @@ impl RuntimeLauncher for LlamaLauncher {
     /// projector for this model is 668,227,264 bytes - 637 MiB - which every
     /// user would download and hold resident for a path almost nothing takes.
     ///
-    /// Each tier gets its own runtime ([`tiers::server_runtime`]) and server
-    /// options ([`tiers::server_options`]), and is asked the way its manifest
-    /// entry's prompt profile says; the fast tier asks for token
-    /// probabilities only when the cascade can escalate on them.
+    /// Each tier gets its runtime ([`tiers::server_runtime`]) and server
+    /// options ([`tiers::server_options`]), is asked the way its manifest
+    /// entry's prompt profile says, and asks for token probabilities when
+    /// its review gate reads them.
     fn launch(
         &self,
         manifest: &ModelManifest,
@@ -1804,13 +1804,10 @@ impl AnalyzerBoundary for RuntimeModel {
                 Err(_) => reading.escalation_failed = true,
             }
         }
-        // The quick model's reading stands for a person to check - never
-        // filed on its own, whatever validation made of it, and whatever was
-        // asked for. Whether it is also read again by the accurate model is
-        // the plan's to say: a stand-in's is; one asked for by name is not.
-        if reading.tier == ModelTier::Fast {
-            tiers::hold_fast_reading(&mut analysis);
-        }
+        // A quick reading is filed as validation and the gate left it, like
+        // the accurate model's. Whether it is also read again by the accurate
+        // model is the plan's to say: a stand-in's is; one asked for by name
+        // is not.
         // Read by the accurate model: it can read now, which is the evidence
         // the provisional readings wait for.
         if reading.tier == ModelTier::Accurate {
@@ -7719,8 +7716,8 @@ mod runtime_directory_tests {
     use super::{ServerExecutables, runtime_directory_from};
 
     /// Prism's llama-server is in the sidecar folder, where the one runtime
-    /// always was, and upstream's in a folder of its own inside it; each
-    /// tier's server is its runtime's.
+    /// always was, and upstream's in a folder of its own inside it; both
+    /// tiers' server is upstream's.
     #[test]
     fn each_runtime_is_in_its_own_folder_of_the_sidecar_folder() {
         let sidecar = Path::new("/usr/lib/Intern/runtime");
@@ -7732,7 +7729,7 @@ mod runtime_directory_tests {
         let servers = ServerExecutables::in_sidecar_directory(sidecar);
         assert_eq!(servers.prism, sidecar.join(name));
         assert_eq!(servers.upstream, sidecar.join("llama-upstream").join(name));
-        assert_eq!(servers.for_tier(ModelTier::Fast), servers.prism);
+        assert_eq!(servers.for_tier(ModelTier::Fast), servers.upstream);
         assert_eq!(servers.for_tier(ModelTier::Accurate), servers.upstream);
     }
 
@@ -8401,8 +8398,7 @@ mod runtime_tests {
     use intern_engine::{
         DateRole, DocumentSource, Engine, EngineError, EngineErrorCode, EngineResult, Evidence,
         ModelFacts, ModelFile, ModelManifest, ModelPreference, ModelProposal, ModelRequest,
-        ModelRole, ModelTier, PartyFact, PartyRelation, PartyRole, PromptProfile, Proposer,
-        TierModel,
+        ModelRole, ModelTier, PartyFact, PartyRelation, PartyRole, Proposer, TierModel,
         download::CancellationToken,
         setup::ExistingModelSelection,
         tiers::{
@@ -8707,9 +8703,9 @@ mod runtime_tests {
             tier,
             model_id: format!("test-{}", tier.as_str()),
             display_name: format!("Test {}", tier.as_str()),
-            // As the embedded manifest: the quick model profiled, the
-            // accurate one asked with the production request alone.
-            prompt_profile: (tier == ModelTier::Fast).then_some(PromptProfile::Bonsai2),
+            // As the embedded manifest: both asked with the production
+            // request alone.
+            prompt_profile: None,
             files: vec![ModelFile {
                 name: name.into(),
                 role: ModelRole::Model,
@@ -9039,9 +9035,9 @@ mod runtime_tests {
         assert_eq!((hashes, self_tests), (1, 1));
         assert_eq!(relaunch("1.1.0").0, 0);
 
-        // A new server binary, which is what the self-test exercised: Prism's,
-        // which the fast model runs on.
-        std::fs::write(install.servers().prism, b"a newer server binary").unwrap();
+        // A new server binary, which is what the self-test exercised:
+        // upstream's, which the fast model runs on.
+        std::fs::write(install.servers().upstream, b"a newer server binary").unwrap();
         let (hashes, self_tests, _) = relaunch("1.1.0");
         assert_eq!((hashes, self_tests), (1, 1));
 
@@ -9914,20 +9910,22 @@ mod runtime_tests {
         assert!(install.accurate().exists(), "nothing deleted it");
     }
 
-    /// Whatever validation made of it, a reading by the quick model goes to
-    /// a person, says why, and is provisional; the accurate model's reading
-    /// of the same document is ready as validation left it.
+    /// A reading by the quick model is ready as validation left it, like the
+    /// accurate model's; made while the accurate model was wanted and not
+    /// there, it is provisional, and the accurate model's reading of the
+    /// same document is not.
     #[test]
-    fn a_quick_reading_is_never_ready() {
+    fn a_quick_reading_is_ready_as_validation_left_it_and_provisional() {
         let install = Install::new("tier-quick-review");
         let rig = Rig::new();
         let runtime = install.runtime(&rig, "1.0.0");
         verified(&runtime);
         let quick = runtime.analyze(&probe(), "pdf", &[]).unwrap();
-        assert_eq!(quick.status, intern_engine::ProposalStatus::NeedsReview);
-        assert_eq!(
-            quick.review_reasons,
-            [intern_engine::ReviewReason::FastModelReading]
+        assert_eq!(quick.status, intern_engine::ProposalStatus::Ready);
+        assert!(
+            quick.review_reasons.is_empty(),
+            "{:?}",
+            quick.review_reasons
         );
         assert!(read_by(&quick).provisional);
 
@@ -9953,14 +9951,14 @@ mod runtime_tests {
         assert_eq!(launched(&rig), [ModelTier::Fast]);
         let fast = runtime.analyze(&probe(), "pdf", &[]).unwrap();
         let reading = read_by(&fast);
-        // Asked for by name, the quick model's reading is still held for a
-        // person, but it stands in for nothing: it is not provisional, and
+        // Asked for by name, the quick model's reading is ready as validation
+        // left it and stands in for nothing: it is not provisional, and
         // nothing promises to read it again.
         assert_eq!(
             (reading.tier, reading.provisional),
             (ModelTier::Fast, false)
         );
-        assert_eq!(fast.status, intern_engine::ProposalStatus::NeedsReview);
+        assert_eq!(fast.status, intern_engine::ProposalStatus::Ready);
         assert!(!runtime.take_provisional_upgrade());
 
         world.prefer(ModelPreference::Accurate);
@@ -10149,7 +10147,7 @@ mod runtime_tests {
         let analysis = runtime.analyze(&probe(), "pdf", &[]).unwrap();
         let reading = read_by(&analysis);
         assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
-        assert_eq!(analysis.status, intern_engine::ProposalStatus::NeedsReview);
+        assert_eq!(analysis.status, intern_engine::ProposalStatus::Ready);
         runtime.analyze(&probe(), "pdf", &[]).unwrap();
         assert_eq!(rig.refused.load(Ordering::SeqCst), 1, "not tried again");
         assert_eq!(
@@ -10634,9 +10632,9 @@ mod runtime_tests {
     }
 
     /// Each tier's entry in the stamp records the server binary of the
-    /// runtime it runs on, so a new upstream build sends only the accurate
-    /// model through its checks again, and a new Prism build only the fast
-    /// one.
+    /// runtime it runs on. Both run on upstream, so a new upstream build
+    /// sends both models through their checks again, and a new Prism build,
+    /// which nothing pinned runs on, neither.
     #[test]
     fn a_new_runtime_binary_vouches_for_nothing_only_about_its_own_tier() {
         let install = Install::new("stamp-runtimes");
@@ -10660,14 +10658,16 @@ mod runtime_tests {
         assert_eq!(launch(ModelPreference::Accurate), (0, 1));
         assert_eq!(stamped(), (Some(true), Some(true)));
 
+        // A new upstream build: both digests again, then each self-test.
         std::fs::write(install.servers().upstream, b"a newer upstream build").unwrap();
-        assert_eq!(stamped(), (Some(true), None));
-        assert_eq!(launch(ModelPreference::Accurate), (1, 1));
-        assert_eq!(launch(ModelPreference::Fast), (0, 0));
+        assert_eq!(stamped(), (None, None));
+        assert_eq!(launch(ModelPreference::Accurate), (2, 1));
+        assert_eq!(launch(ModelPreference::Fast), (0, 1));
+        assert_eq!(stamped(), (Some(true), Some(true)));
 
         std::fs::write(install.servers().prism, b"a newer prism build").unwrap();
-        assert_eq!(stamped(), (None, Some(true)));
-        assert_eq!(launch(ModelPreference::Fast), (1, 1));
+        assert_eq!(stamped(), (Some(true), Some(true)));
+        assert_eq!(launch(ModelPreference::Fast), (0, 0));
         assert_eq!(launch(ModelPreference::Accurate), (0, 0));
     }
 
@@ -10691,11 +10691,13 @@ mod runtime_tests {
     }
 
     /// An install without upstream - a dev checkout, or one from before it
-    /// shipped - launches, and its accurate model fails to start exactly as
-    /// one whose Prism server is missing does: set aside for the session
-    /// while the fast model reads. Prism's server is not started in its place.
+    /// shipped - launches, and its accurate model fails to start as any
+    /// server that will not start does: set aside for the session while the
+    /// fast model reads. Prism's server, which nothing pinned runs on, is not
+    /// started in its place, and the fast model fails the same way on the
+    /// real launcher.
     #[test]
-    fn a_missing_runtime_fails_to_start_as_a_missing_prism_does() {
+    fn a_missing_runtime_fails_to_start_and_prism_never_stands_in() {
         let install = Install::new("missing-runtime");
         install.install_accurate();
         let servers = install.servers();
@@ -10735,14 +10737,15 @@ mod runtime_tests {
         #[cfg(unix)]
         assert_eq!(stand_in_ran_in(&servers.prism), Vec::<PathBuf>::new());
 
-        std::fs::remove_file(&servers.prism).unwrap();
-        let Err(prism_missing) = launcher().launch(&manifest(), ModelTier::Fast) else {
-            panic!("a missing Prism server started");
+        let Err(fast_missing) = launcher().launch(&manifest(), ModelTier::Fast) else {
+            panic!("the fast model started without its upstream server");
         };
         assert_eq!(
             (upstream_missing.code, upstream_missing.message),
-            (prism_missing.code, prism_missing.message)
+            (fast_missing.code, fast_missing.message)
         );
+        #[cfg(unix)]
+        assert_eq!(stand_in_ran_in(&servers.prism), Vec::<PathBuf>::new());
     }
 
     /// Makes `server` a stand-in llama-server that notes, beside itself, the
@@ -10768,12 +10771,11 @@ mod runtime_tests {
         folders
     }
 
-    /// Each tier's server is started from its own runtime, in that runtime's
-    /// folder: the fast model's from Prism's, the accurate model's from
-    /// upstream's.
+    /// Both tiers' servers are started from upstream's runtime, in its
+    /// folder, and Prism's is never started.
     #[cfg(unix)]
     #[test]
-    fn each_tier_is_launched_on_its_own_runtime_in_its_folder() {
+    fn each_tier_is_launched_on_the_upstream_runtime_in_its_folder() {
         let install = Install::new("launch-runtimes");
         install.install_accurate();
         let servers = install.servers();
@@ -10789,8 +10791,11 @@ mod runtime_tests {
             panic!("the stand-in server exits");
         };
         assert_eq!(error.code, "MODEL_SERVER_START_FAILED");
-        assert_eq!(stand_in_ran_in(&servers.prism), [root.clone()]);
-        assert_eq!(stand_in_ran_in(&servers.upstream), Vec::<PathBuf>::new());
+        assert_eq!(
+            stand_in_ran_in(&servers.upstream),
+            [root.join("llama-upstream")]
+        );
+        assert_eq!(stand_in_ran_in(&servers.prism), Vec::<PathBuf>::new());
 
         let Err(error) = launcher.launch(&manifest(), ModelTier::Accurate) else {
             panic!("the stand-in server exits");
@@ -10800,7 +10805,7 @@ mod runtime_tests {
             stand_in_ran_in(&servers.upstream),
             [root.join("llama-upstream")]
         );
-        assert_eq!(stand_in_ran_in(&servers.prism), [root]);
+        assert_eq!(stand_in_ran_in(&servers.prism), Vec::<PathBuf>::new());
     }
 
     /// The real llama-server through a whole lifecycle: start and verify,
