@@ -1,0 +1,103 @@
+{
+  "build": "cargo build --release --locked -p intern-bench --features benchmark-transport",
+  "provenance": {
+    "control": {
+      "cwd": "/workspace/intern/.worktrees/normalization-control",
+      "binary": "/workspace/intern/target/cpu-normalization/control-matched/intern-bench",
+      "source_commit": "a045a341bbdef00a6a405828bf5d974411e2b094",
+      "binary_sha256": "aca93a76ec71391b45655d35183365c20e58083d1810b825bfcfd8d95c895c99"
+    },
+    "candidate": {
+      "cwd": "/workspace/intern",
+      "binary": "/workspace/intern/target/cpu-normalization/candidate/intern-bench",
+      "source_commit": "62074471f612d4ee6f45802f75a1902450054bb4",
+      "binary_sha256": "cb24650f636b0376a3589743800be32ebe32ce48ca14273067fab51a4f2deb8d"
+    }
+  },
+  "all_77_outputs_identical": true,
+  "runs": [
+    {
+      "run": 0,
+      "arm": "control",
+      "elapsed_s": 9.945460045000118,
+      "user_s": 9.848978,
+      "system_s": 0.095673,
+      "maxrss_kib": 35760,
+      "index_total_ms": 1549.999,
+      "retrieval_total_ms": 61.337
+    },
+    {
+      "run": 1,
+      "arm": "candidate",
+      "elapsed_s": 4.916509371000075,
+      "user_s": 4.890617,
+      "system_s": 0.023868,
+      "maxrss_kib": 35900,
+      "index_total_ms": 1003.911,
+      "retrieval_total_ms": 56.777
+    },
+    {
+      "run": 2,
+      "arm": "candidate",
+      "elapsed_s": 4.88002461699989,
+      "user_s": 4.847173,
+      "system_s": 0.031972,
+      "maxrss_kib": 35696,
+      "index_total_ms": 1007.611,
+      "retrieval_total_ms": 56.372
+    },
+    {
+      "run": 3,
+      "arm": "control",
+      "elapsed_s": 9.518193883000095,
+      "user_s": 9.464797,
+      "system_s": 0.051001,
+      "maxrss_kib": 35760,
+      "index_total_ms": 1566.114,
+      "retrieval_total_ms": 60.352000000000004
+    },
+    {
+      "run": 4,
+      "arm": "control",
+      "elapsed_s": 9.489794692000032,
+      "user_s": 9.434146,
+      "system_s": 0.053534,
+      "maxrss_kib": 35920,
+      "index_total_ms": 1532.247,
+      "retrieval_total_ms": 60.599
+    },
+    {
+      "run": 5,
+      "arm": "candidate",
+      "elapsed_s": 4.910825823000096,
+      "user_s": 4.861326,
+      "system_s": 0.047698,
+      "maxrss_kib": 35700,
+      "index_total_ms": 1010.991,
+      "retrieval_total_ms": 56.357
+    }
+  ],
+  "limits": "Replay/scoring and deterministic index/retrieval timing only, no model inference. Linux OS ru_maxrss per child.",
+  "summary": {
+    "control": {
+      "replay_p50_s": 9.518193883000095,
+      "replay_min_s": 9.489794692000032,
+      "replay_max_s": 9.945460045000118,
+      "index_total_p50_ms": 1549.999,
+      "retrieval_total_p50_ms": 60.599,
+      "peak_rss_kib": 35920
+    },
+    "candidate": {
+      "replay_p50_s": 4.910825823000096,
+      "replay_min_s": 4.88002461699989,
+      "replay_max_s": 4.916509371000075,
+      "index_total_p50_ms": 1007.611,
+      "retrieval_total_p50_ms": 56.372,
+      "peak_rss_kib": 35900
+    },
+    "replay_reduction_percent": 48.40590679949226,
+    "index_reduction_percent": 34.99279676954631
+  },
+  "cgroup_cpu_max": "400000 100000",
+  "cgroup_memory_max": "17179869184"
+}
