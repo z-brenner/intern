@@ -1,0 +1,1695 @@
+{
+ "classes": {
+  "generic_type": "type generic or missing (\"Document\", a bare \"Letter\" or \"Invoice\")",
+  "other_document": "type names another document or the wrong kind",
+  "person": "a person named instead of the organization",
+  "missing_date": "no date read",
+  "event_date": "a date the document mentions, not its own",
+  "relation_missing": "the joining word missing, the party not the issuer (\"Type - Addressee\")",
+  "no_party": "no party named",
+  "customer": "an invoice's customer or agency named as its issuer",
+  "other_party": "a party the document only mentions, or a label read as a name",
+  "ocr": "OCR: a handwritten or historic hand it cannot read"
+ },
+ "states": {
+  "before": "main at #49, before any rule written from a real set",
+  "after": "main at #55 (the rules of #51, #52, #54 and #55)"
+ },
+ "readings": [
+  {
+   "id": "real3-letter-01",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2026-06-05 Decision Letter to NBA Properties, Inc.pdf",
+    "2026-06-05 Letter to NBA Properties, Inc.pdf",
+    "2026-06-05 Review Board Decision to NBA Properties, Inc.pdf"
+   ],
+   "before": {
+    "filename": "2026-06-05 Ii Administrative Record for Anil V. George.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2026-06-05 Ii Administrative Record for Anil V. George.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "TYPE_INFERRED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "other_document",
+     "person"
+    ]
+   }
+  },
+  {
+   "id": "real3-letter-02",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2011-02-18 Reminder Letter to Panther Motors, Inc.pdf",
+    "2011-02-18 Letter to Panther Motors, Inc.pdf",
+    "2011-02-18 Notice Letter to Panther Motors, Inc.pdf"
+   ],
+   "before": {
+    "filename": "2011-02-18 Notice - National Highway Traffic Safety Administration.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2011-02-18 Notice to Panther Motors, Inc.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "TYPE_MISSING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "other_document"
+    ]
+   }
+  },
+  {
+   "id": "real3-letter-03",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2023-03-28 Decision Letter to Good Energy.pdf",
+    "2023-03-28 Letter to Good Energy.pdf",
+    "2023-03-28 Derogation Decision to Good Energy.pdf"
+   ],
+   "before": {
+    "filename": "2023-03-28 Document - Good Energy Limited.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2023-03-28 Document - Good Energy Limited.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type"
+    ]
+   }
+  },
+  {
+   "id": "real3-letter-04",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2010-07-23 Approval Letter to DG ENER.pdf",
+    "2010-07-23 Letter to DG ENER.pdf",
+    "2010-07-23 Response Letter to DG ENER.pdf"
+   ],
+   "before": {
+    "filename": "2010-07-23 Letter from Agency for the Cooperation of Energy Regulators.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2010-07-23 Letter from Agency for the Cooperation of Energy Regulators.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_MISSING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "right",
+    "classes": []
+   }
+  },
+  {
+   "id": "real3-letter-05",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2023-06-16 Letter to Target Corporation.pdf",
+    "2023-06-16 Multistate Letter to Target Corporation.pdf",
+    "2023-06-16 Attorneys General Letter to Target Corporation.pdf"
+   ],
+   "before": {
+    "filename": "2023-06-16 Document - Target Corporation.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2023-06-16 Document to Target Corporation.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type"
+    ]
+   }
+  },
+  {
+   "id": "real3-letter-06",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "1976-11-18 Letter to Los Alamos Scientific Laboratory.pdf",
+    "1976-11-18 Response Letter to Los Alamos Scientific Laboratory.pdf",
+    "1976-11-18 Confirmation Letter to Los Alamos Scientific Laboratory.pdf"
+   ],
+   "before": {
+    "filename": "1976-11-18 Document - Pacific Northwest Laboratories.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "1976-11-18 Document - Pacific Northwest Laboratories.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type"
+    ]
+   }
+  },
+  {
+   "id": "real3-letter-07",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "1966-01-04 Letter to U.S. Atomic Energy Commission.pdf",
+    "1966-01-04 Response Letter to U.S. Atomic Energy Commission.pdf",
+    "1966-01-04 Reply Letter to U.S. Atomic Energy Commission.pdf"
+   ],
+   "before": {
+    "filename": "Document - Paul G. Holsted.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Document - Paul G. Holsted.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_UNSUPPORTED",
+     "PARSER_WARNING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "missing_date",
+     "person"
+    ]
+   }
+  },
+  {
+   "id": "real3-letter-08",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "1995-12-07 Decision Letter to Bloom & Kreten.pdf",
+    "1995-12-07 Letter to Bloom & Kreten.pdf",
+    "1995-12-07 Appeal Decision to Bloom & Kreten.pdf"
+   ],
+   "before": {
+    "filename": "1995-12-07 Register of Copyrights for Bernhard Kreten.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "1995-12-07 Register of Copyrights for Bernhard Kreten.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "other_document",
+     "person"
+    ]
+   }
+  },
+  {
+   "id": "real3-letter-09",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "1992-12-24 Objection Letter to Pilcher and Pilcher.pdf",
+    "1992-12-24 Letter to Pilcher and Pilcher.pdf",
+    "1992-12-24 Section 5 Objection Letter to Pilcher and Pilcher.pdf"
+   ],
+   "before": {
+    "filename": "Document.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Document.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_UNSUPPORTED",
+     "PARTY_UNSUPPORTED",
+     "DESCRIPTION_INVALID"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "missing_date",
+     "no_party"
+    ]
+   }
+  },
+  {
+   "id": "real3-letter-10",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2019-03-28 Response Letter to Transport Scotland.pdf",
+    "2019-03-28 Letter to Transport Scotland.pdf",
+    "2019-03-28 Response Letter from Office of Rail and Road.pdf"
+   ],
+   "before": {
+    "filename": "2019-03-28 Letter - John Larkinson.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2019-03-28 Letter - John Larkinson.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_MISSING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "person"
+    ]
+   }
+  },
+  {
+   "id": "real3-letter-11",
+   "kind": "letter",
+   "format": "tiff",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1907-12-26 Acknowledgment Letter to Wright Brothers.tif",
+    "1907-12-26 Letter to Wright Brothers.tif",
+    "1907-12-26 Response Letter to Wright Brothers.tif"
+   ],
+   "before": {
+    "filename": "1907-12-26 Letter - Wright Brothers.tif",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "1907-12-26 Letter - Wright Brothers.tif",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_MISSING"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "relation_missing"
+    ]
+   }
+  },
+  {
+   "id": "real3-letter-12",
+   "kind": "letter",
+   "format": "jpg",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1907-12-18 Comment Letter to Office of the Chief Signal Officer.jpg",
+    "1907-12-18 Letter to Office of the Chief Signal Officer.jpg",
+    "1907-12-18 Response Letter to Office of the Chief Signal Officer.jpg"
+   ],
+   "before": {
+    "filename": "Document from Orville Wright.jpg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Document from Orville Wright.jpg",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "missing_date",
+     "person"
+    ]
+   }
+  },
+  {
+   "id": "real3-letter-13",
+   "kind": "letter",
+   "format": "tiff",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1908-02-11 Transmittal Letter to Wright Brothers.tif",
+    "1908-02-11 Letter to Wright Brothers.tif",
+    "1908-02-11 Cover Letter to Wright Brothers.tif"
+   ],
+   "before": {
+    "filename": "1908-02-11 Contract with Wright Brothers.tif",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "1908-02-11 Contract with Wright Brothers.tif",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "PARTY_MISSING"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "other_document"
+    ]
+   }
+  },
+  {
+   "id": "real3-letter-14",
+   "kind": "letter",
+   "format": "txt",
+   "text_layer": "text",
+   "gold_filenames": [
+    "2005-12-14 Dear Colleague Letter from National Science Foundation.txt",
+    "2005-12-14 Letter from National Science Foundation.txt",
+    "2005-12-14 Dear Colleague Letter from NSF.txt"
+   ],
+   "before": {
+    "filename": "2005-12-14 Strategic Plan for Arden L. Bement Jr.txt",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2005-12-14 Strategic Plan for Arden L. Bement Jr.txt",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "TYPE_INFERRED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "other_document",
+     "person"
+    ]
+   }
+  },
+  {
+   "id": "real3-notice-01",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2024-02-19 Improvement Notice for The Chiltern Railway Company Limited.pdf",
+    "2024-02-19 Notice for The Chiltern Railway Company Limited.pdf",
+    "2024-02-19 Enforcement Notice for The Chiltern Railway Company Limited.pdf"
+   ],
+   "before": {
+    "filename": "2024-06-01 Improvement Notice - The Chiltern Railway Company Limited.pdf",
+    "readiness": "ready",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2024-06-01 Improvement Notice - The Chiltern Railway Company Limited.pdf",
+    "readiness": "ready",
+    "review_reasons": [],
+    "adjudicated": "wrong",
+    "classes": [
+     "event_date",
+     "relation_missing"
+    ]
+   }
+  },
+  {
+   "id": "real3-notice-02",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2007-04-24 Notice of Public Site Visit and Informational Hearing for City of Victorville.pdf",
+    "2007-04-24 Notice of Hearing for City of Victorville.pdf",
+    "2007-04-24 Notice of Informational Hearing for City of Victorville.pdf"
+   ],
+   "before": {
+    "filename": "2007-04-24 Application for Certification for the Victorville.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2007-04-24 Application for Certification for the Victorville.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "TYPE_INFERRED",
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "other_document",
+     "other_party"
+    ]
+   }
+  },
+  {
+   "id": "real3-notice-03",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2017-08-25 Notice of Removal with Lubrizol Advanced Materials, Inc.pdf",
+    "2017-08-25 Notice with Lubrizol Advanced Materials, Inc.pdf",
+    "2017-08-25 Notice of Removal with National Union Fire Insurance Company of Pittsburgh, Pa.pdf"
+   ],
+   "before": {
+    "filename": "2017-08-25 Notice of Removal from Lubrizol Advanced Materials, Inc.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2017-08-25 Notice of Removal with Lubrizol Advanced Materials, Inc.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "right",
+    "classes": []
+   }
+  },
+  {
+   "id": "real3-notice-04",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2006-02-23 Notice of Determination from City of Industry.pdf",
+    "2006-02-27 Notice of Determination from City of Industry.pdf",
+    "2006-02-23 Notice from City of Industry.pdf"
+   ],
+   "before": {
+    "filename": "Notice of Determination - County Clerk County of Los Angeles.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Notice of Determination - County Clerk County of Los Angeles.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "missing_date",
+     "other_party"
+    ]
+   }
+  },
+  {
+   "id": "real3-notice-05",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2008-09-22 Notice of Hearing from Mojave Desert Air Quality Management District.pdf",
+    "2008-09-22 Notice from Mojave Desert Air Quality Management District.pdf",
+    "2008-09-22 Public Notice from Mojave Desert Air Quality Management District.pdf"
+   ],
+   "before": {
+    "filename": "Notice of Hearing for Eldon Heaston.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Notice of Hearing for Eldon Heaston.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "missing_date",
+     "person"
+    ]
+   }
+  },
+  {
+   "id": "real3-notice-06",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2025-06-16 Notice of Decision to Impose a Financial Penalty for Farringdon Energy Limited.pdf",
+    "2025-06-16 Penalty Notice for Farringdon Energy Limited.pdf",
+    "2025-06-16 Notice of Decision for Farringdon Energy Limited.pdf"
+   ],
+   "before": {
+    "filename": "2025-06-16 Notice of Decision to Impose a Financial Penalty Pursuant - Farringdon Energy Limited.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2025-06-16 Notice of Decision to Impose a Financial Penalty - Farringdon Energy Limited.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "relation_missing"
+    ]
+   }
+  },
+  {
+   "id": "real3-notice-07",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2023-04-07 Notice of Violation for PacifiCorp.pdf",
+    "2023-04-07 Notice for PacifiCorp.pdf",
+    "2023-04-07 Letter for PacifiCorp.pdf"
+   ],
+   "before": {
+    "filename": "2023-04-07 Notice of Violation - Shelley McCoy.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2023-04-07 Notice of Violation - Shelley McCoy.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "person"
+    ]
+   }
+  },
+  {
+   "id": "real3-notice-08",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2018-01-26 Notice of Removal between Olymbec USA LLC and CWFS Insight LLC.pdf",
+    "2018-01-26 Notice between Olymbec USA LLC and CWFS Insight LLC.pdf",
+    "2018-01-26 Notice of Removal between CWFS Insight LLC and Olymbec USA LLC.pdf"
+   ],
+   "before": {
+    "filename": "2018-01-22 Notice of Removal - Olymbec USA LLC.pdf",
+    "readiness": "ready",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2018-01-22 Notice of Removal - Olymbec USA LLC.pdf",
+    "readiness": "ready",
+    "review_reasons": [],
+    "adjudicated": "wrong",
+    "classes": [
+     "event_date",
+     "relation_missing"
+    ]
+   }
+  },
+  {
+   "id": "real3-notice-09",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2017-12-15 Notice of Appeal between NCL (Bahamas) Ltd and O.W. Bunker USA Inc.pdf",
+    "2017-12-15 Notice between NCL (Bahamas) Ltd and O.W. Bunker USA Inc.pdf",
+    "2017-12-15 Notice of Appeal between O.W. Bunker USA Inc and NCL (Bahamas) Ltd.pdf"
+   ],
+   "before": {
+    "filename": "2017-12-15 Notice of Appeal from NCL (BAHAMAS) LTD.pdf",
+    "readiness": "ready",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2017-12-15 Notice of Appeal between NCL (BAHAMAS) LTD and O.W. BUNKER USA INC.pdf",
+    "readiness": "ready",
+    "review_reasons": [],
+    "adjudicated": "right",
+    "classes": []
+   }
+  },
+  {
+   "id": "real3-notice-10",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [],
+   "before": {
+    "filename": "2025-12-01 Notice of Opportunity for Public Comment - The Boeing Company.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "no gold name (no date printed)"
+   },
+   "after": {
+    "filename": "2025-12-01 Notice of Opportunity for Public Comment - The Boeing Company.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "no gold name (no date printed)",
+    "classes": []
+   }
+  },
+  {
+   "id": "real3-notice-11",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2023-11-13 Revocation of Product Approval for Atlantis Hydrotec.pdf",
+    "2023-11-13 Notice of Revocation for Atlantis Hydrotec.pdf",
+    "2023-11-13 Revocation Notice for Atlantis Hydrotec.pdf"
+   ],
+   "before": {
+    "filename": "2023-11-13 Document - Department for Environment, Food and Rural Affairs.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2023-11-13 Document - Department for Environment, Food and Rural Affairs.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "other_party"
+    ]
+   }
+  },
+  {
+   "id": "real3-notice-12",
+   "kind": "notice",
+   "format": "jpg",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1884-12-29 Notice for William Dew.jpg",
+    "1884-12-29 Public Notice for William Dew.jpg",
+    "1884-12-29 Animals Order Notice for William Dew.jpg"
+   ],
+   "before": {
+    "filename": "1884-12-29 Animals Order - William Dew.jpg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "1884-12-29 Animals Order - William Dew.jpg",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "DATE_IMPLAUSIBLE",
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "other_document"
+    ]
+   }
+  },
+  {
+   "id": "real3-notice-13",
+   "kind": "notice",
+   "format": "jpg",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1831-11-01 Notice from Parish of Clerkenwell.jpg",
+    "1831-11-01 Public Notice from Parish of Clerkenwell.jpg",
+    "1831-11-01 Public Health Notice from Parish of Clerkenwell.jpg"
+   ],
+   "before": {
+    "filename": "1831-11-01 Document - The Board of Health.jpg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "1831-11-01 Document - The Board of Health.jpg",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_IMPLAUSIBLE",
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "other_party"
+    ]
+   }
+  },
+  {
+   "id": "real3-notice-14",
+   "kind": "notice",
+   "format": "tif",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1867-05-01 Notice from Assessors of the City of Boston.tif",
+    "1867-05-01 Public Notice from Assessors of the City of Boston.tif",
+    "1867-05-01 Tax Notice from Assessors of the City of Boston.tif"
+   ],
+   "before": {
+    "filename": "1867-05-01 Notice to the Inhabitants and Other Persons Liable to Pay - City of Boston.tif",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "1867-05-01 Notice to the Inhabitants and Other Persons Liable to Pay - City of Boston.tif",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "DATE_IMPLAUSIBLE",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "other_document"
+    ]
+   }
+  },
+  {
+   "id": "real3-notice-15",
+   "kind": "notice",
+   "format": "txt",
+   "text_layer": "text",
+   "gold_filenames": [
+    "2026-10-14 Errata Notice from The FreeBSD Project.txt",
+    "2026-10-14 Notice from The FreeBSD Project.txt",
+    "2026-10-14 Security Notice from The FreeBSD Project.txt"
+   ],
+   "before": {
+    "filename": "2026-10-14 Errata Notice.txt",
+    "readiness": "ready",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2026-10-14 Errata Notice.txt",
+    "readiness": "ready",
+    "review_reasons": [],
+    "adjudicated": "wrong",
+    "classes": [
+     "no_party"
+    ]
+   }
+  },
+  {
+   "id": "real3-invoice-01",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2026-07-26 Invoice from WISN TV.pdf",
+    "2026-07-26 Invoice from WISN-TV.pdf",
+    "2026-07-26 Invoice from WISN.pdf"
+   ],
+   "before": {
+    "filename": "2026-07-26 Invoice - Wisn TV.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2026-07-26 Invoice.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "PARTY_MISSING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "no_party"
+    ]
+   }
+  },
+  {
+   "id": "real3-invoice-02",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2026-09-30 Invoice from KSAZ.pdf",
+    "2026-09-30 Invoice from KSAZ-TV.pdf",
+    "2026-09-30 Invoice from FOX 10 Phoenix.pdf"
+   ],
+   "before": {
+    "filename": "2026-09-30 Invoice from Waterfront Strategies.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2026-09-30 Invoice from Waterfront Strategies.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "customer"
+    ]
+   }
+  },
+  {
+   "id": "real3-invoice-03",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2026-05-04 Tax Invoice from International Futures Forum.pdf",
+    "2026-05-04 Invoice from International Futures Forum.pdf"
+   ],
+   "before": {
+    "filename": "2026-05-04 Tax Invoice from International Futures Forum.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2026-05-04 Tax Invoice from International Futures Forum.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "right",
+    "classes": []
+   }
+  },
+  {
+   "id": "real3-invoice-04",
+   "kind": "statement",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2019-06-19 Statement of Account from Riviera Broadcasting.pdf",
+    "2019-06-19 Statement from Riviera Broadcasting.pdf",
+    "2019-06-19 Statement of Account from KMVA-FM.pdf"
+   ],
+   "before": {
+    "filename": "2019-06-19 Statement of Account from Riviera Broadcasting.pdf",
+    "readiness": "ready",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2019-06-19 Statement of Account from Riviera Broadcasting.pdf",
+    "readiness": "ready",
+    "review_reasons": [],
+    "adjudicated": "right",
+    "classes": []
+   }
+  },
+  {
+   "id": "real3-invoice-05",
+   "kind": "statement",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2025-12-05 Statement of Account from Lotus Communications Corp.pdf",
+    "2025-12-05 Statement from Lotus Communications Corp.pdf",
+    "2025-12-05 Statement of Account from KFWB.pdf"
+   ],
+   "before": {
+    "filename": "2025-12-05 Statement of Account from Lotus Communications Corp.pdf",
+    "readiness": "ready",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2025-12-05 Statement of Account from Lotus Communications Corp.pdf",
+    "readiness": "ready",
+    "review_reasons": [],
+    "adjudicated": "right",
+    "classes": []
+   }
+  },
+  {
+   "id": "real3-invoice-06",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2014-09-26 Invoice from Idox Software Limited.pdf",
+    "2014-09-26 Invoice from Idox Software Ltd.pdf",
+    "2014-09-26 Invoice from Idox.pdf"
+   ],
+   "before": {
+    "filename": "2014-09-28 Invoice from Glasgow City Council.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2014-09-28 Invoice from Glasgow City Council.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "PARTY_UNSUPPORTED"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "event_date",
+     "other_party"
+    ]
+   }
+  },
+  {
+   "id": "real3-invoice-07",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "2017-03-08 Invoice from East Lothian Council.pdf",
+    "2017-03-08 Bill from East Lothian Council.pdf"
+   ],
+   "before": {
+    "filename": "invoice - SCOTGO0001.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "invoice.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "DATE_UNSUPPORTED",
+     "PARTY_UNSUPPORTED",
+     "PARTY_MISSING",
+     "DESCRIPTION_UNSUPPORTED",
+     "DESCRIPTION_INVALID",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "missing_date",
+     "no_party",
+     "ocr"
+    ]
+   }
+  },
+  {
+   "id": "real3-invoice-08",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "gold_filenames": [
+    "2017-06-02 Invoice from Aberdeen City Council.pdf"
+   ],
+   "before": {
+    "filename": "Invoice.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Invoice.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "DATE_UNSUPPORTED",
+     "PARTY_MISSING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "missing_date",
+     "no_party"
+    ]
+   }
+  },
+  {
+   "id": "real3-invoice-09",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "scan",
+   "gold_filenames": [
+    "1916-11-04 Invoice from Mergenthaler Linotype Co.pdf",
+    "1916-11-04 Bill from Mergenthaler Linotype Co.pdf",
+    "1916-11-04 Invoice from Mergenthaler Linotype Company.pdf"
+   ],
+   "before": {
+    "filename": "Invoice from Dr. ST ANDREW.pdf",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Invoice from Dr. ST ANDREW.pdf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "missing_date",
+     "ocr"
+    ]
+   }
+  },
+  {
+   "id": "real3-invoice-10",
+   "kind": "invoice",
+   "format": "tiff",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1868-10-01 Bill from Haviland & Sutton.tif",
+    "1868-10-01 Invoice from Haviland & Sutton.tif"
+   ],
+   "before": {
+    "filename": "Document from M Covace dby.tif",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Document from M Covace dby.tif",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_UNSUPPORTED",
+     "PARTY_UNSUPPORTED",
+     "DESCRIPTION_INVALID",
+     "PARSER_WARNING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "missing_date",
+     "ocr"
+    ]
+   }
+  },
+  {
+   "id": "real3-invoice-11",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1850-07-11 Bill from Henry D. Gray & Son.jpg",
+    "1850-07-11 Invoice from Henry D. Gray & Son.jpg",
+    "1850-07-11 Receipt from Henry D. Gray & Son.jpg"
+   ],
+   "before": {
+    "filename": "Document - 14 1850.jpg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Document - 14 1850.jpg",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_UNSUPPORTED",
+     "DESCRIPTION_INVALID",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "missing_date",
+     "ocr"
+    ]
+   }
+  },
+  {
+   "id": "real3-invoice-12",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1848-11-14 Bill from Veranda Hotel.jpg",
+    "1848-11-14 Invoice from Veranda Hotel.jpg",
+    "1848-11-14 Hotel Bill from Veranda Hotel.jpg"
+   ],
+   "before": {
+    "filename": "Document from Mr 29. Wonior.jpg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Document from Mr 29. Wonior.jpg",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_UNSUPPORTED",
+     "PARTY_UNSUPPORTED",
+     "DESCRIPTION_UNSUPPORTED",
+     "DESCRIPTION_INVALID",
+     "PARSER_WARNING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "missing_date",
+     "ocr"
+    ]
+   }
+  },
+  {
+   "id": "real3-invoice-13",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1776-07-15 Invoice from Clark & Nightingale.jpg",
+    "1776-07-15 Shipping Invoice from Clark & Nightingale.jpg"
+   ],
+   "before": {
+    "filename": "Document from J Orovidenco.jpg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Document from J Orovidenco.jpg",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_UNSUPPORTED",
+     "PARTY_UNSUPPORTED",
+     "DESCRIPTION_INVALID",
+     "PARSER_WARNING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "missing_date",
+     "ocr"
+    ]
+   }
+  },
+  {
+   "id": "real3-invoice-14",
+   "kind": "receipt",
+   "format": "jpg",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1817-06-17 Receipt from Gales & Seaton.jpg",
+    "1817-06-17 Bill from Gales & Seaton.jpg",
+    "1817-06-17 Subscription Receipt from Gales & Seaton.jpg"
+   ],
+   "before": {
+    "filename": "Document from Hon Shomas Jefferson 1817 o chts & SEATON.jpg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Document from Hon Shomas Jefferson 1817 o chts & SEATON.jpg",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_UNSUPPORTED",
+     "PARSER_WARNING"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "missing_date",
+     "ocr"
+    ]
+   }
+  },
+  {
+   "id": "real3-invoice-15",
+   "kind": "receipt",
+   "format": "jpg",
+   "text_layer": "image",
+   "gold_filenames": [
+    "1848-07-01 Receipt from Post-Office, Duxbury, Mass.jpg",
+    "1848-07-01 Bill from Post-Office, Duxbury, Mass.jpg",
+    "1848-07-01 Postage Bill from Post-Office, Duxbury, Mass.jpg"
+   ],
+   "before": {
+    "filename": "Document - Frensint Aefoers.jpg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Document - Frensint Aefoers.jpg",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "DATE_UNSUPPORTED",
+     "PARTY_UNSUPPORTED",
+     "PARSER_WARNING",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "missing_date",
+     "ocr"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-01",
+   "kind": "letter",
+   "format": "docx",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2026-09-14 Consultation Response to London Borough of Islington.docx",
+    "2026-09-14 Letter to London Borough of Islington.docx",
+    "2026-09-14 Response Letter to London Borough of Islington.docx"
+   ],
+   "before": {
+    "filename": "2026-09-14 Notice from London Borough of Islington.docx",
+    "readiness": "ready",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2026-09-14 Notice from London Borough of Islington.docx",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "TYPE_MISSING"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "other_document",
+     "other_party"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-02",
+   "kind": "letter",
+   "format": "docx",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2018-11-21 Remit Letter to NHS Pay Review Body.docx",
+    "2018-11-21 Letter to NHS Pay Review Body.docx",
+    "2018-11-21 Remit Letter from Department of Health and Social Care.docx"
+   ],
+   "before": {
+    "filename": "2018-11-21 Document from Philippa Hird.docx",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2018-11-21 Document from Philippa Hird.docx",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "person"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-03",
+   "kind": "letter",
+   "format": "docx",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2016-03-23 Letter of Concern to Central Bedfordshire Council.docx",
+    "2016-03-23 Letter to Central Bedfordshire Council.docx",
+    "2016-03-23 Concern Letter to Central Bedfordshire Council.docx"
+   ],
+   "before": {
+    "filename": "2016-03-23 Document - Andrew Cook.docx",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2016-03-23 Document - Andrew Cook.docx",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "person"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-04",
+   "kind": "letter",
+   "format": "docx",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2017-08-24 Freedom of Information Response from Office of the Advocate General for Scotland.docx",
+    "2017-08-24 Letter from Office of the Advocate General for Scotland.docx",
+    "2017-08-24 Response Letter from Office of the Advocate General for Scotland.docx"
+   ],
+   "before": {
+    "filename": "2017-08-24 Document - Office of the Advocate General for Scotland.docx",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2017-08-24 Document - Office of the Advocate General for Scotland.docx",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-05",
+   "kind": "notice",
+   "format": "doc",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2011-10-01 Direction for Ofcom.doc",
+    "2011-10-01 Direction to Ofcom for Ofcom.doc",
+    "2011-10-01 Notice for Ofcom.doc"
+   ],
+   "before": {
+    "filename": "2011-10-01 Document - Secretary of State for Business, Innovation and Skills.doc",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2011-10-01 Document - Secretary of State for Business, Innovation and Skills.doc",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "PARTY_UNSUPPORTED"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-06",
+   "kind": "notice",
+   "format": "doc",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2014-02-20 Circular from Home Office.doc",
+    "2014-02-20 Home Office Circular from Home Office.doc",
+    "2014-02-20 Notice from Home Office.doc"
+   ],
+   "before": {
+    "filename": "report of the Winsor Review for Home Secretary.doc",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "report of the Winsor Review for Home Secretary.doc",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "TYPE_INFERRED",
+     "DATE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "other_document",
+     "missing_date"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-07",
+   "kind": "letter",
+   "format": "odt",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2020-04-28 Update Letter to Home Affairs Select Committee.odt",
+    "2020-04-28 Letter to Home Affairs Select Committee.odt",
+    "2020-04-28 Windrush Update to Home Affairs Select Committee.odt"
+   ],
+   "before": {
+    "filename": "2020-04-28 Report for Home Secretary.odt",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2020-04-28 Report for Home Secretary.odt",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "other_document"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-08",
+   "kind": "letter",
+   "format": "odt",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2021-05-14 Freedom of Information Response from Office of Manpower Economics.odt",
+    "2021-05-14 Letter from Office of Manpower Economics.odt",
+    "2021-05-14 Response Letter from Office of Manpower Economics.odt"
+   ],
+   "before": {
+    "filename": "2021-05-14 Document - Office of Manpower Economics.odt",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2021-05-14 Document - Office of Manpower Economics.odt",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-09",
+   "kind": "notice",
+   "format": "rtf",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2018-07-25 Notice of Change of Company Name for Aston Car Group Limited.rtf",
+    "2018-07-25 Notice for Aston Car Group Limited.rtf",
+    "2018-07-25 Change of Name Notice for Aston Car Group Limited.rtf"
+   ],
+   "before": {
+    "filename": "2018-07-25 Notice of Change of Company Name - Aston Car Group Limited.rtf",
+    "readiness": "ready",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2018-07-25 Notice of Change of Company Name - Aston Car Group Limited.rtf",
+    "readiness": "ready",
+    "review_reasons": [],
+    "adjudicated": "wrong",
+    "classes": [
+     "relation_missing"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-10",
+   "kind": "letter",
+   "format": "msg",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2018-03-21 Email to Royal Borough of Greenwich.msg",
+    "2018-03-21 Letter to Royal Borough of Greenwich.msg",
+    "2018-03-21 Response to Royal Borough of Greenwich.msg"
+   ],
+   "before": {
+    "filename": "2018-03-21 Email from Jillian Holford.msg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2018-03-21 Email from Jillian Holford.msg",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "PARTY_UNSUPPORTED",
+     "DESCRIPTION_UNSUPPORTED"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "person"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-11",
+   "kind": "letter",
+   "format": "msg",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2021-12-22 Email to London Borough of Lambeth.msg",
+    "2021-12-22 Letter to London Borough of Lambeth.msg",
+    "2021-12-22 Enquiry to London Borough of Lambeth.msg"
+   ],
+   "before": {
+    "filename": "2021-12-22 Document - tcook@lambeth.gov.uk.msg",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2021-12-22 Document - tcook@lambeth.gov.uk.msg",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "generic_type",
+     "other_party"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-12",
+   "kind": "statement",
+   "format": "xlsx",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2012-09-30 Statement of Financial Position from Province of British Columbia.xlsx",
+    "2012-09-30 Balance Sheet from Province of British Columbia.xlsx",
+    "2012-09-30 Statement from Province of British Columbia.xlsx"
+   ],
+   "before": {
+    "filename": "Statement of Financial Position from Table 1.16 201213 Statement of Financial Position.xlsx",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "Statement of Financial Position from Table 1.16 201213 Statement of Financial Position.xlsx",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "DATE_UNSUPPORTED",
+     "PARTY_UNSUPPORTED",
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "missing_date",
+     "other_party"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-13",
+   "kind": "letter",
+   "format": "xlsx",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2026-08-07 Air Quality Memo to Stoney Wood Property Developments Ltd.xlsx",
+    "2026-07-20 Air Quality Memo to Stoney Wood Property Developments Ltd.xlsx",
+    "2026-07-23 Air Quality Memo to Stoney Wood Property Developments Ltd.xlsx"
+   ],
+   "before": {
+    "filename": "2025-11-01 Pre-App Advice - Stoney Wood Property Developments Ltd.xlsx",
+    "readiness": "needs_review",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2025-11-01 Pre-App Advice - Stoney Wood Property Developments Ltd.xlsx",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "TYPE_UNSUPPORTED",
+     "TYPE_INFERRED"
+    ],
+    "adjudicated": "wrong",
+    "classes": [
+     "other_document",
+     "event_date"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-14",
+   "kind": "statement",
+   "format": "csv",
+   "text_layer": "text",
+   "gold_filenames": [
+    "2017-03-31 Condensed Statement of Financial Position from Administrative Tribunals Support Service of Canada.csv",
+    "2017-03-31 Statement of Financial Position from Administrative Tribunals Support Service of Canada.csv",
+    "2017-03-31 Financial Statement from Administrative Tribunals Support Service of Canada.csv"
+   ],
+   "before": {
+    "filename": "2017-03-31 Condensed Statement of Financial Position unaudited.csv",
+    "readiness": "ready",
+    "adjudicated": "wrong"
+   },
+   "after": {
+    "filename": "2017-03-31 Condensed Statement of Financial Position unaudited.csv",
+    "readiness": "ready",
+    "review_reasons": [],
+    "adjudicated": "wrong",
+    "classes": [
+     "no_party"
+    ]
+   }
+  },
+  {
+   "id": "real3-office-15",
+   "kind": "notice",
+   "format": "rtf",
+   "text_layer": "office",
+   "gold_filenames": [
+    "2018-07-26 Notice of Change of Company Name for PORSCHE LTD.rtf",
+    "2018-07-26 Notice for PORSCHE LTD.rtf",
+    "2018-07-26 Change of Name Notice for PORSCHE LTD.rtf"
+   ],
+   "before": {
+    "filename": "2018-07-26 Notice of Change of Company Name - The Company Names Tribunal.rtf",
+    "readiness": "needs_review",
+    "adjudicated": "right"
+   },
+   "after": {
+    "filename": "2018-07-26 Notice of Change of Company Name - The Company Names Tribunal.rtf",
+    "readiness": "needs_review",
+    "review_reasons": [
+     "LOW_CONFIDENCE"
+    ],
+    "adjudicated": "right",
+    "classes": [],
+    "why_right": "The Company Names Tribunal issued the notice"
+   }
+  }
+ ]
+}
