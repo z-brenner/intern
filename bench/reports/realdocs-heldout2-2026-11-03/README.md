@@ -164,6 +164,38 @@ is narrow: a notice or statement named with its subject but no joining word, or 
 
 **Speed.** p50 16.0 s per document, p95 30 s, at most 45 s, on a 4-core x86-64 host.
 
+## Afterwards: a letter's layout names it a letter (in-sample)
+
+The largest class above is a generic type. A rule now names one case of it. When the reply's
+type is not in the document and no title stands in for it, a document laid out as a letter is
+named a "Letter": it has a "Dear ..." on its first page, with a dateline or a "Date:" field above
+it. The dateline may sit in a paragraph that extraction ran the letter's head into, so lines are
+read, not units. A bare "Letter" still goes to review, so no name becomes ready. What changes is
+the name a person reviews: "Letter to Target Corporation" in place of "Document to Target
+Corporation".
+
+The rule was written after this set was measured, so the figures below are in-sample on all
+three sets.
+
+| | Before | After |
+|---|---:|---:|
+| This set: right, adjudicated | 7/58 | **9/58** |
+| First set: right, scorer | | +1 |
+| Held-out set: right, scorer | | +2 |
+| Wrong names ready, any set | | unchanged |
+
+**What changed:**
+- **This set:** Ofgem's decision letter is now "Letter to Good Energy Limited", and the attorneys
+  general's letter is "Letter to Target Corporation". Two GOV.UK letters go from "Document" to
+  "Letter", but still name a person.
+- **First set:** the FTC's closing letter is now "Letter to Loeb & Loeb LLP".
+- **Held-out set:**
+  - DOE's enforcement letter is now "Letter to Packaging Specialties, Inc.".
+  - An 1891 letter is now "Letter from The Columbia Phonograph Company".
+- **Everywhere else:** InternBench's ten recordings keep every count; a few "Document - X" names
+  there become "Letter - X", still wrong for their other reasons and still in review. CUAD is
+  unchanged.
+
 ## Reproduce
 
 ```bash

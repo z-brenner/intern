@@ -600,6 +600,17 @@ pub fn validate_facts_at(
                 document_type = Some(inferred);
                 push(&mut reasons, ReviewReason::TypeInferred);
             }
+            // A document laid out as a letter - a dateline near the top of
+            // its first page, a "Dear ..." below it - is a letter, whatever
+            // kind the reply could not find in it: "Letter to Target
+            // Corporation" tells a person what to check where "Document to
+            // Target Corporation" does not. A bare "Letter" names no kind a
+            // person could file by, so it still waits for one.
+            None if layout.laid_out_as_letter(scope) => {
+                document_type = Some("Letter".to_owned());
+                push(&mut reasons, ReviewReason::TypeInferred);
+                push(&mut reasons, ReviewReason::TypeMissing);
+            }
             None if type_supported => push(&mut reasons, ReviewReason::TypeMissing),
             None => {}
         }
@@ -2906,6 +2917,29 @@ impl LetterLayout {
         }
     }
 
+    /// Whether the document is laid out as a letter: its first page greets
+    /// someone ("Dear ...") below a line that is its dateline, the date and
+    /// nothing else, or a "Date:" field. Extracted text often runs a letter's
+    /// head into one paragraph, so the lines are read, not the units.
+    fn laid_out_as_letter(self, scope: &ValidationScope<'_>) -> bool {
+        let Some((salutation, at)) = self.salutation else {
+            return false;
+        };
+        self.dateline.is_some()
+            || scope.index.units().iter().any(|unit| {
+                if unit.running || unit.ordinal > salutation {
+                    return false;
+                }
+                let lines = unit.text.lines().collect::<Vec<_>>();
+                let above = if unit.ordinal == salutation {
+                    &lines[..at.min(lines.len())]
+                } else {
+                    &lines[..]
+                };
+                above.iter().any(|line| is_dateline(line))
+            })
+    }
+
     /// Whether a unit stands before the dateline, where a letterhead can.
     fn before_dateline(self, unit: &EvidenceUnit) -> bool {
         self.dateline.is_none_or(|dateline| unit.ordinal < dateline)
@@ -3024,28 +3058,46 @@ impl LetterLayout {
     }
 }
 
+/// The months, as a dateline writes them.
+const MONTHS: &[&str] = &[
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+];
+
 /// Whether a unit is a date and nothing else - "March 2, 2026" - as a
 /// letter's dateline is written.
 fn is_bare_date(unit: &EvidenceUnit) -> bool {
-    const MONTHS: &[&str] = &[
-        "january",
-        "february",
-        "march",
-        "april",
-        "may",
-        "june",
-        "july",
-        "august",
-        "september",
-        "october",
-        "november",
-        "december",
-    ];
     unit.label.is_none()
         && !unit.features.dates.is_empty()
         && words(&unit.text)
             .iter()
             .all(|word| MONTHS.contains(&word.as_str()) || word.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Whether a line is a letter's dateline: a written date and nothing else,
+/// or a "Date:" field holding one - "June 16, 2023", "Date: 28 March 2023".
+fn is_dateline(line: &str) -> bool {
+    let line_words = words(line);
+    let rest = line_words
+        .strip_prefix(&["date".to_owned()])
+        .unwrap_or(&line_words);
+    !rest.is_empty()
+        && rest.len() <= 4
+        && rest.iter().any(|word| MONTHS.contains(&word.as_str()))
+        && rest
+            .iter()
+            .all(|word| MONTHS.contains(&word.as_str()) || word.chars().all(|c| c.is_ascii_digit()))
+        && !extract_stated_dates(&normalize(line)).is_empty()
 }
 
 /// `cues`: whether an issued document's issuer and customer cues count.
@@ -9274,6 +9326,52 @@ The merger needs a majority of votes cast.";
             outcome.proposal,
             outcome.reasons
         );
+    }
+
+    /// A letter whose reply typed it by something the letter never says is
+    /// still a letter: its dateline over a "Dear ..." says so, and "Letter to
+    /// Target Corporation" waits for a person in place of "Document to ...".
+    /// Extracted text often runs the letter's head into one paragraph.
+    #[test]
+    fn a_document_laid_out_as_a_letter_is_a_letter_when_its_type_is_not_found() {
+        let reply = |index: &EvidenceIndex| ModelFacts {
+            document_type: Some("Civil Rights Letter".into()),
+            type_evidence: vec![id_of(index, "As Attorneys General")],
+            document_date: Some("2023-06-16".into()),
+            date_evidence: vec![id_of(index, "June 16, 2023")],
+            parties: vec![party(
+                "Target Corporation",
+                Some(PartyRole::Recipient),
+                &[id_of(index, "Target Corporation")],
+            )],
+            ..ModelFacts::default()
+        };
+        for dateline in ["June 16, 2023", "Date: June 16, 2023"] {
+            let (outcome, _) = facts_for(
+                &format!(
+                    "{dateline}\nBrian C. Cornell\nChairman and CEO\nTarget Corporation\n\
+                     Minneapolis, MN 55403\nDear Mr. Cornell,\nAs Attorneys General we write to \
+                     you about the company's merchandise decisions of June 16, 2023."
+                ),
+                reply,
+            );
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Letter"),
+                "{dateline}"
+            );
+            assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        }
+        // A greeting with no dateline over it is no letter's layout: a
+        // memo or a report can say "Dear colleagues".
+        let (outcome, _) = facts_for(
+            "Brian C. Cornell\nChairman and CEO\nTarget Corporation\nDear Mr. Cornell,\n\
+             As Attorneys General we write to you about the company's merchandise decisions \
+             of June 16, 2023.",
+            reply,
+        );
+        assert_eq!(outcome.proposal.document_type, None);
     }
 
     /// An FCC letter in the real set, typed by the order it closes: a type
