@@ -38,6 +38,8 @@ jobs:
       - run: npm ci
       - run: npm run fixtures
       - run: npm run check
+      - name: Test CPU model qualification evidence checks
+        run: python3 -I -m unittest discover -s scripts/cpu-model-eval -p 'test_*.py'
       - run: npx playwright install chromium
       - run: npm run test:e2e
 

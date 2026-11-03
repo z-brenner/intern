@@ -4,7 +4,7 @@
 # what a model qualification needs and the app does not do:
 #
 #   LLAMA_SERVER_ARGS  extra llama-server flags appended after the app's own,
-#                      e.g. "--cache-ram 0 -fa on -ub 256"
+#                      e.g. "-fa on --cache-type-k q8_0 --cache-type-v q8_0"
 #   BENCH_PROFILE      a --bench-profile JSON (needs intern-bench built with
 #                      --features benchmark-transport); the wire captures go
 #                      to OUT_DIR/wire
@@ -51,6 +51,7 @@ KEY="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 SERVER_ARGS=(--host 127.0.0.1 --port "$PORT" --api-key "$KEY" --model "$MODEL"
   --parallel 1 --ctx-size 8192 --n-gpu-layers 0
   --threads "$THREADS" --threads-batch "$THREADS" --jinja --no-webui --no-mmproj
+  --cache-ram 0 -ub 256 --prio -1 --poll 0
   ${EXTRA[@]+"${EXTRA[@]}"})
 printf '%q ' "$LLAMA_SERVER" "${SERVER_ARGS[@]}" | sed "s/$KEY/<key>/" > "$OUT_DIR/server-command.txt"
 echo >> "$OUT_DIR/server-command.txt"
@@ -77,7 +78,8 @@ for _ in $(seq 1 3000); do  # up to ~5 min: a cold 4B load from a slow disk take
   sleep 0.1
 done
 curl -sf --noproxy '*' "http://127.0.0.1:$PORT/health" | grep -q '"ok"' || { echo "llama-server not healthy" >&2; exit 1; }
-echo "startup_s $(echo "$(date +%s.%N) - $START" | bc)" > "$OUT_DIR/startup.txt"
+python3 -I -c 'import sys; print("startup_s", float(sys.argv[1]) - float(sys.argv[2]))' \
+  "$(date +%s.%N)" "$START" > "$OUT_DIR/startup.txt"
 
 PROFILE_ARGUMENTS=()
 if [ -n "${BENCH_PROFILE:-}" ]; then
