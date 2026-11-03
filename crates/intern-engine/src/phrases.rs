@@ -331,12 +331,20 @@ pub(crate) fn without_identifier(value: &str) -> String {
     {
         start = 3;
     }
-    // A code with digits, dots or dashes in one token before the kind.
+    // A reference code in one token before the kind: digits and letters
+    // joined by two or more dots, dashes or colons ("FreeBSD-EN-26:25.tzdata
+    // Errata Notice", "INV-2024-001 Invoice"). A standardized form's code is
+    // the kind itself, not one copy of it, and is short, with one dash at
+    // most: "W-9 Form", "10-K Annual Report", "1099-MISC Form" keep it.
     if start == 0
         && head >= 1
         && has_digit(tokens[0])
         && tokens[0].chars().any(char::is_alphabetic)
-        && tokens[0].contains(['-', '.', ':'])
+        && tokens[0]
+            .chars()
+            .filter(|character| matches!(character, '-' | '.' | ':'))
+            .count()
+            >= 2
     {
         start = 1;
     }
@@ -754,6 +762,7 @@ mod tests {
             ),
             ("January 1, 1997 Invoice", "Invoice"),
             ("FreeBSD-EN-26:25.tzdata Errata Notice", "Errata Notice"),
+            ("INV-2024-001 Invoice", "Invoice"),
         ] {
             assert_eq!(without_identifier(value), kind, "{value}");
         }
@@ -767,6 +776,10 @@ mod tests {
             "Notice in Accordance with Section 57C of the Railways Act 1993",
             "Second Amendment",
             "Form 1099",
+            "W-9 Form",
+            "10-K Annual Report",
+            "1099-MISC Form",
+            "SF-86 Questionnaire",
             "Amendment No. 3",
             "Change Order No. 7",
             "ADDENDUM NO. 2",
