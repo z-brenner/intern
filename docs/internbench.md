@@ -210,6 +210,50 @@ reply, and the server's timings. A recording says which pipeline, retrieval
 and prompt made it, and is replayed only through the same pipeline: a
 digest recording with `--pipeline digest`.
 
+### Candidates on GitHub runners
+
+`.github/workflows/candidate-bench.yml` runs the live benchmark above for
+one or more candidate GGUF files on Ubuntu runners, one job per candidate
+and set, in parallel. It is laboratory tooling: run only by hand (Actions >
+Candidate model benchmark on Linux > Run workflow), it gates nothing and
+publishes nothing. Each job builds the worker and `intern-bench` as CI
+does, stages the Linux runtime with `scripts/stage-linux-runtime.sh`,
+fetches the candidate and refuses it unless its SHA-256 matches, and runs
+`scripts/run-internbench.sh OUT -- --min-token-confidence 0.5`. The job
+summary gives the headline lines (`filename`, `unsafe ready`, `total per
+document`), the server's peak RSS, the wall time, the runner's CPU and the
+`ggml-cpu-*` backend `llama-server` loaded; the report, recording and logs
+are an artifact named `candidate-<label>-<set>-<run id>`, kept 14 days.
+Runners differ, so compare jobs that the summary puts on the same CPU.
+
+Inputs:
+
+* `candidates` (required): a JSON array, one object per model, each with a
+  `label` (`[a-z0-9._-]+`, it names the job and the artifact), the GGUF's
+  https `url` (pin a commit on Hugging Face, as the manifest does) and its
+  `sha256`:
+
+  ```json
+  [{"label": "qwen35-9b-q4km",
+    "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/<commit>/Qwen3.5-9B-Q4_K_M.gguf",
+    "sha256": "<64 hex digits>"}]
+  ```
+
+* `sets` (default `internbench`): comma-separated from `internbench` (the
+  synthetic corpus), `real1` (`sample.json`), `real2`
+  (`sample-heldout.json`) and `real3` (`sample-heldout2.json`), the real
+  documents fetched by `scripts/realdocs-eval/fetch.py` from their public
+  sources; a source that is down costs its document, not the run.
+* `threads` (default `4`): the server's model threads.
+* `extra_server_args` (default empty): flags appended after the app's own,
+  to try a KV-cache or speculative flag. The script takes them as
+  `LLAMA_SERVER_ARGS`; unset, it starts the server exactly as the app does.
+* `llama_release` (default empty, the pinned upstream build the runtime
+  stages): a ggml-org llama.cpp release tag such as `b12078`, whose Ubuntu
+  x64 `llama-server` runs the candidate instead. No hash of an arbitrary
+  release is pinned ahead of time, so the SHA-256 of what was downloaded is
+  recorded in the summary rather than checked; nothing from it is staged.
+
 ### Replay
 
 ```sh
