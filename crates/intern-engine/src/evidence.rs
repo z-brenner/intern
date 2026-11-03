@@ -51,6 +51,28 @@ impl Segments for DocumentDigest {
 /// Invisible characters ([`is_invisible`]) are left out, so one neither
 /// splits a word nor keeps a quote from matching it.
 pub fn normalize(value: &str) -> String {
+    if value.is_ascii() {
+        let mut result = String::with_capacity(value.len());
+        let mut pending_space = false;
+        for byte in value.bytes() {
+            // char::is_whitespace also recognizes vertical tab, which
+            // u8::is_ascii_whitespace deliberately excludes.
+            if matches!(byte, b' ' | b'\t'..=b'\r') {
+                pending_space = !result.is_empty();
+            } else {
+                if pending_space {
+                    result.push(' ');
+                    pending_space = false;
+                }
+                result.push(char::from(byte.to_ascii_lowercase()));
+            }
+        }
+        return result;
+    }
+    normalize_unicode(value)
+}
+
+fn normalize_unicode(value: &str) -> String {
     let visible = value.chars().filter(|character| !is_invisible(*character));
     let normalized = visible.nfkc().case_fold().map(|character| match character {
         '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}' | '\u{2032}' => '\'',
@@ -451,6 +473,42 @@ mod tests {
 
     fn digest_of(text: &str) -> DocumentDigest {
         distill(&source_from_text(text), DigestBudget::default())
+    }
+
+    #[test]
+    fn ascii_normalization_matches_unicode_for_every_byte_and_pair() {
+        assert_eq!(normalize(""), normalize_unicode(""));
+        for first in 0..=127_u8 {
+            let single = String::from(char::from(first));
+            assert_eq!(normalize(&single), normalize_unicode(&single));
+            for second in 0..=127_u8 {
+                let pair = format!("A{}{}Z", char::from(first), char::from(second));
+                assert_eq!(normalize(&pair), normalize_unicode(&pair), "{pair:?}");
+            }
+        }
+        assert_eq!(normalize(" \x0bA\t\n\x0b\x0c\r B\x0b "), "a b");
+    }
+
+    #[test]
+    fn ascii_normalization_matches_unicode_on_long_mixed_runs() {
+        let mut state = 0x5eed_u32;
+        for length in [1, 7, 31, 128, 1_024, 12_000] {
+            let text = (0..length)
+                .map(|_| {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    char::from((state >> 24) as u8 & 0x7f)
+                })
+                .collect::<String>();
+            assert_eq!(normalize(&text), normalize_unicode(&text));
+        }
+        for text in [
+            "ACME\u{00a0}CORPORATION",
+            "Straße \u{201c}İSTANBUL\u{201d}",
+            "\u{ff21}\u{ff22}\u{ff23}\u{200b} Ltd",
+            "e\u{301} & \u{fb03} \u{2212} \u{202f}March",
+        ] {
+            assert_eq!(normalize(text), normalize_unicode(text));
+        }
     }
 
     #[test]
