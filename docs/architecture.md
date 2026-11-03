@@ -722,8 +722,8 @@ named as it was keeps whatever the reviewer had typed.
 
 | | |
 | --- | --- |
-| Models | Qwen3.5 2B, Q4_K_M GGUF (1.19 GiB), the accurate model; Bonsai 2 2B, ternary PQ2_0 GGUF (0.48 GiB), an optional quick model whose readings always go to review. One loaded at a time |
-| Runtime | two llama.cpp builds, CPU only, one running at a time: upstream `b11946` runs the accurate model; the PrismML fork, release `prism-b10826-c9c34bc`, runs the quick one, whose PQ2_0 weights only its kernels read |
+| Models | Qwen3.5 9B, Q4_K_M GGUF (5.29 GiB), the accurate model; Qwen3.5 4B, Q4_K_M GGUF (2.55 GiB), the quick one, which stands in while memory is short and reads first on a new install. One loaded at a time |
+| Runtime | two llama.cpp builds, CPU only: upstream `b11946` runs both models; the PrismML fork, release `prism-b10826-c9c34bc`, is still packaged and runs nothing the manifest pins |
 | Context | 8,192 tokens |
 | Threads | half the logical processors, clamped to 2–12, for generation and for prompt processing alike |
 | Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below) |
@@ -757,25 +757,27 @@ spinning between operations, which cost nothing measurable. The server is given
 ### Two models, one at a time
 
 The manifest (schema 3) pins two models, one per tier, each a single GGUF at an
-immutable Hugging Face revision with its length and SHA-256, under 2 GiB
+immutable Hugging Face revision with its length and SHA-256, under 10 GiB
 together (the manifest refuses itself if they are not). The accurate tier is
-Qwen3.5 2B, the same file the single-model build pinned, asked with the
-production request alone - so the corpus recordings of record and the replay
-gates describe it. The fast tier is Bonsai 2 2B, asked through the `bonsai_2`
-profile (below). The evaluation chose them: 52-54 of 77 InternBench names for
-Qwen, 37 for Bonsai 2 2B, 48 for Bonsai 2 4B at 1.6 times Qwen's time, and
-both Bonsai models marked more wrong names ready (23 and 22 against 15-18).
+Qwen3.5 9B and the fast tier Qwen3.5 4B, both asked with the production
+request alone - so the corpus recordings of record and the replay gates
+describe the 9B. The real-document sets chose them over Qwen3.5 2B, which the
+builds before alpha.13 pinned: with the rules of November 2026 the 9B names
+20/19/11 of the three sets' documents right to the 2B's 16/17/11, and the 4B
+18/16/12 ([`accuracy-research-2026-10.md`](accuracy-research-2026-10.md)).
 Nothing in setup deletes a model file.
 
-**A quick reading is never ready.** Whatever validation made of it, a document
-the fast model read goes to review with `FAST_MODEL_READING` ("Read by the
-quick model — check it, or wait for the accurate model to read it again"), and
-its reading is provisional: once the accurate model can read - its download
-verified, or memory back - the queue sends every provisional reading nobody has
-acted on back to be read again (`Pipeline::reanalyze_provisional`). An
-approval, an edit, a kept name or an undone rename is a person's decision and
-is never overwritten, and automatic renaming, which takes only ready
-documents, never files a quick reading.
+**A quick reading is judged like any other.** Validation and the review gate
+decide whether it is ready, exactly as for the 9B's, each tier with its own
+gate threshold (`tiers::review_below_token_confidence`). What sets a quick
+reading apart is whether it stands in: made while the accurate model was
+wanted and not installed yet, or did not fit in memory, it is provisional, and
+once the accurate model can read - its download verified, or memory back -
+the queue sends every provisional reading nobody has acted on back to be read
+again (`Pipeline::reanalyze_provisional`). An approval, an edit, a kept name
+or an undone rename is a person's decision and is never overwritten. The
+builds before alpha.13 held every quick reading for a person with
+`FAST_MODEL_READING`, which a document read then still carries.
 
 Which model reads a document is a pure decision in `intern_engine::tiers`,
 asked before every document, so a choice in Settings, a model that finished
@@ -783,8 +785,8 @@ downloading or memory that came back takes effect at the next document with
 nothing restarted. Settings offers **Automatic** (the default), **Most
 accurate** and **Fastest**. Automatic reads with the accurate model when it is
 installed and fits (`AUTOMATIC_STRATEGY = AccurateFirst`), and the quick model
-only stands in. Fastest reads everything with the quick model, and every name
-it gives still waits for a check. The alternative to AccurateFirst - a cascade
+only stands in. Fastest reads everything with the quick model, with nothing
+read again. The alternative to AccurateFirst - a cascade
 that reads with the quick model and sends a reading to the accurate one when it
 carries a review reason, is not ready or has a low-probability token
 (`tiers::escalation`) - is implemented and tested but off: the evaluation found
@@ -797,10 +799,12 @@ one named constant.
 The memory guard: a model is loaded only when the machine reports enough
 available memory for it (`MemAvailable` on Linux, `GlobalMemoryStatusEx` on
 Windows; memory that cannot be read counts as enough): its server's resident
-set with the prompt cache off as the evaluation measured it (Bonsai 2 2B about
-1.4 GB, Qwen3.5 2B about 2.2 GB), the parser worker's 0.71 GB OCR peak, and
-1 GiB left for the person's own work - 3.2 GiB for the quick model, 4 GiB for
-the accurate one. What unloading the loaded model would free counts as
+set with the prompt cache off as the live runs measured it (Qwen3.5 4B about
+4.7 GB, Qwen3.5 9B about 8.3 GB, almost all of it the mapped weights), the
+parser worker's 0.71 GB OCR peak, and 1 GiB left for the person's own work -
+6.5 GiB for the quick model, 10 GiB for the accurate one. A 16 GB laptop has
+the latter with little else open, and not with a browser and an office suite
+at work, which is what the quick model is for. What unloading the loaded model would free counts as
 available too - its context and buffers, not its mapped weights, which the
 machine already reports as reclaimable. When the accurate model is wanted - by
 Automatic or by name - but is not installed yet or does not fit, the quick
@@ -808,7 +812,7 @@ model reads instead, provisionally; its readings are sent back to the accurate
 model only on evidence that it can read - it was just verified, or it just read
 a document - never on a memory reading alone, which could send the same
 documents round and round. Under Fastest a quick reading stands in for nothing
-and is not read again, though it still waits for a check.
+and is not read again.
 
 A model whose server will not start is set aside for the session, with the
 error on its line in Settings and a Try again there, and the other installed
@@ -816,18 +820,18 @@ model reads; with no other model, setup reports the failure as it always has.
 A paused download stays paused across restarts (a `<model>.paused` marker
 beside its partial file).
 
-Each model runs on its own runtime (`tiers::server_runtime`). Upstream
+Both models run on the upstream runtime (`tiers::server_runtime`). Upstream
 llama.cpp `b11946` read Qwen3.5 2B 19% faster than Prism on Linux, at the same
 accuracy
 ([`bench/reports/speed-linux-cpu-2026-10-29`](../bench/reports/speed-linux-cpu-2026-10-29/README.md)),
-and 25% faster on Windows, but cannot read Bonsai's PQ2_0 weights, so the
-quick model stays on Prism. Prism's llama-server is where the one runtime
-always was, in the sidecar folder - the install root on Windows, the `runtime`
-folder on Linux - and upstream's in a `llama-upstream` folder inside it. Both
+and 25% faster on Windows. Prism's llama-server, which only the Bonsai 2
+models' PQ2_0 weights needed, is still packaged where the one runtime always
+was, in the sidecar folder - the install root on Windows, the `runtime` folder
+on Linux - and upstream's is in a `llama-upstream` folder inside it. Both
 builds name their CPU backends `ggml-cpu-*`, and ggml loads them from the
 executable's folder and the current directory, so each server is started in
 its own folder. A runtime that is missing fails to start like any other
-server, and its model is set aside while the other reads.
+server, and the tiers that run on it are set aside.
 
 One llama-server runs at a time. A document planned onto the model that is not
 loaded unloads it and loads the other under the same `lifecycle` lock and
@@ -839,31 +843,27 @@ session already checked it. The review panel says which model read a document,
 and that a provisional reading will be read again.
 
 A new install downloads the quick model first and opens the queue as soon as it
-has passed its digest and its semantic self-test; every name it gives waits in
-review. The accurate model downloads behind the window with the same
-resumable, verified downloader - Settings shows its progress and can pause,
-resume or retry it, and the main window says, in one line, "Improving
-accuracy: downloading Qwen3.5 2B, 41%". Its digest is checked when the download
-ends and its self-test runs the first time a document loads it; a model that
-fails is set aside for the session and Settings offers to download it again.
-Someone upgrading from the single-model build has the accurate model already:
-launch verifies it once (the earlier build's stamp vouches for nothing here)
-and opens the queue on it, with nothing downloaded; Settings offers the quick
-model, which is fetched only if they ask. **Choose existing model files**
-accepts either file or both, each recognized by its length and accepted only
-once its digest matches.
+has passed its digest and its semantic self-test. The accurate model downloads
+behind the window with the same resumable, verified downloader - Settings
+shows its progress and can pause, resume or retry it, and the main window
+says, in one line, "Improving accuracy: downloading Qwen3.5 9B, 41%". Its
+digest is checked when the download ends and its self-test runs the first time
+a document loads it; a model that fails is set aside for the session and
+Settings offers to download it again. Someone upgrading from a build that
+pinned Qwen3.5 2B, with or without Bonsai 2 2B, goes through the same setup:
+neither earlier file is this build's model, and neither is deleted. **Choose
+existing model files** accepts either file or both, each recognized by its
+length and accepted only once its digest matches.
 
-The quick model is asked through the `bonsai_2` prompt profile
-(`intern_engine::profile`): the production evidence instructions, unchanged,
-followed by one neutral demonstration exchange - a fictional dispatch note and
-the reply that files it - then the document, greedy, with thinking switched
-off. It is the "few-shot greedy" profile the native qualification froze for
-both Bonsai models, and a test holds it to the frozen files. Without the
-exchange, Bonsai 2B copied the instructions' own placeholder words into its
-replies. The profile is part of every request's identity and of the prompt
-version a recording carries; the accurate model has none, and
-`--prompt-profile` on `intern-evaluate`, `intern-analyze` and InternBench
-chooses one explicitly.
+The `bonsai_2` prompt profile (`intern_engine::profile`) - the production
+evidence instructions followed by one neutral demonstration exchange, greedy,
+with thinking switched off, the "few-shot greedy" profile the native
+qualification froze for both Bonsai models - is kept for recordings and
+laboratory runs of those models, held to the frozen files by a test; neither
+pinned model is asked through it. A profile is part of every request's
+identity and of the prompt version a recording carries, and `--prompt-profile`
+on `intern-evaluate`, `intern-analyze` and InternBench chooses one
+explicitly.
 
 Threads are half the logical processors on purpose. llama.cpp scales with
 physical cores rather than SMT threads, and taking every core makes the rest of
@@ -1217,7 +1217,7 @@ ordinary applications running:
 | Median document, end to end | 12.4-27.7 s across four runs of the same corpus on the same machine |
 | 29,000-character contract | 42 s |
 | Peak model process memory | 2,470-2,590 MB |
-| First-run download | 0.48 GiB, the quick text model, before the first document; the accurate one, 1.19 GiB, follows behind the window |
+| First-run download | 2.55 GiB, the quick text model, before the first document; the accurate one, 5.29 GiB, follows behind the window |
 
 Quote the latency as a range. Four runs of the same corpus on this machine gave
 medians of 12.4, 16.6, 19.6, and 27.7 seconds depending on what else was

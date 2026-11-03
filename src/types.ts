@@ -119,7 +119,7 @@ export type ModelPreference = 'automatic' | 'accurate' | 'fast';
 export interface ModelReading {
   tier: ModelTier;
   modelId: string;
-  /** "Bonsai 2 4B". */
+  /** "Qwen3.5 9B". */
   displayName: string;
   /** Why the fast model's reading was sent to the accurate one, when it was. */
   escalated?: 'review_reason' | 'not_ready' | 'low_token_confidence';

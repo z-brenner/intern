@@ -5,14 +5,14 @@ import { describeSetupError } from '../setup/useModelSetup';
 
 /**
  * What each choice does, in a line. The names come from the backend when it
- * says them. The quick model's readings always wait for a check, whichever
- * choice asked for them, and the lines say so.
+ * says them. Both models' readings are judged alike; the quick one is about
+ * half the time and a little less sure, and the lines say so.
  */
 function choices(fast: string, accurate: string): { value: ModelPreference; label: string; hint: string }[] {
   return [
     { value: 'automatic', label: 'Automatic (recommended)', hint: `${accurate} reads every document. ${fast}, if you have it, stands in only while this computer is short of memory.` },
     { value: 'accurate', label: 'Most accurate', hint: `${accurate} for every document, whenever memory allows.` },
-    { value: 'fast', label: 'Fastest', hint: `${fast} for every document. Quicker, but every name it gives waits for you to check it.` },
+    { value: 'fast', label: 'Fastest', hint: `${fast} for every document. About half the time, and a little less often right.` },
   ];
 }
 
@@ -70,13 +70,13 @@ function startFailure(error: string | null | undefined): boolean {
 
 /**
  * The quick model is never fetched without being asked for - someone who
- * came from the single-model build has only the accurate one - so its
- * button says what it is for.
+ * chose only the accurate model's file has just that one - so its button
+ * says what it is for.
  */
 function downloadLabel(tier: TierSetup): string {
   if (tier.tier !== 'fast') return 'Download';
   const size = tier.totalBytes > 0 ? ` (${formatBytes(tier.totalBytes)})` : '';
-  return `Download the quick model${size} for faster first readings and low-memory fallback`;
+  return `Download the quick model${size} for quicker readings and low-memory fallback`;
 }
 
 function tierStatus(tier: TierSetup): string {
@@ -90,7 +90,7 @@ function tierStatus(tier: TierSetup): string {
 
 /**
  * The main window's one line about the accurate model while it arrives:
- * "Improving accuracy: downloading Qwen3.5 2B, 41%". Nothing once it is
+ * "Improving accuracy: downloading Qwen3.5 9B, 41%". Nothing once it is
  * ready, and nothing that asks for a decision.
  */
 export function accuracyStatus(setup: SetupState | undefined): string | undefined {

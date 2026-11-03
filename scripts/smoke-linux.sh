@@ -24,11 +24,12 @@
 #                  llama-server the app runs GGUF's tier on, with the flags the
 #                  app uses, and name a fixture with intern-analyze
 #                  (INTERN_ANALYZE, or built with cargo).
-#   --tier TIER    the tier GGUF is for, fast or accurate: the fast tier runs
-#                  on Prism's runtime/llama-server, the accurate tier on
-#                  upstream's runtime/llama-upstream/llama-server. Without it,
-#                  the tier src-tauri/resources/model-manifest.json gives a
-#                  file of GGUF's name.
+#   --tier TIER    the tier GGUF is for, fast or accurate; both run on
+#                  upstream's runtime/llama-upstream/llama-server (Prism's
+#                  runtime/llama-server is still packaged and checked, and
+#                  runs nothing the manifest pins). Without it, the tier
+#                  src-tauri/resources/model-manifest.json gives a file of
+#                  GGUF's name.
 #
 # Needs the generated fixtures (npm run fixtures) and Node; --app also needs
 # xvfb-run, dbus-run-session and xwininfo (packages xvfb, dbus, x11-utils).
@@ -115,9 +116,9 @@ else
 fi
 RUNTIME="$RUNTIME_ROOT/runtime"
 # The two llama.cpp builds, each in a folder of its own: Prism's in runtime/
-# itself, which the fast tier runs on, and upstream's, which the accurate
-# tier runs on.
-FAST_LLAMA="$RUNTIME"
+# itself, where the one runtime always was, and upstream's, which both tiers
+# run on.
+PRISM_LLAMA="$RUNTIME"
 ACCURATE_LLAMA="$RUNTIME/llama-upstream"
 
 # Starts DIR/llama-server and checks it runs on its own build: the two builds
@@ -153,7 +154,7 @@ check_llama_server() {
   fi
   grep -o 'loaded CPU backend from .*' <<< "$devices"
 }
-check_llama_server "$FAST_LLAMA" "Prism's (fast tier)"
+check_llama_server "$PRISM_LLAMA" "Prism's"
 check_llama_server "$ACCURATE_LLAMA" "upstream's (accurate tier)"
 
 step "Driving the parser worker through the release fixtures"
@@ -165,9 +166,11 @@ node "$ROOT/scripts/smoke-worker.mjs" --worker "$RUNTIME/intern-worker" --runtim
 # --- the pipeline, headless -------------------------------------------------
 if [ -n "$MODEL" ]; then
   # The server the app runs that tier on.
+  # Both tiers' models are Qwen3.5 models, which run on upstream
+  # (tiers.rs server_runtime); Prism's server is checked above and runs
+  # nothing the manifest pins.
   case "$TIER" in
-    fast) MODEL_LLAMA="$FAST_LLAMA" ;;
-    accurate) MODEL_LLAMA="$ACCURATE_LLAMA" ;;
+    fast | accurate) MODEL_LLAMA="$ACCURATE_LLAMA" ;;
   esac
   step "Naming a fixture through the real pipeline with $(basename "$MODEL") on the $TIER tier's ${MODEL_LLAMA#"$RUNTIME_ROOT/"}/llama-server"
   if [ -z "${INTERN_ANALYZE:-}" ]; then

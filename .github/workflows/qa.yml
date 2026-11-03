@@ -192,7 +192,7 @@ jobs:
         # Bounded like the release run's scoring step. Without a limit a wedged
         # llama-server held the runner until the job's own 360 minutes ran out,
         # and the tee'd log is what says which document it was stuck on.
-        timeout-minutes: 60
+        timeout-minutes: 150
         run: |
           New-Item -ItemType Directory docs\qa\logs -Force | Out-Null
           & ./scripts/run-model-evaluation.ps1 `

@@ -1,15 +1,17 @@
 //! Which local model reads a document.
 //!
 //! Intern pins two local models (see [`crate::manifest::ModelTier`]): the
-//! accurate one, Qwen3.5 2B, and an optional quick one, Bonsai 2 2B, about two
-//! thirds of the accurate one's time and two thirds of its memory. On the
-//! 77-document evaluation (`bench/reports/bonsai-linux-cpu-2026-10-27`) the
-//! quick model named 37 documents correctly to Qwen's 52-54, and marked 23
-//! wrong names ready, so a quick reading is never ready: it always goes to a
-//! person ([`hold_fast_reading`]), and is read again by the accurate model
-//! once it can be. Everything here is a pure decision over what is installed
-//! and how much memory is free, so every policy - and every threshold the
-//! benchmarks move - is one named constant or one function, tested on its own.
+//! accurate one, Qwen3.5 9B, and a quick one, Qwen3.5 4B, about half the
+//! accurate one's time and little over half its memory. Both are read the
+//! same way - the same prompt, the same validation, the same review gate -
+//! and a quick reading is filed when validation and the gate let it be. What
+//! sets the two apart is memory: the accurate model needs more of it than a
+//! 16 GB laptop with a browser and an office suite open always has, so the
+//! quick one stands in while memory is short, and a reading it made as a
+//! stand-in is read again by the accurate model once it can be. Everything
+//! here is a pure decision over what is installed and how much memory is
+//! free, so every policy - and every threshold the benchmarks move - is one
+//! named constant or one function, tested on its own.
 //!
 //! The runtime asks [`plan`] before every document, so a setting changed in
 //! Settings, a model that finished downloading, or memory that came back takes
@@ -17,7 +19,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{DocumentAnalysis, ProposalStatus, ReviewReason};
+use crate::domain::{DocumentAnalysis, ProposalStatus};
 use crate::manifest::ModelTier;
 use crate::server::ServerOptions;
 
@@ -33,8 +35,8 @@ pub enum ModelPreference {
     /// fast model stands in, read again later, only while the machine is
     /// short of memory.
     Accurate,
-    /// The fast model whenever it is installed. Its readings still always go
-    /// to review: asking for speed does not make them safer to file.
+    /// The fast model whenever it is installed, with nothing read again by
+    /// the accurate one.
     Fast,
 }
 
@@ -85,14 +87,16 @@ pub const HEADROOM: u64 = 1_024 * MIB;
 
 /// Memory that must be available - free, or reclaimable without paging -
 /// before the fast model is loaded: its server, the worker, and the
-/// headroom. It is the least the machine can be asked for, so it decides
-/// nothing yet; it is here so the fast model's cost is said in one place.
-pub const MIN_AVAILABLE_FOR_FAST: u64 = 3_200 * MIB;
+/// headroom, rounded up to 6.5 GiB. It is the least the machine can be asked
+/// for, so it decides nothing yet; it is here so the fast model's cost is
+/// said in one place.
+pub const MIN_AVAILABLE_FOR_FAST: u64 = 6_656 * MIB;
 
 /// Memory that must be available before the accurate model is loaded: its
-/// server, the worker, and the headroom, rounded up to 4 GiB. A 14 GB laptop
-/// with a browser and an office suite open usually has twice that.
-pub const MIN_AVAILABLE_FOR_ACCURATE: u64 = 4_096 * MIB;
+/// server, the worker, and the headroom, rounded up to 10 GiB. A 16 GB
+/// laptop has that with little else open, and not with a browser and an
+/// office suite at work; then the fast model stands in.
+pub const MIN_AVAILABLE_FOR_ACCURATE: u64 = 10_240 * MIB;
 
 /// The memory a tier needs available before it is loaded.
 pub const fn min_available_for(tier: ModelTier) -> u64 {
@@ -103,23 +107,24 @@ pub const fn min_available_for(tier: ModelTier) -> u64 {
 }
 
 /// About what a loaded tier's server holds, with `--cache-ram 0` (see
-/// [`crate::server::LlamaServer::arguments_for`]), from the 77-document
-/// evaluation's measured resident sets on the AVX-512 CPU variant, the larger
-/// of the two a laptop may load (the AVX2 one repacks less):
+/// [`crate::server::LlamaServer::arguments_for`]): the resident set's high
+/// water mark over a whole live run of the 77-document evaluation and the
+/// real-document sets, almost all of it the mapped weights, on the AVX-512
+/// CPU variant, the larger of the two a laptop may load (the AVX2 one
+/// repacks less):
 ///
-/// * Bonsai 2 2B: 1,418 MiB after twelve real requests (0.9 GB on AVX2).
-/// * Qwen3.5 2B: 2,175-2,185 MiB after load and warm-up in every InternBench
-///   chunk; with the prompt cache off it stops growing from there, as the
-///   Bonsai servers do (2B: about 4 MB a document instead of 80).
+/// * Qwen3.5 4B: 4,600-4,700 MiB (2.7 GB of weights).
+/// * Qwen3.5 9B: 8,300-8,500 MiB (5.7 GB of weights).
 ///
-/// Unloading the model to load another gives this back, so the runtime
-/// counts it as available when it plans with a model already loaded:
-/// otherwise a loaded accurate model would be judged not to fit beside
-/// itself, and swapped for the fast one before every document.
+/// With the prompt cache off neither grows from there. Unloading the model
+/// to load another gives this back, so the runtime counts it as available
+/// when it plans with a model already loaded: otherwise a loaded accurate
+/// model would be judged not to fit beside itself, and swapped for the fast
+/// one before every document.
 pub const fn resident_estimate(tier: ModelTier) -> u64 {
     match tier {
-        ModelTier::Fast => 1_420 * MIB,
-        ModelTier::Accurate => 2_200 * MIB,
+        ModelTier::Fast => 4_700 * MIB,
+        ModelTier::Accurate => 8_300 * MIB,
     }
 }
 
@@ -165,12 +170,13 @@ pub fn server_options(tier: ModelTier) -> ServerOptions {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServerRuntime {
     /// PrismML's fork, `prism-b10826-c9c34bc`: the only build that reads the
-    /// PQ2_0 tensors Bonsai's weights are stored in.
+    /// PQ2_0 tensors the Bonsai 2 models were stored in. Still packaged, and
+    /// no longer what any pinned model runs on.
     Prism,
     /// ggml-org's llama.cpp `b11946`, about 1,100 builds past the one Prism
     /// forked from. It read Qwen3.5 2B 19% faster than Prism on Linux, at the
     /// same accuracy (`bench/reports/speed-linux-cpu-2026-10-29`), and 25%
-    /// faster on Windows, but cannot read Bonsai.
+    /// faster on Windows; both Qwen3.5 models run on it.
     Upstream,
 }
 
@@ -191,13 +197,12 @@ impl ServerRuntime {
     }
 }
 
-/// The runtime `tier`'s server is started from: Prism for the fast tier,
-/// since nothing else reads its weights, and upstream for the accurate one,
-/// which it reads faster.
+/// The runtime `tier`'s server is started from: upstream for both, since
+/// both are Qwen3.5 models and upstream reads them fastest. Prism stays in
+/// the package for the Bonsai 2 models an earlier build pinned.
 pub const fn server_runtime(tier: ModelTier) -> ServerRuntime {
     match tier {
-        ModelTier::Fast => ServerRuntime::Prism,
-        ModelTier::Accurate => ServerRuntime::Upstream,
+        ModelTier::Fast | ModelTier::Accurate => ServerRuntime::Upstream,
     }
 }
 
@@ -206,20 +211,6 @@ pub const fn server_runtime(tier: ModelTier) -> ServerRuntime {
 /// which costs seconds; holding a gigabyte or two all day for nothing costs
 /// the person working beside it far more.
 pub const IDLE_UNLOAD_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
-
-/// Holds a reading the fast model made for a person: never ready, whatever
-/// validation made of it, and with [`ReviewReason::FastModelReading`] among
-/// its reasons so the review panel can say why. A queue that renames ready
-/// documents on its own never renames one of these.
-pub fn hold_fast_reading(analysis: &mut DocumentAnalysis) {
-    analysis.status = ProposalStatus::NeedsReview;
-    if !analysis
-        .review_reasons
-        .contains(&ReviewReason::FastModelReading)
-    {
-        analysis.review_reasons.push(ReviewReason::FastModelReading);
-    }
-}
 
 /// Whether `tier` fits in `available` bytes. Memory that cannot be measured
 /// is assumed to fit: refusing the better model on a machine whose memory
@@ -389,34 +380,39 @@ pub fn escalation_with(
     unsure.then_some(EscalationReason::LowTokenConfidence)
 }
 
-/// The token probability below which an accurate reading goes to review
-/// instead of being filed: the least probable token of its date or of a
-/// party's name ([`crate::domain::TokenConfidence::min`]). The model naming
-/// a date or a party it would rather not have written is the one signal
-/// validation cannot see, since the value it chose is still in the text.
+/// The token probability below which the accurate model's reading goes to
+/// review instead of being filed: the least probable token of its date or
+/// of a party's name ([`crate::domain::TokenConfidence::min`]). The model
+/// naming a date or a party it would rather not have written is the one
+/// signal validation cannot see, since the value it chose is still in the
+/// text.
 ///
-/// On the 77-document evaluation (Qwen3.5 2B, the packaged runtime, after
-/// the party rules of October 2026) it sent 15 of the 65 ready readings to
-/// review: 7 of the 11 wrong names among them, and 8 right ones. The value
-/// was chosen on the fixture corpus (`docs/model-candidates.md`), not on
-/// those documents.
-pub const REVIEW_BELOW_TOKEN_CONFIDENCE: Option<f32> = Some(0.5);
+/// Calibrated by replay on the three real-document sets
+/// (`bench/reports/realdocs-*`): a larger model is surer of its wrong names
+/// than Qwen3.5 2B was, and the 2B's 0.5 let it file 4-7 wrong names a set.
+/// At 0.6 the 9B files 3/3/1 wrong names for 6/3/3 right ones; each tenth
+/// above costs about as many right names as wrong ones.
+pub const REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE: f32 = 0.6;
 
-/// The token probability below which `tier`'s readings go to review. A fast
-/// reading always goes to review ([`hold_fast_reading`]), so only the
-/// accurate tier has one.
+/// The same for the quick model's readings, calibrated the same way: at 0.6
+/// the 4B files 3/4/2 wrong names for 5/1/0 right ones.
+pub const REVIEW_BELOW_TOKEN_CONFIDENCE_FAST: f32 = 0.6;
+
+/// The token probability below which `tier`'s readings go to review. Both
+/// tiers are judged by it: a quick reading is filed when validation and the
+/// gate let it be, like any other.
 pub fn review_below_token_confidence(tier: ModelTier) -> Option<f32> {
     match tier {
-        ModelTier::Accurate => REVIEW_BELOW_TOKEN_CONFIDENCE,
-        ModelTier::Fast => None,
+        ModelTier::Accurate => Some(REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE),
+        ModelTier::Fast => Some(REVIEW_BELOW_TOKEN_CONFIDENCE_FAST),
     }
 }
 
 /// Whether `tier`'s requests should ask the server for token probabilities:
 /// a reading the review gate judges by them, or one the cascade may escalate
 /// on them. The server pays a softmax over the vocabulary for every
-/// generated token (about 1-2% of a reading's time), so no other reading
-/// asks.
+/// generated token (about 1-2% of a reading's time); every reading is
+/// judged by the gate, so every request asks.
 pub fn wants_token_confidence(tier: ModelTier) -> bool {
     review_below_token_confidence(tier).is_some()
         || (matches!(AUTOMATIC_STRATEGY, AutomaticStrategy::Cascade)
@@ -701,32 +697,6 @@ mod tests {
         }
     }
 
-    /// A fast reading is never ready, whatever validation made of it, and
-    /// says why exactly once, beside any reason it already had.
-    #[test]
-    fn a_fast_reading_always_goes_to_review() {
-        let mut ready = reading(ProposalStatus::Ready, &[], Some(0.99));
-        hold_fast_reading(&mut ready);
-        assert_eq!(ready.status, ProposalStatus::NeedsReview);
-        assert_eq!(ready.review_reasons, [ReviewReason::FastModelReading]);
-
-        let mut doubtful = reading(
-            ProposalStatus::NeedsReview,
-            &[ReviewReason::DateMissing],
-            None,
-        );
-        hold_fast_reading(&mut doubtful);
-        hold_fast_reading(&mut doubtful);
-        assert_eq!(
-            doubtful.review_reasons,
-            [ReviewReason::DateMissing, ReviewReason::FastModelReading]
-        );
-        assert_eq!(
-            ReviewReason::FastModelReading.as_str(),
-            "FAST_MODEL_READING"
-        );
-    }
-
     /// The memory guard is the model, the worker beside it and the headroom
     /// the person keeps, and the accurate model needs more of it.
     #[test]
@@ -742,8 +712,8 @@ mod tests {
     fn unloading_gives_back_only_what_is_not_the_mapped_file() {
         assert_eq!(unload_gives_back(F, 0), resident_estimate(F));
         assert_eq!(
-            unload_gives_back(A, 1_280_835_840),
-            resident_estimate(A) - 1_280_835_840
+            unload_gives_back(A, 5_680_522_464),
+            resident_estimate(A) - 5_680_522_464
         );
         assert_eq!(unload_gives_back(F, u64::MAX), 0);
     }
@@ -822,16 +792,23 @@ mod tests {
         );
     }
 
+    /// Every reading is judged by the gate, so every request asks for the
+    /// probabilities it reads; each tier's threshold is its own constant.
     #[test]
     fn token_probabilities_are_asked_for_only_where_something_reads_them() {
-        assert_eq!(review_below_token_confidence(A), Some(0.5));
-        assert_eq!(review_below_token_confidence(F), None);
-        assert!(wants_token_confidence(A), "the review gate reads them");
         assert_eq!(
-            wants_token_confidence(F),
-            AUTOMATIC_STRATEGY == Cascade,
-            "a fast reading is always reviewed, and AccurateFirst never escalates"
+            review_below_token_confidence(A),
+            Some(REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE)
         );
+        assert_eq!(
+            review_below_token_confidence(F),
+            Some(REVIEW_BELOW_TOKEN_CONFIDENCE_FAST)
+        );
+        for tier in ModelTier::ALL {
+            assert!(wants_token_confidence(tier), "the review gate reads them");
+            let threshold = review_below_token_confidence(tier).unwrap();
+            assert!((0.0..=1.0).contains(&threshold));
+        }
     }
 
     #[test]
@@ -850,11 +827,11 @@ mod tests {
         assert_eq!(IDLE_UNLOAD_AFTER.as_secs(), 600);
     }
 
-    /// Only Prism reads Bonsai's weights; the accurate model is read faster
-    /// by upstream, from a folder of its own beside Prism's.
+    /// Both Qwen3.5 models run on upstream, from a folder of its own beside
+    /// Prism's, which stays where the one runtime always was.
     #[test]
-    fn each_tier_runs_on_its_own_runtime() {
-        assert_eq!(server_runtime(F), ServerRuntime::Prism);
+    fn both_tiers_run_on_the_upstream_runtime() {
+        assert_eq!(server_runtime(F), ServerRuntime::Upstream);
         assert_eq!(server_runtime(A), ServerRuntime::Upstream);
         assert_eq!(ServerRuntime::Prism.subfolder(), None);
         assert_eq!(ServerRuntime::Upstream.subfolder(), Some("llama-upstream"));

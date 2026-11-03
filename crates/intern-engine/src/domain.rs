@@ -677,9 +677,9 @@ pub enum ReviewReason {
     /// The date is written only as numbers whose day and month could be
     /// read either way round, and nothing in the document settles which.
     DateAmbiguous,
-    /// The optional quick local model read the document. Its readings are
-    /// never filed on their own: a person checks it, or the accurate model
-    /// reads it again.
+    /// The quick local model read the document while its readings were
+    /// always held for a person, in builds before both models were judged
+    /// alike. Kept so an analysis stored by one of them still reads.
     FastModelReading,
 }
 
@@ -796,7 +796,7 @@ pub struct AnalysisTelemetry {
 
 /// The local model that produced an analysis.
 ///
-/// What a reviewer is told ("Read by Qwen3.5 2B"), and what decides whether
+/// What a reviewer is told ("Read by Qwen3.5 9B"), and what decides whether
 /// a reading is read again once the accurate model can be used: a provisional
 /// one is, unless a person has acted on it first.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -956,8 +956,8 @@ mod tests {
     fn the_model_that_read_a_document_is_recorded_and_optional() {
         let reading = ModelReading {
             tier: ModelTier::Accurate,
-            model_id: "qwen3.5-2b-instruct-q4-k-m".into(),
-            display_name: "Qwen3.5 2B".into(),
+            model_id: "qwen3.5-9b-instruct-q4-k-m".into(),
+            display_name: "Qwen3.5 9B".into(),
             escalated: Some(EscalationReason::ReviewReason),
             escalation_failed: false,
             provisional: false,
@@ -972,8 +972,8 @@ mod tests {
             written["readBy"],
             serde_json::json!({
                 "tier": "accurate",
-                "modelId": "qwen3.5-2b-instruct-q4-k-m",
-                "displayName": "Qwen3.5 2B",
+                "modelId": "qwen3.5-9b-instruct-q4-k-m",
+                "displayName": "Qwen3.5 9B",
                 "escalated": "review_reason"
             }),
             "flags that are off are left out"

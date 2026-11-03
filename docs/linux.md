@@ -74,19 +74,19 @@ INTERN_RUNTIME_DIR=/tmp/intern-stage/runtime npm run tauri dev
 
 | Part | Source | Pinned by |
 | --- | --- | --- |
-| `llama-server`, `libllama*`, `libggml*`, `libmtmd`, and a `libggml-cpu-*.so` per x86-64 generation: the fast tier's | The [PrismML llama.cpp fork](https://github.com/PrismML-Eng/llama.cpp), which reads the Bonsai 2 ternary models: its prebuilt `llama-<release>-bin-ubuntu-x64.tar.gz` | The release, at the top of `scripts/fetch-linux-assets.sh`, and its archive's size and SHA-256 |
-| `llama-upstream/`: the same files again, the accurate tier's | [llama.cpp](https://github.com/ggml-org/llama.cpp) itself (ggml-org), `b11946`: its prebuilt `llama-b11946-bin-ubuntu-x64.tar.gz` | The release and its archive's size and SHA-256, beside Prism's pin |
+| `llama-server`, `libllama*`, `libggml*`, `libmtmd`, and a `libggml-cpu-*.so` per x86-64 generation: Prism's, which runs nothing the manifest pins | The [PrismML llama.cpp fork](https://github.com/PrismML-Eng/llama.cpp), which reads the Bonsai 2 ternary models an earlier build pinned: its prebuilt `llama-<release>-bin-ubuntu-x64.tar.gz` | The release, at the top of `scripts/fetch-linux-assets.sh`, and its archive's size and SHA-256 |
+| `llama-upstream/`: the same files again, both tiers' | [llama.cpp](https://github.com/ggml-org/llama.cpp) itself (ggml-org), `b11946`: its prebuilt `llama-b11946-bin-ubuntu-x64.tar.gz` | The release and its archive's size and SHA-256, beside Prism's pin |
 | `libpdfium.so` | pdfium-binaries `chromium/7881`, as on Windows | Size and SHA-256 |
 | `libonnxruntime.so`, `ocr-models/` | ONNX Runtime 1.30.0's PyPI wheel; the PP-OCR models | `scripts/fetch-ocr-runtime.sh` and `runtime-assets.json` |
 | `tessdata/eng.traineddata`, `osd.traineddata` | `tessdata_fast`, as on Windows | `runtime-assets.json` |
 | `intern-worker` | This repository | Its digest, in the inventory |
 
-**llama.cpp** comes twice: two builds, each running one local model tier.
-**Prism's**, the PrismML fork whose ternary kernels the Bonsai 2 models need,
-runs the fast tier from `runtime/` itself, where it has always been.
-**Upstream's**, ggml-org's own llama.cpp, runs the accurate tier from
-`runtime/llama-upstream/`: it read the accurate model's 77 evaluation
-documents 19% faster than Prism with no loss of accuracy
+**llama.cpp** comes twice: two builds. **Prism's**, the PrismML fork whose
+ternary kernels the Bonsai 2 models an earlier build pinned need, is still
+staged in `runtime/` itself, where it has always been, and runs nothing the
+manifest pins now. **Upstream's**, ggml-org's own llama.cpp, runs both tiers
+from `runtime/llama-upstream/`: it read Qwen3.5 2B's 77 evaluation documents
+19% faster than Prism with no loss of accuracy
 ([report](../bench/reports/speed-linux-cpu-2026-10-29/README.md)). Each is
 its publisher's own prebuilt Ubuntu x86-64 release, CPU-only and portable: it
 carries one CPU backend per x86-64 generation, from `sse42` (Prism's from
@@ -184,8 +184,8 @@ model, Prism's for the fast one - with the flags the app uses, and
 ```sh
 sudo apt-get install -y xvfb dbus x11-utils
 scripts/smoke-linux.sh --runtime /usr/lib/Intern --app /usr/bin/intern
-scripts/smoke-linux.sh --app target/release/intern --model ~/models/Qwen3.5-2B-Q4_K_M.gguf
-scripts/smoke-linux.sh --model ~/models/my-bonsai.gguf --tier fast
+scripts/smoke-linux.sh --app target/release/intern --model ~/models/Qwen3.5-9B-Q4_K_M.gguf
+scripts/smoke-linux.sh --model ~/models/my-model.gguf --tier fast
 ```
 
 `target/release/intern` must come from `npm run tauri build`, which builds
@@ -206,18 +206,17 @@ runs, as more than one copy, with no hosted-model key.
 
 For the pipeline alone, `intern-analyze` is the same code path as the app, and
 `scripts/run-internbench.sh` runs InternBench live against a llama-server -
-both take the staged runtime directly. Run each model on its tier's server:
-the accurate model (Qwen3.5 2B) on `$RUNTIME/llama-upstream/llama-server`, as
-below, and the fast one (Bonsai 2) on `$RUNTIME/llama-server`:
+both take the staged runtime directly. Both models run on
+`$RUNTIME/llama-upstream/llama-server`:
 
 ```sh
 RUNTIME=/usr/lib/Intern/runtime   # or a stage-linux-runtime.sh stage's runtime/
 "$RUNTIME/llama-upstream/llama-server" --host 127.0.0.1 --port 8080 --api-key KEY \
-  --model Qwen3.5-2B-Q4_K_M.gguf --ctx-size 8192 --jinja --no-webui --no-mmproj &
+  --model Qwen3.5-9B-Q4_K_M.gguf --ctx-size 8192 --jinja --no-webui --no-mmproj &
 INTERN_RUNTIME_DIR="$RUNTIME" cargo run --locked --release -p intern-engine --bin intern-analyze -- \
   --file contract.pdf --worker "$RUNTIME/intern-worker" \
   --endpoint http://127.0.0.1:8080/v1/chat/completions --api-key KEY
-MODEL=Qwen3.5-2B-Q4_K_M.gguf LLAMA_SERVER="$RUNTIME/llama-upstream/llama-server" \
+MODEL=Qwen3.5-9B-Q4_K_M.gguf LLAMA_SERVER="$RUNTIME/llama-upstream/llama-server" \
   INTERN_RUNTIME_DIR="$RUNTIME" INTERN_WORKER="$RUNTIME/intern-worker" scripts/run-internbench.sh
 ```
 
