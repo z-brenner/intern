@@ -2223,12 +2223,16 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
     ) {
         return value;
     }
-    // The line's kind phrase, where it is shorter than the line: what a
-    // break sets off, a code or a number ("Fieldnote S2"), or what an "and"
-    // joins to it ("Availability and"). Never what a connector joins: an
+    // The line's kind phrase, where the line is plainly more than a type:
+    // three or more words around the kind phrase ("Spring Wholesale
+    // Availability and Price List", "letter of 4 April 2014"), or fewer
+    // with a number among them ("Fieldnote S2 Product Launch Plan",
+    // "Advisory Opinion 1997-5"). A type's own modifiers stay: "Profit and
+    // Loss Statement", "Health and Safety Plan", "Bank Statement", and the
+    // one code or year a title opens with, which names the kind ("W-9
+    // Form", "2025 Annual Report"). Never what a connector joins: an
     // "Approval of Closure Plan" is an approval, and the plan is what it
-    // approves. Never a standardized form's code alone, which names the
-    // kind: a "W-9 Form" is not a "Form".
+    // approves.
     const JOINS: &[&str] = &["of", "to", "for", "on", "under", "by"];
     let value_words = words(&value);
     if let Some(head) = head_noun(&value_words).map(str::to_owned)
@@ -2239,9 +2243,30 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
             .into_iter()
             .next()
         && !(at > 0 && JOINS.contains(&value_words[at - 1].as_str()))
-        && !(at == 1 && value.split_whitespace().next().is_some_and(is_form_code))
     {
-        value = phrase;
+        // The tokens outside the phrase: a token may hold several words.
+        let end = at + phrase_words.len();
+        let mut seen = 0;
+        let (mut before, mut after) = (Vec::new(), Vec::new());
+        for token in value.split_whitespace() {
+            let count = words(token).len();
+            if seen + count <= at {
+                before.push(token);
+            } else if seen >= end {
+                after.push(token);
+            }
+            seen += count;
+        }
+        let has_digit = |token: &&str| token.chars().any(|character| character.is_ascii_digit());
+        let removed = before.len() + after.len();
+        let numbered = before.iter().any(has_digit) || after.iter().any(has_digit);
+        let names_the_kind = after.is_empty()
+            && before.len() == 1
+            && (is_form_code(before[0])
+                || (before[0].len() == 4 && before[0].chars().all(|c| c.is_ascii_digit())));
+        if (removed >= 3 || numbered) && !names_the_kind {
+            value = phrase;
+        }
     }
     // A party's name, and the connector that introduces it.
     let value_words = words(&value);
@@ -5591,6 +5616,12 @@ mod tests {
                 "Public Information Statement from Saltmarsh Point Homeowners Association",
                 "Public Information Statement",
             ),
+            ("Advisory Opinion 1997-5", "Advisory Opinion"),
+            ("letter of 4 April 2014", "letter"),
+            (
+                "Public Information Statement 24-45",
+                "Public Information Statement",
+            ),
         ] {
             assert_eq!(stated_title(value, &parties), kind, "{value}");
         }
@@ -5598,6 +5629,11 @@ mod tests {
             "W-9 Form",
             "10-K Annual Report",
             "1099-MISC Form",
+            "Profit and Loss Statement",
+            "Health and Safety Plan",
+            "Bank Statement",
+            "Credit Card Statement",
+            "2025 Annual Report",
             "Approval of Closure Plan",
             "EPA Approval of Closure Plan",
             "Action by Unanimous Written Consent of the Board of Directors",
