@@ -121,6 +121,16 @@ export function validateEvaluation(report) {
   requireValue(report && typeof report === 'object', 'model evaluation report must be an object');
   requireValue(report.schema_version === 3, 'model evaluation schema_version must be 3');
   requireValue(report.pipeline === 'evidence', 'the release gate only accepts the shipping pipeline');
+  requireValue(report.mode === 'live', 'release qualification requires live inference, not replay');
+  requireValue(report.token_confidence_requested === true, 'the shipping evaluation must request token probabilities');
+  requireValue(
+    typeof report.shipping_min_token_confidence === 'number'
+      && report.shipping_min_token_confidence >= 0
+      && report.shipping_min_token_confidence <= 1
+      && typeof report.min_token_confidence === 'number'
+      && Math.abs(report.min_token_confidence - report.shipping_min_token_confidence) < 1e-6,
+    'the evaluation confidence threshold must match the shipping accurate model',
+  );
   requireValue(typeof report.model_id === 'string' && report.model_id.length > 0, 'model evaluation must record the served model id');
   requireValue(Array.isArray(report.records) && report.records.length > 0, 'model evaluation must contain records');
 

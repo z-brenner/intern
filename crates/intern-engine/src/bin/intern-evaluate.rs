@@ -79,6 +79,7 @@ use intern_engine::{
         LEGACY_GRAMMAR, LegacyProposal, legacy_digest, legacy_filename, legacy_prompt,
         legacy_validate,
     },
+    manifest::ModelTier,
     naming::windows_name_key,
     profile::PromptProfile,
     prompt::{SYSTEM_INSTRUCTION, evidence_prompt_version_with},
@@ -281,6 +282,17 @@ fn run() -> Result<i32, String> {
     report.insert("pipeline".into(), json!(pipeline));
     report.insert("model_id".into(), json!(model_id));
     report.insert("budget_characters".into(), json!(budget.max_characters));
+    report.insert(
+        "token_confidence_requested".into(),
+        json!(arguments.contains_key("token-confidence")),
+    );
+    report.insert("min_token_confidence".into(), json!(min_token_confidence));
+    report.insert(
+        "shipping_min_token_confidence".into(),
+        json!(intern_engine::tiers::review_below_token_confidence(
+            ModelTier::Accurate
+        )),
+    );
     report.insert("summary".into(), summarize(&records));
 
     if let Some(path) = arguments.get("baseline") {

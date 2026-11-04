@@ -47,6 +47,14 @@ intern-evaluate ... --pipeline digest --replay fixtures/corpus-recording-digest.
 
 ## What replay can and cannot tell you
 
+The release and Windows QA evaluator requests token probabilities and applies
+the accurate model's 0.7 gate, just as the app does. Its JSON records
+`token_confidence_requested`, `min_token_confidence`, and
+`shipping_min_token_confidence`; the last comes directly from the app's tier
+policy. The release validator rejects missing probabilities, a threshold that
+differs from that policy, and replay results offered as live qualification.
+Changing the app's threshold without updating the runner therefore fails closed.
+
 Replay is honest about its own limits. Before scoring a fixture it rebuilds
 the prompt from the recorded text and compares the hash with the one recorded:
 
