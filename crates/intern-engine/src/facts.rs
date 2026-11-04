@@ -529,7 +529,14 @@ pub fn validate_facts_at(
                 support.document_type = found.support;
                 remember(&found, &mut references);
                 type_line = found.line.clone();
-                let phrase = without_identifier(&phrase);
+                // A title phrase runs on through "of the ..." to a party's
+                // name; a party is no part of a type.
+                let names = facts
+                    .parties
+                    .iter()
+                    .map(|party| party.name.as_str())
+                    .collect::<Vec<_>>();
+                let phrase = stated_title(&without_identifier(&phrase), &names);
                 type_title = Some(phrase.clone());
                 type_unit = found.unit.map(|unit| unit.ordinal);
                 (Some(phrase), true)
@@ -541,7 +548,13 @@ pub fn validate_facts_at(
                 type_unit = found.unit.map(|unit| unit.ordinal);
                 let kept = marks_its_line_holds(value, found.line.as_deref().unwrap_or_default());
                 type_line = found.line.clone();
-                (Some(titled(&without_identifier(&kept))), true)
+                let names = facts
+                    .parties
+                    .iter()
+                    .map(|party| party.name.as_str())
+                    .collect::<Vec<_>>();
+                let kept = stated_title(&without_identifier(&kept), &names);
+                (Some(titled(&kept)), true)
             }
             TypeReading::Retitled { phrase, line } => {
                 support.document_type = Support::Unsupported;
@@ -1926,6 +1939,16 @@ fn read_type_words<'a>(
         };
     }
     let value_words = words(value);
+    // "Report generated", "Printed on": the stamp a system puts on a sheet
+    // says when it was made, not what it is. The title above it does.
+    if value_words.last().is_some_and(|word| {
+        matches!(
+            word.as_str(),
+            "generated" | "printed" | "exported" | "created" | "saved"
+        )
+    }) {
+        return TypeReading::Unsupported;
+    }
     let Some(head) = head_noun(&value_words).map(str::to_owned) else {
         return TypeReading::Unsupported;
     };
@@ -2170,6 +2193,96 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
 /// default" - as a title: the words are the document's, the casing a
 /// stylistic choice the model is not asked to make. Any capital in the
 /// reply is kept as written.
+/// A stated type as a title names its kind, not the whole line a bigger
+/// model copies. The field a title line runs into is cut away ("CHANGE
+/// ORDER Distribution: Briarport Library District" is a "Change Order");
+/// the line's own kind phrase stands for the line ("Fieldnote S2 Product
+/// Launch Plan" is a "Product Launch Plan", "Spring Wholesale Availability
+/// and Price List" a "Price List", as [`title_phrase`] reads a title); and
+/// a party the reply named is no part of a type ("Newsletter of the
+/// Saltmarsh Point Homeowners Association" is a "Newsletter"). An
+/// agreement or an amendment keeps its title whole: it is named for what
+/// it is about ("Supply Agreement", "Amendment to Lease"), and a party's
+/// name can be part of that.
+fn stated_title(value: &str, parties: &[&str]) -> String {
+    let tokens = value.split_whitespace().collect::<Vec<_>>();
+    let keep = |tokens: &[&str]| -> Option<String> {
+        let kept = tokens.join(" ");
+        (!kept.is_empty() && has_a_kind(&words(&kept))).then_some(kept)
+    };
+    // A field the title line runs into: the label's word ends with a colon.
+    let mut value = tokens
+        .iter()
+        .skip(1)
+        .position(|token| token.ends_with(':'))
+        .and_then(|at| keep(&tokens[..at + 1]))
+        .unwrap_or_else(|| value.to_owned());
+    if matches!(
+        DocumentClass::of(Some(&value)),
+        DocumentClass::Agreement | DocumentClass::Amendment
+    ) {
+        return value;
+    }
+    // The line's kind phrase, where it is shorter than the line: what a
+    // break sets off, a code or a number ("Fieldnote S2"), or what an "and"
+    // joins to it ("Availability and"). Never what a connector joins: an
+    // "Approval of Closure Plan" is an approval, and the plan is what it
+    // approves.
+    const JOINS: &[&str] = &["of", "to", "for", "on", "under", "by"];
+    let value_words = words(&value);
+    if let Some(head) = head_noun(&value_words).map(str::to_owned)
+        && let Some(phrase) = title_phrase(&value, &head)
+        && let phrase_words = words(&phrase)
+        && phrase_words.len() < value_words.len()
+        && let Some(at) = phrase_positions(&value_words, &phrase_words)
+            .into_iter()
+            .next()
+        && !(at > 0 && JOINS.contains(&value_words[at - 1].as_str()))
+    {
+        value = phrase;
+    }
+    // A party's name, and the connector that introduces it.
+    let value_words = words(&value);
+    const INTRODUCES: &[&str] = &[
+        "of", "for", "by", "from", "to", "with", "between", "and", "the",
+    ];
+    let cut = parties
+        .iter()
+        .filter_map(|party| {
+            let party_words = words(party);
+            if party_words.is_empty() {
+                return None;
+            }
+            phrase_positions(&value_words, &party_words)
+                .into_iter()
+                .next()
+        })
+        .filter(|&at| at > 0)
+        .min();
+    if let Some(mut at) = cut {
+        while at > 1 && INTRODUCES.contains(&value_words[at - 1].as_str()) {
+            at -= 1;
+        }
+        // The token the cut word opens: a token may hold several words
+        // ("Girafa.com,") or none ("-").
+        let tokens = value.split_whitespace().collect::<Vec<_>>();
+        let mut seen = 0;
+        let token_at = tokens
+            .iter()
+            .position(|token| {
+                let count = words(token).len();
+                let opens = seen == at && count > 0;
+                seen += count;
+                opens
+            })
+            .unwrap_or(tokens.len());
+        if let Some(kept) = keep(&tokens[..token_at]) {
+            value = kept;
+        }
+    }
+    value
+}
+
 fn titled(value: &str) -> String {
     if value.chars().any(char::is_uppercase) {
         return value.to_owned();
@@ -5450,6 +5563,84 @@ mod tests {
         }
     }
 
+    /// A stated type that is a whole title line reads as the line's kind
+    /// phrase: without the field it runs into, the code or the words an
+    /// "and" joins before the kind, or a party the reply named after it.
+    /// What a connector joins stays ("Approval of Closure Plan"), and so
+    /// does an agreement's title, which can be named for a party.
+    #[test]
+    fn a_stated_type_reads_as_its_titles_kind_phrase() {
+        let parties = [
+            "Saltmarsh Point Homeowners Association",
+            "Briarport Library District",
+        ];
+        for (value, kind) in [
+            ("Fieldnote S2 Product Launch Plan", "Product Launch Plan"),
+            ("Spring Wholesale Availability and Price List", "Price List"),
+            (
+                "Newsletter of the Saltmarsh Point Homeowners Association",
+                "Newsletter",
+            ),
+            (
+                "CHANGE ORDER Distribution: Briarport Library District / Stonebridge",
+                "CHANGE ORDER",
+            ),
+            (
+                "Public Information Statement from Saltmarsh Point Homeowners Association",
+                "Public Information Statement",
+            ),
+        ] {
+            assert_eq!(stated_title(value, &parties), kind, "{value}");
+        }
+        for kept in [
+            "Approval of Closure Plan",
+            "EPA Approval of Closure Plan",
+            "Action by Unanimous Written Consent of the Board of Directors",
+            "Notice of Default and Reservation of Rights",
+            "Saltmarsh Point Homeowners Association Services Agreement",
+            "Amendment to Lease with Briarport Library District",
+            "Guide to the Code",
+            "Details for Improvement Notice",
+        ] {
+            assert_eq!(stated_title(kept, &parties), kept);
+        }
+    }
+
+    /// "Report generated: ..." is the stamp a system put on a sheet, not
+    /// its title: the heading above it names the kind.
+    #[test]
+    fn a_machine_stamp_is_no_type() {
+        let index = EvidenceIndex::build(&DocumentSource::from_pages(vec![
+            crate::domain::SourcePage::new(
+                1,
+                "HARVEST LOG\n\nReport generated: 2026-10-02\n\nRowanbrae Vineyards\n\n\
+                 Block | Variety | Tons\nA1 | Pinot Noir | 4.2",
+                PageOrigin::PlainText,
+            ),
+        ]));
+        let context = whole(&index);
+        let facts = ModelFacts {
+            document_type: Some("Report generated".into()),
+            type_evidence: vec![id_of(&index, "Report generated")],
+            document_date: Some("2026-10-02".into()),
+            date_evidence: vec![id_of(&index, "Report generated")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &context, &index);
+        assert_ne!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Report Generated"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(
+            outcome.reasons.contains(&ReviewReason::TypeUnsupported)
+                || outcome.reasons.contains(&ReviewReason::TypeInferred),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
     fn check(
         facts: ModelFacts,
         context: &EvidenceContext,
@@ -8481,6 +8672,7 @@ LOAN CONDITION REPORT\n\n\
             ],
             basis: String::new(),
             on_proposed_roles: false,
+            defaulted: false,
         };
         assert_eq!(
             fit_type(
