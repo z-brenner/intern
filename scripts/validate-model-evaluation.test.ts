@@ -15,9 +15,13 @@ function metric(rate: number, correct = Math.round(rate * 10), total = 10) {
 function report(overrides: Record<string, unknown> = {}, summaryOverrides: Record<string, unknown> = {}) {
   return {
     schema_version: 3,
+    mode: 'live',
     pipeline: 'evidence',
     model_id: 'intern-local',
     budget_characters: 12_000,
+    token_confidence_requested: true,
+    min_token_confidence: 0.7,
+    shipping_min_token_confidence: 0.7,
     summary: {
       evaluated: 12,
       review_rate: 0.25,
@@ -40,6 +44,30 @@ function report(overrides: Record<string, unknown> = {}, summaryOverrides: Recor
 }
 
 describe('model evaluation gate', () => {
+  it('refuses replay results as live release qualification', () => {
+    expect(() => validateEvaluation(report({ mode: 'replay' }))).toThrow(/live inference/);
+  });
+
+  it('rejects a live evaluation that did not request token probabilities', () => {
+    for (const token_confidence_requested of [undefined, false]) {
+      expect(() => validateEvaluation(report({ token_confidence_requested }))).toThrow(/token probabilities/);
+    }
+  });
+
+  it('rejects an ungated or differently gated evaluation of the shipping model', () => {
+    for (const min_token_confidence of [undefined, null, 0.5, 0.6, 0.8]) {
+      expect(() => validateEvaluation(report({ min_token_confidence }))).toThrow(/confidence threshold/);
+    }
+  });
+
+  it('compares the evaluated threshold to the policy exported by the app', () => {
+    expect(() => validateEvaluation(report({ shipping_min_token_confidence: 0.8 }))).toThrow(/confidence threshold/);
+    expect(validateEvaluation(report({ min_token_confidence: 0.8, shipping_min_token_confidence: 0.8 })).accepted).toBe(true);
+    for (const shipping_min_token_confidence of [undefined, null, -0.1, 1.1]) {
+      expect(() => validateEvaluation(report({ shipping_min_token_confidence }))).toThrow(/confidence threshold/);
+    }
+  });
+
   it('accepts a run that files documents correctly', () => {
     const result = validateEvaluation(report());
     expect(result.accepted).toBe(true);

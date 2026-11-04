@@ -147,6 +147,7 @@ try {
         --api-key $ApiKey `
         --model-id ([string]$Manifest.served_model_name) `
         --pipeline $Pipeline `
+        --token-confidence --min-token-confidence 0.7 `
         @ProfileArguments
     if ($LASTEXITCODE -ne 0) { throw "Corpus evaluation failed" }
     $Elapsed = ((Get-Date) - $Started).TotalSeconds
