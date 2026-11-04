@@ -12,6 +12,7 @@ Each pair is one report: the Markdown is for reading, the JSON for
 | `2026-10-07-phase3-before` | All 77 documents through the digest pipeline, as Intern read them before phase 3: the phase 2 recording of record plus the five long documents, replayed from `bench/recording-digest.json` with `--pipeline digest`. |
 | `2026-10-07-phase3-after` | The same 77 documents through the evidence pipeline, the default since, replayed from today's `bench/recording.json`. |
 | `2026-10-07-phase3-compare` | `intern-bench compare` of the two, with the phase 3 scorecard: what retrieval, the facts reply and validation changed, document by document. |
+| `model-qualification-2026-11` | Qwen3.5 9B and 4B qualified to replace Qwen3.5 2B: six candidates live on InternBench and three real sets, the finalists on every recording after two rounds of engine adaptation, a fourth unseen real set, the fixtures corpus, speed and memory on one machine. `readings.json` has every document's reading by the three models. |
 
 ## The phase 3 runs
 

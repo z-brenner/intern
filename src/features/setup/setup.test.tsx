@@ -98,7 +98,7 @@ describe('setup and queue controls', () => {
     expect(screen.getByRole('list', { name: 'Model setup steps' })).toHaveTextContent('Download the model (2.55 GiB)');
     fireEvent.click(screen.getByText('What gets downloaded'));
     expect(screen.getByText(/The quick model, Qwen3\.5 4B \(2\.55 GiB\), to start naming documents/i)).toBeVisible();
-    expect(screen.getByText(/Qwen3\.5 9B \(5\.29 GiB\), the accurate model, then follows in the background while you work\. Until it arrives, the quick model reads, and the accurate one reads those documents again unless you have acted on them\./i)).toBeVisible();
+    expect(screen.getByText(/Qwen3\.5 9B \(5\.29 GiB\), the accurate model, then follows in the background while you work\. Until it arrives, the quick model reads, every name it gives waits for your check, and the accurate one reads those documents again unless you have acted on them\./i)).toBeVisible();
     expect(screen.queryByText(/3\.27 GB/i)).not.toBeInTheDocument();
   });
 

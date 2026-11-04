@@ -1804,10 +1804,13 @@ impl AnalyzerBoundary for RuntimeModel {
                 Err(_) => reading.escalation_failed = true,
             }
         }
-        // A quick reading is filed as validation and the gate left it, like
-        // the accurate model's. Whether it is also read again by the accurate
-        // model is the plan's to say: a stand-in's is; one asked for by name
-        // is not.
+        // The quick model's reading stands for a person to check - never
+        // filed on its own, whatever validation made of it, and whatever was
+        // asked for. Whether it is also read again by the accurate model is
+        // the plan's to say: a stand-in's is; one asked for by name is not.
+        if reading.tier == ModelTier::Fast {
+            tiers::hold_fast_reading(&mut analysis);
+        }
         // Read by the accurate model: it can read now, which is the evidence
         // the provisional readings wait for.
         if reading.tier == ModelTier::Accurate {
@@ -9910,22 +9913,20 @@ mod runtime_tests {
         assert!(install.accurate().exists(), "nothing deleted it");
     }
 
-    /// A reading by the quick model is ready as validation left it, like the
-    /// accurate model's; made while the accurate model was wanted and not
-    /// there, it is provisional, and the accurate model's reading of the
-    /// same document is not.
+    /// Whatever validation made of it, a reading by the quick model goes to
+    /// a person, says why, and is provisional; the accurate model's reading
+    /// of the same document is ready as validation left it.
     #[test]
-    fn a_quick_reading_is_ready_as_validation_left_it_and_provisional() {
+    fn a_quick_reading_is_never_ready() {
         let install = Install::new("tier-quick-review");
         let rig = Rig::new();
         let runtime = install.runtime(&rig, "1.0.0");
         verified(&runtime);
         let quick = runtime.analyze(&probe(), "pdf", &[]).unwrap();
-        assert_eq!(quick.status, intern_engine::ProposalStatus::Ready);
-        assert!(
-            quick.review_reasons.is_empty(),
-            "{:?}",
-            quick.review_reasons
+        assert_eq!(quick.status, intern_engine::ProposalStatus::NeedsReview);
+        assert_eq!(
+            quick.review_reasons,
+            [intern_engine::ReviewReason::FastModelReading]
         );
         assert!(read_by(&quick).provisional);
 
@@ -9951,14 +9952,14 @@ mod runtime_tests {
         assert_eq!(launched(&rig), [ModelTier::Fast]);
         let fast = runtime.analyze(&probe(), "pdf", &[]).unwrap();
         let reading = read_by(&fast);
-        // Asked for by name, the quick model's reading is ready as validation
-        // left it and stands in for nothing: it is not provisional, and
+        // Asked for by name, the quick model's reading still waits for a
+        // person, and stands in for nothing: it is not provisional, and
         // nothing promises to read it again.
         assert_eq!(
             (reading.tier, reading.provisional),
             (ModelTier::Fast, false)
         );
-        assert_eq!(fast.status, intern_engine::ProposalStatus::Ready);
+        assert_eq!(fast.status, intern_engine::ProposalStatus::NeedsReview);
         assert!(!runtime.take_provisional_upgrade());
 
         world.prefer(ModelPreference::Accurate);
@@ -10147,7 +10148,8 @@ mod runtime_tests {
         let analysis = runtime.analyze(&probe(), "pdf", &[]).unwrap();
         let reading = read_by(&analysis);
         assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
-        assert_eq!(analysis.status, intern_engine::ProposalStatus::Ready);
+        // Read by the stand-in, so held for a person as every quick reading is.
+        assert_eq!(analysis.status, intern_engine::ProposalStatus::NeedsReview);
         runtime.analyze(&probe(), "pdf", &[]).unwrap();
         assert_eq!(rig.refused.load(Ordering::SeqCst), 1, "not tried again");
         assert_eq!(

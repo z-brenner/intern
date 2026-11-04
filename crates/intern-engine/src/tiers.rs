@@ -2,13 +2,15 @@
 //!
 //! Intern pins two local models (see [`crate::manifest::ModelTier`]): the
 //! accurate one, Qwen3.5 9B, and a quick one, Qwen3.5 4B, about half the
-//! accurate one's time and little over half its memory. Both are read the
-//! same way - the same prompt, the same validation, the same review gate -
-//! and a quick reading is filed when validation and the gate let it be. What
-//! sets the two apart is memory: the accurate model needs more of it than a
-//! 16 GB laptop with a browser and an office suite open always has, so the
-//! quick one stands in while memory is short, and a reading it made as a
-//! stand-in is read again by the accurate model once it can be. Everything
+//! accurate one's time and little over half its memory. Both are asked the
+//! same way - the same prompt, the same validation - but on the real-document
+//! sets (`bench/reports/model-qualification-2026-11`) the 4B filed a wrong
+//! name for every right one at any review gate, so a quick reading is never
+//! ready: it always goes to a person ([`hold_fast_reading`]), and is read
+//! again by the accurate model once it can be. What sets the two apart is
+//! memory: the accurate model needs more of it than a 16 GB laptop with a
+//! browser and an office suite open always has, so the quick one stands in
+//! while memory is short. Everything
 //! here is a pure decision over what is installed and how much memory is
 //! free, so every policy - and every threshold the benchmarks move - is one
 //! named constant or one function, tested on its own.
@@ -19,7 +21,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{DocumentAnalysis, ProposalStatus};
+use crate::domain::{DocumentAnalysis, ProposalStatus, ReviewReason};
 use crate::manifest::ModelTier;
 use crate::server::ServerOptions;
 
@@ -212,6 +214,20 @@ pub const fn server_runtime(tier: ModelTier) -> ServerRuntime {
 /// the person working beside it far more.
 pub const IDLE_UNLOAD_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
+/// Holds a reading the fast model made for a person: never ready, whatever
+/// validation made of it, and with [`ReviewReason::FastModelReading`] among
+/// its reasons so the review panel can say why. A queue that renames ready
+/// documents on its own never renames one of these.
+pub fn hold_fast_reading(analysis: &mut DocumentAnalysis) {
+    analysis.status = ProposalStatus::NeedsReview;
+    if !analysis
+        .review_reasons
+        .contains(&ReviewReason::FastModelReading)
+    {
+        analysis.review_reasons.push(ReviewReason::FastModelReading);
+    }
+}
+
 /// Whether `tier` fits in `available` bytes. Memory that cannot be measured
 /// is assumed to fit: refusing the better model on a machine whose memory
 /// Intern cannot read would make it worse everywhere for nothing.
@@ -387,20 +403,23 @@ pub fn escalation_with(
 /// signal validation cannot see, since the value it chose is still in the
 /// text.
 ///
-/// Calibrated by replay on the three real-document sets
-/// (`bench/reports/realdocs-*`): a larger model is surer of its wrong names
-/// than Qwen3.5 2B was, and the 2B's 0.5 let it file 4-7 wrong names a set.
-/// At 0.6 the 9B files 3/3/1 wrong names for 6/3/3 right ones; each tenth
-/// above costs about as many right names as wrong ones.
-pub const REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE: f32 = 0.6;
+/// Calibrated by replay on the four real-document sets
+/// (`bench/reports/model-qualification-2026-11`): a larger model is surer of
+/// its wrong names than Qwen3.5 2B was, and the 2B's 0.5 let the 9B file
+/// 16 wrong names of 42 filed. At 0.6 it files 9 wrong of 28; at 0.7, 2 of
+/// 15; at 0.8, 1 of 7. On InternBench 0.7 keeps 37 of 77 names ready with
+/// one wrong, against 47 and one at 0.6.
+pub const REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE: f32 = 0.7;
 
-/// The same for the quick model's readings, calibrated the same way: at 0.6
-/// the 4B files 3/4/2 wrong names for 5/1/0 right ones.
-pub const REVIEW_BELOW_TOKEN_CONFIDENCE_FAST: f32 = 0.6;
+/// The same for the quick model's readings. A quick reading always goes to
+/// a person ([`hold_fast_reading`]), so this decides only whether a cascade
+/// sends it on to the accurate model ([`escalation_with`]): the 4B filed
+/// 14 wrong names of 25 at 0.6 and 5 of 12 at 0.7 on the real sets, which
+/// is why it is held.
+pub const REVIEW_BELOW_TOKEN_CONFIDENCE_FAST: f32 = 0.7;
 
-/// The token probability below which `tier`'s readings go to review. Both
-/// tiers are judged by it: a quick reading is filed when validation and the
-/// gate let it be, like any other.
+/// The token probability below which `tier`'s readings go to review, or, for
+/// a quick reading, which is held anyway, to the accurate model.
 pub fn review_below_token_confidence(tier: ModelTier) -> Option<f32> {
     match tier {
         ModelTier::Accurate => Some(REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE),
@@ -695,6 +714,30 @@ mod tests {
             }),
             facts: None,
         }
+    }
+
+    #[test]
+    fn a_fast_reading_always_goes_to_review() {
+        let mut ready = reading(ProposalStatus::Ready, &[], Some(0.99));
+        hold_fast_reading(&mut ready);
+        assert_eq!(ready.status, ProposalStatus::NeedsReview);
+        assert_eq!(ready.review_reasons, [ReviewReason::FastModelReading]);
+
+        let mut doubtful = reading(
+            ProposalStatus::NeedsReview,
+            &[ReviewReason::DateMissing],
+            None,
+        );
+        hold_fast_reading(&mut doubtful);
+        hold_fast_reading(&mut doubtful);
+        assert_eq!(
+            doubtful.review_reasons,
+            [ReviewReason::DateMissing, ReviewReason::FastModelReading]
+        );
+        assert_eq!(
+            ReviewReason::FastModelReading.as_str(),
+            "FAST_MODEL_READING"
+        );
     }
 
     /// The memory guard is the model, the worker beside it and the headroom

@@ -763,21 +763,23 @@ Qwen3.5 9B and the fast tier Qwen3.5 4B, both asked with the production
 request alone - so the corpus recordings of record and the replay gates
 describe the 9B. The real-document sets chose them over Qwen3.5 2B, which the
 builds before alpha.13 pinned: with the rules of November 2026 the 9B names
-20/19/11 of the three sets' documents right to the 2B's 16/17/11, and the 4B
-18/16/12 ([`accuracy-research-2026-10.md`](accuracy-research-2026-10.md)).
+22/21/11 of the three sets' documents right to the 2B's 16/17/11, and the 4B
+18/16/12 ([`bench/reports/model-qualification-2026-11`](../bench/reports/model-qualification-2026-11/README.md)).
 Nothing in setup deletes a model file.
 
-**A quick reading is judged like any other.** Validation and the review gate
-decide whether it is ready, exactly as for the 9B's, each tier with its own
-gate threshold (`tiers::review_below_token_confidence`). What sets a quick
-reading apart is whether it stands in: made while the accurate model was
-wanted and not installed yet, or did not fit in memory, it is provisional, and
-once the accurate model can read - its download verified, or memory back -
-the queue sends every provisional reading nobody has acted on back to be read
-again (`Pipeline::reanalyze_provisional`). An approval, an edit, a kept name
-or an undone rename is a person's decision and is never overwritten. The
-builds before alpha.13 held every quick reading for a person with
-`FAST_MODEL_READING`, which a document read then still carries.
+**A quick reading always goes to a person.** Validation and the review gate
+judge it as they judge the 9B's, but whatever they make of it the queue holds
+it with `FAST_MODEL_READING` (`tiers::hold_fast_reading`), as the builds
+before alpha.13 held Bonsai's: on the four real-document sets the 4B filed
+a wrong name for about every right one at any gate threshold
+(`bench/reports/model-qualification-2026-11`), where the 9B at its 0.7
+gate files one wrong name in seven. What sets a quick reading apart beyond
+that is whether it stands in: made while the accurate model was wanted and
+not installed yet, or did not fit in memory, it is provisional, and once the
+accurate model can read - its download verified, or memory back - the queue
+sends every provisional reading nobody has acted on back to be read again
+(`Pipeline::reanalyze_provisional`). An approval, an edit, a kept name or an
+undone rename is a person's decision and is never overwritten.
 
 Which model reads a document is a pure decision in `intern_engine::tiers`,
 asked before every document, so a choice in Settings, a model that finished

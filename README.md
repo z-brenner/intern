@@ -111,9 +111,9 @@ your documents is **Qwen3.5 9B** (5.29 GiB). So that a new install can start
 sooner, setup first fetches **Qwen3.5 4B** (2.55 GiB), a quicker model, and
 opens the queue as soon as it has passed its checks; Qwen3.5 9B then downloads
 in the background while you work, and the window says so in one quiet line.
-Until it arrives the 4B reads, its names filed or held for review by the same
-checks as the 9B's, and the 9B reads those documents again once it can - unless
-you have acted on them first. Both downloads are resumable, they transfer no
+Until it arrives the 4B reads, every name it gives waits for your check, and
+the 9B reads those documents again once it can - unless you have acted on them
+first. Both downloads are resumable, they transfer no
 document information, and a file becomes active only after its exact length
 and SHA-256 match the manifest built into the installer. If you already have
 the files, **Choose existing model files** points Intern at either or both and
@@ -125,13 +125,13 @@ for the two new models the same way: the 4B first, then the 9B behind the
 window. The earlier models' files are not deleted; nothing in Intern ever
 deletes a model file. The 9B needs about 10 GB of memory free to load, which a
 16 GB laptop has with little else open and not with a browser and an office
-suite at work; then the 4B, which needs about 6.5 GB, reads in its place, and
-its readings are read again by the 9B when memory comes back. Both are slower
-than the 2B was - the 4B about twice, the 9B about five times - and that trade
-was made on purpose: on three sets of real letters, notices and invoices the
-9B named 20, 19 and 11 of about 60 documents right where the 2B named 16, 17
-and 11, and the 4B 18, 16 and 12
-([`docs/accuracy-research-2026-10.md`](docs/accuracy-research-2026-10.md)).
+suite at work; then the 4B, which needs about 6.5 GB, reads in its place, its
+names wait for your check, and the 9B reads them again when memory comes back.
+Both are slower than the 2B was - the 4B about two and a half times, the 9B
+about four and a half - and that trade was made on purpose: on three sets of
+real letters, notices and invoices the 9B named 22, 21 and 11 of about 60
+documents right where the 2B named 16, 17 and 11, and the 4B 18, 16 and 12
+([`bench/reports/model-qualification-2026-11`](bench/reports/model-qualification-2026-11/README.md)).
 
 **Settings > Model** chooses which local model reads: **Automatic**
 (recommended) reads every document with Qwen3.5 9B, the 4B standing in only

@@ -22,7 +22,7 @@ The GGUF file named in src-tauri/resources/model-manifest.json, as the app
 downloaded it.
 
 .EXAMPLE
-./scripts/record-corpus.ps1 -RuntimeDirectory C:\intern-stage -ModelPath "$env:LOCALAPPDATA\Intern\models\Qwen3.5-2B-Q4_K_M.gguf"
+./scripts/record-corpus.ps1 -RuntimeDirectory C:\intern-stage -ModelPath "$env:LOCALAPPDATA\Intern\models\Qwen3.5-9B-Q4_K_M.gguf"
 #>
 [CmdletBinding()]
 param(

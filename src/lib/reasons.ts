@@ -23,8 +23,9 @@ const SENTENCES: Record<string, string> = {
   DATE_IMPLAUSIBLE: 'The date\'s year looks wrong for a document, often a misread such as 2625 for 2025. Check it against the document.',
   DATE_IS_DEADLINE: 'The date the model chose is a due, renewal, or expiry date, not the date the document was issued. Check the date.',
   DATE_AMBIGUOUS: 'The date is written only as numbers that could be read day-first or month-first. Check which one the document means.',
-  // The quick model read it in an earlier build, which held every quick
-  // reading for a person; kept so a document read then still says why.
+  // The quick model read it. Its readings are never filed on their own; the
+  // accurate model reads the document again when it can, unless a person has
+  // acted on it first.
   FAST_MODEL_READING: 'Read by the quick model — check it, or wait for the accurate model to read it again.',
   // Approving such a document sends it back here rather than filing a name
   // that described the earlier version; reading it again is the way on, and

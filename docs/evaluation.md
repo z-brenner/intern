@@ -30,15 +30,19 @@ The evaluator runs the evidence pipeline, the default, unless asked for
 another (`--pipeline digest`, or `legacy` live). A recording says which
 pipeline made it and is replayed only through that one:
 `fixtures/corpus-recording.json` and `corpus-baseline.json` are the evidence
-pipeline's, recorded live from `902c7fe`, and
-`fixtures/corpus-recording-digest.json` and `corpus-baseline-digest.json`
-the digest pipeline's, which a hosted model reads through. CI replays
-both:
+pipeline's, recorded live with Qwen3.5 9B after the second engine adaptation
+(`e64581e`, merged as `a7d3021`), and `fixtures/corpus-recording-digest.json`
+and `corpus-baseline-digest.json` the digest pipeline's, which a hosted model
+reads through, recorded the same day. Both are replayed with the accurate
+model's review gate, `--min-token-confidence 0.7`
+(`REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE` in `tiers.rs`), as the app reads,
+and their baselines were written at that gate. CI replays both:
 
 ```text
-intern-evaluate ... --replay fixtures/corpus-recording.json --baseline fixtures/corpus-baseline.json
+intern-evaluate ... --replay fixtures/corpus-recording.json --baseline fixtures/corpus-baseline.json \
+  --min-token-confidence 0.7
 intern-evaluate ... --pipeline digest --replay fixtures/corpus-recording-digest.json \
-  --baseline fixtures/corpus-baseline-digest.json
+  --baseline fixtures/corpus-baseline-digest.json --min-token-confidence 0.7
 ```
 
 ## What replay can and cannot tell you

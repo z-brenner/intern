@@ -5,8 +5,8 @@
   "pipeline": "evidence",
   "retrieval": "f7ab2a5355b6f3c7c7d1938067462f0f92e15edda279238a373ed5068fc2942e",
   "prompt_version": "4425663a8a9e",
-  "recorded_at_unix": 1791392088,
-  "note": "Qwen3.5-2B-Q4_K_M.gguf (manifest sha256 aaf42c8b), llama.cpp CPU build, 4 threads, 8192 context, Linux x86_64; routing worker with PP-OCR (phase 2); evidence pipeline, stable ids, compact reply; every fixture recorded live on 2026-10-07 from commit 902c7fe65c69 (the Stage 7 prompt). The digest pipeline's recording is fixtures/corpus-recording-digest.json",
+  "recorded_at_unix": 1793753607,
+  "note": "Qwen3.5-9B-Q4_K_M.gguf (manifest sha256 03b74727), upstream llama.cpp b11946 CPU build, 4 threads, 8192 context, Linux x86_64 (4-core Xeon); routing worker with PP-OCR; evidence pipeline, stable ids, compact reply, recorded with --token-confidence; every fixture recorded live on 2026-11-04 from commit e64581ebce4f (round two of the engine adaptation, merged as a7d302136f0b; the prompt is main's). The digest pipeline's recording is fixtures/corpus-recording-digest.json",
   "fixtures": [
     {
       "file": "employment-agreement.pdf",
@@ -151,7 +151,7 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Employment Agreement",
+          "document_type": "EMPLOYMENT AGREEMENT",
           "document_date": "2025-02-14",
           "date_role": "effective",
           "parties": [
@@ -168,7 +168,7 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Employment Agreement",
+            "document_type": "EMPLOYMENT AGREEMENT",
             "type_evidence": [
               "p1.b1"
             ],
@@ -193,14 +193,19 @@
                 ]
               }
             ],
-            "subject": "Employment",
+            "subject": "Employment Agreement",
             "subject_evidence": [
-              "p1.b2.f3"
+              "p1.b1"
             ],
             "identifier": null,
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.66357625,
+          "mean": 0.98100376,
+          "tokens": 18
         }
       }
     },
@@ -333,11 +338,11 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Lease Agreement",
+          "document_type": "LEASE AGREEMENT",
           "document_date": "2024-09-01",
           "date_role": "effective",
           "parties": [
-            "PrOperty 47 JUniper LOOP Cedar Finch Properties Llc",
+            "Cedar Finch Properties Llc",
             "Orion Glass Studio inc"
           ],
           "party_relation": "none",
@@ -350,7 +355,7 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Lease Agreement",
+            "document_type": "LEASE AGREEMENT",
             "type_evidence": [
               "p1.b1"
             ],
@@ -361,28 +366,33 @@
             ],
             "parties": [
               {
-                "name": "PrOperty 47 JUniper LOOP Cedar Finch Properties Llc",
-                "role": "client",
+                "name": "Cedar Finch Properties Llc",
+                "role": "landlord",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b2"
                 ]
               },
               {
                 "name": "Orion Glass Studio inc",
-                "role": "client",
+                "role": "tenant",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b2"
                 ]
               }
             ],
-            "subject": "Lease Agreement",
+            "subject": "Property 47 Juniper Loop",
             "subject_evidence": [
-              "p1.b1"
+              "p1.b2"
             ],
             "identifier": null,
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.7388045,
+          "mean": 0.9867085,
+          "tokens": 21
         }
       }
     },
@@ -640,9 +650,9 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Services Agreement",
+          "document_type": "SERVICES AGREEMENT",
           "document_date": "2025-01-08",
-          "date_role": "effective",
+          "date_role": "execution",
           "parties": [
             "Lumen Kite Cooperative",
             "Solstice Index LLC"
@@ -657,26 +667,26 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Services Agreement",
+            "document_type": "SERVICES AGREEMENT",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-01-08",
-            "date_role": "effective",
+            "date_role": "execution",
             "date_evidence": [
-              "p1.b2"
+              "p2.b3"
             ],
             "parties": [
               {
                 "name": "Lumen Kite Cooperative",
-                "role": "recipient",
+                "role": "client",
                 "evidence": [
                   "p1.b2"
                 ]
               },
               {
                 "name": "Solstice Index LLC",
-                "role": "recipient",
+                "role": "contractor",
                 "evidence": [
                   "p1.b2"
                 ]
@@ -690,6 +700,11 @@
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.9949332,
+          "mean": 0.99936694,
+          "tokens": 19
         }
       }
     },
@@ -852,12 +867,12 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Non-Disclosure Agreement",
+          "document_type": "Mutual Non-Disclosure Agreement",
           "document_date": "2025-03-03",
-          "date_role": "execution",
+          "date_role": "effective",
           "parties": [
             "Fable Harbor Labs LLC",
-            "Copper Wren Design Inc."
+            "Copper Wren Design Inc"
           ],
           "party_relation": "none",
           "description": "",
@@ -869,26 +884,26 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Non-Disclosure Agreement",
+            "document_type": "Mutual Non-Disclosure Agreement",
             "type_evidence": [
-              "p1.b1"
+              "p1.b2"
             ],
             "document_date": "2025-03-03",
-            "date_role": "execution",
+            "date_role": "effective",
             "date_evidence": [
               "p1.b2"
             ],
             "parties": [
               {
                 "name": "Fable Harbor Labs LLC",
-                "role": "recipient",
+                "role": "client",
                 "evidence": [
                   "p1.b2"
                 ]
               },
               {
-                "name": "Copper Wren Design Inc.",
-                "role": "sender",
+                "name": "Copper Wren Design Inc",
+                "role": "client",
                 "evidence": [
                   "p1.b2"
                 ]
@@ -902,6 +917,11 @@
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.9890582,
+          "mean": 0.9992118,
+          "tokens": 21
         }
       }
     },
@@ -1084,7 +1104,7 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Invoice",
+          "document_type": "INV-2048",
           "document_date": "2025-04-30",
           "date_role": "invoice",
           "parties": [
@@ -1101,32 +1121,32 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Invoice",
+            "document_type": "INV-2048",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-04-30",
             "date_role": "invoice",
             "date_evidence": [
-              "p1.b1"
+              "p1.b2.f1"
             ],
             "parties": [
               {
                 "name": "Nimbus Orchard Supply Co.",
-                "role": "sender",
+                "role": "issuer",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b3"
                 ]
               },
               {
                 "name": "Atlas Threadworks LLC",
-                "role": "recipient",
+                "role": "customer",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b3"
                 ]
               }
             ],
-            "subject": "1-page document",
+            "subject": "Invoice for goods",
             "subject_evidence": [
               "p1.b1"
             ],
@@ -1134,6 +1154,11 @@
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.5722148,
+          "mean": 0.9689746,
+          "tokens": 20
         }
       }
     },
@@ -1225,8 +1250,10 @@
         "proposal": {
           "document_type": "Quarterly Operations Review",
           "document_date": "2025-05-07",
-          "date_role": "other",
-          "parties": [],
+          "date_role": "effective",
+          "parties": [
+            "Fictional Meridian Committee"
+          ],
           "party_relation": "none",
           "description": "",
           "confidence": 1.0,
@@ -1242,12 +1269,20 @@
               "p1.b1"
             ],
             "document_date": "2025-05-07",
-            "date_role": "other",
+            "date_role": "effective",
             "date_evidence": [
-              "p1.b1"
+              "p1.b2"
             ],
-            "parties": [],
-            "subject": "inventory",
+            "parties": [
+              {
+                "name": "Fictional Meridian Committee",
+                "role": "client",
+                "evidence": [
+                  "p1.b3"
+                ]
+              }
+            ],
+            "subject": "Quarterly Operations Review",
             "subject_evidence": [
               "p1.b1"
             ],
@@ -1255,6 +1290,11 @@
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.5856376,
+          "mean": 0.97383887,
+          "tokens": 16
         }
       }
     },
@@ -1401,9 +1441,9 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Delivery Receipt",
+          "document_type": "DElIvery RECeIPt DR-771",
           "document_date": "2025-06-12",
-          "date_role": "other",
+          "date_role": "notice",
           "parties": [
             "Pine Echo Couriers Llc",
             "Violet cartography Studio"
@@ -1418,19 +1458,19 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Delivery Receipt",
+            "document_type": "DElIvery RECeIPt DR-771",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-06-12",
-            "date_role": "other",
+            "date_role": "notice",
             "date_evidence": [
               "p1.b2"
             ],
             "parties": [
               {
                 "name": "Pine Echo Couriers Llc",
-                "role": "issuer",
+                "role": "sender",
                 "evidence": [
                   "p1.b3"
                 ]
@@ -1451,6 +1491,11 @@
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.9095593,
+          "mean": 0.99315,
+          "tokens": 22
         }
       }
     },
@@ -12190,9 +12235,9 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Journal",
+          "document_type": "MOONLIT ARCHIVE PROJECT JOURNAL - PAGE 1",
           "document_date": "2025-07-01",
-          "date_role": "filing",
+          "date_role": "issuance",
           "parties": [],
           "party_relation": "none",
           "description": "",
@@ -12204,24 +12249,29 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Journal",
+            "document_type": "MOONLIT ARCHIVE PROJECT JOURNAL - PAGE 1",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-07-01",
-            "date_role": "filing",
+            "date_role": "issuance",
             "date_evidence": [
-              "p1.b1"
+              "p1.b2.f1"
             ],
             "parties": [],
-            "subject": "Moonlit Archive Project",
+            "subject": "Fictional observation 001",
             "subject_evidence": [
-              "p1.b1"
+              "p1.b3"
             ],
             "identifier": null,
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.7609991,
+          "mean": 0.9795948,
+          "tokens": 12
         }
       }
     },
@@ -12359,11 +12409,11 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Purchase Order",
+          "document_type": "PURCHASE ORDER PO-310",
           "document_date": "2025-07-14",
-          "date_role": "other",
+          "date_role": "execution",
           "parties": [
-            "Manufacuring LLC"
+            "EMBer POSt MANUFACtURInG LLC"
           ],
           "party_relation": "none",
           "description": "",
@@ -12375,32 +12425,37 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Purchase Order",
+            "document_type": "PURCHASE ORDER PO-310",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-07-14",
-            "date_role": "other",
+            "date_role": "execution",
             "date_evidence": [
               "p1.b2"
             ],
             "parties": [
               {
-                "name": "Manufacuring LLC",
+                "name": "EMBer POSt MANUFACtURInG LLC",
                 "role": "issuer",
                 "evidence": [
                   "p1.b3"
                 ]
               }
             ],
-            "subject": "manufacturing",
+            "subject": "Purchase Order PO-310",
             "subject_evidence": [
-              "p1.b3"
+              "p1.b1"
             ],
             "identifier": null,
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.63600874,
+          "mean": 0.95825034,
+          "tokens": 22
         }
       }
     },
@@ -12517,10 +12572,12 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Packing Slip",
+          "document_type": "PACKING SLIP PS-311",
           "document_date": "2025-07-15",
-          "date_role": "other",
-          "parties": [],
+          "date_role": "issuance",
+          "parties": [
+            "QUARTZ MEADOW RETAIL LLC"
+          ],
           "party_relation": "none",
           "description": "",
           "confidence": 1.0,
@@ -12531,17 +12588,25 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Packing Slip",
+            "document_type": "PACKING SLIP PS-311",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-07-15",
-            "date_role": "other",
+            "date_role": "issuance",
             "date_evidence": [
               "p1.b2"
             ],
-            "parties": [],
-            "subject": "Packing Slip",
+            "parties": [
+              {
+                "name": "QUARTZ MEADOW RETAIL LLC",
+                "role": "seller",
+                "evidence": [
+                  "p1.b2"
+                ]
+              }
+            ],
+            "subject": "PACKING SLIP PS-311",
             "subject_evidence": [
               "p1.b1"
             ],
@@ -12549,6 +12614,11 @@
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.87801415,
+          "mean": 0.99261373,
+          "tokens": 18
         }
       }
     },
@@ -12655,12 +12725,10 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Evidence",
-          "document_date": "2023-07-15",
-          "date_role": "other",
-          "parties": [
-            "Harbor Comet Repairs LLC"
-          ],
+          "document_type": null,
+          "document_date": null,
+          "date_role": null,
+          "parties": [],
           "party_relation": "none",
           "description": "",
           "confidence": 1.0,
@@ -12671,32 +12739,25 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Evidence",
-            "type_evidence": [
-              "p1.b1"
-            ],
-            "document_date": "2023-07-15",
-            "date_role": "other",
-            "date_evidence": [
-              "p1.b1"
-            ],
-            "parties": [
-              {
-                "name": "Harbor Comet Repairs LLC",
-                "role": "other",
-                "evidence": [
-                  "p1.b1"
-                ]
-              }
-            ],
+            "document_type": null,
+            "type_evidence": [],
+            "document_date": null,
+            "date_role": null,
+            "date_evidence": [],
+            "parties": [],
             "subject": "Harbor Comet Repairs LLC",
             "subject_evidence": [
-              "p1.b1"
+              "p1.b2"
             ],
             "identifier": null,
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.82579774,
+          "mean": 0.8874568,
+          "tokens": 3
         }
       }
     },
@@ -20095,9 +20156,9 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Statement of Work",
+          "document_type": "STATEMENT OF WORK NO. 4",
           "document_date": "2026-04-09",
-          "date_role": "other",
+          "date_role": "execution",
           "parties": [
             "Ridgeline Cartography LLC",
             "Contoso Worldwide, Inc."
@@ -20112,32 +20173,32 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Statement of Work",
+            "document_type": "STATEMENT OF WORK NO. 4",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2026-04-09",
-            "date_role": "other",
+            "date_role": "execution",
             "date_evidence": [
               "p14.b1"
             ],
             "parties": [
               {
                 "name": "Ridgeline Cartography LLC",
-                "role": "issuer",
+                "role": "contractor",
                 "evidence": [
-                  "p14.b2"
+                  "p1.b3"
                 ]
               },
               {
                 "name": "Contoso Worldwide, Inc.",
-                "role": "recipient",
+                "role": "client",
                 "evidence": [
-                  "p14.b3.f1"
+                  "p1.b3"
                 ]
               }
             ],
-            "subject": "customer relationship management platform",
+            "subject": "implement CRM platform and migrate records",
             "subject_evidence": [
               "p1.b5"
             ],
@@ -20145,6 +20206,11 @@
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.94663274,
+          "mean": 0.99387234,
+          "tokens": 23
         }
       }
     },
@@ -20586,12 +20652,12 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Notice of Termination",
+          "document_type": "NOTICE OF TERMINATION",
           "document_date": "2026-12-29",
-          "date_role": "other",
+          "date_role": "notice",
           "parties": [
-            "Harriet Voss",
-            "Northstar Lantern Works LLC"
+            "John Smith",
+            "Harriet Voss"
           ],
           "party_relation": "none",
           "description": "",
@@ -20603,39 +20669,44 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Notice of Termination",
+            "document_type": "NOTICE OF TERMINATION",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2026-12-29",
-            "date_role": "other",
+            "date_role": "notice",
             "date_evidence": [
-              "p1.b1"
+              "p1.b3.f1"
             ],
             "parties": [
               {
-                "name": "Harriet Voss",
-                "role": "recipient",
+                "name": "John Smith",
+                "role": "client",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b4.f1"
                 ]
               },
               {
-                "name": "Northstar Lantern Works LLC",
+                "name": "Harriet Voss",
                 "role": "sender",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b4.f2"
                 ]
               }
             ],
-            "subject": "Termination of Employment Agreement",
+            "subject": "Termination of the Employment Agreement",
             "subject_evidence": [
-              "p1.b1"
+              "p1.b6.f1"
             ],
             "identifier": null,
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.6113455,
+          "mean": 0.9687085,
+          "tokens": 16
         }
       }
     },
@@ -21475,9 +21546,9 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "First Amendment to Consulting Agreement",
+          "document_type": "FIRST AMENDMENT TO CONSULTING AGREEMENT",
           "document_date": "2025-09-14",
-          "date_role": "execution",
+          "date_role": "effective",
           "parties": [
             "Contoso Worldwide, Inc.",
             "Jane Ellery"
@@ -21492,39 +21563,44 @@
             "parties": []
           },
           "facts": {
-            "document_type": "First Amendment to Consulting Agreement",
+            "document_type": "FIRST AMENDMENT TO CONSULTING AGREEMENT",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-09-14",
-            "date_role": "execution",
+            "date_role": "effective",
             "date_evidence": [
-              "p1.b1"
+              "p1.b2"
             ],
             "parties": [
               {
                 "name": "Contoso Worldwide, Inc.",
-                "role": "issuer",
+                "role": "employer",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b2"
                 ]
               },
               {
                 "name": "Jane Ellery",
-                "role": "recipient",
+                "role": "contractor",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b2"
                 ]
               }
             ],
-            "subject": "Fees",
+            "subject": "Amendment to Consulting Agreement fees and term",
             "subject_evidence": [
-              "p1.b1"
+              "p1.b2"
             ],
             "identifier": null,
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.77865195,
+          "mean": 0.98640203,
+          "tokens": 19
         }
       }
     },
@@ -21905,9 +21981,9 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "invoice",
+          "document_type": "INVOICE",
           "document_date": "2026-01-05",
-          "date_role": "invoice",
+          "date_role": "issuance",
           "parties": [
             "Acme Corporation",
             "Contoso Worldwide, Inc."
@@ -21922,39 +21998,44 @@
             "parties": []
           },
           "facts": {
-            "document_type": "invoice",
+            "document_type": "INVOICE",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2026-01-05",
-            "date_role": "invoice",
+            "date_role": "issuance",
             "date_evidence": [
-              "p1.b1"
+              "p1.b3.f2"
             ],
             "parties": [
               {
                 "name": "Acme Corporation",
-                "role": "sender",
+                "role": "issuer",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b2"
                 ]
               },
               {
                 "name": "Contoso Worldwide, Inc.",
-                "role": "recipient",
+                "role": "customer",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b4.f1"
                 ]
               }
             ],
-            "subject": "platform subscription services",
+            "subject": "Annual platform subscription and services",
             "subject_evidence": [
-              "p1.b1"
+              "p1.b5"
             ],
             "identifier": null,
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.8568719,
+          "mean": 0.991839,
+          "tokens": 19
         }
       }
     },
@@ -25718,7 +25799,7 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Settlement Agreement and Mutual Release",
+          "document_type": "SETTLEMENT AGREEMENT AND MUTUAL RELEASE",
           "document_date": "2026-07-22",
           "date_role": "effective",
           "parties": [
@@ -25735,9 +25816,9 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Settlement Agreement and Mutual Release",
+            "document_type": "SETTLEMENT AGREEMENT AND MUTUAL RELEASE",
             "type_evidence": [
-              "p1.b1"
+              "p1.b2"
             ],
             "document_date": "2026-07-22",
             "date_role": "effective",
@@ -25747,14 +25828,14 @@
             "parties": [
               {
                 "name": "Harborline Freight Systems LLC",
-                "role": "sender",
+                "role": "employer",
                 "evidence": [
                   "p1.b2"
                 ]
               },
               {
                 "name": "Quill and Vane Advisory Group, Inc.",
-                "role": "sender",
+                "role": "client",
                 "evidence": [
                   "p1.b2"
                 ]
@@ -25768,6 +25849,11 @@
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.96558195,
+          "mean": 0.99608254,
+          "tokens": 26
         }
       }
     },
@@ -25921,14 +26007,10 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Notes",
-          "document_date": "2024-01-15",
-          "date_role": "other",
-          "parties": [
-            "Rowan",
-            "Priya",
-            "Dana"
-          ],
+          "document_type": null,
+          "document_date": null,
+          "date_role": null,
+          "parties": [],
           "party_relation": "none",
           "description": "",
           "confidence": 1.0,
@@ -25939,39 +26021,13 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Notes",
-            "type_evidence": [
-              "p1.b1"
-            ],
-            "document_date": "2024-01-15",
-            "date_role": "other",
-            "date_evidence": [
-              "p1.b1"
-            ],
-            "parties": [
-              {
-                "name": "Rowan",
-                "role": "other",
-                "evidence": [
-                  "p1.b1"
-                ]
-              },
-              {
-                "name": "Priya",
-                "role": "other",
-                "evidence": [
-                  "p1.b1"
-                ]
-              },
-              {
-                "name": "Dana",
-                "role": "other",
-                "evidence": [
-                  "p1.b3.f1"
-                ]
-              }
-            ],
-            "subject": "offsite",
+            "document_type": null,
+            "type_evidence": [],
+            "document_date": null,
+            "date_role": null,
+            "date_evidence": [],
+            "parties": [],
+            "subject": "Notes",
             "subject_evidence": [
               "p1.b1"
             ],
@@ -25979,6 +26035,11 @@
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.78875136,
+          "mean": 0.8807125,
+          "tokens": 3
         }
       }
     },
@@ -26192,9 +26253,9 @@
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Quarterly Business Review",
+          "document_type": "QUARTERLY BUSINESS REVIEW",
           "document_date": "2026-05-21",
-          "date_role": "other",
+          "date_role": "execution",
           "parties": [
             "Contoso Worldwide, Inc.",
             "Ridgeline Cartography LLC"
@@ -26209,32 +26270,32 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Quarterly Business Review",
+            "document_type": "QUARTERLY BUSINESS REVIEW",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2026-05-21",
-            "date_role": "other",
+            "date_role": "execution",
             "date_evidence": [
               "p1.b4"
             ],
             "parties": [
               {
                 "name": "Contoso Worldwide, Inc.",
-                "role": "recipient",
+                "role": "client",
                 "evidence": [
                   "p1.b2"
                 ]
               },
               {
                 "name": "Ridgeline Cartography LLC",
-                "role": "sender",
+                "role": "issuer",
                 "evidence": [
                   "p1.b3"
                 ]
               }
             ],
-            "subject": "Q2 pipeline",
+            "subject": "Q2 pipeline and roadmap review",
             "subject_evidence": [
               "p1.b7.f1"
             ],
@@ -26242,6 +26303,11 @@
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.86244875,
+          "mean": 0.9917904,
+          "tokens": 23
         }
       }
     },
@@ -26422,7 +26488,7 @@
         "proposal": {
           "document_type": "Order Form",
           "document_date": "2026-01-14",
-          "date_role": "other",
+          "date_role": "execution",
           "parties": [
             "Tessellate Analytics Ltd.",
             "Contoso Worldwide, Inc."
@@ -26442,34 +26508,39 @@
               "p1.b1"
             ],
             "document_date": "2026-01-14",
-            "date_role": "other",
+            "date_role": "execution",
             "date_evidence": [
               "p1.b4"
             ],
             "parties": [
               {
                 "name": "Tessellate Analytics Ltd.",
-                "role": "sender",
+                "role": "buyer",
                 "evidence": [
                   "p1.b2"
                 ]
               },
               {
                 "name": "Contoso Worldwide, Inc.",
-                "role": "recipient",
+                "role": "seller",
                 "evidence": [
                   "p1.b2"
                 ]
               }
             ],
-            "subject": "Master Subscription Agreement",
+            "subject": "Order Form for Subscription",
             "subject_evidence": [
-              "p1.b2"
+              "p1.b1"
             ],
             "identifier": null,
             "identifier_evidence": [],
             "key_facts": []
           }
+        },
+        "token_confidence": {
+          "min": 0.5955943,
+          "mean": 0.9798973,
+          "tokens": 22
         }
       }
     }
