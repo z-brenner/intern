@@ -1,5 +1,9 @@
 # Qwen3.5 9B and 4B replace Qwen3.5 2B: the qualification, November 2026
 
+Follow-up: [the date, QA-policy and memory safety fixes](../pr62-safety-followup-2026-11-04/README.md)
+correct three InternBench date failures by replay and document remaining release
+requirements. The measurements below remain the original model-selection record.
+
 Status: measured 2026-11-03 and 2026-11-04. This is the record of how Intern's local models were
 chosen for v0.1.0-alpha.13, what each measurement found, and what was rejected. `readings.json`
 holds every document's reading by the three Qwen3.5 models on every set below, with the gold.

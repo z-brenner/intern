@@ -756,6 +756,31 @@ pub fn validate_facts_at(
         date_line = Some(line);
         replaced = true;
     }
+    // An explicit "Date of this Lease" names this document, rather than
+    // the term or rent it starts. A policy period likewise gives coverage's
+    // start, rather than the representative's countersignature. A signature
+    // gives way only to one date supported in both views.
+    if !replaced
+        && let Some(date) = document_date.clone()
+        && let Some(kind) = document_type.as_deref()
+        && (infer_date_role(context, &date, Some(kind)) == Some(DateRole::Execution)
+            || (only_in_signatures(scope.index, &date) && reads_as_signature_date(document, &date)))
+    {
+        let in_context = declared_document_dates(context, &date, kind);
+        let in_document = declared_document_dates(document, &date, kind);
+        let has_alternate = !in_context.is_empty() || !in_document.is_empty();
+        if let Some((alternate, line)) = single_agreed(in_context, in_document) {
+            document_date = Some(alternate);
+            date_role = Some(DateRole::Effective);
+            date_line = Some(line);
+            replaced = true;
+        } else if has_alternate {
+            // Conflicting labels, an unsettled numeric convention, or a
+            // date absent from the excerpts: do not quietly pick a signature.
+            push(&mut reasons, ReviewReason::DateAmbiguous);
+            replaced = true;
+        }
+    }
     // A signed-on date loses to a stated effective or start date: an
     // agreement or a form takes effect when it says it does, not on the day
     // it was signed. Only the one effective date both views agree on
@@ -772,7 +797,8 @@ pub fn validate_facts_at(
             .then(|| infer_date_role(&scope.view(&cited), &date, document_type.as_deref()))
             .flatten()
             .or_else(|| infer_date_role(context, &date, document_type.as_deref()));
-        if wording == Some(DateRole::Execution)
+        if (wording == Some(DateRole::Execution)
+            || (only_in_signatures(scope.index, &date) && reads_as_signature_date(document, &date)))
             && let Some((alternate, line)) = single_agreed(
                 effective_alternates(context, &date),
                 effective_alternates(document, &date),
@@ -2485,6 +2511,55 @@ fn single_agreed(
         ([(left, line)], [(right, _)]) if left == right => Some((left.clone(), line.clone())),
         _ => None,
     }
+}
+
+/// Dates explicitly naming this kind of document, and the start of an
+/// insurance policy's "Policy Period | From ... to ...". The period's end
+/// is never an alternate, and numeric conventions must be settled by the
+/// document before an ambiguous first date can be chosen.
+fn declared_document_dates(
+    view: &impl Segments,
+    chosen: &str,
+    document_type: &str,
+) -> Vec<(String, String)> {
+    let kind = normalize(document_type);
+    let agreement = DocumentClass::of(Some(document_type)) == DocumentClass::Agreement;
+    let policy =
+        kind == "policy" || kind.ends_with(" policy") || kind.ends_with("policy declarations");
+    let order = numeric_date_order(view);
+    let mut dates: Vec<(String, String)> = Vec::new();
+    for segment in view.segments() {
+        for line in segment.lines() {
+            let normalized = normalize(line);
+            for (date, position) in crate::infer::dates_stated_on(&normalized, order) {
+                if date == chosen || dates.iter().any(|(other, _)| *other == date) {
+                    continue;
+                }
+                let window = crate::infer::window_before(&normalized, position);
+                let own = agreement
+                    && ["lease", "agreement", "contract", "statement of work"]
+                        .iter()
+                        .any(|noun| {
+                            contains_whole(&kind, noun)
+                                && window
+                                    .split(|c: char| !c.is_alphabetic())
+                                    .filter(|word| !word.is_empty())
+                                    .eq(["date", "of", "this"]
+                                        .into_iter()
+                                        .chain(noun.split_whitespace()))
+                        });
+                let period_start = policy
+                    && window
+                        .split(|c: char| !c.is_alphabetic())
+                        .filter(|word| !word.is_empty())
+                        .eq(["policy", "period", "from"]);
+                if own || period_start {
+                    dates.push((date, line.trim().to_owned()));
+                }
+            }
+        }
+    }
+    dates
 }
 
 /// The significant words of a type or a subject: longer than two letters,
@@ -5545,6 +5620,159 @@ mod tests {
     use crate::retrieve::{RetrievalConfig, Tier, retrieve};
 
     const YEAR: i32 = 2026;
+
+    #[test]
+    fn a_leases_explicit_own_date_beats_signatures_and_rent_commencement() {
+        let index = index_of(
+            "INDUSTRIAL LEASE\n\nThis Lease is dated as of the date stated in Schedule 1.\n\n| Item | Particular |\n| Date of this Lease | April 14, 2026 |\n| Commencement Date | July 1, 2026 |\n| Rent Commencement Date | October 1, 2026 |\n\nIN WITNESS WHEREOF\n\nSigned: April 16, 2026\n\nSigned: April 20, 2026",
+        );
+        let facts = ModelFacts {
+            document_type: Some("Industrial Lease".into()),
+            type_evidence: vec![id_of(&index, "INDUSTRIAL LEASE")],
+            document_date: Some("2026-04-16".into()),
+            date_role: Some(DateRole::Execution),
+            date_evidence: vec![id_of(&index, "Signed: April 16")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-04-14")
+        );
+        assert!(
+            outcome
+                .proposal
+                .evidence
+                .date
+                .as_deref()
+                .unwrap()
+                .contains("Date of this Lease")
+        );
+    }
+
+    #[test]
+    fn a_sows_effective_date_does_not_compete_with_its_end_of_term() {
+        let index = index_of(
+            "STATEMENT OF WORK\n\nThis SOW is effective as of May 26, 2026 and continues until November 30, 2026.\n\nIN WITNESS WHEREOF\n\nDate: June 1, 2026\n\nDate: June 3, 2026",
+        );
+        let facts = ModelFacts {
+            document_type: Some("Statement of Work".into()),
+            type_evidence: vec![id_of(&index, "STATEMENT OF WORK")],
+            document_date: Some("2026-06-01".into()),
+            date_role: Some(DateRole::Execution),
+            date_evidence: vec![id_of(&index, "Date: June 1")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-05-26")
+        );
+        assert_eq!(outcome.proposal.date_role, Some(DateRole::Effective));
+    }
+
+    #[test]
+    fn a_policy_is_dated_by_its_period_start_instead_of_countersignature() {
+        let index = index_of(
+            "COMMERCIAL PROPERTY POLICY\n\nCOMMON POLICY DECLARATIONS\n\n| Item | Declaration |\n| Policy Period | From 07/01/2026 to 07/01/2027 at 12:01 A.M. |\n| Countersigned | 06/24/2026 by the authorized representative |",
+        );
+        let facts = ModelFacts {
+            document_type: Some("Commercial Property Policy".into()),
+            type_evidence: vec![id_of(&index, "COMMERCIAL PROPERTY POLICY")],
+            document_date: Some("2026-06-24".into()),
+            date_role: Some(DateRole::Execution),
+            date_evidence: vec![id_of(&index, "Countersigned")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-07-01")
+        );
+        assert!(
+            outcome
+                .proposal
+                .evidence
+                .date
+                .as_deref()
+                .unwrap()
+                .contains("Policy Period")
+        );
+    }
+
+    #[test]
+    fn conflicting_explicit_lease_dates_require_a_person_instead_of_a_signature_guess() {
+        let index = index_of(
+            "INDUSTRIAL LEASE\n\n| Date of this Lease | April 14, 2026 |\n| Date of this Lease | April 15, 2026 |\n\nIN WITNESS WHEREOF\n\nSigned: April 16, 2026",
+        );
+        let facts = ModelFacts {
+            document_type: Some("Industrial Lease".into()),
+            type_evidence: vec![id_of(&index, "INDUSTRIAL LEASE")],
+            document_date: Some("2026-04-16".into()),
+            date_evidence: vec![id_of(&index, "Signed:")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-04-16")
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::DateAmbiguous));
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+    }
+
+    #[test]
+    fn an_unsettled_numeric_policy_start_requires_review() {
+        let index = index_of(
+            "COMMERCIAL PROPERTY POLICY\n\n| Policy Period | From 07/01/2026 to 07/01/2027 |\n| Countersigned | June 24, 2026 |",
+        );
+        let facts = ModelFacts {
+            document_type: Some("Commercial Property Policy".into()),
+            type_evidence: vec![id_of(&index, "COMMERCIAL PROPERTY POLICY")],
+            document_date: Some("2026-06-24".into()),
+            date_evidence: vec![id_of(&index, "Countersigned")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-06-24")
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::DateAmbiguous));
+    }
+
+    #[test]
+    fn another_documents_period_or_date_does_not_replace_this_documents_signature() {
+        for (kind, text) in [
+            (
+                "Lease Amendment",
+                "LEASE AMENDMENT\n\n| Date of this Lease | April 14, 2026 |\n\nIN WITNESS WHEREOF\n\nSigned: May 1, 2026",
+            ),
+            (
+                "Policy Cancellation Notice",
+                "POLICY CANCELLATION NOTICE\n\n| Policy Period | From July 1, 2026 to July 1, 2027 |\n\nSigned: May 1, 2026",
+            ),
+            (
+                "Commercial Property Policy",
+                "COMMERCIAL PROPERTY POLICY\n\n| Prior Policy Period | From July 1, 2025 to July 1, 2026 |\n\nCountersigned: May 1, 2026",
+            ),
+        ] {
+            let index = index_of(text);
+            let facts = ModelFacts {
+                document_type: Some(kind.into()),
+                type_evidence: vec![id_of(&index, &kind.to_uppercase())],
+                document_date: Some("2026-05-01".into()),
+                date_evidence: vec![id_of(&index, "May 1")],
+                ..ModelFacts::default()
+            };
+            let outcome = check(facts, &whole(&index), &index);
+            assert_eq!(
+                outcome.proposal.document_date.as_deref(),
+                Some("2026-05-01"),
+                "{kind}"
+            );
+        }
+    }
 
     fn index_of(text: &str) -> EvidenceIndex {
         EvidenceIndex::build(&source_from_text(text))

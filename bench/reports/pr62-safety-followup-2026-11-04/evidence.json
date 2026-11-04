@@ -1,0 +1,324 @@
+{
+  "base_commit": "b94198418dc7aad57329b91bea2cca4e764dc60c",
+  "compatible_main": "e4f1d706083c2f2ee77fefa35d1d01000cf38481",
+  "method": "Replay of original model responses, with prompt staleness checks enabled. No new inference or laptop performance measurement. Report HEAD metadata names the base; source hashes bind the evaluated changes.",
+  "inputs_sha256": {
+    "bench/recording.json": "851ad40a3829767f6b6d89fde77bdad03735cd8b3623a3019157d36e3abc0bc9",
+    "bench/gold.json": "0d03c7572388d15cddeaf8177ae1a546429e809c40ef46caff187f3eb0f36cbf",
+    "bench/manifest.json": "a80399ce67f3ca444c753fbdc51e4ce0a8d8464486ead189e282d8c6220ac571",
+    "fixtures/corpus-recording.json": "ce310ebee41746f1accdf4e5ebfd8bc70beeef78a866cfaceb764637a84deb84",
+    "fixtures/corpus-recording-digest.json": "7ba1a79e2e3cbc342e5bb956d72186ee90c4a654bcb42e60f4162d49be180e5b",
+    "fixtures/expected.json": "4a2b1723abe4e0f499aea116828e07c7ed0803b1b999a07d52b547b05ec44eac"
+  },
+  "source_sha256": {
+    "crates/intern-engine/src/facts.rs": "fd62b1ce7cb83ea28fac639816b8c1d8e4927d48dd32f96c8924ca75029a3ea9",
+    "crates/intern-engine/src/infer.rs": "05199f199311fd39a028e411c03c9e18c66e4c666017ef557edb7160632138e5",
+    "crates/intern-engine/src/validate.rs": "42259dedfd6e4e95fdba8b7baf940f2239f9470a345a8c95ab6d8da3ea1c2968",
+    "crates/intern-engine/src/tiers.rs": "31dbc4d2750ffb116aaaed65e246644bf3a92dc68f06ba084044b98140590672",
+    "crates/intern-engine/src/bin/intern-evaluate.rs": "db0b1321289053dec1a6d19adaa37771af15f039c20a58da7d29c723f1771f03",
+    "scripts/run-model-evaluation.ps1": "07c1e7fa732c9ba2fc86b075d1ac6407499eed1cd0059ac8448f2ebbb481635f",
+    "scripts/validate-model-evaluation.mjs": "6fb1f4e34c7abe462ce6c810b4cb23136146d8447c7a0c4c0bfe68149e82ca54",
+    "src-tauri/src/commands.rs": "b9f903da4f5debe93fb9e80640405c9c4e9e92dcef85596cec07fd644e7baf16"
+  },
+  "reports": {
+    "q9b-bench": {
+      "file_sha256": "5d91140b40fe2cc0fe8ad9b37af51731d56c50ea5a95ef3ace79e065bee90df7",
+      "mode": "replay",
+      "records": 77,
+      "stale": 0,
+      "scores": {
+        "filename_correct": {
+          "correct": 73,
+          "rate": 0.9481,
+          "total": 77
+        },
+        "date_correct": {
+          "correct": 77,
+          "rate": 1.0,
+          "total": 77
+        },
+        "parties_correct": {
+          "correct": 77,
+          "rate": 1.0,
+          "total": 77
+        },
+        "ready": {
+          "correct": 37,
+          "rate": 0.4805,
+          "total": 77
+        },
+        "unsafe_ready": {
+          "correct": 0,
+          "rate": 0.0,
+          "total": 77
+        },
+        "date_forbidden": {
+          "correct": 0,
+          "rate": 0.0,
+          "total": 77
+        }
+      },
+      "original_baseline_failures": [
+        "sow-under-msa-5p: needless_review was false, now true",
+        "property-policy-declarations-mid-60p: needless_review was false, now true"
+      ],
+      "readiness_decisions_unchanged": 77,
+      "previously_correct_filenames_lost": 0
+    },
+    "q2b-bench": {
+      "file_sha256": "c54a6e9fb110ed9ace21781190166ce7fa96c70bb2765e183bd73bcdbc5db885",
+      "mode": "replay",
+      "records": 77,
+      "stale": 0,
+      "scores": {
+        "filename_correct": {
+          "correct": 71,
+          "rate": 0.9221,
+          "total": 77
+        },
+        "date_correct": {
+          "correct": 76,
+          "rate": 0.987,
+          "total": 77
+        },
+        "parties_correct": {
+          "correct": 75,
+          "rate": 0.974,
+          "total": 77
+        },
+        "ready": {
+          "correct": 65,
+          "rate": 0.8442,
+          "total": 77
+        },
+        "unsafe_ready": {
+          "correct": 1,
+          "rate": 0.013,
+          "total": 77
+        },
+        "date_forbidden": {
+          "correct": 0,
+          "rate": 0.0,
+          "total": 77
+        }
+      },
+      "original_baseline_failures": []
+    },
+    "q9b-fixtures": {
+      "file_sha256": "90060eb5076fe076bccd3abe8873969ce26d503f661b90dbd856903f861aa782",
+      "mode": "replay",
+      "records": 21,
+      "stale": 0,
+      "baseline_regressions": []
+    },
+    "q9b-digest": {
+      "file_sha256": "360418d06f83102d50c11489b0f461765f3441ffe089c43d682fcfda8f214363",
+      "mode": "replay",
+      "records": 21,
+      "stale": 0,
+      "baseline_regressions": []
+    },
+    "q9b-fixtures-policy": {
+      "file_sha256": "f9ab0e243358500ee716b3f08300c4037b0c6f6638034a599f032778895805f6",
+      "mode": "replay",
+      "records": 21,
+      "stale": 0,
+      "baseline_regressions": []
+    }
+  },
+  "checks": {
+    "portable_rust": {
+      "passed": 1494,
+      "failed": 0,
+      "ignored": 6,
+      "excluded": "intern-app: missing glib-2.0 GTK development dependency"
+    },
+    "frontend": {
+      "files": 77,
+      "passed": 758,
+      "failed": 0
+    },
+    "clippy": "Rust 1.88; workspace excluding intern-app; all-targets; -D warnings passed",
+    "format": "cargo fmt --all -- --check passed"
+  },
+  "limitations": [
+    "Desktop memory integration tests added but cannot run locally without GTK development libraries.",
+    "No native PowerShell live model-evaluation run here.",
+    "No replay of real sets or CUAD after these rules, and no fresh model inference.",
+    "No 16 GB laptop cold/warm latency, RSS, paging, or application-load qualification.",
+    "Workflow API GET through gh returned Forbidden; no Windows workflow dispatch was attempted.",
+    "Changing the model default and publishing a release remain unqualified."
+  ],
+  "baseline_before_sha256": "bcf9789e4646bd4d9374b9a475354ca7ac1f55089f3c3989b337120fed9ec431",
+  "baseline_after_sha256": "cb0c0aad1831c8a946d76d67ae6a535a62a2b94c7498dfa06270058219ece8ec",
+  "qualified_baseline_comparison": {
+    "baseline_mode": "replay",
+    "gates": [
+      "documents"
+    ],
+    "passed": true,
+    "failures": [],
+    "document_regressions": [],
+    "document_improvements": [],
+    "aggregate": [
+      {
+        "metric": "date_correct",
+        "baseline": 1.0,
+        "current": 1.0,
+        "limit": 0.987,
+        "regressed": false
+      },
+      {
+        "metric": "date_exact",
+        "baseline": 0.987,
+        "current": 0.987,
+        "limit": 0.974,
+        "regressed": false
+      },
+      {
+        "metric": "date_forbidden",
+        "baseline": 0.0,
+        "current": 0.0,
+        "limit": 0.013,
+        "regressed": false
+      },
+      {
+        "metric": "date_present",
+        "baseline": 1.0,
+        "current": 1.0,
+        "limit": 0.987,
+        "regressed": false
+      },
+      {
+        "metric": "date_role_correct",
+        "baseline": 0.7632,
+        "current": 0.7632,
+        "limit": 0.75,
+        "regressed": false
+      },
+      {
+        "metric": "description_complete",
+        "baseline": 0.2987,
+        "current": 0.2987,
+        "limit": 0.2857,
+        "regressed": false
+      },
+      {
+        "metric": "description_factual",
+        "baseline": 1.0,
+        "current": 1.0,
+        "limit": 0.987,
+        "regressed": false
+      },
+      {
+        "metric": "description_specific",
+        "baseline": 0.987,
+        "current": 0.987,
+        "limit": 0.974,
+        "regressed": false
+      },
+      {
+        "metric": "filename_correct",
+        "baseline": 0.9481,
+        "current": 0.9481,
+        "limit": 0.9351,
+        "regressed": false
+      },
+      {
+        "metric": "needless_review",
+        "baseline": 0.4528,
+        "current": 0.4528,
+        "limit": 0.4717,
+        "regressed": false
+      },
+      {
+        "metric": "parties_correct",
+        "baseline": 1.0,
+        "current": 1.0,
+        "limit": 0.987,
+        "regressed": false
+      },
+      {
+        "metric": "party_forbidden",
+        "baseline": 0.0,
+        "current": 0.0,
+        "limit": 0.013,
+        "regressed": false
+      },
+      {
+        "metric": "party_role_correct",
+        "baseline": 1.0,
+        "current": 1.0,
+        "limit": 0.987,
+        "regressed": false
+      },
+      {
+        "metric": "readiness_match",
+        "baseline": 0.5088,
+        "current": 0.5088,
+        "limit": 0.4912,
+        "regressed": false
+      },
+      {
+        "metric": "relation_correct",
+        "baseline": 1.0,
+        "current": 1.0,
+        "limit": 0.987,
+        "regressed": false
+      },
+      {
+        "metric": "type_correct",
+        "baseline": 0.9481,
+        "current": 0.9481,
+        "limit": 0.9351,
+        "regressed": false
+      },
+      {
+        "metric": "type_present",
+        "baseline": 0.974,
+        "current": 0.974,
+        "limit": 0.961,
+        "regressed": false
+      },
+      {
+        "metric": "unsafe_ready",
+        "baseline": 0.0,
+        "current": 0.0,
+        "limit": 0.013,
+        "regressed": false
+      },
+      {
+        "metric": "unsupported_fact_doc",
+        "baseline": 0.1039,
+        "current": 0.1039,
+        "limit": 0.1169,
+        "regressed": false
+      },
+      {
+        "metric": "trap_date_count",
+        "baseline": 0.0,
+        "current": 0.0,
+        "limit": 0.0,
+        "regressed": false
+      },
+      {
+        "metric": "forbidden_party_count",
+        "baseline": 0.0,
+        "current": 0.0,
+        "limit": 0.0,
+        "regressed": false
+      },
+      {
+        "metric": "unsafe_ready_count",
+        "baseline": 0.0,
+        "current": 0.0,
+        "limit": 0.0,
+        "regressed": false
+      }
+    ],
+    "latency": [],
+    "new": [],
+    "missing": [],
+    "pending": []
+  }
+}
