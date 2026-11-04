@@ -340,11 +340,7 @@ pub(crate) fn without_identifier(value: &str) -> String {
         && head >= 1
         && has_digit(tokens[0])
         && tokens[0].chars().any(char::is_alphabetic)
-        && tokens[0]
-            .chars()
-            .filter(|character| matches!(character, '-' | '.' | ':'))
-            .count()
-            >= 2
+        && !is_form_code(tokens[0])
     {
         start = 1;
     }
@@ -383,6 +379,20 @@ pub(crate) fn without_identifier(value: &str) -> String {
         return value.to_owned();
     }
     kept
+}
+
+/// A standardized form's code, which is the kind itself and no part of one
+/// copy's identifier: letters and digits with one dot, dash or colon at most
+/// ("W-9", "10-K", "1099-MISC", "SF-86", "CP161"). A reference code has two or
+/// more ("FreeBSD-EN-26:25.tzdata", "INV-2024-001").
+pub(crate) fn is_form_code(token: &str) -> bool {
+    token.chars().any(|character| character.is_ascii_digit())
+        && token.chars().any(char::is_alphabetic)
+        && token
+            .chars()
+            .filter(|character| matches!(character, '-' | '.' | ':'))
+            .count()
+            < 2
 }
 
 const MONTHS: [&str; 12] = [

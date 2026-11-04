@@ -62,9 +62,9 @@ use crate::evidence::{
 use crate::index::{EvidenceIndex, EvidenceUnit, UnitKind};
 use crate::infer::{infer_date_role, reads_as_signature_date, repair_issued_relation};
 use crate::phrases::{
-    has_a_kind, head_noun, is_placeholder, is_reference, label_and_value, names_a_kind,
-    opens_with_party_label, phrase_positions, same_word, subject_value, tidy_case, title_phrase,
-    trim_name, without_identifier, words,
+    has_a_kind, head_noun, is_form_code, is_placeholder, is_reference, label_and_value,
+    names_a_kind, opens_with_party_label, phrase_positions, same_word, subject_value, tidy_case,
+    title_phrase, trim_name, without_identifier, words,
 };
 use crate::retrieve::EvidenceContext;
 use crate::validate::{
@@ -2227,7 +2227,8 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
     // break sets off, a code or a number ("Fieldnote S2"), or what an "and"
     // joins to it ("Availability and"). Never what a connector joins: an
     // "Approval of Closure Plan" is an approval, and the plan is what it
-    // approves.
+    // approves. Never a standardized form's code alone, which names the
+    // kind: a "W-9 Form" is not a "Form".
     const JOINS: &[&str] = &["of", "to", "for", "on", "under", "by"];
     let value_words = words(&value);
     if let Some(head) = head_noun(&value_words).map(str::to_owned)
@@ -2238,6 +2239,7 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
             .into_iter()
             .next()
         && !(at > 0 && JOINS.contains(&value_words[at - 1].as_str()))
+        && !(at == 1 && value.split_whitespace().next().is_some_and(is_form_code))
     {
         value = phrase;
     }
@@ -5593,6 +5595,9 @@ mod tests {
             assert_eq!(stated_title(value, &parties), kind, "{value}");
         }
         for kept in [
+            "W-9 Form",
+            "10-K Annual Report",
+            "1099-MISC Form",
             "Approval of Closure Plan",
             "EPA Approval of Closure Plan",
             "Action by Unanimous Written Consent of the Board of Directors",
