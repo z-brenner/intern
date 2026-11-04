@@ -5,7 +5,7 @@ const download = vi.fn<() => Promise<void>>();
 const install = vi.fn<() => Promise<void>>();
 
 vi.mock('@tauri-apps/plugin-updater', () => ({
-  check: async () => ({ version: '0.1.0-alpha.12', body: 'Notes', date: '2026-10-05', download, install }),
+  check: async () => ({ version: '0.1.0-alpha.13', body: 'Notes', date: '2026-10-05', download, install }),
 }));
 vi.mock('@tauri-apps/api/app', () => ({ getVersion: async () => '0.1.0-alpha.11' }));
 

@@ -1,43 +1,39 @@
-# Intern v0.1.0-alpha.12 release checklist
+# Intern v0.1.0-alpha.13 release checklist
 
-**Release status: blocked pending exact-main validation and the deliberately
-dispatched release workflow.** Whole-product QA has run and the rendered
-fidelity sign-off is accepted, so those two gates are no longer
-**pending/blocked**. Everything the release job owns still is. Nothing in this
-checklist authorizes a tag or publication.
+**Release status: blocked pending whole-product QA, rendered fidelity sign-off,
+exact-main validation, and the deliberately dispatched release workflow.** No
+hosted QA run has been recorded for alpha.13 yet, so every gate below is
+**pending/blocked** until a hosted run produces artifacts bound to the alpha.13
+release inputs. Nothing in this checklist authorizes a tag or publication.
 
-## Hosted QA artifacts and accepted alpha.12 evidence
+## Hosted QA artifacts and accepted alpha.13 evidence
 
-- Workflow: Whole-product QA evidence, run `40618344348`, attempt `1`.
-- Commit: `33082af6ebb2a4ad96b1cf299e502c164ab3834e`; runner: `Windows/X64`.
-  This is `main` after #36, which fixed the SBOM failure that stopped the
-  first alpha.12 release run (`40605312406`) before tagging. Nothing was
-  published from that run. The earlier QA run `40566145844` is superseded.
-- Execution result: every step passed, including the real-inference corpus
-  evaluation, which `validate-model-evaluation.mjs` accepted.
-- Release-input digest:
-  `1dbe634135b2f85c92b532d7bfcdb5376945a0b5308c3ef338b6db5a09c31a84`.
-- Capture: `docs/qa/latest-implementation.png`, 1536x1024, SHA-256
-  `2ea19abf6f400ead3d9fa25a4452bed2d44d78f44642f846317d64bd9b9ea52d`.
-- Fidelity reviewer: the maintainer, Zachary Brenner, accepted this capture
-  from run `40566145844`. Run `40618344348` produced the same file byte for
-  byte, which Claude Code verified before carrying the acceptance to this
-  digest. The record is in `rendered-fidelity-signoff.json` and the reasoning
-  is in `fidelity-ledger.md`.
+- Workflow: Whole-product QA evidence, run `pending`, attempt `pending`.
+- Commit: `pending`; runner: `pending`.
+- Execution result: pending. No alpha.13 hosted QA run has been executed.
+- Release-input digest: `pending`.
+- Capture: `docs/qa/latest-implementation.png`, dimensions and SHA-256 pending a
+  fresh alpha.13 capture. The alpha.12 capture was bound to a release-input
+  digest that no longer describes what ships, and this release changes what
+  the screen shows (the two Qwen3.5 models in setup and Settings, the "Read
+  by" line and review reasons in the Details panel), so the frame has to be
+  taken again and reviewed rather than carried over.
+- Fidelity reviewer: pending; a fresh sign-off must be recorded in
+  `rendered-fidelity-signoff.json` and bound to the alpha.13 release-input digest.
 
 | Gate | Status | Hosted run artifact or post-run evidence |
 |---|---|---|
-| Frontend unit, lint, and build check | accepted | `npm run check` exit 0; TypeScript, 72 Vitest files (717 tests passed, 1 skipped), and the Vite production build. |
-| Browser core interaction, accessibility, and 1024-pixel layout | accepted | `npm run test:e2e` exit 0; 29 Playwright tests, and the 1536x1024 capture. |
-| Rendered fidelity review | accepted | The capture above, reviewed and bound to the alpha.12 release-input digest. |
-| Rust formatting and workspace lint | accepted | `cargo fmt --all -- --check` and `cargo clippy --locked --workspace --all-targets -- -D warnings`, both exit 0. |
-| Rust workspace tests | accepted | `cargo test --locked --workspace --all-targets` exit 0; 1,690 tests. |
-| Pinned runtime assets and native fixtures | accepted | `npm run assets:verify -- --require-bundled` exit 0 (54 runtime files, 26 license files); 4 native fixture tests with the pinned assets. |
-| Windows Tauri/NSIS build | accepted | `npm run tauri build -- --bundles nsis -- --locked` exit 0; one installer. |
-| Installer and installed-core smoke | accepted | `scripts/smoke-installer.ps1` exit 0: install, packaged worker PDF/OCR, uninstall, user data retained. |
-| Corpus evaluation and model acceptance | accepted | 19 documents scored on the pinned Qwen3.5 2B model (peak model RSS 2,052 MB): dates 16/18, parties 18/19, filenames 13/18. Every accuracy gate is above its floor, and no document was filed under a forbidden date or party. |
-| Exact-main validation | pending/blocked | The release workflow must verify its dispatch target is the exact current `main` commit. |
-| Deliberately dispatched release workflow | pending/blocked | Rebuild, updater signature verification, checksums/SBOM/evidence acceptance, provenance, annotated tag creation, and publication remain release-job gates. |
+| Frontend unit, lint, and build check | pending | `npm run check` has not been recorded for alpha.13. |
+| Browser core interaction, accessibility, and 1024-pixel layout | pending | `npm run test:e2e` capture has not been recorded for alpha.13. |
+| Rendered fidelity review | pending/blocked | A fresh alpha.13 capture must be reviewed and its sign-off bound to the alpha.13 release-input digest. |
+| Rust formatting and workspace lint | pending | `cargo fmt --all -- --check`; `cargo clippy --locked --workspace --all-targets -- -D warnings`. |
+| Rust workspace tests | pending | `cargo test --locked --workspace --all-targets`. |
+| Pinned runtime assets and native fixtures | pending | `npm run assets:verify -- --require-bundled`. |
+| Windows Tauri/NSIS build | pending | `npm run tauri build -- --bundles nsis -- --locked`. |
+| Installer and installed-core smoke | pending | Install, Send to shortcut, packaged worker PDF/OCR, app launch and clean shutdown, uninstall, user data retained. |
+| Corpus evaluation and model acceptance | pending | `validate-model-evaluation.mjs` must accept a fresh alpha.13 evaluation. |
+| Exact-main validation | pending | The release workflow must verify its dispatch target is the exact current `main` commit. |
+| Deliberately dispatched release workflow | pending | Rebuild, updater signature verification, checksums/SBOM/evidence acceptance, provenance, annotated tag creation, and publication remain release-job gates. |
 
 ## Release boundary
 
