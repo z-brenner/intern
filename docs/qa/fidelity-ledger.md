@@ -1,15 +1,121 @@
-# Intern alpha.12 rendered-fidelity ledger
+# Intern alpha.13 rendered-fidelity ledger
 
-**Rendered sign-off status: accepted for alpha.12.**
+**Rendered sign-off status: accepted for alpha.13, by Claude Code under the
+maintainer's standing instruction; no person has looked at this capture.**
 `docs/qa/rendered-fidelity-signoff.json` is bound to release-input digest
-`649494076b200fc7546e3aa97b605ed77c07626adb917715951d9732f2213126` and to the
+`40df3381aac1a22c7cbfcd50944dc4f5c4dd629ba710e03eaef9f6d0a3864c32` and to the
 1536x1024 capture `docs/qa/latest-implementation.png`, SHA-256
-`2ea19abf6f400ead3d9fa25a4452bed2d44d78f44642f846317d64bd9b9ea52d`, taken by
-Whole-product QA evidence run 40566145844 (attempt 1) at commit
-`cd058571ebe529d4bf434c1abcdebf6fddbbeb57`, `main` after the alpha.12
+`a95052639f75b6e2bdad0438da20645b59490271748ca2a9dab901fdb31cbd25`, taken by
+Whole-product QA evidence run 41777820194 (attempt 1) at commit
+`d900c11604efefaa56616230f0b0818c26df3911`, `main` after the alpha.13
 release preparation.
 
-## alpha.12 record
+## alpha.13 record
+
+Run 41777820194 passed every gate on Windows:
+
+- frontend checks (77 Vitest files, 753 tests passed and 1 skipped), and the
+  browser QA suite (30 tests) including its contrast assertions;
+- `cargo fmt --check`, workspace clippy with warnings denied, and the Rust
+  workspace tests (1,753);
+- native fixture parsing with the pinned assets, and the verified pinned runtime
+  (76 runtime files, 27 license files), now carrying both llama.cpp builds: the
+  PrismML release `prism-b10826-c9c34bc` and upstream build 11946 for the
+  Qwen3.5 models;
+- an NSIS build, and installer and uninstall smoke with user data retained,
+  with both installed llama-server builds started;
+- an accepted whole-corpus evaluation with real inference: 19 documents on the
+  pinned Qwen3.5 9B model (the accurate tier, `Qwen3.5-9B-Q4_K_M.gguf`), on two
+  threads of the four-core runner, median 21.7 s and at most 51.1 s of
+  inference a document, 490.8 s in all, peak model memory 8,132 MiB.
+
+Against alpha.12's hosted run on the same 19 documents, which scored the
+Qwen3.5 2B: date role 16/16 (15/16), descriptions covering the expected facts
+16/18 (15/18), type 17/18 (17/18), and nothing filed under a date or a party
+the corpus marks as a trap, in both. Dates were right for 16 of 18. Two counts
+are lower: parties 15/19 (18/19) and description specific 16/19 (17/19), and
+the review rate is 42.1% (26.3%): eight of the 19 readings were held for the
+user at the 0.7 token-confidence gate this release adopts, and the expected
+filename was matched exactly for 9 of 18 (the local qualification run of the
+same model on this corpus scored 10). Every gate is above its floor. This
+synthetic corpus is the one set in the qualification battery where the 9B
+scores below the 2B; the release notes and
+`bench/reports/model-qualification-2026-11/` cite the real-document sets where
+it was chosen, and the gate's own numbers are recorded here as they are.
+
+The capture was inspected against the accepted concept:
+
+- The counts strip and toolbar, the queue table and the review panel read as
+  three distinct planes.
+- The header states the privacy posture (Private, On this device).
+- Date-first proposed filenames and em-dashes for absent values stay consistent
+  down the column; the model's confidence is a right-aligned percentage beside
+  its track in the panel.
+- Ready, Needs review, Proposing a name and Waiting are each distinguishable by
+  icon as well as color.
+- Evidence stays attributed under Date and Type headings, each value on its own
+  line.
+- The approve and keep actions sit in a pinned bar at the foot of the panel,
+  with their keyboard shortcuts.
+- No collisions, clipping, illegible copy, excessive density or ambiguous focus
+  were observed, and the run's automated contrast assertions passed.
+
+What changed in the frame is this release's own:
+
+- The sidebar is gone. Queue (8) and Completed (1) are tabs above the table,
+  beside the "1 needs review" and "3 ready" counts; help and settings moved to
+  the header, and Pause is labeled.
+- The table's Confidence column is a Check column, which says "All checks
+  passed" or gives the reason for review; the confidence itself is in the
+  panel. "Rename all ready" replaces "Apply all ready".
+- A progress line ("Reading Q1 Financials.pdf, 0 of 4 done") stands where the
+  alpha.12 frame showed the drop zone.
+- The panel opens with "What to check", carrying the reason for review above
+  the fold, which the alpha.11 and alpha.12 records left as a follow-up.
+- Evidence is introduced as the model's reading in its own words rather than
+  lines matched in the document, and its values are no longer quoted.
+
+One observation, not a defect of this frame: at this size Parties now sits
+below the fold under the pinned action bar and is reached by scrolling the
+panel, where alpha.12 showed it; the reason for review took that space. The
+"Read by" line in the Details panel is not in this frame, which shows the
+review panel; it is held by unit tests.
+
+### Reviewer
+
+Reviewed by Claude Code, which opened the capture named above from the run's
+artifact at full size, checked it against the concept, and accepted it. No
+person has looked at this capture. The maintainer, Zachary Brenner, instructed
+in advance that this release be cut without further questions and that the
+work be reviewed and approved by Claude Code; this record is written under
+that standing instruction and says so, rather than naming a person who did not
+look. The maintainer can look at the same capture and re-sign this record
+without a new QA run, since neither the digest nor the capture hash changes.
+
+### Freshness boundary
+
+The sign-off is accepted only for the digest and screenshot named above.
+`scripts/hash-release-inputs.mjs` derives that digest from the committed non-QA
+release inputs. Any relevant source change invalidates this record and requires
+a new capture and review. Exact-main validation and the deliberately dispatched
+release workflow must still reproduce and accept their own evidence before a tag
+or publication is allowed.
+
+## Superseded alpha.12 record
+
+The alpha.12 sign-off was accepted by the maintainer for the capture from run
+40566145844 at commit `cd058571ebe529d4bf434c1abcdebf6fddbbeb57`, bound to
+release-input digest
+`649494076b200fc7546e3aa97b605ed77c07626adb917715951d9732f2213126`, and then
+carried, because run 40618344348's capture was byte-identical, to the SBOM-fix
+commit `33082af6ebb2a4ad96b1cf299e502c164ab3834e` and its digest
+`1dbe634135b2f85c92b532d7bfcdb5376945a0b5308c3ef338b6db5a09c31a84`, which is
+the record alpha.12 shipped with. The capture SHA-256 was
+`2ea19abf6f400ead3d9fa25a4452bed2d44d78f44642f846317d64bd9b9ea52d`. Pull
+requests #37 through #63 have changed the non-QA release inputs since, so
+neither digest describes what would ship. Its record is kept below for history.
+
+### alpha.12 run
 
 Run 40566145844 passed every gate on Windows:
 
