@@ -64,7 +64,7 @@ use crate::infer::{infer_date_role, reads_as_signature_date, repair_issued_relat
 use crate::phrases::{
     has_a_kind, head_noun, is_placeholder, is_reference, label_and_value, names_a_kind,
     opens_with_party_label, phrase_positions, same_word, subject_value, tidy_case, title_phrase,
-    trim_name, words,
+    trim_name, without_identifier, words,
 };
 use crate::retrieve::EvidenceContext;
 use crate::validate::{
@@ -529,6 +529,7 @@ pub fn validate_facts_at(
                 support.document_type = found.support;
                 remember(&found, &mut references);
                 type_line = found.line.clone();
+                let phrase = without_identifier(&phrase);
                 type_title = Some(phrase.clone());
                 type_unit = found.unit.map(|unit| unit.ordinal);
                 (Some(phrase), true)
@@ -540,7 +541,7 @@ pub fn validate_facts_at(
                 type_unit = found.unit.map(|unit| unit.ordinal);
                 let kept = marks_its_line_holds(value, found.line.as_deref().unwrap_or_default());
                 type_line = found.line.clone();
-                (Some(titled(&kept)), true)
+                (Some(titled(&without_identifier(&kept))), true)
             }
             TypeReading::Retitled { phrase, line } => {
                 support.document_type = Support::Unsupported;
@@ -1364,6 +1365,11 @@ pub fn validate_facts_at(
         caption: caption_sides(scope, context, &cast),
     };
     let relation = relation_from_roles(class, document_type.as_deref(), &cast, cues);
+    // A name that rests on roles the document did not support waits for
+    // a person: the reply read the sides, the document did not say.
+    if relation.on_proposed_roles {
+        push(&mut reasons, ReviewReason::PartyUnsupported);
+    }
     // An agreement has two sides at least. One that names only one has
     // lost the other, which a person must supply.
     if matches!(class, DocumentClass::Agreement | DocumentClass::Amendment)
@@ -6152,7 +6158,7 @@ Slip Date: 04/05/2026\n\nShip Date: 04/13/2026\n\nNotes\n\nReceived at dock 13/0
     }
 
     #[test]
-    fn a_role_the_document_does_not_support_never_decides_the_relation() {
+    fn a_role_the_document_does_not_support_decides_the_relation_only_unopposed_and_in_review() {
         let text = "NOTICE OF RENT INCREASE\n\nTo: Imogen Castellanos, Tenant\n\n\
 From: Cresthaven Court Holdings LLC\n\nYour rent for Apartment 4C rises to $1,965.00 on August 1, 2026.\n\n\
 Dated May 12, 2026";
@@ -6211,8 +6217,9 @@ Dated May 12, 2026";
         assert_eq!(outcome.proposal.parties, vec!["Imogen Castellanos"]);
 
         // A document that gives no role in words leaves an unsupported
-        // claim nothing to stand on: the names are kept without a joining
-        // word.
+        // claim nothing to stand on, and nothing to contradict it: the
+        // reply's roles name the notice's party, and the name waits for a
+        // person, saying why.
         let plain = "NOTICE OF RENT INCREASE\n\nImogen Castellanos and Cresthaven Court Holdings LLC \
                      agree that the rent for Apartment 4C rises on August 1, 2026, and that every other \
                      term of the residential lease stays as it is.\n\nDated May 12, 2026";
@@ -6240,7 +6247,18 @@ Dated May 12, 2026";
         let outcome = check(facts, &whole(&index), &index);
         let parties = &outcome.facts.as_ref().unwrap().parties;
         assert_eq!(parties[0].document_role, None);
-        assert_eq!(outcome.proposal.party_relation, PartyRelation::None);
+        assert_eq!(parties[1].document_role, None);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Cresthaven Court Holdings LLC"]
+        );
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
     }
 
     /// An invoice that names only its customer names no one: the bill-to
@@ -8462,6 +8480,7 @@ LOAN CONDITION REPORT\n\n\
                 "Aucta Pharmaceuticals, Inc.".into(),
             ],
             basis: String::new(),
+            on_proposed_roles: false,
         };
         assert_eq!(
             fit_type(

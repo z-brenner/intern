@@ -297,6 +297,109 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
     Some(crate::infer::title_case(&tidy_case(&phrase)))
 }
 
+/// A document's type without the identifier a title carries beside its
+/// kind: the number after its kind ("Invoice No. 2248", "Invoice Number
+/// 00-03-06", "Invoice #PMr0197", "Capital Call Notice No. 7"), a
+/// subtitle a dash sets off ("Quarterly Business Review - Q3 2026",
+/// "Straight Bill of Lading - Short Form"), a written date before the kind ("January
+/// 1, 1997 Invoice"), or a code before it ("FreeBSD-EN-26:25.tzdata Errata
+/// Notice"). The number names this one copy, which the description keeps
+/// as the identifier; the type names the kind. A year, a phase, a rule or
+/// a section the title is named by stays: "2025 Annual Report", "Phase 1
+/// Decision Letter", "Section 5 Objection Letter", "Notice of Deposition
+/// Pursuant to Rule 30(b)(6)", "CP161 Notice".
+pub(crate) fn without_identifier(value: &str) -> String {
+    let tokens = value.split_whitespace().collect::<Vec<_>>();
+    let core = |token: &str| -> String {
+        normalize(token)
+            .trim_matches(|character: char| !character.is_alphanumeric())
+            .to_owned()
+    };
+    let has_digit = |token: &str| token.chars().any(|character| character.is_ascii_digit());
+    let Some(head) = tokens.iter().position(|token| names_a_kind(&core(token))) else {
+        return value.to_owned();
+    };
+    let mut start = 0;
+    // "January 1, 1997 Invoice": a month, a day and a year before the kind.
+    if head >= 3
+        && MONTHS.contains(&core(tokens[0]).as_str())
+        && core(tokens[1])
+            .chars()
+            .all(|character| character.is_ascii_digit())
+        && core(tokens[2]).len() == 4
+        && has_digit(tokens[2])
+    {
+        start = 3;
+    }
+    // A reference code in one token before the kind: digits and letters
+    // joined by two or more dots, dashes or colons ("FreeBSD-EN-26:25.tzdata
+    // Errata Notice", "INV-2024-001 Invoice"). A standardized form's code is
+    // the kind itself, not one copy of it, and is short, with one dash at
+    // most: "W-9 Form", "10-K Annual Report", "1099-MISC Form" keep it.
+    if start == 0
+        && head >= 1
+        && has_digit(tokens[0])
+        && tokens[0].chars().any(char::is_alphabetic)
+        && tokens[0]
+            .chars()
+            .filter(|character| matches!(character, '-' | '.' | ':'))
+            .count()
+            >= 2
+    {
+        start = 1;
+    }
+    let identifier_word = |token: &str| {
+        matches!(
+            core(token).as_str(),
+            "no" | "number" | "num" | "nos" | "ref" | "id"
+        )
+    };
+    // An amendment, an addendum or a change order is numbered as its kind:
+    // "Amendment No. 3" is the third amendment, which a bare "Amendment"
+    // would not say.
+    let numbered_kind = matches!(
+        core(tokens[head]).as_str(),
+        "amendment" | "addendum" | "order"
+    ) && tokens[..head]
+        .last()
+        .is_none_or(|previous| core(previous) != "purchase");
+    let mut end = tokens.len();
+    for at in head + 1..tokens.len() {
+        if numbered_kind && identifier_word(tokens[at]) {
+            break;
+        }
+        let token = tokens[at];
+        let next = tokens.get(at + 1).copied();
+        let introduces = identifier_word(token) && next.is_none_or(has_digit);
+        let numbered = token.starts_with('#') && has_digit(token);
+        let dashed = matches!(token, "-" | "\u{2013}" | "\u{2014}") && at + 1 < tokens.len();
+        if introduces || numbered || dashed {
+            end = at;
+            break;
+        }
+    }
+    let kept = tokens[start..end].join(" ");
+    if kept.is_empty() || !has_a_kind(&words(&kept)) {
+        return value.to_owned();
+    }
+    kept
+}
+
+const MONTHS: [&str; 12] = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+];
+
 /// How a word is written: in capitals, with a capital, or in lower case.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Writing {
@@ -635,6 +738,55 @@ pub(crate) fn trim_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_titles_identifier_is_no_part_of_the_type() {
+        for (value, kind) in [
+            ("INVOICE No. 2248", "INVOICE"),
+            ("Invoice Number 00-03-06", "Invoice"),
+            ("Invoice #PMr0197", "Invoice"),
+            ("Capital Call Notice No. 7", "Capital Call Notice"),
+            ("Invoice No", "Invoice"),
+            ("Purchase Order No. 4471", "Purchase Order"),
+            (
+                "Quarterly Business Review - Q3 2026",
+                "Quarterly Business Review",
+            ),
+            (
+                "Straight Bill of Lading - Short Form",
+                "Straight Bill of Lading",
+            ),
+            (
+                "Offer of Employment - Senior Data Engineer",
+                "Offer of Employment",
+            ),
+            ("January 1, 1997 Invoice", "Invoice"),
+            ("FreeBSD-EN-26:25.tzdata Errata Notice", "Errata Notice"),
+            ("INV-2024-001 Invoice", "Invoice"),
+        ] {
+            assert_eq!(without_identifier(value), kind, "{value}");
+        }
+        for kept in [
+            "2025 Annual Report",
+            "Annual Report Fiscal Year 2026",
+            "Phase 1 Decision Letter",
+            "Section 5 Objection Letter",
+            "Notice of Deposition Pursuant to Rule 30(b)(6)",
+            "CP161 Notice",
+            "Notice in Accordance with Section 57C of the Railways Act 1993",
+            "Second Amendment",
+            "Form 1099",
+            "W-9 Form",
+            "10-K Annual Report",
+            "1099-MISC Form",
+            "SF-86 Questionnaire",
+            "Amendment No. 3",
+            "Change Order No. 7",
+            "ADDENDUM NO. 2",
+        ] {
+            assert_eq!(without_identifier(kept), kept);
+        }
+    }
 
     fn w(text: &str) -> Vec<String> {
         words(text)
