@@ -7,9 +7,11 @@ writes the replay baseline CI holds every push to.
 Runs intern-evaluate live - the staged worker, PDFium, Tesseract, and a
 llama-server started here with the same flags the desktop app uses - over
 fixtures/generated, and writes fixtures/corpus-recording.json (what the worker
-read and what the model replied, keyed by prompt hash) and
-fixtures/corpus-baseline.json (the scores that recording earns). Commit both
-with the change that made the recording stale. See docs/evaluation.md.
+read and what the model replied, keyed by prompt hash, with the token
+probabilities the review gate reads) and fixtures/corpus-baseline.json (the
+scores that recording earns at the accurate model's gate, 0.7, as CI replays
+it). Commit both with the change that made the recording stale. See
+docs/evaluation.md.
 
 .PARAMETER RuntimeDirectory
 A package-shaped runtime: intern-worker.exe, llama-server.exe (the PrismML
@@ -97,6 +99,7 @@ try {
         --fixtures $Fixtures --expected (Join-Path $RepositoryRoot "fixtures/expected.json") `
         --worker (Join-Path $Runtime "intern-worker.exe") `
         --endpoint "http://127.0.0.1:$Port/v1/chat/completions" --api-key $ApiKey --model-id intern-local `
+        --token-confidence --min-token-confidence 0.7 `
         --record (Join-Path $RepositoryRoot "fixtures/corpus-recording.json") `
         --write-baseline (Join-Path $RepositoryRoot "fixtures/corpus-baseline.json") `
         --output (Join-Path $RepositoryRoot "corpus-report.json") `
