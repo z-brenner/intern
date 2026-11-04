@@ -6,8 +6,10 @@ Laboratory tooling; the app does not call it. Usage:
 
 writes OUT_DIR/corpus/<id>.<ext>, each checked against its pinned size and SHA-256, and
 OUT_DIR/gold.json, the sample's own gold in InternBench's schema. SAMPLE.json is sample.json, the
-first set, by default; sample-heldout.json, the second; or sample-heldout2.json, the third, which
-shares no document with the other two and was gathered after the rules written from them. A live
+first set, by default; sample-heldout.json, the second; sample-heldout2.json, the third, which
+shares no document with the other two and was gathered after the rules written from them; or
+sample-heldout3.json, the fourth, 58 modern business documents gathered after the rules written
+from all three, for the model qualification of November 2026. A live
 run then records and scores it like any corpus, with InternBench's own filename score:
 
     CORPUS=OUT_DIR/corpus GOLD=OUT_DIR/gold.json MANIFEST= MODEL=... LLAMA_SERVER=... \\
