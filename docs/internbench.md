@@ -184,7 +184,7 @@ pinned model.
 ```sh
 cargo build --release --locked -p intern-worker --features windows-native
 cargo build --release --locked -p intern-bench
-MODEL=/path/to/Qwen3.5-2B-Q4_K_M.gguf LLAMA_SERVER=/path/to/llama-server \
+MODEL=/path/to/Qwen3.5-9B-Q4_K_M.gguf LLAMA_SERVER=/path/to/llama-server \
 INTERN_RUNTIME_DIR=/path/to/runtime THREADS=4 \
   scripts/run-internbench.sh target/internbench -- --baseline bench/baseline.json
 ```
@@ -261,8 +261,13 @@ Inputs:
 cargo run --release --locked -p intern-bench -- run --corpus bench/generated \
   --gold bench/gold.json --manifest bench/manifest.json \
   --replay bench/recording.json --baseline bench/baseline.json \
-  --output report.json --markdown report.md
+  --min-token-confidence 0.7 --output report.json --markdown report.md
 ```
+
+`--min-token-confidence 0.7` is the accurate model's review gate
+(`REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE` in `crates/intern-engine/src/tiers.rs`);
+`bench/baseline.json` was written at it, so a replay without it reports more
+documents ready than the app would file, and fails the readiness comparison.
 
 Replay re-runs everything after the model (indexing and retrieval, or
 distillation; validation, role and type inference, naming, scoring) from
@@ -615,7 +620,9 @@ Reports of record, the baseline first, are in [`bench/reports/`](../bench/report
 
 The recording and baseline of record are `bench/recording.json` and
 `bench/baseline.json`: the evidence pipeline's, all 77 documents recorded
-live from `902c7fe`. A live run writes them (`--record`,
+live with Qwen3.5 9B on a GitHub-hosted runner from `c427aff` (the candidate
+benchmark workflow's run 41718479983), and the baseline written at the app's
+review gate. A live run writes them (`--record`,
 `--write-baseline`), and they are committed with the change that produced
 them; replay and the gates read them. A recording keeps its header indented
 and each document compact on a line of its own, its layouts without their

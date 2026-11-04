@@ -9,7 +9,7 @@ import type { SetupState } from '../../types';
 // than a second copy of the same number.
 import modelManifest from '../../../src-tauri/resources/model-manifest.json';
 
-const modelFiles = { modelPaths: ['C:\\Models\\Ternary-Bonsai-2-2B-PQ2_0.gguf'] };
+const modelFiles = { modelPaths: ['C:\\Models\\Qwen3.5-4B-Q4_K_M.gguf'] };
 
 function setupSelection(pickExistingModelFiles: () => Promise<ExistingModelFiles | undefined>): SelectionBoundary {
   return {
@@ -57,19 +57,19 @@ describe('setup and queue controls', () => {
       const bridge = { ...createInMemoryBridge(), getSetup: async () => ({ ...setup }), subscribeSetup: async (next: typeof listener) => { listener = next; return () => {}; } };
       vi.setSystemTime(0);
       render(<App bridge={bridge} />);
-      expect(await screen.findByText('363 MiB of 493 MiB · 73%')).toBeVisible();
+      expect(await screen.findByText('363 MiB of 2.55 GiB · 13%')).toBeVisible();
       // The first state can show before the screen has subscribed to the
       // ones after it; on a busy runner that left `listener` unset.
       await vi.waitFor(() => expect(listener).toBeTypeOf('function'));
 
-      // A megabyte a second, by the samples, with 120 MiB still to come.
+      // A megabyte a second, by the samples, with 2,241 MiB still to come.
       for (const [at, mib] of [[5_000, 368], [10_000, 373]] as const) {
         vi.setSystemTime(at);
         setup = { ...setup, downloadedBytes: mib * MiB };
         act(() => listener({ ...setup }));
       }
 
-      expect(await screen.findByText('373 MiB of 493 MiB · 75% · about 2 min left')).toBeVisible();
+      expect(await screen.findByText('373 MiB of 2.55 GiB · 14% · about 37 min left')).toBeVisible();
     } finally {
       vi.useRealTimers();
     }
@@ -94,11 +94,11 @@ describe('setup and queue controls', () => {
     />);
 
     // The size leads, in plain words; which models, by name, is a detail.
-    expect(await screen.findByText(/It needs a one-time download of 493 MiB first/i)).toBeVisible();
-    expect(screen.getByRole('list', { name: 'Model setup steps' })).toHaveTextContent('Download the model (493 MiB)');
+    expect(await screen.findByText(/It needs a one-time download of 2\.55 GiB first/i)).toBeVisible();
+    expect(screen.getByRole('list', { name: 'Model setup steps' })).toHaveTextContent('Download the model (2.55 GiB)');
     fireEvent.click(screen.getByText('What gets downloaded'));
-    expect(screen.getByText(/The quick model, Bonsai 2 2B \(493 MiB\), to start naming documents/i)).toBeVisible();
-    expect(screen.getByText(/Qwen3\.5 2B \(1\.19 GiB\), the accurate model, then follows in the background while you work\. Until it arrives, every name waits for you to check it\./i)).toBeVisible();
+    expect(screen.getByText(/The quick model, Qwen3\.5 4B \(2\.55 GiB\), to start naming documents/i)).toBeVisible();
+    expect(screen.getByText(/Qwen3\.5 9B \(5\.29 GiB\), the accurate model, then follows in the background while you work\. Until it arrives, the quick model reads, every name it gives waits for your check, and the accurate one reads those documents again unless you have acted on them\./i)).toBeVisible();
     expect(screen.queryByText(/3\.27 GB/i)).not.toBeInTheDocument();
   });
 
@@ -278,7 +278,7 @@ describe('setup and queue controls', () => {
   // shipped manifest.
   it('never asks for model files this build does not use', async () => {
     const names = modelManifest.models.flatMap((model) => model.files.map((file) => file.name));
-    expect(names).toEqual(['Ternary-Bonsai-2-2B-PQ2_0.gguf', 'Qwen3.5-2B-Q4_K_M.gguf']);
+    expect(names).toEqual(['Qwen3.5-4B-Q4_K_M.gguf', 'Qwen3.5-9B-Q4_K_M.gguf']);
     const { unmount: done } = render(<App
       bridge={createInMemoryBridge({ setup: { state: 'failed', downloadedBytes: 40, totalBytes: PINNED_MODEL_BYTES, error: 'MODEL_FILE_INVALID' } })}
       selection={setupSelection(async () => modelFiles)}

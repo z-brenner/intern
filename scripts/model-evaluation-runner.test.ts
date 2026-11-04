@@ -28,9 +28,10 @@ it('scores the corpus with the exact model the app installs, text-only', async (
 });
 
 // Each tier is scored on the llama.cpp build the app runs it on: upstream
-// llama.cpp from the runtime's llama-upstream folder for the accurate model,
-// which is what the release and QA runs score, and the PrismML fork at the
-// runtime's root for the fast one. Both workflows hand over the runtime root.
+// llama.cpp from the runtime's llama-upstream folder for both Qwen3.5 models;
+// the release and QA runs score the accurate one. The PrismML fork at the
+// runtime's root runs nothing the manifest pins. Both workflows hand over the
+// runtime root.
 it('scores each tier on the llama-server the app runs it on', async () => {
   const [script, release, qa] = await Promise.all([
     readFile('scripts/run-model-evaluation.ps1', 'utf8'),
@@ -38,7 +39,7 @@ it('scores each tier on the llama-server the app runs it on', async () => {
     readFile('.github/workflows/qa.yml', 'utf8'),
   ]);
   expect(script).toMatch(/\[ValidateSet\("fast", "accurate"\)\]\[string\]\$Tier = "accurate"/);
-  expect(script).toContain('$ServerRelative = if ($Tier -eq "accurate") { "llama-upstream/llama-server.exe" } else { "llama-server.exe" }');
+  expect(script).toContain('$ServerRelative = "llama-upstream/llama-server.exe"');
   expect(script).toContain('$Server = [IO.Path]::GetFullPath((Join-Path $Runtime $ServerRelative))');
   expect(script).not.toContain('Join-Path $Runtime "llama-server.exe"');
   expect(script).toContain('Start-Process -FilePath $Server ');

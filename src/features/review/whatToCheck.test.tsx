@@ -16,7 +16,7 @@ const ambiguous: QueueItem = {
   evidence: { date: 'Invoice date: 02/09/2024', type: 'INVOICE INV-3301', parties: 'Fabrikam Inc.' },
   reason: humanizeReason('DATE_AMBIGUOUS, LOW_CONFIDENCE'),
   reasonCodes: ['DATE_AMBIGUOUS', 'LOW_CONFIDENCE'],
-  readBy: { tier: 'accurate', modelId: 'qwen', displayName: 'Qwen3.5 2B' },
+  readBy: { tier: 'accurate', modelId: 'qwen', displayName: 'Qwen3.5 9B' },
 };
 
 describe('what to check', () => {

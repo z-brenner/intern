@@ -39,8 +39,8 @@ inference fallback. This is the complete list of what Intern sends anywhere:
 | Microsoft sign-in and Graph (`login.microsoftonline.com`, `graph.microsoft.com`) | Only in a build an administrator provisioned for the SharePoint deployment | Sign-in and its renewal, then account and file metadata for upload verification, never document content. The build published here has none. |
 
 The first two are all a default install ever sends, and neither carries
-document information. The model files are Qwen3.5 2B (1.19 GiB) and, if you
-want it, the quick Bonsai 2 2B (0.48 GiB): two text models and nothing else. The update check asks only "is there a newer, signed build"; untick
+document information. The model files are Qwen3.5 9B (5.29 GiB) and Qwen3.5
+4B (2.55 GiB): two text models and nothing else. The update check asks only "is there a newer, signed build"; untick
 **Check for updates automatically** in Settings and only the button asks. A
 found update is never installed by the check itself: installing is always a
 separate, explicit click, and only ever happens if the update is signed by this
@@ -106,35 +106,38 @@ as the installer, so whoever could replace one could replace both. The
 attestation is the part that establishes where the file came from.
 
 On first launch Intern shows a setup screen and asks to download the one thing
-the installer deliberately leaves out: the local model. The model that names
-your documents is **Qwen3.5 2B** (1.19 GiB). So that a new install can start at
-once, setup first fetches **Bonsai 2 2B** (0.48 GiB), a quick model, and opens
-the queue as soon as it has passed its checks; Qwen3.5 2B then downloads in the
-background while you work, and the window says so in one quiet line. A name the
-quick model gives is never filed on its own: it always waits in review, saying
-so, and Qwen3.5 2B reads the document again once it can - unless you have acted
-on it first. Both downloads are resumable, they transfer no document
-information, and a file becomes active only after its exact length and SHA-256
-match the manifest built into the installer. If you already have the files,
-**Choose existing model files** points Intern at either or both and skips
-those downloads. Nothing else needs installing — PDF text extraction, OCR, and
-inference all ship inside the app.
+the installer deliberately leaves out: the local models. The model that names
+your documents is **Qwen3.5 9B** (5.29 GiB). So that a new install can start
+sooner, setup first fetches **Qwen3.5 4B** (2.55 GiB), a quicker model, and
+opens the queue as soon as it has passed its checks; Qwen3.5 9B then downloads
+in the background while you work, and the window says so in one quiet line.
+Until it arrives the 4B reads, every name it gives waits for your check, and
+the 9B reads those documents again once it can - unless you have acted on them
+first. Both downloads are resumable, they transfer no
+document information, and a file becomes active only after its exact length
+and SHA-256 match the manifest built into the installer. If you already have
+the files, **Choose existing model files** points Intern at either or both and
+skips those downloads. Nothing else needs installing — PDF text extraction,
+OCR, and inference all ship inside the app.
 
-Upgrading from a build that had only Qwen3.5 2B, nothing is downloaded: the
-model you have is the accurate model, and the queue opens on it. The quick
-model is offered in Settings, for faster first readings and as a fallback when
-the computer is short of memory, and is fetched only if you ask.
+Upgrading from a build that had Qwen3.5 2B, or it and Bonsai 2 2B, setup asks
+for the two new models the same way: the 4B first, then the 9B behind the
+window. The earlier models' files are not deleted; nothing in Intern ever
+deletes a model file. The 9B needs about 10 GB of memory free to load, which a
+16 GB laptop has with little else open and not with a browser and an office
+suite at work; then the 4B, which needs about 6.5 GB, reads in its place, its
+names wait for your check, and the 9B reads them again when memory comes back.
+Both are slower than the 2B was - the 4B about two and a half times, the 9B
+about four and a half - and that trade was made on purpose: on three sets of
+real letters, notices and invoices the 9B named 22, 21 and 11 of about 60
+documents right where the 2B named 16, 17 and 11, and the 4B 18, 16 and 12
+([`bench/reports/model-qualification-2026-11`](bench/reports/model-qualification-2026-11/README.md)).
 
 **Settings > Model** chooses which local model reads: **Automatic**
-(recommended) reads every document with Qwen3.5 2B, the quick model standing in
-only while the computer is short of memory; **Most accurate** asks for Qwen3.5
-2B whenever memory allows; **Fastest** reads everything with the quick model,
-and every name it gives still waits for your check. One model is loaded at a
-time, and it is unloaded after ten minutes without a document. The choice rests
-on a 77-document evaluation
-([`bench/reports/bonsai-linux-cpu-2026-10-27`](bench/reports/bonsai-linux-cpu-2026-10-27/README.md)):
-Qwen3.5 2B named 52-54 documents correctly, Bonsai 2 2B 37 and the larger
-Bonsai 2 4B 48, at 1.6 times Qwen's time.
+(recommended) reads every document with Qwen3.5 9B, the 4B standing in only
+while the computer is short of memory; **Most accurate** asks for Qwen3.5 9B
+whenever memory allows; **Fastest** reads everything with the 4B. One model is
+loaded at a time, and it is unloaded after ten minutes without a document.
 
 Then Intern asks for **two folders**, and it cannot be used until both are
 chosen — there is no skipping it:
@@ -391,10 +394,9 @@ last column for anyone who would rather paste.
 document
   -> text/Markdown extraction (native text first; OCR only when there is none)
   -> whole-document distillation (every page read, redundancy removed)
-  -> one local inference (Qwen3.5 2B; the quick model only as a stand-in)
+  -> one local inference (Qwen3.5 9B; Qwen3.5 4B while memory is short)
   -> evidence validation
   -> filename + description + review decision
-     (a quick-model reading always goes to review)
 ```
 
 The distillation stage is the part that matters. Intern does **not** send the

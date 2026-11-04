@@ -4,16 +4,17 @@
 //! ever download cannot be changed at runtime. Every file is accepted only if
 //! its byte length and SHA-256 both match.
 //!
-//! There are two models, one per [`ModelTier`]: the accurate one, Qwen3.5 2B,
-//! which reads every document it can, and an optional quick one, Bonsai 2 2B,
-//! a third of the download and about two thirds of the time, whose readings
-//! always go to a person (see [`crate::tiers`]). The 77-document evaluation in
-//! `bench/reports/bonsai-linux-cpu-2026-10-27` chose them: 52-54 correct
-//! names for Qwen against 37 for Bonsai 2 2B and 48 for Bonsai 2 4B, at 1.6
-//! times Qwen's time. Which of them reads a document is [`crate::tiers`]'s
-//! decision; this module only says what they are. Nothing here, nor anywhere
-//! in setup, deletes a model file: an earlier build's model is this one's
-//! accurate tier.
+//! There are two models, one per [`ModelTier`]: the accurate one, Qwen3.5 9B,
+//! which reads every document it can, and a quick one, Qwen3.5 4B, half the
+//! download and about half the time, which stands in while the machine is
+//! short of memory and reads first on a new install (see [`crate::tiers`]).
+//! The real-document sets chose them over Qwen3.5 2B
+//! (`docs/accuracy-research-2026-10.md`): with the rules of November 2026
+//! the 9B names 20/19/11 of the three sets' documents right to the 2B's
+//! 16/17/11, and the 4B 18/16/12. Which of them reads a document is
+//! [`crate::tiers`]'s decision; this module only says what they are. Nothing
+//! here, nor anywhere in setup, deletes a model file: an earlier build's
+//! models stay on disk beside these.
 
 use std::{collections::HashSet, ffi::OsStr, path::Path};
 
@@ -28,7 +29,7 @@ pub const MANIFEST_SCHEMA_VERSION: u32 = 3;
 
 /// The most a first-run setup may ever ask a person to download: every file
 /// of every tier together.
-pub const MAX_TOTAL_DOWNLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub const MAX_TOTAL_DOWNLOAD_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 
 /// What a manifest file is for.
 ///
@@ -83,7 +84,7 @@ pub struct TierModel {
     pub tier: ModelTier,
     /// A stable identifier, recorded with every analysis the model makes.
     pub model_id: String,
-    /// The model's name as a person reads it: "Qwen3.5 2B".
+    /// The model's name as a person reads it: "Qwen3.5 9B".
     pub display_name: String,
     /// How this model is asked. Absent: the engine's evidence request as it
     /// is, with nothing added.
@@ -263,17 +264,11 @@ mod tests {
             assert!(model.model().is_some());
             assert_eq!(model.files.len(), 1);
         }
-        // The quick model is asked the way its qualification froze; the
-        // accurate one with the production request alone, which is what the
-        // recordings of record answer.
-        assert_eq!(
-            manifest.tier(ModelTier::Fast).unwrap().prompt_profile,
-            Some(PromptProfile::Bonsai2)
-        );
-        assert_eq!(
-            manifest.tier(ModelTier::Accurate).unwrap().prompt_profile,
-            None
-        );
+        // Both are asked with the production request alone, which is what
+        // the recordings of record answer.
+        for tier in ModelTier::ALL {
+            assert_eq!(manifest.tier(tier).unwrap().prompt_profile, None);
+        }
         assert_eq!(
             manifest.tiers().map(|model| model.tier).collect::<Vec<_>>(),
             ModelTier::ALL
@@ -293,30 +288,37 @@ mod tests {
         );
     }
 
-    /// Everyone who installed an earlier build has its one model on disk, and
-    /// it is this build's accurate tier exactly: the same file, revision,
-    /// length and digest. That is what lets an upgrade go straight to the
-    /// queue, with no download and nothing deleted.
+    /// The two pinned models are the ones the real-document sets chose, by
+    /// file, revision, length and digest: a change here is a change of
+    /// model, and every recording of record was made with these.
     #[test]
-    fn the_accurate_tier_is_the_model_the_single_model_build_installed() {
+    fn the_pinned_models_are_qwen35_9b_and_4b() {
         let manifest = embedded();
         let accurate = manifest.tier(ModelTier::Accurate).unwrap();
-        assert_eq!(accurate.model_id, "qwen3.5-2b-instruct-q4-k-m");
-        assert_eq!(accurate.display_name, "Qwen3.5 2B");
+        assert_eq!(accurate.model_id, "qwen3.5-9b-instruct-q4-k-m");
+        assert_eq!(accurate.display_name, "Qwen3.5 9B");
         let file = accurate.model().unwrap();
-        assert_eq!(file.name, "Qwen3.5-2B-Q4_K_M.gguf");
-        assert_eq!(file.size, 1_280_835_840);
+        assert_eq!(file.name, "Qwen3.5-9B-Q4_K_M.gguf");
+        assert_eq!(file.size, 5_680_522_464);
         assert_eq!(
             file.sha256,
-            "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223"
+            "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8"
         );
         assert_eq!(
             file.url,
-            "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/\
-             f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q4_K_M.gguf"
+            "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/\
+             3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf"
         );
         let fast = manifest.tier(ModelTier::Fast).unwrap();
-        assert_eq!(fast.model().unwrap().name, "Ternary-Bonsai-2-2B-PQ2_0.gguf");
+        assert_eq!(fast.model_id, "qwen3.5-4b-instruct-q4-k-m");
+        assert_eq!(fast.display_name, "Qwen3.5 4B");
+        let file = fast.model().unwrap();
+        assert_eq!(file.name, "Qwen3.5-4B-Q4_K_M.gguf");
+        assert_eq!(file.size, 2_740_937_888);
+        assert_eq!(
+            file.sha256,
+            "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
+        );
     }
 
     #[test]
@@ -326,7 +328,7 @@ mod tests {
         // Nothing here may be a file the engine cannot load.
         assert!(
             manifest.total_bytes() < MAX_TOTAL_DOWNLOAD_BYTES,
-            "the whole download must stay under 2 GiB, got {} bytes",
+            "the whole download must stay under 10 GiB, got {} bytes",
             manifest.total_bytes()
         );
         assert_eq!(manifest.files().count(), 2);

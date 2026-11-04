@@ -3,10 +3,9 @@ name: Runtime speed on Windows
 # The packaged llama.cpp runtime against upstream llama.cpp on a Windows
 # runner: the same 26 recorded InternBench requests replayed through each,
 # timed, and compared reply for reply with the reply the request got live.
-# One more run puts the fast tier's model (Bonsai, which only the packaged
-# runtime reads) through the same requests, for its speed alone: they were
-# written for the accurate model's prompt profile, so its replies are not
-# scored.
+# One more run puts the fast tier's model through upstream, which both tiers
+# run on, for its speed alone: the requests were recorded for the accurate
+# model, so its replies are compared with that capture but mean less.
 # Laboratory measurement only: it gates nothing and publishes nothing. See
 # bench/reports/speed-linux-cpu-2026-10-29.
 
@@ -24,7 +23,7 @@ concurrency:
 
 jobs:
   windows-runtime-speed:
-    name: Windows runtime speed (Prism vs upstream llama.cpp, and Bonsai)
+    name: Windows runtime speed (Prism vs upstream llama.cpp, and the fast tier)
     runs-on: windows-latest
     timeout-minutes: 180
     env:
@@ -68,14 +67,14 @@ jobs:
             threads = [Math]::Max(2, [Math]::Min(12, [int][Math]::Floor([int]$env:NUMBER_OF_PROCESSORS / 2)))
           } | ConvertTo-Json | Set-Content lab\context.json -Encoding utf8NoBOM
           Get-Content lab\context.json
-      - name: Replay the requests (Qwen on prism, upstream; Bonsai on prism; Qwen on upstream, prism)
+      - name: Replay the requests (accurate on prism, upstream; fast on upstream; accurate on upstream, prism)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $Threads = (Get-Content lab\context.json -Raw | ConvertFrom-Json).threads
           $Port = 18200
           $Runs = @(@("prism", "accurate", "prism-1"), @("upstream", "accurate", "upstream-1"),
-            @("prism", "fast", "bonsai-1"), @("upstream", "accurate", "upstream-2"), @("prism", "accurate", "prism-2"))
+            @("upstream", "fast", "fast-1"), @("upstream", "accurate", "upstream-2"), @("prism", "accurate", "prism-2"))
           foreach ($Run in $Runs) {
             $Runtime = $Run[0]; $Label = $Run[2]
             $Model = (Resolve-Path "lab\$($Run[1]).gguf").Path
@@ -111,8 +110,8 @@ jobs:
           context = json.load(open("lab/context.json", encoding="utf-8-sig"))
           lines = [f"Windows runner: {context['cpu']}, {context['logical_processors']} logical processors, "
                    f"{context['threads']} server threads; Prism {context['prism']}, upstream {context['upstream']}",
-                   "", "prism-N and upstream-N run Qwen3.5-2B (accurate); bonsai-1 runs Bonsai 2 2B (fast) on Prism, "
-                   "with prompts written for Qwen, so only its time means anything.",
+                   "", "prism-N and upstream-N run the accurate model; fast-1 runs the fast one on upstream, "
+                   "against requests recorded for the accurate model, so its time means most.",
                    "", "| Run | Time per document | Prefill (median) | Decode (median) | Replies identical to the Linux capture |",
                    "| --- | ---: | ---: | ---: | ---: |"]
           for path in sorted(glob.glob("lab/*-[12].json")):

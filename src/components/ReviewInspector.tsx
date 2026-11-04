@@ -403,7 +403,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   </aside>;
 }
 
-/** "Read by Qwen3.5 2B", and anything a reviewer should know about that reading. */
+/** "Read by Qwen3.5 9B", and anything a reviewer should know about that reading. */
 export function readByLine(reading: ModelReading, pending: boolean): string {
   const read = `Read by ${reading.displayName}`;
   if (reading.escalationFailed) return `${read}. The accurate model could not read it again.`;
