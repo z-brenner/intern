@@ -1,5 +1,11 @@
 # Model qualification status, 4 November 2026
 
+**Later update:** the [real4 live comparison](../bench/reports/real4-log-audit-2026-11-04/README.md)
+now includes a 2B control and matched document/prompt inputs. Its models ran on different CPUs,
+so it does not supply the same-host latency comparison proposed below. PRs 59 and 60 have
+since merged; replaying the original real4 recordings on current main is the next step.
+The remaining text preserves the earlier `c427aff` inspection, not the latest repository state.
+
 Inspection base: main `c427aff0deb490c8eda1aeccc28a5416c233050b`. This is a coordination
 and qualification plan, not a new inference result or a release sign-off.
 

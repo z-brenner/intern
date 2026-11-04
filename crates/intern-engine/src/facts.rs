@@ -62,9 +62,9 @@ use crate::evidence::{
 use crate::index::{EvidenceIndex, EvidenceUnit, UnitKind};
 use crate::infer::{infer_date_role, reads_as_signature_date, repair_issued_relation};
 use crate::phrases::{
-    has_a_kind, head_noun, is_placeholder, is_reference, label_and_value, names_a_kind,
-    opens_with_party_label, phrase_positions, same_word, subject_value, tidy_case, title_phrase,
-    trim_name, words,
+    has_a_kind, head_noun, is_form_code, is_placeholder, is_reference, label_and_value,
+    names_a_kind, opens_with_party_label, phrase_positions, same_word, subject_value, tidy_case,
+    title_phrase, trim_name, without_identifier, words,
 };
 use crate::retrieve::EvidenceContext;
 use crate::validate::{
@@ -529,6 +529,14 @@ pub fn validate_facts_at(
                 support.document_type = found.support;
                 remember(&found, &mut references);
                 type_line = found.line.clone();
+                // A title phrase runs on through "of the ..." to a party's
+                // name; a party is no part of a type.
+                let names = facts
+                    .parties
+                    .iter()
+                    .map(|party| party.name.as_str())
+                    .collect::<Vec<_>>();
+                let phrase = stated_title(&without_identifier(&phrase), &names);
                 type_title = Some(phrase.clone());
                 type_unit = found.unit.map(|unit| unit.ordinal);
                 (Some(phrase), true)
@@ -540,6 +548,12 @@ pub fn validate_facts_at(
                 type_unit = found.unit.map(|unit| unit.ordinal);
                 let kept = marks_its_line_holds(value, found.line.as_deref().unwrap_or_default());
                 type_line = found.line.clone();
+                let names = facts
+                    .parties
+                    .iter()
+                    .map(|party| party.name.as_str())
+                    .collect::<Vec<_>>();
+                let kept = stated_title(&without_identifier(&kept), &names);
                 (Some(titled(&kept)), true)
             }
             TypeReading::Retitled { phrase, line } => {
@@ -1364,6 +1378,11 @@ pub fn validate_facts_at(
         caption: caption_sides(scope, context, &cast),
     };
     let relation = relation_from_roles(class, document_type.as_deref(), &cast, cues);
+    // A name that rests on roles the document did not support waits for
+    // a person: the reply read the sides, the document did not say.
+    if relation.on_proposed_roles {
+        push(&mut reasons, ReviewReason::PartyUnsupported);
+    }
     // An agreement has two sides at least. One that names only one has
     // lost the other, which a person must supply.
     if matches!(class, DocumentClass::Agreement | DocumentClass::Amendment)
@@ -1920,6 +1939,16 @@ fn read_type_words<'a>(
         };
     }
     let value_words = words(value);
+    // "Report generated", "Printed on": the stamp a system puts on a sheet
+    // says when it was made, not what it is. The title above it does.
+    if value_words.last().is_some_and(|word| {
+        matches!(
+            word.as_str(),
+            "generated" | "printed" | "exported" | "created" | "saved"
+        )
+    }) {
+        return TypeReading::Unsupported;
+    }
     let Some(head) = head_noun(&value_words).map(str::to_owned) else {
         return TypeReading::Unsupported;
     };
@@ -2164,6 +2193,148 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
 /// default" - as a title: the words are the document's, the casing a
 /// stylistic choice the model is not asked to make. Any capital in the
 /// reply is kept as written.
+/// A stated type as a title names its kind, not the whole line a bigger
+/// model copies. The field a title line runs into is cut away ("CHANGE
+/// ORDER Distribution: Briarport Library District" is a "Change Order");
+/// the line's own kind phrase stands for the line ("Fieldnote S2 Product
+/// Launch Plan" is a "Product Launch Plan", "Spring Wholesale Availability
+/// and Price List" a "Price List", as [`title_phrase`] reads a title); and
+/// a party the reply named is no part of a type ("Newsletter of the
+/// Saltmarsh Point Homeowners Association" is a "Newsletter"). An
+/// agreement or an amendment keeps its title whole: it is named for what
+/// it is about ("Supply Agreement", "Amendment to Lease"), and a party's
+/// name can be part of that.
+fn stated_title(value: &str, parties: &[&str]) -> String {
+    let tokens = value.split_whitespace().collect::<Vec<_>>();
+    let keep = |tokens: &[&str]| -> Option<String> {
+        let kept = tokens.join(" ");
+        (!kept.is_empty() && has_a_kind(&words(&kept))).then_some(kept)
+    };
+    // A field the title line runs into: a label ending with a colon, with
+    // the field's value after it, where the title before the label ends in
+    // a kind ("CHANGE ORDER Distribution: Briarport ..."). A colon that
+    // ends the title itself is no label: "Notice of Hearing: Motion for
+    // Summary Judgment" keeps its "Hearing".
+    let ends_in_a_kind = |tokens: &[&str]| {
+        words(&tokens.join(" "))
+            .last()
+            .is_some_and(|word| names_a_kind(word))
+    };
+    let mut value = tokens
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(at, token)| token.ends_with(':') && *at + 1 < tokens.len())
+        .and_then(|(at, _)| {
+            if ends_in_a_kind(&tokens[..at]) {
+                keep(&tokens[..at])
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| value.to_owned());
+    if matches!(
+        DocumentClass::of(Some(&value)),
+        DocumentClass::Agreement | DocumentClass::Amendment
+    ) {
+        return value;
+    }
+    // The line's kind phrase, where the line is plainly more than a type:
+    // three or more words around the kind phrase ("Spring Wholesale
+    // Availability and Price List", "letter of 4 April 2014"), or fewer
+    // with a number among them ("Fieldnote S2 Product Launch Plan",
+    // "Advisory Opinion 1997-5"). A type's own modifiers stay: "Profit and
+    // Loss Statement", "Health and Safety Plan", "Bank Statement", the one
+    // code or year a title opens with ("W-9 Form", "2025 Annual Report")
+    // and a numbered qualifier ("Phase 1 Decision Letter", "Section 5
+    // Objection Letter"), all of which name the kind. Never what a
+    // connector joins: an "Approval of Closure Plan" is an approval, and
+    // the plan is what it approves.
+    const JOINS: &[&str] = &["of", "to", "for", "on", "under", "by"];
+    let value_words = words(&value);
+    if let Some(head) = head_noun(&value_words).map(str::to_owned)
+        && let Some(phrase) = title_phrase(&value, &head)
+        && let phrase_words = words(&phrase)
+        && phrase_words.len() < value_words.len()
+        && let Some(at) = phrase_positions(&value_words, &phrase_words)
+            .into_iter()
+            .next()
+        && !(at > 0 && JOINS.contains(&value_words[at - 1].as_str()))
+    {
+        // The tokens outside the phrase: a token may hold several words.
+        let end = at + phrase_words.len();
+        let mut seen = 0;
+        let (mut before, mut after) = (Vec::new(), Vec::new());
+        for token in value.split_whitespace() {
+            let count = words(token).len();
+            if seen + count <= at {
+                before.push(token);
+            } else if seen >= end {
+                after.push(token);
+            }
+            seen += count;
+        }
+        let has_digit = |token: &&str| token.chars().any(|character| character.is_ascii_digit());
+        let removed = before.len() + after.len();
+        let numbered = before.iter().any(has_digit) || after.iter().any(has_digit);
+        // The one code or year a title opens with, or a numbered
+        // qualifier ("Phase 1", "Section 5"), names the kind and stays.
+        let all_digits = |token: &str| {
+            let core = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+            !core.is_empty() && core.chars().all(|c| c.is_ascii_digit())
+        };
+        let names_the_kind = after.is_empty()
+            && match before[..] {
+                [code] => is_form_code(code) || (code.len() == 4 && all_digits(code)),
+                [word, number] => word.chars().all(char::is_alphabetic) && all_digits(number),
+                _ => false,
+            };
+        if (removed >= 3 || numbered) && !names_the_kind {
+            value = phrase;
+        }
+    }
+    // A party's name, and the connector that introduces it.
+    let value_words = words(&value);
+    const INTRODUCES: &[&str] = &[
+        "of", "for", "by", "from", "to", "with", "between", "and", "the",
+    ];
+    let cut = parties
+        .iter()
+        .filter_map(|party| {
+            let party_words = words(party);
+            if party_words.is_empty() {
+                return None;
+            }
+            phrase_positions(&value_words, &party_words)
+                .into_iter()
+                .next()
+        })
+        .filter(|&at| at > 0)
+        .min();
+    if let Some(mut at) = cut {
+        while at > 1 && INTRODUCES.contains(&value_words[at - 1].as_str()) {
+            at -= 1;
+        }
+        // The token the cut word opens: a token may hold several words
+        // ("Girafa.com,") or none ("-").
+        let tokens = value.split_whitespace().collect::<Vec<_>>();
+        let mut seen = 0;
+        let token_at = tokens
+            .iter()
+            .position(|token| {
+                let count = words(token).len();
+                let opens = seen == at && count > 0;
+                seen += count;
+                opens
+            })
+            .unwrap_or(tokens.len());
+        if let Some(kept) = keep(&tokens[..token_at]) {
+            value = kept;
+        }
+    }
+    value
+}
+
 fn titled(value: &str) -> String {
     if value.chars().any(char::is_uppercase) {
         return value.to_owned();
@@ -5444,6 +5615,105 @@ mod tests {
         }
     }
 
+    /// A stated type that is a whole title line reads as the line's kind
+    /// phrase: without the field it runs into, the code or the words an
+    /// "and" joins before the kind, or a party the reply named after it.
+    /// What a connector joins stays ("Approval of Closure Plan"), and so
+    /// does an agreement's title, which can be named for a party.
+    #[test]
+    fn a_stated_type_reads_as_its_titles_kind_phrase() {
+        let parties = [
+            "Saltmarsh Point Homeowners Association",
+            "Briarport Library District",
+        ];
+        for (value, kind) in [
+            ("Fieldnote S2 Product Launch Plan", "Product Launch Plan"),
+            ("Spring Wholesale Availability and Price List", "Price List"),
+            (
+                "Newsletter of the Saltmarsh Point Homeowners Association",
+                "Newsletter",
+            ),
+            (
+                "CHANGE ORDER Distribution: Briarport Library District / Stonebridge",
+                "CHANGE ORDER",
+            ),
+            (
+                "Public Information Statement from Saltmarsh Point Homeowners Association",
+                "Public Information Statement",
+            ),
+            ("Advisory Opinion 1997-5", "Advisory Opinion"),
+            (
+                "Notice of Hearing: Motion for Summary Judgment",
+                "Notice of Hearing",
+            ),
+            ("letter of 4 April 2014", "letter"),
+            (
+                "Public Information Statement 24-45",
+                "Public Information Statement",
+            ),
+        ] {
+            assert_eq!(stated_title(value, &parties), kind, "{value}");
+        }
+        for kept in [
+            "W-9 Form",
+            "10-K Annual Report",
+            "1099-MISC Form",
+            "Profit and Loss Statement",
+            "Health and Safety Plan",
+            "Bank Statement",
+            "Credit Card Statement",
+            "2025 Annual Report",
+            "Phase 1 Decision Letter",
+            "Section 5 Objection Letter",
+            "Notice of Hearing:",
+            "Approval of Closure Plan",
+            "EPA Approval of Closure Plan",
+            "Action by Unanimous Written Consent of the Board of Directors",
+            "Notice of Default and Reservation of Rights",
+            "Saltmarsh Point Homeowners Association Services Agreement",
+            "Amendment to Lease with Briarport Library District",
+            "Guide to the Code",
+            "Details for Improvement Notice",
+        ] {
+            assert_eq!(stated_title(kept, &parties), kept);
+        }
+    }
+
+    /// "Report generated: ..." is the stamp a system put on a sheet, not
+    /// its title: the heading above it names the kind.
+    #[test]
+    fn a_machine_stamp_is_no_type() {
+        let index = EvidenceIndex::build(&DocumentSource::from_pages(vec![
+            crate::domain::SourcePage::new(
+                1,
+                "HARVEST LOG\n\nReport generated: 2026-10-02\n\nRowanbrae Vineyards\n\n\
+                 Block | Variety | Tons\nA1 | Pinot Noir | 4.2",
+                PageOrigin::PlainText,
+            ),
+        ]));
+        let context = whole(&index);
+        let facts = ModelFacts {
+            document_type: Some("Report generated".into()),
+            type_evidence: vec![id_of(&index, "Report generated")],
+            document_date: Some("2026-10-02".into()),
+            date_evidence: vec![id_of(&index, "Report generated")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &context, &index);
+        assert_ne!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Report Generated"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(
+            outcome.reasons.contains(&ReviewReason::TypeUnsupported)
+                || outcome.reasons.contains(&ReviewReason::TypeInferred),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
     fn check(
         facts: ModelFacts,
         context: &EvidenceContext,
@@ -6152,7 +6422,7 @@ Slip Date: 04/05/2026\n\nShip Date: 04/13/2026\n\nNotes\n\nReceived at dock 13/0
     }
 
     #[test]
-    fn a_role_the_document_does_not_support_never_decides_the_relation() {
+    fn a_role_the_document_does_not_support_decides_the_relation_only_unopposed_and_in_review() {
         let text = "NOTICE OF RENT INCREASE\n\nTo: Imogen Castellanos, Tenant\n\n\
 From: Cresthaven Court Holdings LLC\n\nYour rent for Apartment 4C rises to $1,965.00 on August 1, 2026.\n\n\
 Dated May 12, 2026";
@@ -6211,8 +6481,9 @@ Dated May 12, 2026";
         assert_eq!(outcome.proposal.parties, vec!["Imogen Castellanos"]);
 
         // A document that gives no role in words leaves an unsupported
-        // claim nothing to stand on: the names are kept without a joining
-        // word.
+        // claim nothing to stand on, and nothing to contradict it: the
+        // reply's roles name the notice's party, and the name waits for a
+        // person, saying why.
         let plain = "NOTICE OF RENT INCREASE\n\nImogen Castellanos and Cresthaven Court Holdings LLC \
                      agree that the rent for Apartment 4C rises on August 1, 2026, and that every other \
                      term of the residential lease stays as it is.\n\nDated May 12, 2026";
@@ -6240,7 +6511,18 @@ Dated May 12, 2026";
         let outcome = check(facts, &whole(&index), &index);
         let parties = &outcome.facts.as_ref().unwrap().parties;
         assert_eq!(parties[0].document_role, None);
-        assert_eq!(outcome.proposal.party_relation, PartyRelation::None);
+        assert_eq!(parties[1].document_role, None);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Cresthaven Court Holdings LLC"]
+        );
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
     }
 
     /// An invoice that names only its customer names no one: the bill-to
@@ -8462,6 +8744,8 @@ LOAN CONDITION REPORT\n\n\
                 "Aucta Pharmaceuticals, Inc.".into(),
             ],
             basis: String::new(),
+            on_proposed_roles: false,
+            defaulted: false,
         };
         assert_eq!(
             fit_type(

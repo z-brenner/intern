@@ -35,6 +35,14 @@ impl GoldFile {
             if !seen.insert(document.id.as_str()) {
                 return Err(format!("gold lists document {} twice", document.id));
             }
+            if let Some(expected) = &document.gold.expected_readiness
+                && !matches!(expected.as_str(), "ready" | "needs_review" | "either")
+            {
+                return Err(format!(
+                    "{}: expected_readiness {expected:?} is not ready, needs_review or either",
+                    document.id
+                ));
+            }
             for (page, route) in document
                 .structure
                 .iter()
@@ -392,6 +400,47 @@ mod tests {
         assert!(GoldFile::parse(duplicate).unwrap_err().contains("twice"));
         let future = br#"{"schema_version": 2, "documents": []}"#;
         assert!(GoldFile::parse(future).is_err());
+    }
+
+    #[test]
+    fn an_unknown_readiness_cannot_silently_disable_routing_scores() {
+        for expected in ["review", "Ready", "needs-review", ""] {
+            let value = serde_json::json!({
+                "schema_version": 1,
+                "documents": [{"id": "undated-notice", "file": "notice.pdf",
+                    "gold": {"expected_readiness": expected}}]
+            });
+            let error = GoldFile::parse(&serde_json::to_vec(&value).unwrap()).unwrap_err();
+            assert!(error.contains("undated-notice"), "{error}");
+            assert!(error.contains("expected_readiness"), "{error}");
+        }
+        for expected in [None, Some("ready"), Some("needs_review"), Some("either")] {
+            let value = serde_json::json!({
+                "schema_version": 1,
+                "documents": [{"id": "notice", "file": "notice.pdf",
+                    "gold": {"expected_readiness": expected}}]
+            });
+            GoldFile::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn committed_benchmark_and_real_document_gold_use_supported_readiness_values() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for name in [
+            "bench/gold.json",
+            "scripts/realdocs-eval/sample.json",
+            "scripts/realdocs-eval/sample-heldout.json",
+            "scripts/realdocs-eval/sample-heldout2.json",
+            "scripts/realdocs-eval/sample-heldout3.json",
+        ] {
+            let bytes = std::fs::read(root.join(name)).unwrap();
+            let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            // Source samples acquire this header when fetch.py writes gold.
+            value["schema_version"] = 1.into();
+            GoldFile::parse(&serde_json::to_vec(&value).unwrap())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+        }
     }
 
     #[test]

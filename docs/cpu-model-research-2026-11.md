@@ -1,5 +1,10 @@
 # Stronger local models for a 16 GB CPU laptop
 
+**Subsequent evidence:** a [real4 live 2B/4B/9B comparison](../bench/reports/real4-log-audit-2026-11-04/README.md)
+is now available from the parallel workstream. It has not established a safe replacement.
+The original research and local download limits below are retained as a dated record; the
+latest paired-case audit and remaining replay requirements are in that newer report.
+
 Research date: 2026-11-03. Base: `7996324` (main after #55).
 **No replacement is qualified. No new release is justified by this work yet.**
 The environment's proxy refused the model-weight CDN with HTTP 403; the same pinned baseline

@@ -1,0 +1,892 @@
+{
+  "source_run": 41749074250,
+  "source_commit": "0295a09fdb72988143481f7e024cc9e6ee240114",
+  "source": "GitHub API decoded job logs plus committed gold; raw recordings and per-document readiness unavailable",
+  "job_ids": {
+    "2b": 126309394637,
+    "4b": 126309394195,
+    "9b": 126309394715
+  },
+  "counts": {
+    "2b": {
+      "right": 13,
+      "scored": 55
+    },
+    "4b": {
+      "right": 13,
+      "scored": 55
+    },
+    "9b": {
+      "right": 15,
+      "scored": 55
+    }
+  },
+  "pairs": {
+    "4b": {
+      "candidate_only_correct": [
+        "real4-letter-13",
+        "real4-notice-05",
+        "real4-notice-14",
+        "real4-invoice-08",
+        "real4-office-11"
+      ],
+      "control_only_correct": [
+        "real4-notice-06",
+        "real4-invoice-12",
+        "real4-invoice-13",
+        "real4-office-01",
+        "real4-office-13"
+      ],
+      "both_correct": [
+        "real4-notice-04",
+        "real4-notice-15",
+        "real4-invoice-03",
+        "real4-invoice-04",
+        "real4-invoice-05",
+        "real4-invoice-06",
+        "real4-invoice-07",
+        "real4-invoice-09"
+      ]
+    },
+    "9b": {
+      "candidate_only_correct": [
+        "real4-letter-13",
+        "real4-notice-05",
+        "real4-notice-14",
+        "real4-invoice-08",
+        "real4-invoice-15"
+      ],
+      "control_only_correct": [
+        "real4-notice-06",
+        "real4-invoice-12",
+        "real4-office-01"
+      ],
+      "both_correct": [
+        "real4-notice-04",
+        "real4-notice-15",
+        "real4-invoice-03",
+        "real4-invoice-04",
+        "real4-invoice-05",
+        "real4-invoice-06",
+        "real4-invoice-07",
+        "real4-invoice-09",
+        "real4-invoice-13",
+        "real4-office-13"
+      ]
+    }
+  },
+  "rows": [
+    {
+      "id": "real4-letter-01",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2024-12-13 Inspection Report for Pacific Gas and Electric Company.pdf",
+        "4b": "2024-12-13 Inspection Report 050002752024405 and 050003232024405 for Pacific Gas and Electric Company.pdf",
+        "9b": "2024-12-13 Inspection Report for Pacific Gas and Electric Company.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-letter-02",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2024-12-13 Nrc Inspection Report for Southern California Edison Company.pdf",
+        "4b": "2024-12-13 Letter for Southern California Edison Company.pdf",
+        "9b": "2024-12-13 LETTER for Southern California Edison Company.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-letter-03",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2024-07-05 Document - Minister for Social Development.pdf",
+        "4b": "2024-07-05 Document - Laura Berntsen.pdf",
+        "9b": "2024-07-05 Document - Laura Berntsen.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-letter-04",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2024-09-03 Document - Te Whatu Ora - Health NZ.pdf",
+        "4b": "2024-09-03 Document - Jess Hewat.pdf",
+        "9b": "2024-09-03 Document - Jess Hewat.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-letter-05",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2024-08-23 Document from Ministry for Pacific Peoples.pdf",
+        "4b": "2024-08-23 Document from Ministry for Pacific Peoples.pdf",
+        "9b": "2024-08-23 Document from Ministry for Pacific Peoples.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-letter-06",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2024-10-04 Tax Invoice from Ministry for Pacific Peoples.pdf",
+        "4b": "2024-10-04 Tax Invoice from Ministry for Pacific Peoples.pdf",
+        "9b": "2024-10-04 Tax Invoice from Ministry for Pacific Peoples.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-letter-07",
+      "kind": "letter",
+      "filenames": {
+        "2b": "Letter.pdf",
+        "4b": "Freedom of Information Act Request Acknowledgement.pdf",
+        "9b": "Freedom of Information Act Request Acknowledgement.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-letter-08",
+      "kind": "letter",
+      "filenames": {
+        "2b": "Letter to Occupational Safety and Health Administration.pdf",
+        "4b": "Document from U.S. Department of Labor.pdf",
+        "9b": "Document - Mr. Carl Malamud.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-letter-09",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2015-06-29 Memorandum from 88 ABWJA.pdf",
+        "4b": "2015-09-08 Privacy Act Statement for Mr. Carl Malamud.pdf",
+        "9b": "Privacy Act Statement for Carl Malamud.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-letter-10",
+      "kind": "letter",
+      "filenames": {
+        "2b": "Letter from Federal Highway Administration.pdf",
+        "4b": "Letter.pdf",
+        "9b": "Letter from Federal Highway Administration.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-letter-11",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2021-05-14 Letter - Kansas Judicial Council.pdf",
+        "4b": "2021-05-14 Letter - Kansas Judicial Council.pdf",
+        "9b": "2021-05-14 Letter from Kansas Judicial Council.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-letter-12",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2021-03-15 Letter to Ms. Clare Martorana.pdf",
+        "4b": "2021-03-15 Letter.pdf",
+        "9b": "2021-03-15 Letter for Ms. Clare Martorana.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-letter-13",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2016-05-18 Letter to Carl Malamud.pdf",
+        "4b": "2016-05-18 Letter to PUBLIC.RESOURCE.ORG.pdf",
+        "9b": "2016-05-18 Letter to PUBLIC.RESOURCE.ORG.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": true,
+        "9b": true
+      }
+    },
+    {
+      "id": "real4-letter-14",
+      "kind": "letter",
+      "filenames": {
+        "2b": "Document from U.S. Coast Guard.pdf",
+        "4b": "Document from U.S. Coast Guard.pdf",
+        "9b": "Document - Mr. Carl Malamud.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-letter-15",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2021-08-27 Letter for Robert Stivers.pdf",
+        "4b": "2021-08-27 Letter to Mr. Carl Malamud.pdf",
+        "9b": "2021-08-27 Letter to Carl Malamud.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-notice-01",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2026-01-02 Defendants\u2019 Notice of Appeal from United States.pdf",
+        "4b": "2026-01-02 Defendants\u2019 Notice of Appeal for U.S. Department of Transportation.pdf",
+        "9b": "2026-01-02 Defendants\u2019 Notice of Appeal between State of California and U.S. Department of Transportation.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-notice-02",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2026-02-17 Notice of Appeal from City of Philadelphia.pdf",
+        "4b": "2026-02-17 Notice of Appeal from Jessica Borwon, Acting Director of the National Park Service.pdf",
+        "9b": "2026-02-17 Notice of Appeal from City of Philadelphia.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-notice-03",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2026-03-02 Notice of Appeal for Joe Neguse.pdf",
+        "4b": "2026-03-02 Notice of Appeal for JOE NEGUSE.pdf",
+        "9b": "2026-03-02 Notice of Appeal for JOE NEGUSE.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-notice-04",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2026-05-01 Notice of Appeal between United States of America and Tim Walz.pdf",
+        "4b": "2026-05-01 Notice of Appeal between United States of America and TIM WALZ.pdf",
+        "9b": "2026-05-01 Notice of Appeal between United States of America and TIM WALZ.pdf"
+      },
+      "filename_correct": {
+        "2b": true,
+        "4b": true,
+        "9b": true
+      }
+    },
+    {
+      "id": "real4-notice-05",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2025-05-23 Notice of Violation to Justyna Kelly.pdf",
+        "4b": "2025-05-23 Notice of Violation for Point Biopharma USA Inc.pdf",
+        "9b": "2025-05-23 Notice of Violation for POINT Biopharma USA Inc.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": true,
+        "9b": true
+      }
+    },
+    {
+      "id": "real4-notice-06",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2025-12-15 Notice of Violation for Tennessee Valley Authority.pdf",
+        "4b": "2025-12-15 Assessment Followup Letter Nrc Inspection Report for Tennessee Valley Authority.pdf",
+        "9b": "2025-12-15 White Finding, Notice of Violation for Tennessee Valley Authority.pdf"
+      },
+      "filename_correct": {
+        "2b": true,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-notice-07",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2025-10-07 Notice to Frazer Ulrick.pdf",
+        "4b": "2025-10-07 Official Public Record for Networth Data Ltd.pdf",
+        "9b": "2025-10-07 Official Public Record for Networth Data Ltd.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-notice-08",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2025-04-28 Notice details Town and Country Planning for National Transport Casework Team.pdf",
+        "4b": "2025-04-28 Official Public Record from Department for Transport.pdf",
+        "9b": "2025-04-28 Official Public Record from Department for Transport.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-notice-09",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2025-01-14 Notice details Town and Country Planning to Town and Country Planning ACT 1990.pdf",
+        "4b": "2025-01-14 Official Public Record from Secretary of State.pdf",
+        "9b": "2025-01-14 Official Public Record from Department for Transport.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-notice-10",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2024-06-06 Document from U.S. Department of Labor.pdf",
+        "4b": "2024-06-06 Document from U.S. Department of Labor.pdf",
+        "9b": "2024-06-06 Document from U.S. Department of Labor.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-notice-11",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2024-02-20 Notice to Employees of Informal Conference for Henry Brick Company, Inc.pdf",
+        "4b": "2024-02-20 Notice to Employees of Informal Conference from U.S. Department of Labor.pdf",
+        "9b": "2024-02-20 Notice to Employees of Informal Conference from U.S. Department of Labor.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-notice-12",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2025-09-04 Notice of Civil Penalty Assessment to Central Transport LLC.pdf",
+        "4b": "2025-09-04 Notice of Civil Penalty Assessment to Central Transport LLC.pdf",
+        "9b": "2025-08-26 Notice of Civil Penalty Assessment to Central Transport LLC.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-notice-13",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2025-06-17 Notice of Civil Penalty Assessment and Order for Oregon Department of Environmental Quality.pdf",
+        "4b": "2024-07-25 Notice of Civil Penalty Assessment and Order Case for Department of Environmental Quality.pdf",
+        "9b": "2023-11-05 Notice of Civil Penalty Assessment and Order Case for Oregon Department of Environmental Quality.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-notice-14",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2023-02-15 Notice to Oregon Department of Environmental Quality.pdf",
+        "4b": "2025-10-28 Notice of Civil Penalty Assessment for Erickson Incorporated.pdf",
+        "9b": "2025-10-28 Notice of Civil Penalty Assessment to Erickson Incorporated.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": true,
+        "9b": true
+      }
+    },
+    {
+      "id": "real4-notice-15",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2025-07-22 Notice of Civil Penalty Assessment and Order from Department of Environmental Quality.pdf",
+        "4b": "2025-07-22 Notice of Civil Penalty Assessment and Order from Department of Environmental Quality.pdf",
+        "9b": "2025-07-22 Notice of Civil Penalty Assessment and Order to Columbia Plywood Corporation.pdf"
+      },
+      "filename_correct": {
+        "2b": true,
+        "4b": true,
+        "9b": true
+      }
+    },
+    {
+      "id": "real4-invoice-01",
+      "kind": "invoice",
+      "filenames": {
+        "2b": "2023-10-05 Requester Invoice.pdf",
+        "4b": "2023-10-05 Requester Invoice.pdf",
+        "9b": "2023-10-05 Requester Invoice.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-invoice-02",
+      "kind": "invoice",
+      "filenames": {
+        "2b": "2018-04-23 Foiaonline Invoice from Office of the Administrator.pdf",
+        "4b": "2018-04-23 Foiaonline Invoice from EPA.pdf",
+        "9b": "2018-04-23 Foiaonline Invoice from EPA.pdf"
+      },
+      "filename_correct": {
+        "2b": null,
+        "4b": null,
+        "9b": null
+      }
+    },
+    {
+      "id": "real4-invoice-03",
+      "kind": "invoice",
+      "filenames": {
+        "2b": "2018-10-23 Invoice from PredPol, Inc.pdf",
+        "4b": "2018-10-23 Invoice from PredPol, Inc.pdf",
+        "9b": "2018-10-23 Invoice from PredPol, Inc.pdf"
+      },
+      "filename_correct": {
+        "2b": true,
+        "4b": true,
+        "9b": true
+      }
+    },
+    {
+      "id": "real4-invoice-04",
+      "kind": "invoice",
+      "filenames": {
+        "2b": "2020-11-16 Invoice from Flock Safety.pdf",
+        "4b": "2020-11-16 Invoice from Flock Group Inc.pdf",
+        "9b": "2020-11-16 Invoice from Flock Safety.pdf"
+      },
+      "filename_correct": {
+        "2b": true,
+        "4b": true,
+        "9b": true
+      }
+    },
+    {
+      "id": "real4-invoice-05",
+      "kind": "invoice",
+      "filenames": {
+        "2b": "2021-02-08 Invoice from Flock Safety.pdf",
+        "4b": "2021-02-08 Invoice from Flock Safety.pdf",
+        "9b": "2021-02-08 Invoice from Flock Safety.pdf"
+      },
+      "filename_correct": {
+        "2b": true,
+        "4b": true,
+        "9b": true
+      }
+    },
+    {
+      "id": "real4-invoice-06",
+      "kind": "invoice",
+      "filenames": {
+        "2b": "2022-01-17 Invoice from Flock Group, Inc.pdf",
+        "4b": "2022-01-17 Invoice from Flock Group, Inc.pdf",
+        "9b": "2022-01-17 Invoice from Flock Group, Inc.pdf"
+      },
+      "filename_correct": {
+        "2b": true,
+        "4b": true,
+        "9b": true
+      }
+    },
+    {
+      "id": "real4-invoice-07",
+      "kind": "invoice",
+      "filenames": {
+        "2b": "2024-03-17 Invoice from WBAL-TV11.pdf",
+        "4b": "2024-03-17 Invoice from WBAL-TV11.pdf",
+        "9b": "2024-03-17 Invoice from WBAL-TV11.pdf"
+      },
+      "filename_correct": {
+        "2b": true,
+        "4b": true,
+        "9b": true
+      }
+    },
+    {
+      "id": "real4-invoice-08",
+      "kind": "invoice",
+      "filenames": {
+        "2b": "2024-05-26 Invoice.pdf",
+        "4b": "2024-05-26 Invoice from WFAA.pdf",
+        "9b": "2024-05-26 Invoice from WFAA.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": true,
+        "9b": true
+      }
+    },
+    {
+      "id": "real4-invoice-09",
+      "kind": "invoice",
+      "filenames": {
+        "2b": "2024-04-07 Invoice from WUSA.pdf",
+        "4b": "2024-04-07 Invoice from WUSA.pdf",
+        "9b": "2024-04-07 Invoice from WUSA.pdf"
+      },
+      "filename_correct": {
+        "2b": true,
+        "4b": true,
+        "9b": true
+      }
+    },
+    {
+      "id": "real4-invoice-10",
+      "kind": "invoice",
+      "filenames": {
+        "2b": "2024-01-08 Invoice from WTTG.pdf",
+        "4b": "2024-01-08 INVOICE from WTTG.pdf",
+        "9b": "2024-01-08 Invoice from WTTG.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-invoice-11",
+      "kind": "invoice",
+      "filenames": {
+        "2b": "2024-06-30 Invoice - America Leads Inc.pdf",
+        "4b": "2024-06-30 Invoice from Smart Media Group.pdf",
+        "9b": "2024-06-30 Invoice from WCCO-TV Advertiser.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-invoice-12",
+      "kind": "invoice",
+      "filenames": {
+        "2b": "2024-11-10 Invoice from WCCO.pdf",
+        "4b": "2024-11-10 Invoice from WCCO-TV Advertiser.pdf",
+        "9b": "2024-11-10 Invoice from WCCO-TV Advertiser.pdf"
+      },
+      "filename_correct": {
+        "2b": true,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-invoice-13",
+      "kind": "statement",
+      "filenames": {
+        "2b": "2010-04-28 Statement from Barclaycard Commercial.pdf",
+        "4b": "2010-04-28 Statement.pdf",
+        "9b": "2010-04-28 Statement from Barclaycard Commercial.pdf"
+      },
+      "filename_correct": {
+        "2b": true,
+        "4b": false,
+        "9b": true
+      }
+    },
+    {
+      "id": "real4-invoice-14",
+      "kind": "invoice",
+      "filenames": {
+        "2b": "2024-05-06 Invoice from WTTG.pdf",
+        "4b": "2024-05-06 Invoice from Main Street Media Group.pdf",
+        "9b": "2024-05-06 Invoice from WTTG.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-invoice-15",
+      "kind": "invoice",
+      "filenames": {
+        "2b": "2024-02-25 Invoice.pdf",
+        "4b": "2024-02-25 Invoice from Armada Strategies.pdf",
+        "9b": "2024-02-25 Invoice from WFAA.pdf"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": true
+      }
+    },
+    {
+      "id": "real4-office-01",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2018-06-21 Letter to Duquesne Light Company.docx",
+        "4b": "2018-06-21 Letter to Emily M Farah CNSL.docx",
+        "9b": "2018-06-21 Letter to Emily M Farah CNSL.docx"
+      },
+      "filename_correct": {
+        "2b": true,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-office-02",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2016-05-12 Receipt from Christopher T. Wright.docx",
+        "4b": "2016-05-12 Letter of Notification of PPL Electric Utilities Corporation to Mr. Wright.docx",
+        "9b": "2016-05-12 Receipt is acknowledged of the Letter of Notification of PPL Electric Utilities.docx"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-office-03",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2021-11-29 Letter to Mr. Lent.doc",
+        "4b": "2021-11-29 Letter of Notification of PPL Electric Utilities Corporation to Mr. Lent.doc",
+        "9b": "2021-11-29 Letter to Garrett P Lent Esquire.doc"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-office-04",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2012-05-25 Document - Department of Health.doc",
+        "4b": "2012-08-10 Document - Department of Health.doc",
+        "9b": "2012-08-10 Document from Department of Health.doc"
+      },
+      "filename_correct": {
+        "2b": null,
+        "4b": null,
+        "9b": null
+      }
+    },
+    {
+      "id": "real4-office-05",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2012-03-29 Letter from James Kirkup.doc",
+        "4b": "2012-03-29 Letter to Mr Kirkup.doc",
+        "9b": "2012-03-29 Letter from James Kirkup.doc"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-office-06",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2021-01-02 Document - Freedom of Information Request.odt",
+        "4b": "2021-02-01 Document - Highways England.odt",
+        "9b": "2021-02-01 Document from Highways England.odt"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-office-07",
+      "kind": "notice",
+      "filenames": {
+        "2b": "Notice to British Library.rtf",
+        "4b": "Document from Patents Journal.rtf",
+        "9b": "Document from British Library.rtf"
+      },
+      "filename_correct": {
+        "2b": null,
+        "4b": null,
+        "9b": null
+      }
+    },
+    {
+      "id": "real4-office-08",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2016-03-08 Document - OAG.docx",
+        "4b": "2016-02-18 Document to REDACTED.docx",
+        "9b": "2016-03-08 Document to OAG.docx"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-office-09",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2019-09-09 Document from Department for Business, Energy and Industrial Strategy.docx",
+        "4b": "2019-09-16 Document from Office of Manpower Economics.docx",
+        "9b": "2019-09-16 Document from Office of Manpower Economics.docx"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-office-10",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2016-04-06 Document - Bruce Betts.msg",
+        "4b": "2016-04-06 Email from Bruce.Betts@dgs.ca.gov.msg",
+        "9b": "2016-04-06 Document - Bruce Betts.msg"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-office-11",
+      "kind": "letter",
+      "filenames": {
+        "2b": "2016-08-01 Email - Alexander Hunter.msg",
+        "4b": "2016-08-01 Email to DGS Cbsc-Sacramento Staff.msg",
+        "9b": "2016-08-01 Document - DGS Cbsc-Sacramento Staff.msg"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": true,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-office-12",
+      "kind": "notice",
+      "filenames": {
+        "2b": "2026-10-19 Public Information Statement for National Weather Service Wichita KS.txt",
+        "4b": "2026-10-19 Document from National Weather Service Wichita KS.txt",
+        "9b": "2026-10-19 Document from National Weather Service Wichita KS.txt"
+      },
+      "filename_correct": {
+        "2b": false,
+        "4b": false,
+        "9b": false
+      }
+    },
+    {
+      "id": "real4-office-13",
+      "kind": "statement",
+      "filenames": {
+        "2b": "2026-10-19 Special Weather Statement from National Weather Service.txt",
+        "4b": "2026-10-19 Document from National Weather Service Jackson KY.txt",
+        "9b": "2026-10-19 Special Weather Statement from National Weather Service Jackson KY.txt"
+      },
+      "filename_correct": {
+        "2b": true,
+        "4b": false,
+        "9b": true
+      }
+    }
+  ]
+}

@@ -25,8 +25,11 @@ A run answers four questions per document, and per group of documents:
    (completeness) and say something only this document could
    (specificity).
 3. **Did Intern know when to ask?** Readiness against the reviewed
-   routing. The number that matters most is **unsafe ready**: a document
-   filed without review under a wrong name.
+   routing. **Unsafe ready** counts a ready name that fails the gold's
+   accepted-filename check. It can include an acceptable human wording the
+   gold did not list, so it is a benchmark disagreement, not by itself proof
+   of factual harm. Read the source to adjudicate it, and report trap dates,
+   forbidden parties and unsupported description claims separately.
 4. **Where did the time go?** Every stage, from snapshot to naming, with
    OCR split into page encoding and Tesseract, and inference split into
    prefill and generation by the server's own count. Latency is reported at
@@ -241,7 +244,8 @@ Inputs:
 
 * `sets` (default `internbench`): comma-separated from `internbench` (the
   synthetic corpus), `real1` (`sample.json`), `real2`
-  (`sample-heldout.json`) and `real3` (`sample-heldout2.json`), the real
+  (`sample-heldout.json`), `real3` (`sample-heldout2.json`) and `real4`
+  (`sample-heldout3.json`), the real
   documents fetched by `scripts/realdocs-eval/fetch.py` from their public
   sources; a source that is down costs its document, not the run.
 * `threads` (default `4`): the server's model threads.

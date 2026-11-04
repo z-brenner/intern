@@ -28,7 +28,8 @@ on:
       sets:
         description: >-
           Comma-separated: internbench (the synthetic corpus), real1
-          (sample.json), real2 (sample-heldout.json), real3 (sample-heldout2.json)
+          (sample.json), real2 (sample-heldout.json), real3 (sample-heldout2.json),
+          real4 (sample-heldout3.json)
         required: false
         default: internbench
         type: string
@@ -86,6 +87,7 @@ jobs:
               "real1": "sample.json",
               "real2": "sample-heldout.json",
               "real3": "sample-heldout2.json",
+              "real4": "sample-heldout3.json",
           }
           problems = []
           try:
