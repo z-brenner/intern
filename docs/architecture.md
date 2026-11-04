@@ -798,6 +798,12 @@ model helps is on readings the quick one marked ready. Every threshold - the
 memory each tier needs available, the token probability, the idle time - is
 one named constant.
 
+Every installed tier must fit before the planner can select it, including
+Fastest and a sole installed model. If neither fits, reading waits; a
+`MODEL_NOT_READY` response requeues a document without consuming its retry
+budget. If initial setup cannot start a model, close other applications and
+try again; verified weights remain installed and no tier is set aside.
+
 The memory guard: a model is loaded only when the machine reports enough
 available memory for it (`MemAvailable` on Linux, `GlobalMemoryStatusEx` on
 Windows; memory that cannot be read counts as enough): its server's resident

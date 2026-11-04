@@ -1276,7 +1276,11 @@ impl RuntimeModel {
             let Some(plan) = self.plan() else {
                 return Err(first_error.unwrap_or_else(|| CommandError {
                     code: "MODEL_NOT_READY".into(),
-                    message: "no local model is installed".into(),
+                    message: if self.plannable_tiers().is_empty() {
+                        "no local model is installed"
+                    } else {
+                        "no verified local model fits the available memory; close other applications and try again"
+                    }.into(),
                 }));
             };
             let tier = plan.first;
@@ -9979,13 +9983,15 @@ mod runtime_tests {
         install.install_accurate();
         let rig = Rig::new();
         let world = World::new();
-        // Short even counting what unloading the fast model would give back.
-        world.memory(Some(
-            MIN_AVAILABLE_FOR_ACCURATE - tiers::resident_estimate(ModelTier::Fast) - 1,
-        ));
+        // Room to load the fast model first. Once resident, the fake world
+        // reports less free memory, as the real operating system does.
+        world.memory(Some(7 * 1024 * 1024 * 1024));
         let runtime = install.runtime_in(&rig, "1.0.0", &world);
         verified(&runtime);
         assert_eq!(launched(&rig), [ModelTier::Fast]);
+        world.memory(Some(
+            MIN_AVAILABLE_FOR_ACCURATE - tiers::resident_estimate(ModelTier::Fast) - 1,
+        ));
         let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
         assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
         assert!(!runtime.take_provisional_upgrade(), "memory is still short");
@@ -10009,6 +10015,43 @@ mod runtime_tests {
         assert_eq!(launched(&rig), [ModelTier::Fast, ModelTier::Accurate]);
     }
 
+    #[test]
+    fn insufficient_memory_never_launches_or_sets_aside_a_verified_model() {
+        for accurate_only in [false, true] {
+            let install = Install::new(if accurate_only {
+                "memory-only-accurate"
+            } else {
+                "memory-both"
+            });
+            install.install_accurate();
+            if accurate_only {
+                std::fs::remove_file(install.model()).unwrap();
+            }
+            let rig = Rig::new();
+            let world = World::new();
+            world.memory(Some(6 * 1024 * 1024 * 1024));
+            let runtime = install.runtime_in(&rig, "1.0.0", &world);
+            let error = runtime
+                .start_verified(&CancellationToken::new())
+                .unwrap_err();
+            assert_eq!(error.code, "MODEL_NOT_READY");
+            assert!(launched(&rig).is_empty());
+            assert!(runtime.tier_failure(ModelTier::Accurate).is_none());
+            assert!(runtime.tier_failure(ModelTier::Fast).is_none());
+            assert!(install.accurate().exists());
+
+            // Try again after other applications give memory back. No
+            // download or reinstallation is needed, and no tier was poisoned.
+            world.memory(Some(16 * 1024 * 1024 * 1024));
+            verified(&runtime);
+            assert_eq!(launched(&rig), [ModelTier::Accurate]);
+            assert_eq!(
+                read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap()).tier,
+                ModelTier::Accurate
+            );
+        }
+    }
+
     /// A loaded quick model's mapped weights are already counted as
     /// available by the machine, so planning credits back only the rest of
     /// what unloading it would free. Counting the whole resident set made the
@@ -10019,13 +10062,14 @@ mod runtime_tests {
         install.install_accurate();
         let rig = Rig::new();
         let world = World::new();
-        // Enough only if the quick model's mapped file counted twice.
-        world.memory(Some(
-            MIN_AVAILABLE_FOR_ACCURATE - tiers::resident_estimate(ModelTier::Fast) + 10,
-        ));
+        world.memory(Some(7 * 1024 * 1024 * 1024));
         let runtime = install.runtime_in(&rig, "1.0.0", &world);
         verified(&runtime);
         assert_eq!(launched(&rig), [ModelTier::Fast]);
+        // Enough only if the now-loaded model's mapped file counted twice.
+        world.memory(Some(
+            MIN_AVAILABLE_FOR_ACCURATE - tiers::resident_estimate(ModelTier::Fast) + 10,
+        ));
         let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
         assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
         assert_eq!(launched(&rig), [ModelTier::Fast], "never swapped");
@@ -10045,10 +10089,11 @@ mod runtime_tests {
         let short =
             Some(MIN_AVAILABLE_FOR_ACCURATE - tiers::resident_estimate(ModelTier::Fast) - 1);
         let plenty = Some(16 * 1024 * 1024 * 1024);
-        world.memory(short);
+        world.memory(Some(7 * 1024 * 1024 * 1024));
         let runtime = install.runtime_in(&rig, "1.0.0", &world);
         // Verified at launch: evidence the accurate model can read.
         verified(&runtime);
+        world.memory(short);
         runtime.analyze(&probe(), "pdf", &[]).unwrap();
         assert!(!runtime.take_provisional_upgrade(), "memory is short");
         world.memory(plenty);
