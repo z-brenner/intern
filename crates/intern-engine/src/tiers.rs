@@ -89,9 +89,8 @@ pub const HEADROOM: u64 = 1_024 * MIB;
 
 /// Memory that must be available - free, or reclaimable without paging -
 /// before the fast model is loaded: its server, the worker, and the
-/// headroom, rounded up to 6.5 GiB. It is the least the machine can be asked
-/// for, so it decides nothing yet; it is here so the fast model's cost is
-/// said in one place.
+/// headroom, rounded up to 6.5 GiB. When neither installed model fits,
+/// reading waits rather than paging out the person's other applications.
 pub const MIN_AVAILABLE_FOR_FAST: u64 = 6_656 * MIB;
 
 /// Memory that must be available before the accurate model is loaded: its
@@ -252,8 +251,8 @@ pub struct TierPlan {
 
 /// The plan for the next document, under [`AUTOMATIC_STRATEGY`]. `installed`
 /// lists the tiers that can be loaded; `available` is the memory free for a
-/// model, `None` when it cannot be measured. `None` when nothing is
-/// installed.
+/// model, `None` when it cannot be measured. Returns `None` when no installed
+/// model fits; the caller can retry when memory becomes available.
 pub fn plan(
     preference: ModelPreference,
     installed: &[ModelTier],
@@ -269,12 +268,10 @@ pub fn plan_with(
     installed: &[ModelTier],
     available: Option<u64>,
 ) -> Option<TierPlan> {
-    let fast = installed.contains(&ModelTier::Fast);
-    let accurate = installed.contains(&ModelTier::Accurate);
-    // One model installed is the only model there is, whatever was asked
-    // for and whatever memory says: refusing to read at all helps nobody.
-    // The fast model alone is provisional unless the fast model is what was
-    // asked for.
+    let fast = installed.contains(&ModelTier::Fast) && fits(ModelTier::Fast, available);
+    let accurate = installed.contains(&ModelTier::Accurate) && fits(ModelTier::Accurate, available);
+    // A sole usable model still follows the memory guard. A fitting fast
+    // model stands in provisionally unless it was requested explicitly.
     match (fast, accurate) {
         (false, false) => return None,
         (false, true) => return Some(settled(ModelTier::Accurate)),
@@ -317,9 +314,7 @@ fn automatic(strategy: AutomaticStrategy, available: Option<u64>) -> TierPlan {
 }
 
 /// The accurate model would not fit beside what else is running, so the fast
-/// one reads - also when it would not fit either, being the least the
-/// machine can be asked for - and the reading is read again once memory
-/// allows.
+/// one fits and reads, and the reading is read again once memory allows.
 const fn stand_in() -> TierPlan {
     TierPlan {
         first: ModelTier::Fast,
@@ -541,6 +536,34 @@ mod tests {
     }
 
     #[test]
+    fn no_installed_model_is_loaded_when_even_the_fast_model_would_page() {
+        for preference in ModelPreference::ALL {
+            for strategy in [AccurateFirst, Cascade] {
+                for installed in [FAST, ACCURATE, BOTH] {
+                    for available in [0, GIB, 6 * GIB] {
+                        assert_eq!(
+                            plan_with(preference, strategy, installed, Some(available)),
+                            None
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_only_accurate_model_waits_when_it_does_not_fit() {
+        for preference in ModelPreference::ALL {
+            for strategy in [AccurateFirst, Cascade] {
+                assert_eq!(
+                    plan_with(preference, strategy, ACCURATE, Some(7 * GIB)),
+                    None
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_named_tier_is_used_whenever_it_is_installed_and_fits() {
         for strategy in [AccurateFirst, Cascade] {
             for available in [None, Some(MIN_AVAILABLE_FOR_ACCURATE), Some(16 * GIB)] {
@@ -549,9 +572,8 @@ mod tests {
                     (A, false, false)
                 );
             }
-            // The fast model, asked for by name, reads whatever the memory:
-            // there is nothing smaller to fall back to.
-            for available in [None, Some(0), Some(GIB), Some(16 * GIB)] {
+            // A named fast model still needs enough memory to load.
+            for available in [None, Some(MIN_AVAILABLE_FOR_FAST), Some(16 * GIB)] {
                 assert_eq!(plan_of(Fast, strategy, BOTH, available), (F, false, false));
             }
         }
@@ -563,7 +585,10 @@ mod tests {
     #[test]
     fn the_accurate_model_asked_for_by_name_keeps_to_the_memory_guard() {
         for strategy in [AccurateFirst, Cascade] {
-            for available in [Some(MIN_AVAILABLE_FOR_ACCURATE - 1), Some(GIB), Some(0)] {
+            for available in [
+                Some(MIN_AVAILABLE_FOR_ACCURATE - 1),
+                Some(MIN_AVAILABLE_FOR_FAST),
+            ] {
                 assert_eq!(
                     plan_of(Accurate, strategy, BOTH, available),
                     (F, false, true)
@@ -578,7 +603,7 @@ mod tests {
     #[test]
     fn the_fast_model_alone_stands_in_provisionally_unless_it_was_asked_for() {
         for strategy in [AccurateFirst, Cascade] {
-            for available in [None, Some(GIB), Some(16 * GIB)] {
+            for available in [None, Some(MIN_AVAILABLE_FOR_FAST), Some(16 * GIB)] {
                 assert_eq!(
                     plan_of(Accurate, strategy, FAST, available),
                     (F, false, true)
@@ -593,12 +618,12 @@ mod tests {
     }
 
     /// Only the accurate model installed - chosen from disk on its own - is
-    /// the only model there is, and it is used for everything.
+    /// the only model there is, and it is used for everything when it fits.
     #[test]
     fn the_accurate_model_alone_reads_everything() {
         for preference in ModelPreference::ALL {
             for strategy in [AccurateFirst, Cascade] {
-                for available in [None, Some(0), Some(16 * GIB)] {
+                for available in [None, Some(MIN_AVAILABLE_FOR_ACCURATE), Some(16 * GIB)] {
                     assert_eq!(
                         plan_of(preference, strategy, ACCURATE, available),
                         (A, false, false)
@@ -616,11 +641,10 @@ mod tests {
                 (A, false, false)
             );
         }
-        // Just short of fitting, and far short: the fast model stands in.
+        // Below the accurate floor, with room for the fast model to stand in.
         for available in [
             Some(MIN_AVAILABLE_FOR_ACCURATE - 1),
             Some(MIN_AVAILABLE_FOR_FAST),
-            Some(0),
         ] {
             assert_eq!(
                 plan_of(Automatic, AccurateFirst, BOTH, available),
@@ -637,7 +661,10 @@ mod tests {
                 (F, true, false)
             );
         }
-        for available in [Some(MIN_AVAILABLE_FOR_ACCURATE - 1), Some(0)] {
+        for available in [
+            Some(MIN_AVAILABLE_FOR_ACCURATE - 1),
+            Some(MIN_AVAILABLE_FOR_FAST),
+        ] {
             assert_eq!(
                 plan_of(Automatic, Cascade, BOTH, available),
                 (F, false, true)
