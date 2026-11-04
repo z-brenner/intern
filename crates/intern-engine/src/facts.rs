@@ -2210,12 +2210,28 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
         let kept = tokens.join(" ");
         (!kept.is_empty() && has_a_kind(&words(&kept))).then_some(kept)
     };
-    // A field the title line runs into: the label's word ends with a colon.
+    // A field the title line runs into: a label ending with a colon, with
+    // the field's value after it, where the title before the label ends in
+    // a kind ("CHANGE ORDER Distribution: Briarport ..."). A colon that
+    // ends the title itself is no label: "Notice of Hearing: Motion for
+    // Summary Judgment" keeps its "Hearing".
+    let ends_in_a_kind = |tokens: &[&str]| {
+        words(&tokens.join(" "))
+            .last()
+            .is_some_and(|word| names_a_kind(word))
+    };
     let mut value = tokens
         .iter()
+        .enumerate()
         .skip(1)
-        .position(|token| token.ends_with(':'))
-        .and_then(|at| keep(&tokens[..at + 1]))
+        .find(|(at, token)| token.ends_with(':') && *at + 1 < tokens.len())
+        .and_then(|(at, _)| {
+            if ends_in_a_kind(&tokens[..at]) {
+                keep(&tokens[..at])
+            } else {
+                None
+            }
+        })
         .unwrap_or_else(|| value.to_owned());
     if matches!(
         DocumentClass::of(Some(&value)),
@@ -2228,11 +2244,12 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
     // Availability and Price List", "letter of 4 April 2014"), or fewer
     // with a number among them ("Fieldnote S2 Product Launch Plan",
     // "Advisory Opinion 1997-5"). A type's own modifiers stay: "Profit and
-    // Loss Statement", "Health and Safety Plan", "Bank Statement", and the
-    // one code or year a title opens with, which names the kind ("W-9
-    // Form", "2025 Annual Report"). Never what a connector joins: an
-    // "Approval of Closure Plan" is an approval, and the plan is what it
-    // approves.
+    // Loss Statement", "Health and Safety Plan", "Bank Statement", the one
+    // code or year a title opens with ("W-9 Form", "2025 Annual Report")
+    // and a numbered qualifier ("Phase 1 Decision Letter", "Section 5
+    // Objection Letter"), all of which name the kind. Never what a
+    // connector joins: an "Approval of Closure Plan" is an approval, and
+    // the plan is what it approves.
     const JOINS: &[&str] = &["of", "to", "for", "on", "under", "by"];
     let value_words = words(&value);
     if let Some(head) = head_noun(&value_words).map(str::to_owned)
@@ -2260,10 +2277,18 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
         let has_digit = |token: &&str| token.chars().any(|character| character.is_ascii_digit());
         let removed = before.len() + after.len();
         let numbered = before.iter().any(has_digit) || after.iter().any(has_digit);
+        // The one code or year a title opens with, or a numbered
+        // qualifier ("Phase 1", "Section 5"), names the kind and stays.
+        let all_digits = |token: &str| {
+            let core = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+            !core.is_empty() && core.chars().all(|c| c.is_ascii_digit())
+        };
         let names_the_kind = after.is_empty()
-            && before.len() == 1
-            && (is_form_code(before[0])
-                || (before[0].len() == 4 && before[0].chars().all(|c| c.is_ascii_digit())));
+            && match before[..] {
+                [code] => is_form_code(code) || (code.len() == 4 && all_digits(code)),
+                [word, number] => word.chars().all(char::is_alphabetic) && all_digits(number),
+                _ => false,
+            };
         if (removed >= 3 || numbered) && !names_the_kind {
             value = phrase;
         }
@@ -5617,6 +5642,10 @@ mod tests {
                 "Public Information Statement",
             ),
             ("Advisory Opinion 1997-5", "Advisory Opinion"),
+            (
+                "Notice of Hearing: Motion for Summary Judgment",
+                "Notice of Hearing",
+            ),
             ("letter of 4 April 2014", "letter"),
             (
                 "Public Information Statement 24-45",
@@ -5634,6 +5663,9 @@ mod tests {
             "Bank Statement",
             "Credit Card Statement",
             "2025 Annual Report",
+            "Phase 1 Decision Letter",
+            "Section 5 Objection Letter",
+            "Notice of Hearing:",
             "Approval of Closure Plan",
             "EPA Approval of Closure Plan",
             "Action by Unanimous Written Consent of the Board of Directors",
