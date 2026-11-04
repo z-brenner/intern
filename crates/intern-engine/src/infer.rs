@@ -609,7 +609,12 @@ pub(crate) fn role_from_wording(window: &str) -> Option<DateRole> {
     if has(EFFECTIVE_CUES) {
         return Some(DateRole::Effective);
     }
-    if has(EXECUTION_CUES) {
+    if has(EXECUTION_CUES)
+        || matches!(
+            window.trim_matches(|c: char| !c.is_alphabetic()),
+            "signed" | "countersigned"
+        )
+    {
         return Some(DateRole::Execution);
     }
     None

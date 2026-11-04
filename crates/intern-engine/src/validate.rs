@@ -380,7 +380,12 @@ pub(crate) fn effective_alternates(digest: &impl Segments, date: &str) -> Vec<(S
             }
             let clean = date_match_positions(&found, &normalized)
                 .iter()
-                .any(|&position| !reference_introduced(&normalized, position));
+                .any(|&position| {
+                    let window = window_before(&normalized, position);
+                    !reference_introduced(&normalized, position)
+                        && !labels_a_deadline(&window)
+                        && EFFECTIVE_CUES.iter().any(|cue| window.contains(cue))
+                });
             if clean {
                 alternates.push((found, line.trim().to_owned()));
             }
