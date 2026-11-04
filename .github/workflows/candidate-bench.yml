@@ -1,0 +1,361 @@
+name: Candidate model benchmark on Linux
+
+# Candidate local models (GGUF files), each run live through InternBench on
+# an Ubuntu runner: the parser worker and the Linux runtime built and staged
+# the way CI builds them, llama-server started with the app's own flags by
+# scripts/run-internbench.sh, and every candidate x set pair a job of its own,
+# in parallel. Each job's report, recording and logs are uploaded, and its
+# headline (filename score, unsafe ready, time per document, the server's
+# peak memory, the runner's CPU and the CPU backend llama-server picked) goes
+# in the job summary, so two candidates can be read side by side without
+# downloading anything.
+# Laboratory measurement only: it gates nothing and publishes nothing. A
+# runner's CPU is whatever the fleet hands out, so compare runs on the same
+# CPU model (the summary names it), and treat the times as relative.
+
+# Run by hand (Actions > Candidate model benchmark on Linux > Run workflow).
+# No push or pull request starts it: a 2B model takes about an hour of a
+# runner per set, a 9B model several, and nothing here needs to run twice.
+on:
+  workflow_dispatch:
+    inputs:
+      candidates:
+        description: >-
+          JSON array of {"label", "url", "sha256"}: a slug ([a-z0-9._-]), the
+          GGUF's https URL (pin a commit on Hugging Face), and its SHA-256
+        required: true
+        type: string
+      sets:
+        description: >-
+          Comma-separated: internbench (the synthetic corpus), real1
+          (sample.json), real2 (sample-heldout.json), real3 (sample-heldout2.json)
+        required: false
+        default: internbench
+        type: string
+      threads:
+        description: Model threads for llama-server
+        required: false
+        default: "4"
+        type: string
+      extra_server_args:
+        description: >-
+          Extra llama-server flags appended after the app's own, e.g. a
+          KV-cache or speculative flag to try (LLAMA_SERVER_ARGS)
+        required: false
+        default: ""
+        type: string
+      llama_release:
+        description: >-
+          A ggml-org llama.cpp release tag (b12078) whose Ubuntu x64
+          llama-server runs the candidate instead of the pinned upstream build
+          the Linux runtime stages; empty for the pinned build
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  # The inputs become a matrix of candidate x set, after every value is
+  # checked: a label is a slug because it names the job, the output directory
+  # and the artifact; a URL is https; a SHA-256 is 64 hex digits; a set is
+  # one of the four. Nothing from the inputs is spliced into a shell line
+  # anywhere in this workflow: every step reads them from the environment.
+  plan:
+    name: Plan the matrix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Check the inputs and lay out the matrix
+        id: plan
+        env:
+          CANDIDATES: ${{ inputs.candidates }}
+          SETS: ${{ inputs.sets }}
+          THREADS: ${{ inputs.threads }}
+          LLAMA_RELEASE: ${{ inputs.llama_release }}
+          EXTRA_SERVER_ARGS: ${{ inputs.extra_server_args }}
+        run: |
+          python3 -I - <<'EOF'
+          import json, os, re, sys
+
+          SAMPLES = {
+              "internbench": "",
+              "real1": "sample.json",
+              "real2": "sample-heldout.json",
+              "real3": "sample-heldout2.json",
+          }
+          problems = []
+          try:
+              candidates = json.loads(os.environ["CANDIDATES"])
+          except ValueError as error:
+              sys.exit(f"candidates is not JSON: {error}")
+          if not isinstance(candidates, list) or not candidates:
+              sys.exit("candidates must be a non-empty JSON array")
+          labels = set()
+          for index, candidate in enumerate(candidates):
+              where = f"candidates[{index}]"
+              if not isinstance(candidate, dict) or set(candidate) != {"label", "url", "sha256"}:
+                  problems.append(f'{where}: an object with exactly "label", "url" and "sha256"')
+                  continue
+              label, url, sha256 = candidate["label"], candidate["url"], candidate["sha256"]
+              if not isinstance(label, str) or not re.fullmatch(r"[a-z0-9._-]+", label) or label in (".", ".."):
+                  problems.append(f"{where}: label must match [a-z0-9._-]+")
+              elif label in labels:
+                  problems.append(f"{where}: label {label!r} is used twice")
+              labels.add(label)
+              if not isinstance(url, str) or not re.fullmatch(r"https://[^\s\"'`]+", url):
+                  problems.append(f"{where}: url must be an https URL")
+              if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+                  problems.append(f"{where}: sha256 must be 64 lowercase hex digits")
+          sets = [name.strip() for name in os.environ["SETS"].split(",") if name.strip()]
+          if not sets:
+              problems.append("sets is empty")
+          for name in sets:
+              if name not in SAMPLES:
+                  problems.append(f"sets: {name!r} is not one of {', '.join(SAMPLES)}")
+          if not re.fullmatch(r"[1-9][0-9]*", os.environ["THREADS"]):
+              problems.append("threads must be a positive integer")
+          if not re.fullmatch(r"|b[0-9]+", os.environ["LLAMA_RELEASE"]):
+              problems.append("llama_release must be empty or a ggml-org release tag like b12078")
+          if re.search(r"[\r\n]", os.environ["EXTRA_SERVER_ARGS"]):
+              problems.append("extra_server_args must be one line")
+          if problems:
+              sys.exit("\n".join(problems))
+          include = [
+              {**candidate, "set": name, "sample": SAMPLES[name]}
+              for candidate in candidates
+              for name in dict.fromkeys(sets)
+          ]
+          matrix = json.dumps({"include": include})
+          print(matrix)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"matrix={matrix}\n")
+          EOF
+
+  # One job per candidate x set: they share nothing, so a candidate that
+  # crashes its server costs the others nothing (fail-fast off), and every
+  # job keeps its own report. The runner is the one CI builds the Linux
+  # package on, so what runs here is what the package carries, candidate and
+  # trial flags aside.
+  bench:
+    name: ${{ matrix.label }} on ${{ matrix.set }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      CARGO_TERM_COLOR: always
+      # As in CI's Linux jobs: no incremental state in the cached target
+      # directory.
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # Where this job's model, corpus, staged runtime and results go: outside
+      # the checkout, so the cargo cache never carries a model or a report.
+      # (Set from the shell: the runner context is not available to a job's
+      # own env block.)
+      - name: Lay out the lab directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/candidate-bench/out"
+          {
+            echo "LAB=$RUNNER_TEMP/candidate-bench"
+            echo "OUT=$RUNNER_TEMP/candidate-bench/out"
+          } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      # The list CI's Linux package job installs, unchanged, so the worker is
+      # built against the same libraries it is there; Tesseract is the part a
+      # run here reads (the package depends on it rather than bundles it).
+      - name: Install the desktop shell's build and smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb dbus x11-utils tesseract-ocr
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-candidate-bench-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      # The runtime's downloads, under CI's own key so a run here restores what
+      # CI already fetched. Nothing restored is trusted for it: every download
+      # is checked against its pin again.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/intern-linux-assets-cache
+          key: linux-runtime-${{ runner.os }}-${{ hashFiles('scripts/fetch-linux-assets.sh', 'scripts/fetch-ocr-runtime.sh', 'src-tauri/resources/runtime-assets.json') }}
+      - run: npm ci
+      # One build for both binaries. With two packages selected, cargo takes
+      # the feature as package/feature, and the native features belong to the
+      # worker alone.
+      - name: Build the parser worker and the benchmark
+        run: cargo build --locked --release -p intern-worker -p intern-bench --features intern-worker/windows-native
+      - name: Fetch and verify the pinned Linux runtime
+        run: scripts/fetch-linux-assets.sh "${{ runner.temp }}/intern-linux-assets-cache"
+      - name: Stage the runtime as the package lays it out
+        run: |
+          scripts/stage-linux-runtime.sh "$LAB/stage"
+          # The accurate tier's server, which the candidate stands in for.
+          echo "LLAMA_SERVER=$LAB/stage/runtime/llama-upstream/llama-server" >> "$GITHUB_ENV"
+      # Laboratory only: an arbitrary release has no SHA-256 pinned anywhere in
+      # the repository ahead of time, so unlike every other download in this
+      # workflow it is not verified against one. What was downloaded is
+      # recorded by digest in the summary and beside the report, which is
+      # enough to say which bytes a measurement came from, and nothing from
+      # here is ever staged or shipped. Entries that climb out of the archive
+      # are refused the way scripts/fetch-linux-assets.sh refuses them.
+      - name: Fetch the llama.cpp release to try instead of the pinned build
+        if: inputs.llama_release != ''
+        env:
+          LLAMA_RELEASE: ${{ inputs.llama_release }}
+        run: |
+          archive="llama-$LLAMA_RELEASE-bin-ubuntu-x64.tar.gz"
+          mkdir -p "$LAB/llama-release"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --retry 3 --retry-delay 10 \
+            --user-agent "Intern candidate benchmark (https://github.com/z-brenner/intern)" \
+            --output "$LAB/llama-release/$archive" \
+            "https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_RELEASE/$archive"
+          sha256sum "$LAB/llama-release/$archive" | tee "$OUT/llama-release.sha256"
+          while IFS= read -r entry; do
+            case "/$entry/" in
+              //* | */../*) echo "unsafe archive entry in $archive: $entry" >&2; exit 1 ;;
+            esac
+          done < <(tar -tzf "$LAB/llama-release/$archive")
+          tar -xzf "$LAB/llama-release/$archive" -C "$LAB/llama-release"
+          server="$LAB/llama-release/llama-$LLAMA_RELEASE/llama-server"
+          if [ ! -f "$server" ]; then
+            server="$(find "$LAB/llama-release" -type f -name llama-server | head -n 1)"
+          fi
+          [ -n "$server" ] && [ -f "$server" ] || { echo "$archive carries no llama-server" >&2; exit 1; }
+          chmod 0755 "$server"
+          echo "LLAMA_SERVER=$server" >> "$GITHUB_ENV"
+      # The candidate itself, refused unless its bytes are the ones named.
+      - name: Fetch and verify the candidate model
+        env:
+          MODEL_URL: ${{ matrix.url }}
+          MODEL_SHA256: ${{ matrix.sha256 }}
+          MODEL: ${{ runner.temp }}/candidate-bench/model/${{ matrix.label }}.gguf
+        run: |
+          mkdir -p "$(dirname "$MODEL")"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --retry 3 --retry-delay 10 \
+            --user-agent "Intern candidate benchmark (https://github.com/z-brenner/intern)" \
+            --output "$MODEL" "$MODEL_URL"
+          echo "$MODEL_SHA256  $MODEL" | sha256sum --check --strict
+          ls -l "$MODEL"
+          echo "MODEL=$MODEL" >> "$GITHUB_ENV"
+      # The real-document sets are fetched from their public sources, each
+      # document checked against its pins; a source that is down costs its
+      # document, not the run (fetch.py writes the gold for the rest and exits
+      # non-zero), so the summary's counts say how many were scored. The
+      # synthetic set needs nothing here: scripts/run-internbench.sh builds
+      # bench/generated itself and checks it against the committed manifest.
+      - name: Fetch the real-document set
+        if: matrix.sample != ''
+        env:
+          SAMPLE: ${{ matrix.sample }}
+          SET: ${{ matrix.set }}
+        run: |
+          python3 -I scripts/realdocs-eval/fetch.py "$LAB/$SET" "$SAMPLE" \
+            || echo "::warning::some documents of $SET were not fetched; the run scores the rest"
+          {
+            echo "CORPUS=$LAB/$SET/corpus"
+            echo "GOLD=$LAB/$SET/gold.json"
+            echo "MANIFEST="
+          } >> "$GITHUB_ENV"
+      # The live run, as docs/internbench.md describes it, the console
+      # (where the headline lines go) kept beside the report. The wall time
+      # is the whole script: corpus generation and model load included.
+      - name: Run InternBench live
+        env:
+          INTERN_RUNTIME_DIR: ${{ runner.temp }}/candidate-bench/stage/runtime
+          INTERN_WORKER: ${{ github.workspace }}/target/release/intern-worker
+          INTERN_BENCH: ${{ github.workspace }}/target/release/intern-bench
+          THREADS: ${{ inputs.threads }}
+          LLAMA_SERVER_ARGS: ${{ inputs.extra_server_args }}
+          SERVER_MEMORY_FILE: ${{ runner.temp }}/candidate-bench/out/server-memory.txt
+        run: |
+          started=$(date +%s)
+          status=0
+          scripts/run-internbench.sh "$OUT" -- --min-token-confidence 0.5 2>&1 | tee "$OUT/run.log" || status=$?
+          echo $(( $(date +%s) - started )) > "$OUT/wall-seconds.txt"
+          exit "$status"
+      - name: Summarize
+        if: always()
+        env:
+          LABEL: ${{ matrix.label }}
+          SET: ${{ matrix.set }}
+          LLAMA_RELEASE: ${{ inputs.llama_release }}
+          EXTRA_SERVER_ARGS: ${{ inputs.extra_server_args }}
+          THREADS: ${{ inputs.threads }}
+        run: |
+          lscpu > "$OUT/lscpu.txt" || true
+          python3 -I - <<'EOF'
+          import os, re
+
+          out = os.environ["OUT"]
+
+          def read(name):
+              try:
+                  with open(os.path.join(out, name), encoding="utf-8", errors="replace") as file:
+                      return file.read()
+              except OSError:
+                  return ""
+
+          headline = [line for line in read("run.log").splitlines()
+                      if re.match(r"(filename |unsafe ready |total per document)", line)]
+          hwm = re.search(r"^VmHWM:\s*(\d+) kB", read("server-memory.txt"), re.M)
+          peak = f"{int(hwm.group(1)) / 1024:.0f} MiB" if hwm else "not captured"
+          wall = read("wall-seconds.txt").strip()
+          wall = f"{int(wall) // 60} min {int(wall) % 60} s" if wall.isdigit() else "not recorded"
+          cpu = re.search(r"^Model name:\s*(.+)$", read("lscpu.txt"), re.M)
+          backends = sorted({match.group(0) for match in re.finditer(r"ggml-cpu-[A-Za-z0-9_]+", read("llama-server.log"))
+                             } | {line.strip() for line in read("llama-server.log").splitlines() if "load_backend" in line})
+          release = read("llama-release.sha256").split()
+          server = (f"llama.cpp {os.environ['LLAMA_RELEASE']} (SHA-256 {release[0]}, unverified: lab only)"
+                    if os.environ["LLAMA_RELEASE"] else "the pinned upstream build the Linux runtime stages")
+          lines = [
+              f"### {os.environ['LABEL']} on {os.environ['SET']}",
+              "",
+              *(f"- `{line}`" for line in headline),
+              *(["- headline lines not found in run.log: the run did not finish"] if not headline else []),
+              f"- peak server RSS (VmHWM): {peak}",
+              f"- wall time (model load and corpus included): {wall}",
+              f"- runner CPU: {cpu.group(1).strip() if cpu else 'unknown'}; {os.environ['THREADS']} threads",
+              f"- llama-server: {server}",
+              f"- extra server flags: `{os.environ['EXTRA_SERVER_ARGS']}`" if os.environ["EXTRA_SERVER_ARGS"] else "- extra server flags: none",
+              "- CPU backend: " + ("; ".join(backends) if backends else "no load_backend line in llama-server.log"),
+              "",
+          ]
+          text = "\n".join(lines)
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(text + "\n")
+          EOF
+      - name: Upload the report, recording and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: candidate-${{ matrix.label }}-${{ matrix.set }}-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/candidate-bench/out/report.json
+            ${{ runner.temp }}/candidate-bench/out/report.md
+            ${{ runner.temp }}/candidate-bench/out/recording.json
+            ${{ runner.temp }}/candidate-bench/out/run.log
+            ${{ runner.temp }}/candidate-bench/out/llama-server.log
+            ${{ runner.temp }}/candidate-bench/out/server-memory.txt
+            ${{ runner.temp }}/candidate-bench/out/wall-seconds.txt
+            ${{ runner.temp }}/candidate-bench/out/lscpu.txt
+            ${{ runner.temp }}/candidate-bench/out/llama-release.sha256
