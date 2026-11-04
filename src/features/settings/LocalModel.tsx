@@ -5,14 +5,14 @@ import { describeSetupError } from '../setup/useModelSetup';
 
 /**
  * What each choice does, in a line. The names come from the backend when it
- * says them. Both models' readings are judged alike; the quick one is about
- * half the time and a little less sure, and the lines say so.
+ * says them. The quick model's readings always wait for a check, whichever
+ * choice asked for them, and the lines say so.
  */
 function choices(fast: string, accurate: string): { value: ModelPreference; label: string; hint: string }[] {
   return [
     { value: 'automatic', label: 'Automatic (recommended)', hint: `${accurate} reads every document. ${fast}, if you have it, stands in only while this computer is short of memory.` },
     { value: 'accurate', label: 'Most accurate', hint: `${accurate} for every document, whenever memory allows.` },
-    { value: 'fast', label: 'Fastest', hint: `${fast} for every document. About half the time, and a little less often right.` },
+    { value: 'fast', label: 'Fastest', hint: `${fast} for every document. About half the time, but every name it gives waits for you to check it.` },
   ];
 }
 

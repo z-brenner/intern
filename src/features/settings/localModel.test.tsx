@@ -36,8 +36,8 @@ describe('the local model setting', () => {
 
     expect(within(local).getByLabelText(/Automatic \(recommended\)/)).toBeChecked();
     expect(within(local).getByText(/Qwen3\.5 9B reads every document\. Qwen3\.5 4B, if you have it, stands in only while this computer is short of memory\./)).toBeVisible();
-    // Fastest says what it costs: the quick model is a little less often right.
-    expect(within(local).getByText(/Qwen3\.5 4B for every document\. About half the time, and a little less often right\./)).toBeVisible();
+    // Fastest says what it costs: every quick reading waits for a check.
+    expect(within(local).getByText(/Qwen3\.5 4B for every document\. About half the time, but every name it gives waits for you to check it\./)).toBeVisible();
     expect(within(local).getByLabelText(/Most accurate/)).not.toBeChecked();
     expect(within(local).getByLabelText(/Fastest/)).not.toBeChecked();
     // Each model, its size, and where it is.
