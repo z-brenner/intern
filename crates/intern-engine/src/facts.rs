@@ -3457,8 +3457,10 @@ impl LetterLayout {
                 .iter()
                 .take(5)
                 // The organization stands between the person and the
-                // street: the address's own lines name no one.
-                .take_while(|line| !is_address_line(line))
+                // street: the address's own lines name no one. A number
+                // in an organization's own name ("3M Company") is no
+                // street number.
+                .take_while(|line| !is_address_line(line) || is_organization(line))
                 .find_map(|line| {
                     let line = line.trim_end_matches([',', ';', '|', '\\']).trim();
                     // "Premises: ...", "Owner: ...": a field's line, not the
@@ -4676,12 +4678,20 @@ fn signer_organization<'a>(
     let (unit, _) = lines[named];
     // The block ends where the address begins: a street with its number,
     // an email, a telephone. A city on the line under the street ("New
-    // York") is no organization of the signer's.
+    // York") is no organization of the signer's; a number in an
+    // organization's own name ("3M Company") is no street number.
+    let people = page
+        .iter()
+        .flat_map(|unit| unit.features.people.iter())
+        .map(|person| normalize_loosely(person))
+        .collect::<Vec<_>>();
     lines[named + 1..]
         .iter()
         .take(6)
         .take_while(|(_, line)| {
-            !names_a_copy(line) && !line.chars().any(|c| c.is_ascii_digit()) && !line.contains('@')
+            !names_a_copy(line)
+                && !line.contains('@')
+                && (!line.chars().any(|c| c.is_ascii_digit()) || is_organization(line))
         })
         .find_map(|(_, line)| {
             let line = line.trim_end_matches([',', ';', '|', '\\', '.']).trim();
@@ -4691,9 +4701,38 @@ fn signer_organization<'a>(
             if holds_a_post(line) {
                 return None;
             }
-            (is_organization(line) && line.split_whitespace().count() <= ORGANIZATION_LINE_WORDS
-                || organization_line(line))
+            if is_organization(line) && line.split_whitespace().count() <= ORGANIZATION_LINE_WORDS {
+                return Some((line.to_owned(), unit));
+            }
+            // A line written like a name but with no organization's word
+            // is read as one only when the index did not read it as a
+            // person and it is not set like one: a co-signer's "Jane Doe"
+            // under "John Smith" is a person, "OFCOM" or "Office of
+            // Manpower Economics" an organization.
+            (organization_line(line)
+                && !people.contains(&normalize_loosely(line))
+                && !names_a_person(line)
+                && !looks_like_a_persons_name(line))
             .then(|| (line.to_owned(), unit))
+        })
+}
+
+/// Whether a line is set like a person's name alone: two or three words in
+/// mixed case, none an organization's word and none an acronym in
+/// capitals ("Jane Doe", "Mary Ann Smith"; never "OFCOM", "Daily
+/// Telegraph Group" or "Pool Re Limited").
+fn looks_like_a_persons_name(line: &str) -> bool {
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    let line_words = words(line);
+    (2..=3).contains(&tokens.len())
+        && tokens.iter().all(|token| {
+            token.chars().next().is_some_and(char::is_uppercase)
+                && token.chars().skip(1).any(char::is_lowercase)
+        })
+        && !line_words.iter().any(|word| {
+            ORGANIZATION_WORDS.contains(&word.as_str())
+                || crate::cues::ORGANIZATION_ENDINGS.contains(&word.as_str())
+                || names_a_kind(word)
         })
 }
 
@@ -11121,6 +11160,21 @@ Rickmansworth,
             sent_by("John Smith"),
         );
         assert_eq!(outcome.proposal.parties, vec!["John Smith"]);
+        // A co-signer under the signer is a person, not the signer's
+        // organization.
+        let (outcome, _) = facts_for(
+            "16 September 2019\n\nDear Sir,\n\nWe write about the noise.\n\nSincerely,\n\n\
+             John Smith\nJane Doe",
+            sent_by("John Smith"),
+        );
+        assert_eq!(outcome.proposal.parties, vec!["John Smith"]);
+        // A number in the organization's own name is no street number.
+        let (outcome, _) = facts_for(
+            "16 September 2019\n\nDear Sir,\n\nPlease find the samples enclosed.\n\n\
+             Sincerely,\n\nJohn Smith\n3M Company\n3M Center\nSt. Paul, MN 55144",
+            sent_by("John Smith"),
+        );
+        assert_eq!(outcome.proposal.parties, vec!["3M Company"]);
     }
 
     /// A caption sets its sides "against" each other as well as "v.", with
