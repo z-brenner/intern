@@ -287,5 +287,11 @@
       "emissions_unchanged": true,
       "readiness_regressions": []
     }
+  },
+  "matching_windows_qa": {
+    "id": 41964133224,
+    "head_sha": "b702a134fc12826bdbf654a75c3273d476d2c28d",
+    "status": "in_progress; live acceptance and complete-recording paired step pending",
+    "url": "https://github.com/z-brenner/intern/actions/runs/41964133224"
   }
 }

@@ -91,5 +91,11 @@ run's difference remains unproven. Held-out checks, 16 GB CPU laptop behavior
 and required fidelity review remain release prerequisites. The uncertain PC
 background run is untouched. No PR, approval, merge or release was performed.
 
+Matching Windows QA is running at
+[41964133224](https://github.com/z-brenner/intern/actions/runs/41964133224),
+head `b702a134fc12826bdbf654a75c3273d476d2c28d`. Its live acceptance and new
+complete-recording paired step are both pending. Later receipt edits under
+`docs/qa/` preserve the source digest.
+
 Machine-readable receipts and frozen evaluator hashes are in
 [`post-alpha13-subject-actions.json`](post-alpha13-subject-actions.json).
