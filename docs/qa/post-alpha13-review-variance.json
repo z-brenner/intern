@@ -95,5 +95,11 @@
     "maximum_review_rate": 0.6
   },
   "next_experiment": "Preserve one fresh QA recording; replay the same recording through before/after code at 0.7 without stale prompts. Retain all live outcomes; a later pass does not erase failure.",
-  "pc_background_run": "uncertain; untouched"
+  "pc_background_run": "uncertain; untouched",
+  "matching_qa": {
+    "id": 41955071603,
+    "head_sha": "20ac4c267881ea1108401d739d561cdc2abdb7f6",
+    "status": "in_progress; no outcome claimed",
+    "url": "https://github.com/z-brenner/intern/actions/runs/41955071603"
+  }
 }

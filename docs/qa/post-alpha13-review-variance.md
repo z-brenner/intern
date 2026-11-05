@@ -84,5 +84,10 @@ single pass does not resolve this variance or establish laptop qualification.
 The interrupted PC run remains untouched. No PR, approval, merge or release
 was performed.
 
+Matching QA is running at
+[41955071603](https://github.com/z-brenner/intern/actions/runs/41955071603),
+head `20ac4c267881ea1108401d739d561cdc2abdb7f6`. No outcome is claimed. Later
+commits only link this receipt under `docs/qa/` and preserve the source digest.
+
 Machine-readable receipts are in
 [`post-alpha13-review-variance.json`](post-alpha13-review-variance.json).
