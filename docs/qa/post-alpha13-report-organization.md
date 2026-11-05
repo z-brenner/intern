@@ -96,3 +96,9 @@ source, so even a pass cannot qualify this ownership fix. Fresh Windows QA,
 the complete matched PC replay for both models, held-out cases, laptop memory
 and cold/warm performance, and applicable fidelity review remain necessary.
 No PR approval, merge, default-model change or release was performed.
+
+Fresh matching Windows QA is running at
+[41970479658](https://github.com/z-brenner/intern/actions/runs/41970479658),
+head `a3910ba22e313d5862642748ab8342c4c807a24c`. The earlier run remains active.
+This docs-only receipt retains the same release-input digest; neither run's
+live acceptance or paired replay has been claimed complete.

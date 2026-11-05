@@ -454,5 +454,13 @@
     "intern-bench run --corpus bench/generated --gold bench/gold.json --manifest bench/manifest.json --replay controlled-ceo-recording.json --min-token-confidence 0.7 --output controlled.json",
     "intern-evaluate --fixtures fixtures/generated --expected fixtures/expected.json --replay fixtures/corpus-recording.json --min-token-confidence 0.7 --baseline fixtures/corpus-baseline.json --output fixtures-current.json",
     "intern-evaluate --fixtures fixtures/generated --expected fixtures/expected.json --pipeline digest --replay fixtures/corpus-recording-digest.json --min-token-confidence 0.7 --baseline fixtures/corpus-baseline-digest.json --output fixtures-digest.json"
-  ]
+  ],
+  "fresh_windows_qa": {
+    "run_id": 41970479658,
+    "head": "a3910ba22e313d5862642748ab8342c4c807a24c",
+    "url": "https://github.com/z-brenner/intern/actions/runs/41970479658",
+    "status": "in_progress",
+    "covers_new_ownership_fix": true,
+    "completed_or_qualified": false
+  }
 }
