@@ -41,11 +41,128 @@
   },
   "native_desktop": "blocked: missing GTK development libraries; configured Debian snapshot source denied by enforced proxy policy",
   "windows_qa": {
-    "status": "not_started"
+    "status": "in_progress",
+    "run_id": 41940189938,
+    "head_sha": "875bb6e49b10d3feb38ad23c21377941d667090a",
+    "url": "https://github.com/z-brenner/intern/actions/runs/41940189938",
+    "qualification": "pending actual results; no Windows success claim"
   },
   "replay_abba": {
-    "status": "running",
-    "scope": "Recorded-response pipeline CPU only; no model inference or laptop performance claim"
+    "scope": "Recorded-response replay only; no model inference or laptop qualification. ABBA order, two runs per arm, no cache flush.",
+    "runs": [
+      {
+        "arm": "before-ascii",
+        "label": "1-before-ascii",
+        "utc_finished": "2026-11-05T00:15:33.574313+00:00",
+        "wall_seconds": 119.736382736,
+        "user_cpu_seconds": 119.560871,
+        "system_cpu_seconds": 0.15442699999999998,
+        "peak_replay_rss_kib": 55520,
+        "exit_code": 0,
+        "binary_sha256": "be8b7183fb3f5516b14b12ca9a29a71e48358325c552ea30f0aa36f21c26d667",
+        "report_sha256": "66588364ba425ddbfce1af0c956b5e8c4fd9329c4df7c70fd21e3ed4cfe96b88",
+        "source_commit": "e6b42d189e20ac2c9012c5c1b5e5983f140a1335",
+        "stale": 0,
+        "baseline_passed": true,
+        "scores": {
+          "filename_correct": 73,
+          "date_correct": 77,
+          "parties_correct": 77,
+          "unsafe_ready": 0,
+          "date_forbidden": 0,
+          "ready": 37
+        }
+      },
+      {
+        "arm": "ascii",
+        "label": "2-ascii",
+        "utc_finished": "2026-11-05T00:16:39.081446+00:00",
+        "wall_seconds": 65.39285772700009,
+        "user_cpu_seconds": 65.091594,
+        "system_cpu_seconds": 0.291864,
+        "peak_replay_rss_kib": 55464,
+        "exit_code": 0,
+        "binary_sha256": "7a776a0e8de2e5f8d74ef7276f9d125746e1102f619a446581f087415169801b",
+        "report_sha256": "f2dce5db0a202b19d29b0f47637cc3c493f9199cd09ebbc18be899b0e287905b",
+        "source_commit": "96f2face94716341d5bb6193c7028ccb057eccb0-dirty",
+        "stale": 0,
+        "baseline_passed": true,
+        "scores": {
+          "filename_correct": 73,
+          "date_correct": 77,
+          "parties_correct": 77,
+          "unsafe_ready": 0,
+          "date_forbidden": 0,
+          "ready": 37
+        }
+      },
+      {
+        "arm": "ascii",
+        "label": "3-ascii",
+        "utc_finished": "2026-11-05T00:17:43.942227+00:00",
+        "wall_seconds": 64.71890272299993,
+        "user_cpu_seconds": 64.532608,
+        "system_cpu_seconds": 0.176261,
+        "peak_replay_rss_kib": 55668,
+        "exit_code": 0,
+        "binary_sha256": "7a776a0e8de2e5f8d74ef7276f9d125746e1102f619a446581f087415169801b",
+        "report_sha256": "e1f384f5e07acce43286fb77f1f4a07832335f73302db36a029bf223b4e0b0c7",
+        "source_commit": "902b9520e42d73777c406f0e9e2c6afd3512c9b5",
+        "stale": 0,
+        "baseline_passed": true,
+        "scores": {
+          "filename_correct": 73,
+          "date_correct": 77,
+          "parties_correct": 77,
+          "unsafe_ready": 0,
+          "date_forbidden": 0,
+          "ready": 37
+        }
+      },
+      {
+        "arm": "before-ascii",
+        "label": "4-before-ascii",
+        "utc_finished": "2026-11-05T00:19:40.956502+00:00",
+        "wall_seconds": 116.96604505300002,
+        "user_cpu_seconds": 116.736844,
+        "system_cpu_seconds": 0.20629499999999998,
+        "peak_replay_rss_kib": 55364,
+        "exit_code": 0,
+        "binary_sha256": "be8b7183fb3f5516b14b12ca9a29a71e48358325c552ea30f0aa36f21c26d667",
+        "report_sha256": "89f176344a1338450fe061d0e2ed59ac9a80cc683e1f4c40f54e791ad55eee3a",
+        "source_commit": "e6b42d189e20ac2c9012c5c1b5e5983f140a1335",
+        "stale": 0,
+        "baseline_passed": true,
+        "scores": {
+          "filename_correct": 73,
+          "date_correct": 77,
+          "parties_correct": 77,
+          "unsafe_ready": 0,
+          "date_forbidden": 0,
+          "ready": 37
+        }
+      }
+    ],
+    "summary": {
+      "before_median_wall_seconds": 118.3512138945,
+      "after_median_wall_seconds": 65.05588022500001,
+      "wall_reduction_percent": 45.031505732597076,
+      "semantic_outputs_identical": true,
+      "documents_per_run": 77,
+      "baseline_passed_all_runs": true,
+      "stale_prompts_all_runs": 0,
+      "rust_source_control": "e6b42d189e20ac2c9012c5c1b5e5983f140a1335",
+      "rust_source_optimized": "96f2face94716341d5bb6193c7028ccb057eccb0",
+      "provenance_note": "Frozen binary hashes bind the Rust code. Run-time HEAD metadata can name later workflow/documentation commits or a dirty tree; no benchmark Rust inputs changed during the experiment."
+    }
   },
-  "release_inputs_sha256": "e1e96bd395259779eec3557b9b146d066bd426933d95f881ddf20308fa011530"
+  "release_inputs_sha256": "e1e96bd395259779eec3557b9b146d066bd426933d95f881ddf20308fa011530",
+  "quality_replays": {
+    "status": "running",
+    "arms": [
+      "2B control at 0.5",
+      "9B fixture evidence at 0.7",
+      "9B fixture digest at 0.7"
+    ]
+  }
 }
