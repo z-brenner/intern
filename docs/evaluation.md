@@ -54,6 +54,10 @@ the accurate model's 0.7 gate, just as the app does. Its JSON records
 policy. The release validator rejects missing probabilities, a threshold that
 differs from that policy, and replay results offered as live qualification.
 Changing the app's threshold without updating the runner therefore fails closed.
+Completed records must also contain valid returned probabilities, and results
+below the configured threshold must actually be held for review. Recording
+the intended request and threshold alone does not establish that the server
+returned probabilities or that the engine applied the gate.
 
 Replay is honest about its own limits. Before scoring a fixture it rebuilds
 the prompt from the recorded text and compares the hash with the one recorded:

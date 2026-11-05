@@ -147,6 +147,19 @@ export function validateEvaluation(report) {
     if (record.status !== 'completed') continue;
     requireValue(typeof record.filename === 'string' && record.filename.length > 0, `record for ${record.file} has no proposed filename`);
     requireValue(!record.filename.includes('/') && !record.filename.includes('\\'), `record for ${record.file} proposed a path, not a filename`);
+    const confidence = record.token_confidence;
+    requireValue(
+      confidence !== null && typeof confidence === 'object'
+        && typeof confidence.min === 'number' && confidence.min >= 0 && confidence.min <= 1
+        && typeof confidence.mean === 'number' && confidence.mean >= confidence.min && confidence.mean <= 1
+        && Number.isInteger(confidence.tokens) && confidence.tokens > 0,
+      `record for ${record.file} has no valid returned token probabilities`,
+    );
+    requireValue(
+      confidence.min >= report.min_token_confidence
+        || (record.readiness === 'needs_review' && record.scores?.ready === false),
+      `record for ${record.file} violates the confidence gate: below-threshold readings must be held for review`,
+    );
   }
 
   const failures = [];

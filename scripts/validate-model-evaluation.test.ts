@@ -13,6 +13,7 @@ function metric(rate: number, correct = Math.round(rate * 10), total = 10) {
 }
 
 function report(overrides: Record<string, unknown> = {}, summaryOverrides: Record<string, unknown> = {}) {
+  const { records, ...otherOverrides } = overrides;
   return {
     schema_version: 3,
     mode: 'live',
@@ -35,15 +36,43 @@ function report(overrides: Record<string, unknown> = {}, summaryOverrides: Recor
       total_millis: { count: 12, min: 950, median: 4_300, max: 22_000, mean: 6_400 },
       ...summaryOverrides,
     },
-    records: [
+    records: ((records ?? [
       { file: 'vendor-invoice.pdf', status: 'completed', filename: '2026-01-05 Invoice from Acme Corporation.pdf' },
       { file: 'encrypted.pdf', status: 'expected_error' },
-    ],
-    ...overrides,
+    ]) as Record<string, unknown>[]).map((record) => record.status === 'completed'
+      ? { token_confidence: { min: 0.9, mean: 0.95, tokens: 10 }, ...record }
+      : record),
+    ...otherOverrides,
   };
 }
 
 describe('model evaluation gate', () => {
+  it('requires returned probabilities even when the request and threshold are recorded', () => {
+    for (const token_confidence of [undefined, null, { min: 0.9, mean: 0.95, tokens: 0 }, { min: -0.1, mean: 0.95, tokens: 1 }, { min: 0.9, mean: 1.1, tokens: 1 }]) {
+      expect(() => validateEvaluation(report({ records: [
+        { file: 'invoice.pdf', status: 'completed', filename: '2026-01-05 Invoice.pdf', token_confidence },
+      ] }))).toThrow(/returned token probabilities/);
+    }
+  });
+
+  it('rejects a ready result whose probabilities fall below the configured gate', () => {
+    for (const readiness of [
+      { readiness: 'ready' },
+      { scores: { ready: true, date_correct: true, description_specific: true } },
+    ]) {
+      expect(() => validateEvaluation(report({ records: [
+        { file: 'invoice.pdf', status: 'completed', filename: '2026-01-05 Invoice.pdf', token_confidence: { min: 0.69, mean: 0.95, tokens: 10 }, ...readiness },
+      ] }))).toThrow(/confidence gate/);
+    }
+  });
+
+  it('accepts low confidence held for review and readiness at the exact threshold', () => {
+    expect(validateEvaluation(report({ records: [
+      { file: 'review.pdf', status: 'completed', filename: 'Invoice.pdf', readiness: 'needs_review', scores: { ready: false }, token_confidence: { min: 0.69, mean: 0.95, tokens: 10 } },
+      { file: 'ready.pdf', status: 'completed', filename: '2026-01-05 Invoice.pdf', readiness: 'ready', scores: { ready: true, date_correct: true, description_specific: true }, token_confidence: { min: 0.7, mean: 0.95, tokens: 10 } },
+    ] })).accepted).toBe(true);
+  });
+
   it('refuses replay results as live release qualification', () => {
     expect(() => validateEvaluation(report({ mode: 'replay' }))).toThrow(/live inference/);
   });
