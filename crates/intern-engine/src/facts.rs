@@ -5395,7 +5395,12 @@ fn with_of_phrase(unit: &EvidenceUnit, span: &str) -> String {
     else {
         return span.to_owned();
     };
-    let Some(tail) = rest.strip_prefix(" of ") else {
+    // "of" as the line writes it: a caption set in capitals says "OF".
+    let Some((of, tail)) = rest
+        .get(..4)
+        .filter(|head| head.eq_ignore_ascii_case(" of "))
+        .map(|head| (head.trim(), &rest[4..]))
+    else {
         return span.to_owned();
     };
     let mut words = Vec::new();
@@ -5412,7 +5417,7 @@ fn with_of_phrase(unit: &EvidenceUnit, span: &str) -> String {
     if words.is_empty() {
         span.to_owned()
     } else {
-        format!("{span} of {}", words.join(" "))
+        format!("{span} {of} {}", words.join(" "))
     }
 }
 
@@ -5967,13 +5972,56 @@ fn caption_other_side<'a>(
         .find_map(|unit| {
             unit.features.organizations.iter().find_map(|organization| {
                 let loose = normalize_loosely(organization);
+                // The court's own heading names no side: "SNOHOMISH
+                // COUNTY" under "SUPERIOR COURT" is the forum, not the
+                // plaintiff.
+                if names_a_forum(&loose) {
+                    return None;
+                }
                 whole_positions(&text, &loose)
                     .into_iter()
                     .any(|at| (from..to).contains(&at))
                     .then(|| written_span(unit, organization))
                     .flatten()
-                    .map(|span| (without_sentence_stop(&span), unit, bringing))
+                    // The index stops a name at its organization's word:
+                    // "First National Bank of Omaha" is read whole.
+                    .map(|span| {
+                        (
+                            without_sentence_stop(&with_of_phrase(unit, &span)),
+                            unit,
+                            bringing,
+                        )
+                    })
             })
+        })
+}
+
+/// Words a court's, a tribunal's or a jurisdiction's heading is made of.
+const JURISDICTION_WORDS: &[&str] = &[
+    "county",
+    "district",
+    "circuit",
+    "judicial",
+    "parish",
+    "borough of",
+    "in and for",
+    "state of",
+    "commonwealth of",
+    "province of",
+];
+
+/// Whether a name is the forum's own: a court, a tribunal, or the county,
+/// district or state it sits in.
+fn names_a_forum(loose: &str) -> bool {
+    FORUM_WORDS
+        .iter()
+        .any(|word| !whole_positions(loose, word).is_empty())
+        || JURISDICTION_WORDS.iter().any(|words| {
+            if words.contains(' ') {
+                loose.contains(words)
+            } else {
+                !whole_positions(loose, words).is_empty()
+            }
         })
 }
 
@@ -11376,6 +11424,54 @@ Rickmansworth,
             outcome.proposal.parties[0]
                 .to_lowercase()
                 .contains("mcgraw-hill companies"),
+            "{:?}",
+            outcome.proposal.parties
+        );
+        // The court's jurisdiction is no side of the case, and a side
+        // named with an "of" phrase is read whole.
+        let (outcome, index) = facts_for(
+            "SUPERIOR COURT\nSNOHOMISH COUNTY\n\nNORTHWIND LLC,\nPlaintiff,\nv.\n\
+             ACME INC.,\nDefendant.\n\nNOTICE OF HEARING\n\nPlease take notice that the motion \
+             will be heard.\n\nDated: November 22, 2006",
+            |index| ModelFacts {
+                document_type: Some("Notice of Hearing".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF HEARING")],
+                document_date: Some("2006-11-22".into()),
+                date_evidence: vec![id_of(index, "Dated")],
+                parties: vec![party(
+                    "Acme Inc.",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "ACME")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        assert!(
+            outcome.proposal.parties[0]
+                .to_lowercase()
+                .contains("northwind llc"),
+            "{:?}",
+            outcome.proposal.parties
+        );
+        // An "of" phrase is read whole however the caption sets it.
+        let unit = index
+            .units()
+            .iter()
+            .find(|unit| unit.text.contains("SNOHOMISH"))
+            .unwrap();
+        let mut caps = unit.clone();
+        caps.text = "FIRST NATIONAL BANK OF OMAHA,".to_owned();
+        assert_eq!(
+            with_of_phrase(&caps, "FIRST NATIONAL BANK"),
+            "FIRST NATIONAL BANK OF OMAHA"
+        );
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|name| name.to_lowercase().contains("snohomish")),
             "{:?}",
             outcome.proposal.parties
         );
