@@ -99,7 +99,8 @@
   "matching_qa": {
     "id": 41955071603,
     "head_sha": "20ac4c267881ea1108401d739d561cdc2abdb7f6",
-    "status": "in_progress; no outcome claimed",
+    "status": "completed, failure: 12/19 review; repeated confidence values",
     "url": "https://github.com/z-brenner/intern/actions/runs/41955071603"
-  }
+  },
+  "superseded_by": "post-alpha13-grounded-subject.json"
 }

@@ -1,0 +1,254 @@
+{
+  "source_commit": "6c51362b5caf279d9fb1625f5092c3b06d442ab7",
+  "release_inputs_sha256": "35f3e854a27f7b50ebc05e027a87569ebc05efcef0ed868fd8bf29fa79160c02",
+  "release_qualified": false,
+  "latest_live_failure": {
+    "run_id": 41955071603,
+    "job_id": 127007912513,
+    "artifact_id": 13385065521,
+    "artifact_sha256": "3419f7ff2a6f769752edfe9063577588399b930a7902756565489f00cd8ad61a",
+    "completed": 19,
+    "named": 7,
+    "review": 12,
+    "independently_read_job_log": true,
+    "archive_bytes_independently_inspected_here": false,
+    "log_excerpts_sha256": "4eb00004bf3148f1fabd1d60eb2506585619062e8a2e95986831b4d33a203b58",
+    "logged_journal_min": 0.6038329005241394,
+    "logged_termination_min": 0.6733022928237915,
+    "logged_statement_of_work_min": 0.9439870715141296,
+    "logged_statement_review_reasons": [
+      "description_unsupported"
+    ]
+  },
+  "parent_reported_independent_audit": {
+    "recording_and_archive_hashes_verified": true,
+    "fixture_hashes_verified": 21,
+    "reply_confidences_verified": 19,
+    "failed_runs_identical_in_outputs_and_readiness": true,
+    "earlier_pass_has_equivalent_recording": false
+  },
+  "causal_limit": "The repeated failure is established; why the earlier passing run differed remains unproven.",
+  "change": "One uniquely grounded acronym in an omitted optional subject does not alone block supported literal facts. Original literal-word and specific-claim checks remain, and the abbreviation is still omitted.",
+  "local_checks": {
+    "portable_rust_passed": 1500,
+    "portable_rust_failed": 0,
+    "portable_rust_ignored": 6,
+    "desktop_excluded": true,
+    "strict_clippy": "passed, portable workspace/all targets",
+    "formatting": "passed",
+    "positive_regression_failed_before_fix": true,
+    "guard_cases": "wrong acronym, invented name, invented amount, separate passage, ambiguous expansion, acronym alone, unseen evidence",
+    "constructed_below_threshold_case": "0.699 still held with low_confidence"
+  },
+  "thresholds_unchanged": {
+    "minimum_probability": 0.7,
+    "maximum_review_rate": 0.6
+  },
+  "gold_baselines_tolerances_unchanged": true,
+  "replays": {
+    "fixtures-before.json": {
+      "sha256": "7705e6f7b76555f5d5be0da7cdcc861f19b20220ec98868a48dcc772a59e1a60",
+      "bytes": 84693,
+      "scope": "historical recorded-response replay, not live inference",
+      "records": 21,
+      "stale_prompts": 0,
+      "statement_of_work": {
+        "filename": "2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso Worldwide, Inc.pdf",
+        "description": "STATEMENT OF WORK between Ridgeline Cartography LLC and Contoso Worldwide, Inc., reference SOW-2026-004, fixed fee of $248,000.",
+        "readiness": "needs_review",
+        "review_reasons": [
+          "description_unsupported"
+        ],
+        "token_confidence": {
+          "mean": 0.993872344493866,
+          "min": 0.9466327428817749,
+          "tokens": 23
+        },
+        "scores": {
+          "date_correct": true,
+          "date_exact": true,
+          "date_forbidden": false,
+          "date_present": true,
+          "date_role_correct": true,
+          "description_covers_facts": true,
+          "description_specific": true,
+          "filename_correct": true,
+          "parties_correct": true,
+          "parties_expected": 2,
+          "parties_matched": 2,
+          "parties_spurious": 0,
+          "party_forbidden": false,
+          "readiness_match": false,
+          "ready": false,
+          "relation_correct": true,
+          "type_correct": true,
+          "type_present": true
+        }
+      },
+      "ready": {
+        "correct": 8,
+        "rate": 0.42105263157894735,
+        "total": 19
+      }
+    },
+    "fixtures-after.json": {
+      "sha256": "1bcc2df98453561b2b757ef470c009aae146ce0aade3e0c02aaaec2ea0711334",
+      "bytes": 84784,
+      "scope": "historical recorded-response replay, not live inference",
+      "records": 21,
+      "stale_prompts": 0,
+      "statement_of_work": {
+        "filename": "2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso Worldwide, Inc.pdf",
+        "description": "STATEMENT OF WORK between Ridgeline Cartography LLC and Contoso Worldwide, Inc., reference SOW-2026-004, fixed fee of $248,000.",
+        "readiness": "ready",
+        "review_reasons": [],
+        "token_confidence": {
+          "mean": 0.993872344493866,
+          "min": 0.9466327428817749,
+          "tokens": 23
+        },
+        "scores": {
+          "date_correct": true,
+          "date_exact": true,
+          "date_forbidden": false,
+          "date_present": true,
+          "date_role_correct": true,
+          "description_covers_facts": true,
+          "description_specific": true,
+          "filename_correct": true,
+          "parties_correct": true,
+          "parties_expected": 2,
+          "parties_matched": 2,
+          "parties_spurious": 0,
+          "party_forbidden": false,
+          "readiness_match": true,
+          "ready": true,
+          "relation_correct": true,
+          "type_correct": true,
+          "type_present": true
+        }
+      },
+      "ready": {
+        "correct": 9,
+        "rate": 0.47368421052631576,
+        "total": 19
+      }
+    },
+    "confidence-guard.json": {
+      "sha256": "2ff4d70e0a7357f1898d4cf9d835fa94f1a2265a88829f499e51d107f3d85c25",
+      "bytes": 84681,
+      "scope": "constructed guard, not live inference",
+      "records": 21,
+      "stale_prompts": 0,
+      "statement_of_work": {
+        "filename": "2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso Worldwide, Inc.pdf",
+        "description": "STATEMENT OF WORK between Ridgeline Cartography LLC and Contoso Worldwide, Inc., reference SOW-2026-004, fixed fee of $248,000.",
+        "readiness": "needs_review",
+        "review_reasons": [
+          "low_confidence"
+        ],
+        "token_confidence": {
+          "mean": 0.993872344493866,
+          "min": 0.6990000009536743,
+          "tokens": 23
+        },
+        "scores": {
+          "date_correct": true,
+          "date_exact": true,
+          "date_forbidden": false,
+          "date_present": true,
+          "date_role_correct": true,
+          "description_covers_facts": true,
+          "description_specific": true,
+          "filename_correct": true,
+          "parties_correct": true,
+          "parties_expected": 2,
+          "parties_matched": 2,
+          "parties_spurious": 0,
+          "party_forbidden": false,
+          "readiness_match": false,
+          "ready": false,
+          "relation_correct": true,
+          "type_correct": true,
+          "type_present": true
+        }
+      },
+      "ready": {
+        "correct": 8,
+        "rate": 0.42105263157894735,
+        "total": 19
+      }
+    },
+    "low-confidence-guard-recording.json": {
+      "sha256": "5755cfbe969183f61525621777d0a9d1a690bdbd9b694316cf94866484e2ad4b",
+      "bytes": 979285,
+      "scope": "constructed guard, not live inference"
+    },
+    "fixtures-digest.json": {
+      "sha256": "d5f62a5b6023c8256e4567cfec8d93eaa7031404bc8f4bc3e479c2d5e75dc3f7",
+      "bytes": 45554,
+      "scope": "historical recorded-response replay, not live inference",
+      "records": 21,
+      "stale_prompts": 0,
+      "baseline_regressions": []
+    },
+    "bench9b.json": {
+      "sha256": "4d4a29eac7d96d1a99fa43bebcbdc91167db2d6c029cc8ae782cb14bfaab72b1",
+      "bytes": 1655709,
+      "scope": "historical recorded-response replay, not live inference",
+      "records": 77,
+      "stale_prompts": 0,
+      "baseline_passed": true,
+      "scores": {
+        "filename_correct": 73,
+        "date_correct": 77,
+        "parties_correct": 77,
+        "unsafe_ready": 0,
+        "ready": 37
+      }
+    },
+    "bench2b.json": {
+      "sha256": "6d22c383ea6c85a2b0920c267f622949b544d7525660aef7fa2c4c78fec1f8d2",
+      "bytes": 1639972,
+      "scope": "historical recorded-response replay, not live inference",
+      "records": 77,
+      "stale_prompts": 0,
+      "baseline_passed": true,
+      "scores": {
+        "filename_correct": 71,
+        "date_correct": 76,
+        "parties_correct": 75,
+        "unsafe_ready": 1,
+        "ready": 65
+      }
+    }
+  },
+  "frozen_binaries": {
+    "intern-bench-before": {
+      "sha256": "038337f76a915adc1d8f9c56827197004de342180b6d9d80800a15c3b53e61df",
+      "bytes": 10337696
+    },
+    "intern-evaluate-after": {
+      "sha256": "d2dc70349fa3514b182b232cc4fd0526013fcb02c653341fe271fd9c7f167b00",
+      "bytes": 8088112
+    },
+    "intern-evaluate-before": {
+      "sha256": "c89ef2661c688340868294fa4696fc93f9fe36d4e1146f1574cca1bf06371b16",
+      "bytes": 8067504
+    },
+    "intern-bench-after": {
+      "sha256": "83b0a9e642116b2ba8ac2d3dee9e2aeb5135a82738930e788def92cf7b39c53e",
+      "bytes": 10351016
+    }
+  },
+  "facts_source_sha256": "1e34aa50e59879556767fc08ce5b9ff1d924c269bf1f88286e9d1316ef52eb66",
+  "outstanding": [
+    "paired replay of latest captured Windows recording",
+    "fresh Windows QA on this source",
+    "origin of earlier passing run difference",
+    "held-out document checks",
+    "16 GB CPU laptop qualification",
+    "required fidelity review"
+  ],
+  "pc_background_run": "uncertain, untouched"
+}

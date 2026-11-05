@@ -1,5 +1,8 @@
 # Review-rate failure and preserved evidence
 
+The later [grounded-subject improvement](post-alpha13-grounded-subject.md)
+records the repeated failure and a tested optional-subject false-positive fix.
+
 The branch remains **unqualified for release**. Windows QA
 [41950475741](https://github.com/z-brenner/intern/actions/runs/41950475741),
 head `be08aa5122758e4cc787cd64dc95b641063b9ed5`, failed live acceptance after
@@ -86,8 +89,10 @@ was performed.
 
 Matching QA is running at
 [41955071603](https://github.com/z-brenner/intern/actions/runs/41955071603),
-head `20ac4c267881ea1108401d739d561cdc2abdb7f6`. No outcome is claimed. Later
-commits only link this receipt under `docs/qa/` and preserve the source digest.
+head `20ac4c267881ea1108401d739d561cdc2abdb7f6`. It failed again at 12/19 review.
+The journal and termination minimum probabilities repeated the prior failed
+values. Its recording was preserved; the passing run's difference remains
+unproven. See the later improvement above for current validation status.
 
 Machine-readable receipts are in
 [`post-alpha13-review-variance.json`](post-alpha13-review-variance.json).
