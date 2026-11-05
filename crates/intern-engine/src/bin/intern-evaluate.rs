@@ -275,6 +275,23 @@ fn run() -> Result<i32, String> {
     for line in filename_misses(fixtures, &records) {
         eprintln!("{line}");
     }
+    // Keep each readiness decision inspectable in a failed CI job's log,
+    // even when the report artifact cannot be downloaded. Never log source
+    // text or request credentials; the report retains the complete evidence.
+    for record in records
+        .iter()
+        .filter(|record| record["status"] == "completed")
+    {
+        eprintln!(
+            "record: {}",
+            json!({
+                "file": record["file"],
+                "readiness": record["readiness"],
+                "review_reasons": record["review_reasons"],
+                "token_confidence": record["token_confidence"],
+            })
+        );
+    }
 
     let mut report = Map::new();
     report.insert("schema_version".into(), json!(3));

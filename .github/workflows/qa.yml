@@ -206,6 +206,7 @@ jobs:
             -RuntimeDirectory $env:INTERN_QA_RUNTIME_STAGE `
             -WorkerPath (Join-Path $env:INTERN_QA_RUNTIME_STAGE "intern-worker.exe") `
             -EvaluatePath target\release\intern-evaluate.exe `
+            -RecordingPath docs\qa\model-evaluation-recording.json `
             -OutputPath docs\qa\model-evaluation.json 2>&1 | Tee-Object -FilePath docs\qa\logs\model-evaluation.log
           node scripts/validate-model-evaluation.mjs docs/qa/model-evaluation.json
       - name: Write run-specific command, count, and exit-code checklist
@@ -291,6 +292,7 @@ jobs:
             docs/qa/release-checklist.md
             docs/qa/fidelity-ledger.md
             docs/qa/model-evaluation.json
+            docs/qa/model-evaluation-recording.json
             docs/qa/latest-implementation.png
             docs/qa/rendered-fidelity-signoff.json
             docs/qa/installed-core-smoke.json

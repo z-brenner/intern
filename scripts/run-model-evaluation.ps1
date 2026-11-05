@@ -23,6 +23,9 @@ param(
     [string]$EvaluatePath = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "target/release/intern-evaluate.exe"),
     [string]$FixtureDirectory = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "fixtures/generated"),
     [string]$OutputPath = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "docs/qa/model-evaluation.json"),
+    # Optional synthetic-corpus recording for exact replay of a live run,
+    # including a run that the acceptance policy subsequently rejects.
+    [string]$RecordingPath = "",
     [string]$ModelDirectory = (Join-Path $env:TEMP "intern-model-evaluation"),
     # The shipping pipeline by default: the release gate accepts nothing else.
     # `digest` (or its old name `new`) and `legacy` remain for comparison runs.
@@ -41,6 +44,13 @@ $Worker = (Resolve-Path -LiteralPath $WorkerPath).Path
 $Evaluate = (Resolve-Path -LiteralPath $EvaluatePath).Path
 $Fixtures = (Resolve-Path -LiteralPath $FixtureDirectory).Path
 $ExpectedPath = Join-Path $Repository "fixtures/expected.json"
+$RecordingArguments = @()
+if ($RecordingPath) {
+    if ($Pipeline -eq "legacy") { throw "The legacy evaluator cannot record replies" }
+    $RecordingPath = [IO.Path]::GetFullPath($RecordingPath)
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $RecordingPath) | Out-Null
+    $RecordingArguments = @("--record", $RecordingPath)
+}
 $Manifest = Get-Content -LiteralPath (Join-Path $Repository "src-tauri/resources/model-manifest.json") -Raw | ConvertFrom-Json
 $TierModel = $Manifest.models | Where-Object { $_.tier -eq $Tier } | Select-Object -First 1
 if (-not $TierModel) { throw "The embedded manifest pins no $Tier model" }
@@ -148,6 +158,7 @@ try {
         --model-id ([string]$Manifest.served_model_name) `
         --pipeline $Pipeline `
         --token-confidence --min-token-confidence 0.7 `
+        @RecordingArguments `
         @ProfileArguments
     if ($LASTEXITCODE -ne 0) { throw "Corpus evaluation failed" }
     $Elapsed = ((Get-Date) - $Started).TotalSeconds
@@ -169,6 +180,7 @@ $Report | Add-Member -NotePropertyName "release_inputs_sha256" -NotePropertyValu
 $Report | Add-Member -NotePropertyName "runner" -NotePropertyValue ([ordered]@{
         os = "$([Environment]::OSVersion.VersionString)"
         logical_processors = [Environment]::ProcessorCount
+        processor_identifier = $env:PROCESSOR_IDENTIFIER
         ci_run_id = $env:GITHUB_RUN_ID
         ci_run_attempt = $env:GITHUB_RUN_ATTEMPT
     }) -Force
@@ -188,6 +200,12 @@ $Report | Add-Member -NotePropertyName "model_file" -NotePropertyValue ([string]
 $Report | Add-Member -NotePropertyName "model_sha256" -NotePropertyValue ([string]$ModelSpec.sha256) -Force
 $Report | Add-Member -NotePropertyName "model_bytes" -NotePropertyValue ([long]$ModelSpec.size) -Force
 $Report | Add-Member -NotePropertyName "threads" -NotePropertyValue $Threads -Force
+$Report | Add-Member -NotePropertyName "server_sha256" -NotePropertyValue ((Get-FileHash -LiteralPath $Server -Algorithm SHA256).Hash.ToLowerInvariant()) -Force
+if ($RecordingPath) {
+    # Bind the replay input to this report before acceptance can fail. The
+    # recording contains synthetic fixture text and parsed replies, no key.
+    $Report | Add-Member -NotePropertyName "recording_sha256" -NotePropertyValue ((Get-FileHash -LiteralPath $RecordingPath -Algorithm SHA256).Hash.ToLowerInvariant()) -Force
+}
 $Report | Add-Member -NotePropertyName "peak_model_rss_bytes" -NotePropertyValue ([long]$Peak) -Force
 $Report | Add-Member -NotePropertyName "wall_clock_seconds" -NotePropertyValue ([math]::Round($Elapsed, 1)) -Force
 
