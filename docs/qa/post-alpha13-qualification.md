@@ -64,16 +64,22 @@ not a 16 GB laptop measurement.
   zero baseline regressions. Both fixture pipelines pass their original
   baselines with no regressions. Existing fixture party losses and the digest
   recording's truncated reply remain; they are not erased by the replay pass.
-- Matching Windows QA, fresh confidence-aware model results, real-document and
-  CUAD checks after the date rules, and actual 16 GB laptop cold/warm behavior
-  remain outstanding. CI success alone does not establish release quality.
+- Matching Windows QA has passed the frontend checks, browser QA, formatting,
+  strict full-workspace Clippy and the **full Windows Rust workspace tests**,
+  including the desktop app tests. This is the workflow step result, not an
+  independently downloaded test-count receipt. At 2026-11-05 00:39 UTC the run
+  is building the parser and evaluator. Installer checks and fresh
+  confidence-aware model results are still pending. Real-document and CUAD
+  checks after the date rules, and actual 16 GB laptop cold/warm behavior,
+  also remain outstanding. Partial CI success does not establish release quality.
 
 Matching Windows QA is running at
 [41940189938](https://github.com/z-brenner/intern/actions/runs/41940189938),
 source head `875bb6e49b10d3feb38ad23c21377941d667090a`. Later commits update only
 these QA evidence files; the non-QA release-input digest remains
 `e1e96bd395259779eec3557b9b146d066bd426933d95f881ddf20308fa011530`.
-No Windows success or release qualification is claimed while the run is pending.
+The entire run and release qualification remain pending; the completed steps
+above are the only Windows success claims at this checkpoint.
 
 The experimental status, source hashes and run receipts are in the companion JSON.
 Existing alpha.13 release artifacts and its fidelity record are retained as

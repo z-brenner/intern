@@ -45,7 +45,17 @@
     "run_id": 41940189938,
     "head_sha": "875bb6e49b10d3feb38ad23c21377941d667090a",
     "url": "https://github.com/z-brenner/intern/actions/runs/41940189938",
-    "qualification": "pending actual results; no Windows success claim"
+    "qualification": "partial checks passed; installer and live model results pending; no full Windows or release qualification claim",
+    "checked_at": "2026-11-05 00:39:13 UTC",
+    "passed_steps": [
+      "frontend checks",
+      "browser QA",
+      "workspace formatting",
+      "strict full-workspace Clippy",
+      "full Windows Rust workspace tests"
+    ],
+    "active_step": "Build parser worker and the corpus evaluator",
+    "count_receipt": "workflow step metadata only; completed job logs and full test count not yet available"
   },
   "replay_abba": {
     "scope": "Recorded-response replay only; no model inference or laptop qualification. ABBA order, two runs per arm, no cache flush.",
