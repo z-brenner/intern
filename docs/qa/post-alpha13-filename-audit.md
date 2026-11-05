@@ -1,5 +1,8 @@
 # Follow-up filename audit
 
+The later [review-rate investigation](post-alpha13-review-variance.md) records
+the failed matching Windows run and supersedes the pending status below.
+
 This is experimental evidence for `qualification/post-alpha13`, not a release
 sign-off. Source commit `4b1c1af28336a8ae993e80cf87bbb7c1c904865f` adds a narrow
 document-kind cleanup after the earlier qualification fixes. Its release-input
@@ -80,7 +83,9 @@ No new timing or model-memory claim comes from these replays. Fresh Windows
 QA must test this new source digest; the earlier run does not cover this
 cleanup. Matching QA has started at
 [41950475741](https://github.com/z-brenner/intern/actions/runs/41950475741),
-head `be08aa5122758e4cc787cd64dc95b641063b9ed5`, and is still in progress.
+head `be08aa5122758e4cc787cd64dc95b641063b9ed5`. It failed live acceptance:
+7/19 named and 12/19 held for review (63.2%), above the unchanged 60% ceiling.
+Installer and preceding checks passed. The branch remains unqualified.
 The PC's interrupted control run remains untouched and its outcome
 must be checked before any restart. Broader held-out checks, laptop behavior
 and the required fidelity review remain release prerequisites. No PR,

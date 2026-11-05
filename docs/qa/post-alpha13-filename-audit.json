@@ -621,6 +621,7 @@
     "run_id": 41950475741,
     "head_sha": "be08aa5122758e4cc787cd64dc95b641063b9ed5",
     "url": "https://github.com/z-brenner/intern/actions/runs/41950475741",
-    "status": "in_progress; no result claimed"
+    "status": "completed, failure: review rate 12/19 (63.2%) exceeds unchanged 60% ceiling",
+    "superseded_by": "post-alpha13-review-variance.json"
   }
 }

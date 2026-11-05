@@ -1,0 +1,99 @@
+{
+  "release_qualified": false,
+  "diagnostic_source_commit": "4259e1c354ecbf286884d024b52034c2f1448921",
+  "release_inputs_sha256": "2c28afbf6fff33193047b7abff7959ba4a1cd511882650eaf08d06ce3ad3fc53",
+  "failed_run": {
+    "id": 41950475741,
+    "head_sha": "be08aa5122758e4cc787cd64dc95b641063b9ed5",
+    "job_id": 126992964016,
+    "conclusion": "failure",
+    "failed_step": "live model acceptance",
+    "independently_verified_log": {
+      "evaluated": 19,
+      "named": 7,
+      "date_correct_when_named": 1,
+      "reason": "review rate 63.2% exceeds the 60% ceiling"
+    },
+    "preceding_checks_and_installer_smoke": "passed",
+    "rust_workspace_passed": 1766,
+    "rust_workspace_ignored": 6,
+    "additional_native_fixture_passed": 4,
+    "additional_pp_ocr_passed": 6,
+    "artifact_id": 13381733292,
+    "artifact_digest": "sha256:db391ad38961a99bc2694df95ba1ed0b2ac8a665c1742e29fde12eb22c84d9dd",
+    "artifact_bytes_independently_inspected_here": false,
+    "materialization": "supported helper failed download; no alternate route attempted",
+    "log_excerpts_sha256": "51f0187c8f8e170eefafc7b5eee53553f8593f16feab66a526fcd887251bdf3c",
+    "log_excerpts": [
+      "2026-11-05T02:12:18.5620851Z meeting-minutes.md: filename: expected 2025-05-07 Meeting Minutes.md, got 2025-05-07 Quarterly Operations Review for Fictional Meridian Committee.md",
+      "2026-11-05T02:12:18.5623256Z rotated-low-resolution-scan.png: filename: expected 2025-06-12 Delivery Receipt from Pine Echo Couriers LLC.png, got 2025-06-12 DElIvery RECeIPt DR-771 from Violet cartography Studio.png",
+      "2026-11-05T02:12:18.5626566Z long-document-100-pages.pdf: filename: expected 2025-07-01 Project Journal.pdf, got 2025-07-01 Moonlit Archive Project Journal.pdf",
+      "2026-11-05T02:12:18.6301962Z document-image.png: filename: expected 2025-07-14 Purchase Order from Ember Post Manufacturing LLC.png, got Purchase Order PO-310 from Ember Post Manufacturing LLC.png",
+      "2026-11-05T02:12:18.6305014Z document-image.jpg: filename: expected 2025-07-15 Packing Slip from Quartz Meadow Retail LLC.jpg, got 2025-07-15 Packing Slip PS-311 from Quartz Meadow Retail LLC.jpg",
+      "2026-11-05T02:12:18.6306260Z document-image.tiff: filename: expected 2025-07-16 Work Order from Harbor Comet Repairs LLC.tiff, got Document.tiff",
+      "2026-11-05T02:12:18.6309915Z termination-notice.pdf: filename: expected 2026-12-29 Notice of Termination for John Smith.pdf, got 2026-12-29 Notice of Termination to John Smith.pdf",
+      "2026-11-05T02:12:18.6311567Z board-deck.pptx: filename: expected 2026-05-21 Quarterly Business Review for Ridgeline Cartography LLC.pptx, got 2026-05-21 Quarterly Business Review for Contoso Worldwide, Inc.pptx",
+      "2026-11-05T02:12:19.1144747Z Model acceptance: blocked - 19 documents evaluated, 7 named, date correct when named 100%",
+      "2026-11-05T02:12:19.1158534Z   BLOCKED: review rate 63.2% exceeds the 60% ceiling"
+    ]
+  },
+  "parent_reported_paired_artifact_findings": {
+    "earlier_run": 41940189938,
+    "earlier_named": 9,
+    "current_named": 7,
+    "earlier_exact_filenames": "9/18",
+    "current_exact_filenames": "10/18",
+    "changes": [
+      {
+        "file": "long-document-100-pages.pdf",
+        "earlier_min": 0.773,
+        "current_min": 0.604,
+        "filename_changed": false,
+        "current_readiness": "needs_review"
+      },
+      {
+        "file": "termination-notice.pdf",
+        "earlier_min": 0.751,
+        "current_min": 0.673,
+        "filename_changed": false,
+        "current_readiness": "needs_review"
+      }
+    ],
+    "completed_with_probabilities": 19,
+    "below_threshold_held": true,
+    "forbidden_dates": 0,
+    "forbidden_parties": 0,
+    "remaining_strict_ready_name_mismatch": "board-deck.pptx: source-supported audience naming"
+  },
+  "causal_assessment": {
+    "supported": "reported probability changes explain the two additional reviews; fixed-reply paired replays show no readiness change from the cleanup",
+    "not_established": "cause of changed probabilities; same filenames do not establish same prompts or raw replies"
+  },
+  "diagnostic_changes": [
+    "opt-in QA recording retained before acceptance failure",
+    "recording and server executable SHA-256 bound to report",
+    "processor identifier recorded",
+    "per-record readiness, reasons and token probabilities logged"
+  ],
+  "tests": {
+    "evaluator_passed": 17,
+    "frontend_passed": 761,
+    "frontend_files": 77,
+    "types_and_build": "passed",
+    "strict_evaluator_clippy": "passed",
+    "formatting": "passed",
+    "diagnostics_replay_report_sha256": "22ff806ddad3719a79a71e1a8b3a7f2bd4d4ac74428f8ac475a1fcf7f9560bb4",
+    "logged_completed_records": 19,
+    "diagnostic_rows_exactly_match_report": true,
+    "replay_semantic_outputs_unchanged": true,
+    "baseline_regressions": 0,
+    "stale_prompts": 0,
+    "powershell_execution": "pending Windows QA"
+  },
+  "thresholds_unchanged": {
+    "minimum_probability": 0.7,
+    "maximum_review_rate": 0.6
+  },
+  "next_experiment": "Preserve one fresh QA recording; replay the same recording through before/after code at 0.7 without stale prompts. Retain all live outcomes; a later pass does not erase failure.",
+  "pc_background_run": "uncertain; untouched"
+}
