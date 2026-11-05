@@ -4733,42 +4733,46 @@ fn signer_organization<'a>(
     // The block ends where the address begins: a street with its number,
     // an email, a telephone. A city on the line under the street ("New
     // York") is no organization of the signer's; a number in an
-    // organization's own name ("3M Company") is no street number.
+    // organization's own name ("3M Company") is no street number. It also
+    // ends at another person's line: a co-signer's post and organization
+    // are theirs ("John Smith / Jane Doe / Director / Acme Ltd").
     let people = page
         .iter()
         .flat_map(|unit| unit.features.people.iter())
         .map(|person| normalize_loosely(person))
         .collect::<Vec<_>>();
-    lines[named + 1..]
-        .iter()
-        .take(6)
-        .take_while(|(_, line)| {
-            !names_a_copy(line)
-                && !line.contains('@')
-                && (!line.chars().any(|c| c.is_ascii_digit()) || is_organization(line))
-        })
-        .find_map(|(_, line)| {
-            let line = line.trim_end_matches([',', ';', '|', '\\', '.']).trim();
-            if let Some(organization) = organization_after_post(line) {
-                return Some((organization, unit));
-            }
-            if holds_a_post(line) {
-                return None;
-            }
-            if is_organization(line) && line.split_whitespace().count() <= ORGANIZATION_LINE_WORDS {
-                return Some((line.to_owned(), unit));
-            }
-            // A line written like a name but with no organization's word
-            // is read as one only when the index did not read it as a
-            // person and it is not set like one: a co-signer's "Jane Doe"
-            // under "John Smith" is a person, "OFCOM" or "Office of
-            // Manpower Economics" an organization.
-            (organization_line(line)
-                && !people.contains(&normalize_loosely(line))
-                && !names_a_person(line)
-                && !looks_like_a_persons_name(line))
-            .then(|| (line.to_owned(), unit))
-        })
+    for (_, raw) in lines[named + 1..].iter().take(6) {
+        if names_a_copy(raw)
+            || raw.contains('@')
+            || (raw.chars().any(|c| c.is_ascii_digit()) && !is_organization(raw))
+        {
+            break;
+        }
+        let line = raw.trim_end_matches([',', ';', '|', '\\', '.']).trim();
+        let post = holds_a_post(line);
+        if !post
+            && (people.contains(&normalize_loosely(line))
+                || names_a_person(line)
+                || looks_like_a_persons_name(line))
+        {
+            break;
+        }
+        if let Some(organization) = organization_after_post(line) {
+            return Some((organization, unit));
+        }
+        if post {
+            continue;
+        }
+        if is_organization(line) && line.split_whitespace().count() <= ORGANIZATION_LINE_WORDS {
+            return Some((line.to_owned(), unit));
+        }
+        // A line written like a name but with no organization's word is
+        // read as one: "OFCOM", "Office of Manpower Economics".
+        if organization_line(line) {
+            return Some((line.to_owned(), unit));
+        }
+    }
+    None
 }
 
 /// Whether a line is set like a person's name alone: two or three words in
@@ -11303,10 +11307,16 @@ Rickmansworth,
         );
         assert_eq!(outcome.proposal.parties, vec!["John Smith"]);
         // A co-signer under the signer is a person, not the signer's
-        // organization.
+        // organization, and their post and organization are theirs.
         let (outcome, _) = facts_for(
             "16 September 2019\n\nDear Sir,\n\nWe write about the noise.\n\nSincerely,\n\n\
              John Smith\nJane Doe",
+            sent_by("John Smith"),
+        );
+        assert_eq!(outcome.proposal.parties, vec!["John Smith"]);
+        let (outcome, _) = facts_for(
+            "16 September 2019\n\nDear Sir,\n\nWe write about the noise.\n\nSincerely,\n\n\
+             John Smith\nJane Doe\nDirector\nAcme Ltd",
             sent_by("John Smith"),
         );
         assert_eq!(outcome.proposal.parties, vec!["John Smith"]);
