@@ -562,8 +562,11 @@ fn relation_from_supported_roles(
             if let Some(party) = with(&[PartyRole::Sender, PartyRole::Issuer]) {
                 return one(PartyRelation::From, party, "the sender");
             }
+            // A letter is written to someone: the client it warns, the
+            // licensee it approves, is the one it is addressed to, so a
+            // "Warning Letter to Toledo Refining", never "for".
             if let Some(party) = with(SUBSTANTIVE) {
-                return one(PartyRelation::For, party, "the party it is about");
+                return one(PartyRelation::To, party, "the party it is addressed to");
             }
             if let Some(party) = counterpart(false) {
                 return one(PartyRelation::For, party, "the provider's counterpart");
