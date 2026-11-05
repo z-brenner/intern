@@ -1,0 +1,261 @@
+name: Server speed battery on Linux
+
+# One llama-server setting against the app's own, on the same runner, with
+# the same model and the same recorded requests, alternated over two rounds
+# so a runner that slows down or speeds up mid-job shifts both the same way.
+# Every variant is a job of its own, each with its own baseline, because a
+# runner's CPU is whatever the fleet hands out (the summary names it): read
+# each job's baseline-to-variant ratio, never a time across jobs.
+# Laboratory measurement only: it gates nothing and publishes nothing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_url:
+        description: The GGUF's https URL (pin a commit on Hugging Face)
+        required: true
+        type: string
+      model_sha256:
+        description: The GGUF's SHA-256
+        required: true
+        type: string
+      variants:
+        description: >-
+          JSON array of {"label", "args"}: a slug ([a-z0-9._-]) and the
+          llama-server flags that replace or follow the app's own, e.g.
+          {"label":"tb4","args":"--threads-batch 4"}
+        required: true
+        type: string
+      threads:
+        description: Model threads for the baseline and every variant
+        required: false
+        default: "2"
+        type: string
+      every:
+        description: Replay every K-th recorded request (1 = all 26)
+        required: false
+        default: "2"
+        type: string
+      llama_release:
+        description: >-
+          A ggml-org llama.cpp release tag whose Ubuntu x64 llama-server runs
+          the battery instead of the pinned upstream build; empty for the
+          pinned build
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Plan the matrix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Check the inputs and lay out the matrix
+        id: plan
+        env:
+          VARIANTS: ${{ inputs.variants }}
+          MODEL_URL: ${{ inputs.model_url }}
+          MODEL_SHA256: ${{ inputs.model_sha256 }}
+          THREADS: ${{ inputs.threads }}
+          EVERY: ${{ inputs.every }}
+          LLAMA_RELEASE: ${{ inputs.llama_release }}
+        run: |
+          python3 -I - <<'EOF2'
+          import json, os, re, sys
+
+          def fail(message):
+              print(f"::error::{message}")
+              sys.exit(1)
+
+          try:
+              variants = json.loads(os.environ["VARIANTS"])
+          except json.JSONDecodeError as error:
+              fail(f"variants is not JSON: {error}")
+          if not isinstance(variants, list) or not variants:
+              fail("variants must be a non-empty JSON array")
+          seen = set()
+          for variant in variants:
+              if not isinstance(variant, dict) or set(variant) != {"label", "args"}:
+                  fail("each variant is {\"label\", \"args\"}")
+              if not re.fullmatch(r"[a-z0-9._-]{1,40}", variant["label"]):
+                  fail(f"label {variant['label']!r} is not a slug")
+              if variant["label"] in seen:
+                  fail(f"label {variant['label']!r} repeats")
+              seen.add(variant["label"])
+              if not isinstance(variant["args"], str) or re.search(r"[^A-Za-z0-9 ._=,:/-]", variant["args"]):
+                  fail(f"args of {variant['label']!r} hold a character flags never need")
+          if not os.environ["MODEL_URL"].startswith("https://"):
+              fail("model_url must be https")
+          if not re.fullmatch(r"[0-9a-f]{64}", os.environ["MODEL_SHA256"]):
+              fail("model_sha256 must be 64 hex digits")
+          if not re.fullmatch(r"[1-9][0-9]?", os.environ["THREADS"]):
+              fail("threads must be a small positive integer")
+          if not re.fullmatch(r"[1-9]", os.environ["EVERY"]):
+              fail("every must be 1 to 9")
+          if os.environ["LLAMA_RELEASE"] and not re.fullmatch(r"b[0-9]{4,6}", os.environ["LLAMA_RELEASE"]):
+              fail("llama_release must look like b12078")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("matrix=" + json.dumps({"include": variants}) + "\n")
+          EOF2
+
+  battery:
+    name: ${{ matrix.label }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      LLAMA_UPSTREAM_RELEASE: b11946
+      LLAMA_UPSTREAM_SHA256: 9e44e1a59e971f0de3fbf74fa46355ab48fed7bb51c1c16b56a96c355947f8dd
+      REQUESTS: bench/reports/speed-linux-cpu-2026-10-29/requests
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Lay out the lab directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/speed-battery/out"
+          {
+            echo "LAB=$RUNNER_TEMP/speed-battery"
+            echo "OUT=$RUNNER_TEMP/speed-battery/out"
+          } >> "$GITHUB_ENV"
+      # The pinned upstream build is verified against the pin the Linux
+      # runtime uses (scripts/fetch-linux-assets.sh); a release chosen by
+      # hand is lab-only and recorded by digest, as candidate-bench.yml does.
+      - name: Fetch llama-server
+        env:
+          LLAMA_RELEASE: ${{ inputs.llama_release }}
+        run: |
+          release="${LLAMA_RELEASE:-$LLAMA_UPSTREAM_RELEASE}"
+          archive="llama-$release-bin-ubuntu-x64.tar.gz"
+          mkdir -p "$LAB/llama"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --retry 3 --retry-delay 10 \
+            --user-agent "Intern speed battery (https://github.com/z-brenner/intern)" \
+            --output "$LAB/llama/$archive" \
+            "https://github.com/ggml-org/llama.cpp/releases/download/$release/$archive"
+          sha256sum "$LAB/llama/$archive" | tee "$OUT/llama-release.sha256"
+          if [ -z "$LLAMA_RELEASE" ]; then
+            echo "$LLAMA_UPSTREAM_SHA256  $LAB/llama/$archive" | sha256sum --check --strict
+          fi
+          while IFS= read -r entry; do
+            case "/$entry/" in
+              //* | */../*) echo "unsafe archive entry in $archive: $entry" >&2; exit 1 ;;
+            esac
+          done < <(tar -tzf "$LAB/llama/$archive")
+          tar -xzf "$LAB/llama/$archive" -C "$LAB/llama"
+          server="$(find "$LAB/llama" -type f -name llama-server | head -n 1)"
+          [ -n "$server" ] && [ -f "$server" ] || { echo "$archive carries no llama-server" >&2; exit 1; }
+          chmod 0755 "$server"
+          echo "LLAMA_SERVER=$server" >> "$GITHUB_ENV"
+      - name: Fetch and verify the model
+        env:
+          MODEL_URL: ${{ inputs.model_url }}
+          MODEL_SHA256: ${{ inputs.model_sha256 }}
+        run: |
+          mkdir -p "$LAB/model"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --retry 3 --retry-delay 10 \
+            --user-agent "Intern speed battery (https://github.com/z-brenner/intern)" \
+            --output "$LAB/model/model.gguf" "$MODEL_URL"
+          echo "$MODEL_SHA256  $LAB/model/model.gguf" | sha256sum --check --strict
+          echo "MODEL=$LAB/model/model.gguf" >> "$GITHUB_ENV"
+      # Baseline, variant, baseline, variant: the app's flags each time, the
+      # variant's appended (a repeated flag's last value wins in llama-server),
+      # every slot warmed first, replies compared with the first baseline's.
+      - name: Run the battery
+        env:
+          LABEL: ${{ matrix.label }}
+          VARIANT_ARGS: ${{ matrix.args }}
+          THREADS: ${{ inputs.threads }}
+          EVERY: ${{ inputs.every }}
+        run: |
+          lscpu | tee "$OUT/lscpu.txt"
+          read -r -a variant <<< "$VARIANT_ARGS"
+          for round in 1 2; do
+            for which in baseline variant; do
+              dir="$OUT/$which-r$round"
+              if [ "$which" = variant ]; then args=("${variant[@]}"); else args=(); fi
+              echo "::group::$which round $round"
+              WIRE="$REQUESTS" THREADS="$THREADS" EVERY="$EVERY" PORT=18120 \
+                REFERENCE="$OUT/baseline-r1/replay.json" \
+                scripts/bonsai-eval/replay-server.sh "$dir" "${args[@]}"
+              echo "::endgroup::"
+            done
+          done
+      - name: Summarize
+        if: always()
+        env:
+          LABEL: ${{ matrix.label }}
+          VARIANT_ARGS: ${{ matrix.args }}
+          THREADS: ${{ inputs.threads }}
+          LLAMA_RELEASE: ${{ inputs.llama_release }}
+        run: |
+          python3 -I - <<'EOF3'
+          import json, os, re, statistics
+
+          out = os.environ["OUT"]
+          rows = []
+          for which in ("baseline", "variant"):
+              for round_ in (1, 2):
+                  path = os.path.join(out, f"{which}-r{round_}", "replay.json")
+                  try:
+                      with open(path, encoding="utf-8") as file:
+                          summary = json.load(file)["summary"]
+                  except (OSError, KeyError, ValueError):
+                      rows.append((which, round_, None))
+                      continue
+                  rows.append((which, round_, summary))
+          def cell(summary, key):
+              return "-" if not summary or summary.get(key) is None else summary[key]
+          lines = [
+              f"### {os.environ['LABEL']}: `{os.environ['VARIANT_ARGS']}` against the app's flags, {os.environ['THREADS']} threads",
+              "",
+              "| run | per request (s) | prefill p50 (ms) | decode p50 (ms) | decode tok/s | prompt tokens p50 | identical to baseline 1 | errors |",
+              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+          ]
+          for which, round_, summary in rows:
+              lines.append(
+                  f"| {which} {round_} | {cell(summary, 'wall_per_request_s')} | {cell(summary, 'prompt_ms_p50')} | "
+                  f"{cell(summary, 'predicted_ms_p50')} | {cell(summary, 'decode_tok_per_s_p50')} | "
+                  f"{cell(summary, 'prompt_tokens_p50')} | {cell(summary, 'identical_to_reference')}/{cell(summary, 'compared_with_reference')} | {cell(summary, 'errors')} |"
+              )
+          by = {}
+          for which, _, summary in rows:
+              if summary and summary.get("wall_per_request_s"):
+                  by.setdefault(which, []).append(summary["wall_per_request_s"])
+          if by.get("baseline") and by.get("variant"):
+              base, var = statistics.mean(by["baseline"]), statistics.mean(by["variant"])
+              lines.append("")
+              lines.append(f"- variant against baseline, mean per request: {var:.1f} s against {base:.1f} s ({(var / base - 1) * 100:+.1f}%)")
+          try:
+              with open(os.path.join(out, "lscpu.txt"), encoding="utf-8") as file:
+                  cpu = re.search(r"^Model name:\s*(.+)$", file.read(), re.M)
+          except OSError:
+              cpu = None
+          lines.append(f"- runner CPU: {cpu.group(1).strip() if cpu else 'unknown'}")
+          lines.append(f"- llama-server: {os.environ['LLAMA_RELEASE'] or 'the pinned upstream build'}")
+          lines.append("")
+          text = "\n".join(lines)
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(text + "\n")
+          EOF3
+      - name: Upload the replays and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: speed-${{ matrix.label }}-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/speed-battery/out/**/replay.json
+            ${{ runner.temp }}/speed-battery/out/**/server-command.txt
+            ${{ runner.temp }}/speed-battery/out/**/llama-server.log
+            ${{ runner.temp }}/speed-battery/out/lscpu.txt
+            ${{ runner.temp }}/speed-battery/out/llama-release.sha256
