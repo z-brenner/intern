@@ -11,17 +11,24 @@ The GitHub metadata for Windows run
 [41940189938](https://github.com/z-brenner/intern/actions/runs/41940189938)
 shows its product checks, installer smoke, live evaluation, evidence binding
 and upload steps passed at source `875bb6e49b10d3feb38ad23c21377941d667090a`.
-Post-job cache saving was still running at this checkpoint. The parent
-workstream independently inspected its artifact and reported four strict
-filename mismatches among ready outputs. Those are reported findings here,
-not independently verified new artifact contents.
+The full run has completed successfully. The parent workstream independently
+inspected its artifact and reported four strict filename mismatches among ready
+outputs. After the job completed, this executor independently read the decoded
+job log: all four expected/actual filename pairs match those findings. The log
+confirms **19 evaluated, 9 named, 100% correct dates when named**, and acceptance
+passed. It also confirms the release-evidence manifest's status remains
+**blocked**. Readiness and individual probability values in the report remain
+parent-reported. The Windows log totals **1,764 passing workspace Rust tests,
+0 failed, 6 ignored**, with 4 additional native fixture and 6 PP-OCR integration
+tests passing later. The low-memory desktop regression passed by name.
 
 This executor resolved artifact `13379942626`, whose GitHub digest is
 `sha256:c1de5b127e372f2cbe69189375ff46ca3ae501cd6676846257ae31ac31e9b376`.
 The supported materialization helper failed to download it; a Library read
 also could not resolve it as a visible Library file. No alternate byte-transfer
-route was attempted. The new artifact's bytes and probabilities remain
-unverified on this executor.
+route was attempted. The new ZIP/report bytes and individual probabilities
+remain unverified on this executor; reading the supported job-log endpoint
+does not fill that gap.
 
 Independently available evidence is the original, SHA-verified alpha.13
 [`model-evaluation.json`](https://github.com/z-brenner/intern/releases/download/v0.1.0-alpha.13/model-evaluation.json),
@@ -71,7 +78,10 @@ dates, and preservation of substantive titles, invalid dates and date ranges.
 
 No new timing or model-memory claim comes from these replays. Fresh Windows
 QA must test this new source digest; the earlier run does not cover this
-cleanup. The PC's interrupted control run remains untouched and its outcome
+cleanup. Matching QA has started at
+[41950475741](https://github.com/z-brenner/intern/actions/runs/41950475741),
+head `be08aa5122758e4cc787cd64dc95b641063b9ed5`, and is still in progress.
+The PC's interrupted control run remains untouched and its outcome
 must be checked before any restart. Broader held-out checks, laptop behavior
 and the required fidelity review remain release prerequisites. No PR,
 approval, merge or release was performed.

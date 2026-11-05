@@ -5,7 +5,7 @@
   "previous_windows_run": {
     "run_id": 41940189938,
     "head_sha": "875bb6e49b10d3feb38ad23c21377941d667090a",
-    "status": "product checks passed; post-job cache saving pending at inspection",
+    "status": "completed, success",
     "artifact_id": 13379942626,
     "artifact_digest": "sha256:c1de5b127e372f2cbe69189375ff46ca3ae501cd6676846257ae31ac31e9b376",
     "artifact_bytes_independently_inspected_here": false,
@@ -17,7 +17,42 @@
       0.773,
       0.751,
       0.849
-    ]
+    ],
+    "independently_read_job_logs": true,
+    "job_id": 126958705500,
+    "independently_verified_logged_result": {
+      "evaluated": 19,
+      "named": 9,
+      "date_correct_when_named": 1,
+      "acceptance": "accepted",
+      "release_evidence_manifest": "blocked",
+      "rust_workspace_passed": 1764,
+      "rust_workspace_failed": 0,
+      "rust_workspace_ignored": 6,
+      "additional_native_fixture_passed": 4,
+      "additional_pp_ocr_passed": 6,
+      "desktop_low_memory_regression": "passed by name"
+    },
+    "log_excerpts": {
+      "sha256": "5d33214a47b28d493e9b8bf499e70c0e24aaad72f69ce1076ecaf147a21e7336",
+      "lines": [
+        "2026-11-05T00:37:15.6237695Z test server::tests::a_text_only_launch_refuses_to_load_a_projector ... ok",
+        "2026-11-05T00:37:15.6293125Z test tiers::tests::fitting_is_a_floor_and_unknown_memory_fits ... ok",
+        "2026-11-05T00:37:15.6296953Z test tiers::tests::no_installed_model_is_loaded_when_even_the_fast_model_would_page ... ok",
+        "2026-11-05T01:31:54.6672964Z scanned-lease.pdf: filename: expected 2024-09-01 Lease Agreement between Cedar Finch Properties LLC and Orion Glass Studio Inc.pdf, got 2024-09-01 Lease Agreement Effective September 1 2024 between Cedar Finch Properties Llc and Orion Glass Studio inc.pdf",
+        "2026-11-05T01:31:54.7548777Z meeting-minutes.md: filename: expected 2025-05-07 Meeting Minutes.md, got 2025-05-07 Quarterly Operations Review for Fictional Meridian Committee.md",
+        "2026-11-05T01:31:54.7552679Z rotated-low-resolution-scan.png: filename: expected 2025-06-12 Delivery Receipt from Pine Echo Couriers LLC.png, got 2025-06-12 DElIvery RECeIPt DR-771 from Violet cartography Studio.png",
+        "2026-11-05T01:31:54.7556447Z long-document-100-pages.pdf: filename: expected 2025-07-01 Project Journal.pdf, got 2025-07-01 Moonlit Archive Project Journal.pdf",
+        "2026-11-05T01:31:54.7561018Z document-image.png: filename: expected 2025-07-14 Purchase Order from Ember Post Manufacturing LLC.png, got Purchase Order PO-310 from Ember Post Manufacturing LLC.png",
+        "2026-11-05T01:31:54.7569023Z document-image.jpg: filename: expected 2025-07-15 Packing Slip from Quartz Meadow Retail LLC.jpg, got 2025-07-15 Packing Slip PS-311 from Quartz Meadow Retail LLC.jpg",
+        "2026-11-05T01:31:54.7571577Z document-image.tiff: filename: expected 2025-07-16 Work Order from Harbor Comet Repairs LLC.tiff, got Document.tiff",
+        "2026-11-05T01:31:54.7574267Z termination-notice.pdf: filename: expected 2026-12-29 Notice of Termination for John Smith.pdf, got 2026-12-29 Notice of Termination to John Smith.pdf",
+        "2026-11-05T01:31:54.7579509Z board-deck.pptx: filename: expected 2026-05-21 Quarterly Business Review for Ridgeline Cartography LLC.pptx, got 2026-05-21 Quarterly Business Review for Contoso Worldwide, Inc.pptx",
+        "2026-11-05T01:31:55.4390778Z Model acceptance: accepted - 19 documents evaluated, 9 named, date correct when named 100%",
+        "2026-11-05T01:31:55.5062283Z {\"status\":\"accepted\",\"failures\":[],\"evaluated\":19,\"named\":9,\"date_correct_when_named\":1}",
+        "2026-11-05T01:31:56.9240404Z {\"status\":\"blocked\",\"output\":\"D:\\\\a\\\\intern\\\\intern\\\\docs\\\\qa\\\\release-evidence-manifest.json\"}"
+      ]
+    }
   },
   "independently_inspected_published_report": {
     "tag": "v0.1.0-alpha.13",
@@ -581,5 +616,11 @@
     "broader held-out document checks",
     "16 GB CPU laptop behavior",
     "required fidelity review"
-  ]
+  ],
+  "matching_windows_qa": {
+    "run_id": 41950475741,
+    "head_sha": "be08aa5122758e4cc787cd64dc95b641063b9ed5",
+    "url": "https://github.com/z-brenner/intern/actions/runs/41950475741",
+    "status": "in_progress; no result claimed"
+  }
 }
