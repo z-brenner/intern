@@ -158,11 +158,80 @@
   },
   "release_inputs_sha256": "e1e96bd395259779eec3557b9b146d066bd426933d95f881ddf20308fa011530",
   "quality_replays": {
-    "status": "running",
-    "arms": [
-      "2B control at 0.5",
-      "9B fixture evidence at 0.7",
-      "9B fixture digest at 0.7"
-    ]
+    "status": "passed",
+    "reports": {
+      "q2b-control": {
+        "sha256": "ee4f6b1181ee86383e99c19682fb349f8bbf17e7f6522c6d5281ee2b86f1440c",
+        "mode": "replay",
+        "stale": 0,
+        "baseline_passed": true,
+        "records": 77,
+        "scores": {
+          "filename_correct": 71,
+          "date_correct": 76,
+          "parties_correct": 75,
+          "ready": 65,
+          "unsafe_ready": 1,
+          "date_forbidden": 0
+        }
+      },
+      "fixtures-evidence": {
+        "sha256": "5881ca4584900a4bd1b9459cc02af5f7dad5e1c0f339c5c579ac2a790c9e04a3",
+        "mode": "replay",
+        "stale": 0,
+        "baseline_passed": true,
+        "records": 21,
+        "statuses": {
+          "completed": 19,
+          "expected_error": 2
+        },
+        "ready": {
+          "correct": 8,
+          "rate": 0.42105263157894735,
+          "total": 19
+        },
+        "filename_correct": {
+          "correct": 10,
+          "rate": 0.5555555555555556,
+          "total": 18
+        },
+        "baseline_regressions": []
+      },
+      "fixtures-digest": {
+        "sha256": "fd6499b7d38ecad8662070034b8a8ba17595e55f2435f05eb42b94ef2b91cc27",
+        "mode": "replay",
+        "stale": 0,
+        "baseline_passed": true,
+        "records": 21,
+        "statuses": {
+          "completed": 18,
+          "expected_error": 2,
+          "model_failed": 1
+        },
+        "ready": {
+          "correct": 11,
+          "rate": 0.6111111111111112,
+          "total": 18
+        },
+        "filename_correct": {
+          "correct": 11,
+          "rate": 0.6470588235294118,
+          "total": 17
+        },
+        "baseline_regressions": []
+      }
+    }
+  },
+  "source_files_sha256": {
+    "crates/intern-engine/src/evidence.rs": "257b39bf684e00026171e8781642a7313a94367b37a7c4da445954c91a6b53ae",
+    "crates/intern-engine/src/facts.rs": "fd62b1ce7cb83ea28fac639816b8c1d8e4927d48dd32f96c8924ca75029a3ea9",
+    "crates/intern-engine/src/infer.rs": "05199f199311fd39a028e411c03c9e18c66e4c666017ef557edb7160632138e5",
+    "crates/intern-engine/src/validate.rs": "42259dedfd6e4e95fdba8b7baf940f2239f9470a345a8c95ab6d8da3ea1c2968",
+    "crates/intern-engine/src/tiers.rs": "31dbc4d2750ffb116aaaed65e246644bf3a92dc68f06ba084044b98140590672",
+    "crates/intern-engine/src/bin/intern-evaluate.rs": "db0b1321289053dec1a6d19adaa37771af15f039c20a58da7d29c723f1771f03",
+    "src-tauri/src/commands.rs": "b9f903da4f5debe93fb9e80640405c9c4e9e92dcef85596cec07fd644e7baf16",
+    "scripts/run-model-evaluation.ps1": "07c1e7fa732c9ba2fc86b075d1ac6407499eed1cd0059ac8448f2ebbb481635f",
+    "scripts/validate-model-evaluation.mjs": "d89c7d03f08f2da942eb01e6dd9cb2faae33a74635ae34af7cffc3cc8dc54e34",
+    ".github/workflows/qa.yml": "6e84ae49bc5873cf0495793f3034bf7d59c4bfd03e53ed6b5b35c6f96da0aa48"
   }
 }

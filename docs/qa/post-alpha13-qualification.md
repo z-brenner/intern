@@ -52,13 +52,30 @@ not a 16 GB laptop measurement.
   The configured Debian snapshot mirror is denied by the executor's enforced
   network policy. The dependency bootstrap installed nothing and was stopped.
 - The frozen-binary replay comparison uses ABBA order, two runs per arm, with
-  no cache flush. Results are pending. Recorded model latency and server memory
-  are inherited evidence and must not be attributed to the replay process.
+  no cache flush. Median wall time falls from **118.35 s to 65.06 s (45.0%)**.
+  All 77 filenames, descriptions, proposals, scores, probabilities and readiness
+  decisions agree across all four runs; all baseline gates pass with zero stale
+  prompts. Peak replay RSS stays about 54 MiB. This includes benchmark scoring;
+  it is not a measurement of live app latency or model inference. Recorded
+  model latency and server memory remain inherited evidence.
+- The reconciled 9B replay scores **73/77 filenames, 77/77 dates, 77/77 parties,
+  zero forbidden dates and zero wrong-ready filenames**, with 37 ready. The 2B
+  control retains 71/77 filenames, 76/77 dates, 75/77 parties and 65 ready, with
+  zero baseline regressions. Both fixture pipelines pass their original
+  baselines with no regressions. Existing fixture party losses and the digest
+  recording's truncated reply remain; they are not erased by the replay pass.
 - Matching Windows QA, fresh confidence-aware model results, real-document and
   CUAD checks after the date rules, and actual 16 GB laptop cold/warm behavior
   remain outstanding. CI success alone does not establish release quality.
 
-The experimental status and run receipts are updated in the companion JSON.
+Matching Windows QA is running at
+[41940189938](https://github.com/z-brenner/intern/actions/runs/41940189938),
+source head `875bb6e49b10d3feb38ad23c21377941d667090a`. Later commits update only
+these QA evidence files; the non-QA release-input digest remains
+`e1e96bd395259779eec3557b9b146d066bd426933d95f881ddf20308fa011530`.
+No Windows success or release qualification is claimed while the run is pending.
+
+The experimental status, source hashes and run receipts are in the companion JSON.
 Existing alpha.13 release artifacts and its fidelity record are retained as
 historical records. These code changes invalidate that release's input digest;
 any subsequent release needs fresh run-bound evidence and the fidelity review
