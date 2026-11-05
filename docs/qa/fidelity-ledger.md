@@ -1,4 +1,22 @@
-# Intern alpha.13 rendered-fidelity ledger
+# Intern alpha.14 rendered-fidelity ledger
+
+**Current rendered sign-off status: pending.** No person has accepted a capture
+for alpha.14. The version and release notes change the release-input tree;
+previous qualification passes do not supply its final capture or sign-off.
+
+The committed image remains the historical alpha.13 capture. Replace it only
+with the exact image from QA on the final release tree and follow
+[the reviewer rule](../releasing.md#the-reviewer-rule). Do not reuse a digest,
+name a person who did not review it, or treat automated screenshot tests as a
+human attestation.
+
+The alpha.13 record below is retained as historical provenance, including its
+explicit statement that no person looked. It is superseded for the current
+release and does not satisfy alpha.14's reviewer rule.
+
+## Historical alpha.13 ledger
+
+### Intern alpha.13 rendered-fidelity ledger
 
 **Rendered sign-off status: accepted for alpha.13, by Claude Code under the
 maintainer's standing instruction; no person has looked at this capture.**
