@@ -1045,11 +1045,17 @@ pub fn validate_facts_at(
         let found = match class {
             DocumentClass::Issued => Vec::new(),
             DocumentClass::Agreement | DocumentClass::Amendment => between_organizations(scope),
+            // A report's signatory does not establish that an organization
+            // mentioned in its body owns it. Require one actual header.
+            DocumentClass::Record => record_letterhead_organization(scope).into_iter().collect(),
             _ => header_organization(scope)
                 .or_else(|| letterhead_organization(scope))
                 .into_iter()
                 .collect(),
         };
+        if class == DocumentClass::Record && found.is_empty() {
+            push(&mut reasons, ReviewReason::PartyMissing);
+        }
         if class == DocumentClass::Issued || !found.is_empty() {
             for party in parties
                 .iter_mut()
@@ -1095,8 +1101,7 @@ pub fn validate_facts_at(
     if acting_for
         && !only_people
         && class == DocumentClass::Record
-        && let Some((name, unit)) =
-            header_organization(scope).or_else(|| letterhead_organization(scope))
+        && let Some((name, unit)) = record_letterhead_organization(scope)
     {
         let name = without_sentence_stop(&with_of_phrase(unit, &name));
         if !parties
@@ -4208,6 +4213,32 @@ fn post_follows(words: &[&str]) -> bool {
     false
 }
 
+/// A bare job-title line after a record signer's name. Every word must be
+/// a post or a title modifier: a sentence about a president is not a post.
+fn is_job_title_line(line: &str) -> bool {
+    const MODIFIERS: &[&str] = &[
+        "and",
+        "of",
+        "the",
+        "vice",
+        "senior",
+        "executive",
+        "financial",
+        "operating",
+        "technology",
+        "general",
+        "associate",
+        "managing",
+    ];
+    let words = words(line);
+    !words.is_empty()
+        && words.len() <= 8
+        && words.iter().any(|word| POST_WORDS.contains(&word.as_str()))
+        && words
+            .iter()
+            .all(|word| POST_WORDS.contains(&word.as_str()) || MODIFIERS.contains(&word.as_str()))
+}
+
 /// Whether a line is a signature block's "Title:" field - not a field
 /// whose label merely starts with the word ("Title of work:").
 fn is_title_field(line: &str) -> bool {
@@ -4312,6 +4343,14 @@ fn standing_of(scope: &ValidationScope<'_>, name: &str, class: DocumentClass) ->
                     .nth(index)
                     .is_some_and(|written| titled_after(written, &loose));
                 let posted_before = POST_WORDS.contains(&closing_words(before, 1).as_str());
+                // PDF extraction often keeps a signature's name and post
+                // on separate lines of one unit. Only a standalone name
+                // followed immediately by a whole job title counts.
+                let posted_below = class == DocumentClass::Record
+                    && line.trim() == loose
+                    && lines
+                        .get(index + 1)
+                        .is_some_and(|next| is_job_title_line(next));
                 let signed_above = index > 0 && signs_by(&lines[index - 1]);
                 // The block's "Title:" may open the next unit.
                 let titled_below = match lines.get(index + 1) {
@@ -4342,6 +4381,7 @@ fn standing_of(scope: &ValidationScope<'_>, name: &str, class: DocumentClass) ->
                     || staff_opening
                     || posted_after
                     || posted_before
+                    || posted_below
                     || signature_block
                 {
                     staff = true;
@@ -4388,6 +4428,67 @@ fn letterhead_organization<'a>(scope: &ValidationScope<'a>) -> Option<(String, &
             [only] => written_span(unit, only).map(|span| (span, unit)),
             _ => None,
         })
+}
+
+/// A record's owner must be the sole organization in its letterhead,
+/// rather than the first organization in a header or one mentioned only
+/// in the body. Tables can name owners or lenders besides the issuer.
+fn record_letterhead_organization<'a>(
+    scope: &ValidationScope<'a>,
+) -> Option<(String, &'a EvidenceUnit)> {
+    let mut found: Vec<(String, &EvidenceUnit)> = Vec::new();
+    for unit in scope
+        .context_units()
+        .filter(|unit| unit.features.position.letterhead && !unit.running)
+    {
+        for organization in unit
+            .features
+            .organizations
+            .iter()
+            .cloned()
+            .chain(unit.text.lines().filter_map(organization_before_kind))
+        {
+            if found
+                .iter()
+                .any(|(known, _)| normalize_loosely(known) == organization)
+            {
+                continue;
+            }
+            if let Some(span) = written_span(unit, &organization) {
+                let full = with_of_phrase(unit, &span);
+                let is_header = unit.text.lines().any(|line| {
+                    line.trim_start_matches(|c: char| c.is_whitespace() || c == '|')
+                        .strip_prefix(&full)
+                        .is_some_and(|tail| {
+                            tail.trim_matches(|c: char| c.is_whitespace() || c == '|')
+                                .is_empty()
+                                || tail.trim() == "."
+                                || tail.trim_start().starts_with(['-', '\u{2013}', '\u{2014}'])
+                                || organization_before_kind(line).as_ref() == Some(&organization)
+                        })
+                });
+                if !is_header {
+                    continue;
+                }
+                // A shared heading with two organizations cannot tell us
+                // which one this person acts for, even if only one starts
+                // the line.
+                if unit
+                    .features
+                    .organizations
+                    .iter()
+                    .any(|other| other != &organization)
+                {
+                    return None;
+                }
+                found.push((span, unit));
+            }
+        }
+    }
+    match found.as_slice() {
+        [only] => Some(only.clone()),
+        _ => None,
+    }
 }
 
 /// A name that ended a sentence, without the sentence's full stop:
@@ -8760,6 +8861,147 @@ President Beckett Halloran called the meeting to order at 6:32 p.m.";
         );
         let facts = outcome.facts.unwrap();
         assert!(facts.parties.iter().any(|party| party.signatory));
+    }
+
+    #[test]
+    fn a_report_signers_wrapped_job_title_yields_to_the_header_organization() {
+        const REPORT: &str = "Rookwood Precision Metals Corporation\n\n2025 Annual Report\n\nReport date: March 12, 2026\n\nLetter to Shareholders\n\nSincerely,\n\nCasimir Ellingsen\nPresident and Chief Executive Officer\nMarch 12, 2026";
+        for role in [None, Some(PartyRole::Issuer), Some(PartyRole::Client)] {
+            let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+                document_type: Some("2025 Annual Report".into()),
+                type_evidence: vec![id_of(index, "2025 Annual")],
+                document_date: Some("2026-03-12".into()),
+                date_role: Some(DateRole::Issuance),
+                date_evidence: vec![id_of(index, "Report date")],
+                parties: vec![party("Casimir Ellingsen", role, &[id_of(index, "Casimir")])],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["Rookwood Precision Metals Corporation"],
+                "{role:?}: {:?}",
+                outcome.proposal
+            );
+            assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+            assert_eq!(
+                outcome.status,
+                ProposalStatus::Ready,
+                "{role:?}: {:?}",
+                outcome.reasons
+            );
+            assert!(
+                outcome
+                    .facts
+                    .as_ref()
+                    .unwrap()
+                    .parties
+                    .iter()
+                    .any(|party| party.name == "Casimir Ellingsen" && party.signatory)
+            );
+        }
+    }
+
+    #[test]
+    fn a_report_with_only_staff_and_no_unique_header_organization_needs_review() {
+        for opening in [
+            "2025 Annual Report\n\nReport date: March 12, 2026",
+            "Rookwood Precision Metals Corporation\n\nHarborline Freight Systems LLC\n\n2025 Annual Report\n\nReport date: March 12, 2026",
+            "Rookwood Precision Metals Corporation\nHarborline Freight Systems LLC\n\n2025 Annual Report\n\nReport date: March 12, 2026",
+            "| Rookwood Precision Metals Corporation - Harborline Freight Systems LLC |\n\n2025 Annual Report\n\nReport date: March 12, 2026",
+            "2025 Annual Report\n\nOur acquisition was Ashdown Surface Technologies LLC.\n\nReport date: March 12, 2026",
+            "2025 Annual Report\n\nAshdown Surface Technologies LLC was acquired this year.\n\nReport date: March 12, 2026",
+            "2025 Annual Report\n\nReport date: March 12, 2026\n\nLetter to Shareholders\n\nFinancial results follow.\n\nOur acquisition was Ashdown Surface Technologies LLC.",
+        ] {
+            let text =
+                format!("{opening}\n\nCasimir Ellingsen\nPresident and Chief Executive Officer");
+            let (outcome, _) = facts_for(&text, |index| ModelFacts {
+                document_type: Some("2025 Annual Report".into()),
+                type_evidence: vec![id_of(index, "2025 Annual")],
+                document_date: Some("2026-03-12".into()),
+                date_evidence: vec![id_of(index, "Report date")],
+                parties: vec![party(
+                    "Casimir Ellingsen",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "Casimir")],
+                )],
+                ..ModelFacts::default()
+            });
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview, "{opening}");
+            assert!(
+                outcome.reasons.contains(&ReviewReason::PartyMissing),
+                "{:?}",
+                outcome.reasons
+            );
+            assert!(
+                outcome.proposal.parties.is_empty(),
+                "{:?}",
+                outcome.proposal.parties
+            );
+        }
+    }
+
+    #[test]
+    fn a_spreadsheet_reports_staff_yields_to_its_table_letterhead() {
+        const REPORT: &str = "## Summary\n\n\
+| Rowanbrae Vineyards - 2026 Harvest Log |  |  |\n\
+| --- | --- | --- |\n\
+| Report generated | 2026-10-02 |  |\n\
+| Winemaker | Esme Varga |  |";
+        let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+            document_type: Some("Harvest Log".into()),
+            type_evidence: vec![id_of(index, "| Rowanbrae")],
+            document_date: Some("2026-10-02".into()),
+            date_evidence: vec![id_of(index, "| Report generated")],
+            parties: vec![party(
+                "Esme Varga",
+                Some(PartyRole::Other),
+                &[id_of(index, "| Winemaker")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.parties, vec!["Rowanbrae Vineyards"]);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    #[test]
+    fn an_explicit_report_recipient_keeps_their_name_despite_a_wrapped_job_title() {
+        const REPORT: &str = "Harborline Advisory LLC\n\nAnnual Performance Report\n\nReport date: March 12, 2026\n\nPrepared for: Casimir Ellingsen\nPresident and Chief Executive Officer";
+        let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+            document_type: Some("Annual Performance Report".into()),
+            type_evidence: vec![id_of(index, "Annual Performance")],
+            document_date: Some("2026-03-12".into()),
+            date_evidence: vec![id_of(index, "Report date")],
+            parties: vec![party(
+                "Casimir Ellingsen",
+                Some(PartyRole::Client),
+                &[id_of(index, "Prepared for")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.parties, vec!["Casimir Ellingsen"]);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert!(!outcome.facts.as_ref().unwrap().parties[0].signatory);
+    }
+
+    #[test]
+    fn a_following_sentence_about_another_president_is_not_a_wrapped_job_title() {
+        const REPORT: &str = "Interview Report\n\nMarch 12, 2026\n\nCasimir Ellingsen\nPresident Wilhelmina Strickland will review these notes.";
+        let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+            document_type: Some("Interview Report".into()),
+            type_evidence: vec![id_of(index, "Interview")],
+            document_date: Some("2026-03-12".into()),
+            date_evidence: vec![id_of(index, "March")],
+            parties: vec![party("Casimir Ellingsen", None, &[id_of(index, "Casimir")])],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.parties, vec!["Casimir Ellingsen"]);
+        assert!(!outcome.facts.as_ref().unwrap().parties[0].signatory);
     }
 
     #[test]
