@@ -619,14 +619,18 @@ pub fn validate_facts_at(
             // kind the reply could not find in it: "Letter to Target
             // Corporation" tells a person what to check where "Document to
             // Target Corporation" does not. A bare "Letter" names no kind a
-            // person could file by, so it still waits for one.
-            None if layout.laid_out_as_letter(scope) => {
-                document_type = Some("Letter".to_owned());
-                push(&mut reasons, ReviewReason::TypeInferred);
-                push(&mut reasons, ReviewReason::TypeMissing);
-            }
-            None if type_supported => push(&mut reasons, ReviewReason::TypeMissing),
-            None => {}
+            // person could file by, so it still waits for one. So an email
+            // by its header block and a notice by its heading stand in for
+            // a kind the reply could not find.
+            None => match class_stand_in(scope, layout) {
+                Some(kind) => {
+                    document_type = Some(kind.to_owned());
+                    push(&mut reasons, ReviewReason::TypeInferred);
+                    push(&mut reasons, ReviewReason::TypeMissing);
+                }
+                None if type_supported => push(&mut reasons, ReviewReason::TypeMissing),
+                None => {}
+            },
         }
     }
 
@@ -856,7 +860,7 @@ pub fn validate_facts_at(
             parties_supported = false;
             continue;
         };
-        let trimmed = trim_name(written);
+        let trimmed = without_trading_name(&trim_name(written));
         let trimmed = completed_name(scope, &trimmed).unwrap_or(trimmed);
         let name = trimmed.as_str();
         // A first name on its own is never a party: one word, not an
@@ -1220,13 +1224,21 @@ pub fn validate_facts_at(
             // the organization's signatory, their name and post over its
             // name read as a signature block: the organization is then a
             // party already, and only its role is settled here.
+            // A letter's inside address names who the letter is to,
+            // whatever role the reply gave them - a "client" it warns, a
+            // "licensee" it approves - unless the reply made them its
+            // sender. A notice's goes by the reply's addressee.
             let party = &parties[index];
-            if party.copied
-                || is_organization(&party.name)
-                || !party
+            let addressed = if class == DocumentClass::Notice {
+                party
                     .proposed_role
                     .is_some_and(|role| ADDRESSED_ROLES.contains(&role))
-            {
+            } else {
+                !party
+                    .proposed_role
+                    .is_some_and(|role| matches!(role, PartyRole::Sender | PartyRole::Issuer))
+            };
+            if party.copied || is_organization(&party.name) || !addressed {
                 continue;
             }
             let named = parties
@@ -1236,6 +1248,13 @@ pub fn validate_facts_at(
                 .collect::<Vec<_>>();
             let Some((name, unit)) = layout.addressee_organization(scope, &party.name, &named)
             else {
+                // The letter is to the first person its inside address
+                // names; when no organization stands under them, it is to
+                // them, and a second addressee's organization does not
+                // take their place.
+                if layout.in_inside_address(scope, &party.name) {
+                    break;
+                }
                 continue;
             };
             if let Some(kept) = parties
@@ -1303,6 +1322,103 @@ pub fn validate_facts_at(
             break;
         }
     }
+    // A letter signed by a person for an organization is from the
+    // organization: its signature block names the person, their post, then
+    // the organization they sign for ("Rashmi Panigrahi / FOI Officer /
+    // Office of Manpower Economics"), or its letterhead names the
+    // organization alone ("BUILDING STANDARDS COMMISSION"). A reply that
+    // named only the person as the sender gets the organization in their
+    // place; one that named the organization too has it confirmed as the
+    // sender.
+    let layout = LetterLayout::of(scope);
+    if class == DocumentClass::Letter
+        || (class == DocumentClass::Unknown && layout.laid_out_as_letter(scope))
+    {
+        for index in 0..parties.len() {
+            let party = &parties[index];
+            if party.copied
+                || party.signatory
+                || party.document_role.is_some()
+                || matches!(
+                    party.role,
+                    Some(PartyRole::Addressee | PartyRole::Recipient)
+                )
+                || is_organization(&party.name)
+                || named_as_an_organization(scope, &party.name)
+                || !named_as_a_person(scope, &party.name)
+                || !party
+                    .proposed_role
+                    .is_some_and(|role| matches!(role, PartyRole::Sender | PartyRole::Issuer))
+            {
+                continue;
+            }
+            let addressees = parties
+                .iter()
+                .filter(|other| {
+                    !other.copied
+                        && !other.proposed_role.is_some_and(|role| {
+                            matches!(role, PartyRole::Sender | PartyRole::Issuer)
+                        })
+                })
+                .map(|other| other.name.clone())
+                .collect::<Vec<_>>();
+            let found = signer_organization(scope, &party.name)
+                .or_else(|| letterhead_name(scope, layout, &addressees));
+            let Some((name, unit)) = found else {
+                continue;
+            };
+            // A letterhead that holds the party's own name, or part of it,
+            // names the party, not another.
+            let own = normalize_loosely(&party.name);
+            let found_loose = normalize_loosely(&name);
+            if own.contains(&found_loose) || found_loose.contains(&own) {
+                continue;
+            }
+            let found = Found {
+                support: Support::Context,
+                unit: Some(unit),
+                line: Some(name.clone()),
+                miscited: 0,
+            };
+            if let Some(kept) = parties
+                .iter()
+                .position(|kept| normalize_loosely(&kept.name) == normalize_loosely(&name))
+            {
+                if kept == index || parties[kept].copied {
+                    continue;
+                }
+                remember(&found, &mut references);
+                parties[index].signatory = true;
+                parties[index].role = Some(PartyRole::Other);
+                let kept = &mut parties[kept];
+                if kept.role.is_none() {
+                    kept.role = Some(PartyRole::Sender);
+                    kept.role_support = Support::Context;
+                    kept.document_role = Some(PartyRole::Sender);
+                }
+                if !kept.evidence.contains(&unit.id) {
+                    kept.evidence.push(unit.id.clone());
+                }
+                break;
+            }
+            remember(&found, &mut references);
+            parties[index].signatory = true;
+            parties[index].role = Some(PartyRole::Other);
+            parties.insert(
+                index,
+                ValidatedParty {
+                    name: display_name(&name),
+                    role: Some(PartyRole::Sender),
+                    role_support: Support::Context,
+                    document_role: Some(PartyRole::Sender),
+                    support: Support::Context,
+                    evidence: vec![unit.id.clone()],
+                    ..ValidatedParty::default()
+                },
+            );
+            break;
+        }
+    }
     // An agreement names its two sides in its opening "between" clause
     // ("This Agreement is made ... by and between"). When the reply kept
     // only one side - the other written as the document never writes it,
@@ -1354,6 +1470,37 @@ pub fn validate_facts_at(
                 },
             );
         }
+    }
+    // A court document names the two sides of its case in its caption.
+    // When the reply kept one side only - the other left out, or written
+    // as the caption never writes it - the caption's other side is the
+    // other party: the publishers who brought the case a notice of
+    // subpoena is filed in, the defendants a notice of appeal is taken by.
+    if class == DocumentClass::Notice
+        && let Some((name, unit, bringing)) = caption_other_side(scope, &parties)
+        && !parties
+            .iter()
+            .any(|party| normalize_loosely(&party.name) == normalize_loosely(&name))
+    {
+        remember(
+            &Found {
+                support: Support::Context,
+                unit: Some(unit),
+                line: Some(name.clone()),
+                miscited: 0,
+            },
+            &mut references,
+        );
+        let at = if bringing { 0 } else { parties.len() };
+        parties.insert(
+            at,
+            ValidatedParty {
+                name: display_name(&name),
+                support: Support::Context,
+                evidence: vec![unit.id.clone()],
+                ..ValidatedParty::default()
+            },
+        );
     }
     // Who the filename and the description can name: everyone but the
     // people copied and those who sign for a party, each with the role the
@@ -2013,6 +2160,65 @@ fn read_type_words<'a>(
             return TypeReading::Stated { found };
         }
     }
+    // A bigger model copies a title and runs on past its line - into the
+    // next line of a wrapped heading, into the paragraph under it - until
+    // the reply's room for a type runs out: "Final enforcement notice to
+    // Euro Car Parks Limited for failure to comply with an", "Notice of
+    // Technical Conference On May 10, 2024, the Commission issued". The
+    // part of the reply its line holds, read as a title, is the type.
+    if kind && value_words.len() >= 3 {
+        let past_line = |unit: &'a EvidenceUnit, support: Support| {
+            let mut lines = title_lines(scope, unit);
+            if unit.kind != UnitKind::Heading && unit.text.lines().count() > 1 {
+                lines.push(unit.text.split_whitespace().collect::<Vec<_>>().join(" "));
+            }
+            // What the document says after the line: the rest of the unit,
+            // then the next unit. The reply ran on into it, so its tail
+            // is found there; a tail found nowhere is no copy of the
+            // document ("OFFICIAL PUBLIC RECORD,p1.b1],").
+            let following = |line: &str| {
+                let unit_words = words(&unit.text);
+                let line_words = words(line);
+                let mut rest = phrase_positions(&unit_words, &line_words)
+                    .first()
+                    .map(|at| unit_words[at + line_words.len()..].to_vec())
+                    .unwrap_or_default();
+                if let Some(next) = scope.index.units().get(unit.ordinal as usize + 1) {
+                    rest.extend(words(&next.text));
+                }
+                rest
+            };
+            lines.into_iter().find_map(|line| {
+                let (kept, tail) = held_by_line(value, &value_words, &line)?;
+                // The tail's first words are the document's next words; a
+                // reply's last word or two may be the id it ran into.
+                let tail_head = &tail[..tail.len().min(2)];
+                if !tail.is_empty() && !following(&line).starts_with(tail_head) {
+                    return None;
+                }
+                let phrase = title_phrase(&kept, &head)?;
+                let line_words = words(&line);
+                let phrase_words = words(&phrase);
+                (phrase_words.len() >= 2
+                    && phrase_positions(&line_words, &phrase_words)
+                        .into_iter()
+                        .any(|at| {
+                            names_document_at(&line_words, at, at + phrase_words.len(), &line)
+                        }))
+                .then(|| TypeReading::Title {
+                    phrase,
+                    found: found_in(unit, &line, support),
+                })
+            })
+        };
+        if let Some(reading) = cited_units
+            .iter()
+            .find_map(|unit| past_line(unit, Support::Cited))
+            .or_else(|| title_units(scope).find_map(|unit| past_line(unit, Support::Context)))
+        {
+            return reading;
+        }
+    }
     for unit in title_units(scope) {
         for line in title_lines(scope, unit) {
             if title_like(unit, &line)
@@ -2026,6 +2232,55 @@ fn read_type_words<'a>(
         }
     }
     TypeReading::Unsupported
+}
+
+/// The head of a reply's type that `line` holds when the reply ran on
+/// past the line, and the reply's tail beyond it: the reply's words from
+/// its start to where the line ends (the line ends with them) or the whole
+/// reply when the line runs on past it; at least two words, fewer than the
+/// reply's when the line ends them, and one of them a kind of document.
+/// `None` when the line does not hold the reply's head that way.
+fn held_by_line<'v>(
+    value: &str,
+    value_words: &'v [String],
+    line: &str,
+) -> Option<(String, &'v [String])> {
+    let line_words = words(line);
+    if line_words.len() < 2 {
+        return None;
+    }
+    // The reply's words as written, one entry per word of `value_words`.
+    let written = value
+        .split_whitespace()
+        .flat_map(|token| {
+            let count = words(token).len();
+            std::iter::repeat_n(token, count.min(1))
+                .chain(std::iter::repeat_n("", count.saturating_sub(1)))
+        })
+        .collect::<Vec<_>>();
+    let kept_words = if line_words.len() > value_words.len() {
+        // The line runs on past the reply: the reply is its head.
+        (line_words.starts_with(value_words)).then_some(value_words.len())?
+    } else {
+        // The reply runs on past the line: the line ends with its head.
+        (2..value_words.len())
+            .rev()
+            .find(|k| line_words.ends_with(&value_words[..*k]))?
+    };
+    if !has_a_kind(&value_words[..kept_words]) {
+        return None;
+    }
+    let kept = written
+        .iter()
+        .take(kept_words)
+        .filter(|token| !token.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some((
+        marks_its_line_holds(&kept, line),
+        &value_words[kept_words..],
+    ))
 }
 
 /// The date an email's header block ([`email_header_block`]) says it was
@@ -2124,6 +2379,38 @@ const NOT_TITLE_WORDS: &[&str] = &[
     "privileged",
 ];
 
+/// Markings a letter carries at its head that are no organization's name,
+/// however they are set: "WITHOUT PREJUDICE", "Subject to Contract", "By
+/// Post", "URGENT". A phrase counts anywhere on the line; a single word
+/// only as the whole line.
+const CORRESPONDENCE_MARKINGS: &[&str] = &[
+    "without prejudice",
+    "subject to contract",
+    "for the attention of",
+    "recorded delivery",
+    "special delivery",
+    "first class",
+    "open letter",
+    "by post",
+    "by fax",
+    "by courier",
+    "by e mail",
+    "by mail",
+    "by messenger",
+    "save as to costs",
+];
+const CORRESPONDENCE_WORDS: &[&str] = &["urgent", "draft", "personal", "copy", "original"];
+
+/// Whether a line is such a marking.
+fn is_correspondence_marking(line: &str) -> bool {
+    let loose = normalize_loosely(line);
+    let loose = loose.trim();
+    CORRESPONDENCE_MARKINGS
+        .iter()
+        .any(|phrase| loose.contains(phrase))
+        || CORRESPONDENCE_WORDS.contains(&loose)
+}
+
 /// Whether a unit is only an organization's name - a letterhead's
 /// "Meadowlark Health Plan" - or a delivery line: no title either way.
 fn names_an_organization(unit: &EvidenceUnit) -> bool {
@@ -2205,7 +2492,12 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
 /// it is about ("Supply Agreement", "Amendment to Lease"), and a party's
 /// name can be part of that.
 fn stated_title(value: &str, parties: &[&str]) -> String {
-    let tokens = value.split_whitespace().collect::<Vec<_>>();
+    // "PLAINTIFF'S Notice of Voluntary Dismissal": the side filing a
+    // notice is no part of its name.
+    let tokens = value
+        .split_whitespace()
+        .skip_while(|token| crate::phrases::possessive_side(token))
+        .collect::<Vec<_>>();
     let keep = |tokens: &[&str]| -> Option<String> {
         let kept = tokens.join(" ");
         (!kept.is_empty() && has_a_kind(&words(&kept))).then_some(kept)
@@ -3070,18 +3362,17 @@ impl LetterLayout {
                 .iter()
                 .filter(move |unit| Some(unit.page) == first_page && !unit.running)
         };
-        let greets = page().any(|unit| !whole_positions(&unit.normalized, "dear").is_empty());
+        let salutation = page().find_map(|unit| {
+            unit.text
+                .lines()
+                .position(is_greeting)
+                .map(|line| (unit.ordinal, line))
+        });
         let dateline = page()
             .take(6)
             .find(|unit| is_bare_date(unit))
             .map(|unit| unit.ordinal)
-            .filter(|_| greets);
-        let salutation = page().find_map(|unit| {
-            unit.text
-                .lines()
-                .position(|line| normalize(line).starts_with("dear "))
-                .map(|line| (unit.ordinal, line))
-        });
+            .filter(|_| salutation.is_some());
         Self {
             dateline,
             salutation,
@@ -3094,11 +3385,20 @@ impl LetterLayout {
     /// head into one paragraph, so the lines are read, not the units.
     fn laid_out_as_letter(self, scope: &ValidationScope<'_>) -> bool {
         let Some((salutation, at)) = self.salutation else {
-            return false;
+            // No greeting: a letter that goes straight to its matter still
+            // opens on its dateline and closes with a sign-off ("Yours
+            // faithfully,") over its signature.
+            return self.dateline.is_some_and(|_| signs_off(scope))
+                || (first_page_lines(scope)
+                    .take(12)
+                    .any(|line| is_dateline(&line))
+                    && signs_off(scope));
         };
         // The dateline found among the page's first units counts only above
         // the greeting: a memo opening "Dear colleagues" may date a section
-        // below it.
+        // below it. A greeting over a letter's sign-off is a letter whether
+        // or not its dateline was found: a scan may run the date into its
+        // letterhead.
         self.dateline.is_some_and(|dateline| dateline < salutation)
             || scope.index.units().iter().any(|unit| {
                 if unit.running || unit.ordinal > salutation {
@@ -3112,6 +3412,7 @@ impl LetterLayout {
                 };
                 above.iter().any(|line| is_dateline(line))
             })
+            || signs_off(scope)
     }
 
     /// Whether a unit stands before the dateline, where a letterhead can.
@@ -3120,13 +3421,17 @@ impl LetterLayout {
     }
 
     /// The organization the inside address names under `person`: the first
-    /// of the four lines after the person's own that is an organization's
-    /// name and no job title, in a unit of the first page between the
-    /// dateline, when there is one, and the salutation. A line that is
+    /// of the lines after the person's own, down to the street address,
+    /// that is an organization's name and no job title, in the units of
+    /// the first page between the dateline, when there is one, and the
+    /// salutation - or the organization's line right above the person
+    /// ("DUQUESNE LIGHT COMPANY / EMILY M FARAH CNSL"). A line that is
     /// exactly one of the reply's own parties (`replied`) counts too, though
     /// its name ends on no organization's word: "Chicago Mercantile
-    /// Exchange".
-    /// Its lines may be broken by "<br>" in a table's cell.
+    /// Exchange"; so does a line written as a name is ("OFCOM", "Public
+    /// Resource", "Daily Telegraph"), and the organization a post is held
+    /// at ("Chair, Home Affairs Select Committee"). Its lines may be
+    /// broken by "<br>" in a table's cell.
     fn addressee_organization<'a>(
         self,
         scope: &ValidationScope<'a>,
@@ -3135,51 +3440,161 @@ impl LetterLayout {
     ) -> Option<(String, &'a EvidenceUnit)> {
         let (salutation, _) = self.salutation?;
         let person = normalize_loosely(person);
-        scope.context_units().find_map(|unit| {
-            // Between the dateline, when there is one, and the salutation:
-            // the letterhead above the dateline is the sender's.
-            if unit.ordinal > salutation || self.dateline.is_some_and(|line| unit.ordinal <= line) {
-                return None;
-            }
+        let in_address = |unit: &EvidenceUnit| self.in_address(unit);
+        let lines_of = |unit: &EvidenceUnit| {
             let lines = unit
                 .text
                 .lines()
                 .flat_map(|line| line.split("<br>"))
                 .map(str::trim)
+                .map(str::to_owned)
                 .collect::<Vec<_>>();
             // The address ends at the salutation, when it shares the unit:
             // what follows "Dear ..." is the letter talking.
             let end = if unit.ordinal == salutation {
                 lines
                     .iter()
-                    .position(|line| normalize(line).starts_with("dear "))
+                    .position(|line| is_greeting(line))
                     .unwrap_or(lines.len())
             } else {
                 lines.len()
             };
-            let named = lines[..end]
+            lines[..end].to_vec()
+        };
+        let units = scope
+            .context_units()
+            .filter(|unit| in_address(unit))
+            .collect::<Vec<_>>();
+        units.iter().enumerate().find_map(|(at, unit)| {
+            let lines = lines_of(unit);
+            let named = lines
                 .iter()
                 .position(|line| contains_whole(&normalize_loosely(line), &person))?;
-            // A job title can end on an organization's word too ("Director
-            // of Corporate Services"): it is the person's post, never the
-            // organization. A sentence is no name either.
-            lines[named + 1..end]
+            // The lines under the person, into the next units of the
+            // address when theirs end.
+            let mut below = lines[named + 1..].to_vec();
+            for later in &units[at + 1..] {
+                if below.len() >= 5 {
+                    break;
+                }
+                below.extend(lines_of(later));
+            }
+            let people = units[at..]
                 .iter()
-                .take(4)
-                .map(|line| line.trim_end_matches([',', ';', '|']).trim())
-                .filter(|line| line.split_whitespace().count() <= ORGANIZATION_LINE_WORDS)
-                .filter(|line| {
-                    !normalize_loosely(line)
-                        .split_whitespace()
-                        .any(|word| JOB_TITLE_WORDS.contains(&word))
+                .take(3)
+                .flat_map(|unit| unit.features.people.iter())
+                .map(|person| normalize_loosely(person))
+                .collect::<Vec<_>>();
+            // The organization stands between the person and the street:
+            // the address's own lines name no one, and a number in an
+            // organization's own name ("3M Company") is no street number.
+            // A line set like a person's name under the addressee is a
+            // second person, and their post and organization are theirs,
+            // so the scan ends there ("John Smith / Jane Doe / Director /
+            // Acme Ltd"); under the addressee's own post such a line is
+            // the organization the post is held at ("Bill Reeve / Director
+            // of Rail / Transport Scotland").
+            let mut under_a_post = false;
+            let mut found = None;
+            for raw in below.iter().take(5) {
+                if is_address_line(raw) && !is_organization(raw) {
+                    break;
+                }
+                let line = raw.trim_end_matches([',', ';', '|', '\\']).trim();
+                // A post's line ("Chief Executive") is set like a name but
+                // names none.
+                let post = holds_a_post(line);
+                let a_person = !post
+                    && (people.contains(&normalize_loosely(line))
+                        || names_a_person(line)
+                        || (!under_a_post && looks_like_a_persons_name(line)));
+                if a_person {
+                    break;
+                }
+                under_a_post |= post;
+                // "Premises: ...", "Owner: ...": a field's line, not the
+                // address's.
+                if line.contains(':') {
+                    continue;
+                }
+                if let Some(organization) = organization_after_post(line) {
+                    found = Some(organization);
+                    break;
+                }
+                if (is_organization(line)
+                    || replied
+                        .iter()
+                        .any(|name| normalize_loosely(name) == normalize_loosely(line)))
+                    && line.split_whitespace().count() <= ORGANIZATION_LINE_WORDS
+                    && !post
+                {
+                    found = Some(line.to_owned());
+                    break;
+                }
+                if organization_line(line) {
+                    found = Some(line.to_owned());
+                    break;
+                }
+            }
+            found
+                .or_else(|| {
+                    // The organization over the person: the line above
+                    // theirs, in their unit or ending the unit before.
+                    let above = match named.checked_sub(1) {
+                        Some(above) => Some(lines[above].clone()),
+                        None => at
+                            .checked_sub(1)
+                            .and_then(|previous| lines_of(units[previous]).last().cloned()),
+                    }?;
+                    let above = above.trim_end_matches([',', ';', '|']).trim();
+                    (is_organization(above) && !holds_a_post(above) && !is_address_line(above))
+                        .then(|| above.to_owned())
                 })
-                .find(|line| {
-                    is_organization(line)
-                        || replied
-                            .iter()
-                            .any(|name| normalize_loosely(name) == normalize_loosely(line))
+                .map(|name| (name, *unit))
+        })
+    }
+
+    /// Whether a unit can be part of the inside address: before the
+    /// salutation, and after the dateline when the dateline opens the
+    /// letter, as American letters are laid out. A British letter puts
+    /// its date right over the greeting, nothing between them, under the
+    /// address: its address stands above the dateline.
+    fn in_address(self, unit: &EvidenceUnit) -> bool {
+        let Some((salutation, _)) = self.salutation else {
+            return false;
+        };
+        unit.ordinal <= salutation
+            && (self.british() || self.dateline.is_none_or(|dateline| unit.ordinal > dateline))
+    }
+
+    /// Whether the letter is laid out the British way: the dateline right
+    /// over the greeting, so the inside address stands above the dateline.
+    fn british(self) -> bool {
+        self.dateline
+            .zip(self.salutation)
+            .is_some_and(|(dateline, (salutation, _))| salutation == dateline + 1)
+    }
+
+    /// Whether the inside address - the first page between the dateline,
+    /// when there is one, and the salutation - names `person`.
+    fn in_inside_address(self, scope: &ValidationScope<'_>, person: &str) -> bool {
+        let Some((salutation, at)) = self.salutation else {
+            return false;
+        };
+        let person = normalize_loosely(person);
+        scope.context_units().any(|unit| {
+            if !self.in_address(unit) {
+                return false;
+            }
+            unit.text
+                .lines()
+                .flat_map(|line| line.split("<br>"))
+                .take(if unit.ordinal == salutation {
+                    at
+                } else {
+                    usize::MAX
                 })
-                .map(|line| (line.to_owned(), unit))
+                .any(|line| contains_whole(&normalize_loosely(line), &person))
         })
     }
 
@@ -3248,6 +3663,28 @@ const MONTHS: &[&str] = &[
     "december",
 ];
 
+/// The months as a dateline abbreviates them ("Dec. 26, 1907").
+const MONTH_ABBREVIATIONS: &[&str] = &[
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+];
+
+/// Whether a word of a dateline names a month, written out or abbreviated.
+fn names_a_month(word: &str) -> bool {
+    MONTHS.contains(&word) || MONTH_ABBREVIATIONS.contains(&word)
+}
+
+/// Whether a word of a dateline is a day, a year or an ordinal day ("18th
+/// October 2019").
+fn is_date_number(word: &str) -> bool {
+    let digits = word
+        .strip_suffix("st")
+        .or_else(|| word.strip_suffix("nd"))
+        .or_else(|| word.strip_suffix("rd"))
+        .or_else(|| word.strip_suffix("th"))
+        .unwrap_or(word);
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+}
+
 /// Whether a unit is a date and nothing else - "March 2, 2026" - as a
 /// letter's dateline is written.
 fn is_bare_date(unit: &EvidenceUnit) -> bool {
@@ -3255,11 +3692,12 @@ fn is_bare_date(unit: &EvidenceUnit) -> bool {
         && !unit.features.dates.is_empty()
         && words(&unit.text)
             .iter()
-            .all(|word| MONTHS.contains(&word.as_str()) || word.chars().all(|c| c.is_ascii_digit()))
+            .all(|word| names_a_month(word) || is_date_number(word))
 }
 
 /// Whether a line is a letter's dateline: a written date and nothing else,
-/// or a "Date:" field holding one - "June 16, 2023", "Date: 28 March 2023".
+/// or a "Date:" field holding one - "June 16, 2023", "Date: 28 March 2023",
+/// "Dec. 26, 1907", "18th October 2019".
 fn is_dateline(line: &str) -> bool {
     let line_words = words(line);
     let rest = line_words
@@ -3267,11 +3705,135 @@ fn is_dateline(line: &str) -> bool {
         .unwrap_or(&line_words);
     !rest.is_empty()
         && rest.len() <= 4
-        && rest.iter().any(|word| MONTHS.contains(&word.as_str()))
+        && rest.iter().any(|word| names_a_month(word))
         && rest
             .iter()
-            .all(|word| MONTHS.contains(&word.as_str()) || word.chars().all(|c| c.is_ascii_digit()))
+            .all(|word| names_a_month(word) || is_date_number(word))
         && !extract_stated_dates(&normalize(line)).is_empty()
+}
+
+/// Greetings a letter opens with besides "Dear ...", as a line of their own.
+const GREETINGS: &[&str] = &[
+    "gentlemen",
+    "sir",
+    "sirs",
+    "madam",
+    "madame",
+    "dear sir or madam",
+    "dear sir madam",
+    "to whom it may concern",
+    "ladies and gentlemen",
+];
+
+/// Whether a line is a letter's salutation: "Dear ...", "Dear," or "Dear"
+/// alone (a published letter with the addressee's name removed), or
+/// "Gentlemen:", "Sir:", "To Whom It May Concern". A table's cells may
+/// split it ("| Dear | Mr. | Pilcher: |").
+fn is_greeting(line: &str) -> bool {
+    let loose = normalize_loosely(&line.replace(['|', '*', '#', '>', '_'], " "));
+    let loose = loose.trim_end_matches([':', '-', ';', '!', ' ']).trim();
+    loose == "dear" || loose.starts_with("dear ") || GREETINGS.contains(&loose)
+}
+
+/// The closings a letter signs off with, over its signature.
+const CLOSINGS: &[&str] = &[
+    "sincerely",
+    "sincerely yours",
+    "yours sincerely",
+    "yours faithfully",
+    "faithfully yours",
+    "yours truly",
+    "very truly yours",
+    "yours very truly",
+    "respectfully",
+    "respectfully yours",
+    "very respectfully",
+    "respectfully submitted",
+    "best regards",
+    "kind regards",
+    "warm regards",
+    "with kind regards",
+    "with best regards",
+    "regards",
+    "cordially",
+    "cordially yours",
+    "best wishes",
+    "with best wishes",
+    "yours",
+    "yours ever",
+];
+
+/// Whether a line is a letter's closing: "Sincerely,", "Yours faithfully",
+/// "Very respectfully," - or that, then a signature on the same line, as
+/// OCR runs them together ("Sincerely, Amanda L. Edens").
+fn is_closing(line: &str) -> bool {
+    let written = normalize(&line.replace(['|', '*', '_'], " "));
+    let written = written.trim().trim_end_matches([',', '.', ':', ';']).trim();
+    CLOSINGS.contains(&written)
+        || CLOSINGS.iter().any(|closing| {
+            written
+                .strip_prefix(closing)
+                .is_some_and(|rest| rest.starts_with([',', ':', ';', '-']))
+        })
+}
+
+/// Whether the document signs off as a letter does: one of its last lines
+/// is a closing over a signature.
+fn signs_off(scope: &ValidationScope<'_>) -> bool {
+    let units = scope.index.units();
+    let last_page = units.iter().map(|unit| unit.page).max();
+    let lines = units
+        .iter()
+        .filter(|unit| Some(unit.page) == last_page && !unit.running)
+        .flat_map(|unit| unit.text.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let tail = lines.len().saturating_sub(30);
+    lines[tail..].iter().any(|line| is_closing(line))
+}
+
+/// The kind of document its layout says it is, when the reply named none
+/// the document supports and no title stands in: "Email" for a header
+/// block, "Letter" for a letter's layout, "Notice" for a heading that
+/// opens on it. Each is a bare kind, so the name waits for a person;
+/// "Letter to Wright Brothers" tells them what to check where "Document to
+/// Wright Brothers" does not.
+fn class_stand_in(scope: &ValidationScope<'_>, layout: LetterLayout) -> Option<&'static str> {
+    if email_header_block(scope).is_some() {
+        return Some("Email");
+    }
+    if layout.laid_out_as_letter(scope) {
+        return Some("Letter");
+    }
+    notice_stand_in(scope)
+}
+
+/// "Notice" when a heading at the head of the document opens on the word
+/// and no title was read from it (a title that runs past the reply's
+/// reach, a heading cut by a party's name).
+fn notice_stand_in(scope: &ValidationScope<'_>) -> Option<&'static str> {
+    title_units(scope)
+        .flat_map(|unit| title_lines(scope, unit))
+        .take(6)
+        .any(|line| {
+            let line_words = words(&line);
+            matches!(line_words.first().map(String::as_str), Some("notice"))
+                && line_words.len() >= 2
+                && !names_a_matter(&line)
+        })
+        .then_some("Notice")
+}
+
+/// The lines of the first page, in order, running lines left out.
+fn first_page_lines<'a>(scope: &'a ValidationScope<'_>) -> impl Iterator<Item = String> + 'a {
+    let units = scope.index.units();
+    let first_page = units.iter().map(|unit| unit.page).min();
+    units
+        .iter()
+        .filter(move |unit| Some(unit.page) == first_page && !unit.running)
+        .flat_map(|unit| unit.text.lines().map(|line| line.trim().to_owned()))
+        .filter(|line| !line.is_empty())
 }
 
 /// `cues`: whether an issued document's issuer and customer cues count.
@@ -3557,6 +4119,31 @@ fn display_name(name: &str) -> String {
     tidy_case(name)
 }
 
+/// A name without the trading name it goes on to give - "Farringdon
+/// Energy Limited trading as Champion Energy", "CWFS Insight LLC d/b/a
+/// RealINSIGHT Marketplace": the company is the party, the trading name
+/// a style.
+fn without_trading_name(name: &str) -> String {
+    // The markers are ASCII, and an ASCII lowering keeps every byte offset
+    // of `name`: a Unicode lowering can change a letter's length ("İ")
+    // and leave the cut inside a character.
+    let lower = name.to_ascii_lowercase();
+    let cut = [
+        " trading as ",
+        " t/a ",
+        " d/b/a ",
+        " dba ",
+        " doing business as ",
+    ]
+    .iter()
+    .filter_map(|marker| lower.find(marker))
+    .min();
+    match cut {
+        Some(at) if at > 0 => name[..at].trim_end_matches([',', ';']).trim().to_owned(),
+        _ => name.to_owned(),
+    }
+}
+
 /// The whole organization name a reply's name is the end of - "MANUFACTURING
 /// LLC" of "EMBer POSt MANUFACtURInG LLC" - when a unit of the context names
 /// the organization, as the document writes it. `None` when the name is no
@@ -3758,6 +4345,555 @@ fn is_organization(name: &str) -> bool {
 /// to: more is a sentence.
 const ORGANIZATION_LINE_WORDS: usize = 10;
 
+/// Words a street address, a building or a postal line is written with.
+const ADDRESS_WORDS: &[&str] = &[
+    "street",
+    "st",
+    "road",
+    "rd",
+    "avenue",
+    "ave",
+    "lane",
+    "drive",
+    "boulevard",
+    "blvd",
+    "way",
+    "box",
+    "suite",
+    "ste",
+    "floor",
+    "house",
+    "building",
+    "plaza",
+    "square",
+    "tower",
+    "park",
+    "place",
+    "row",
+    "terrace",
+    "quay",
+    "wharf",
+    "gate",
+    "court",
+    "crescent",
+    "close",
+    "hill",
+    "mail",
+    "stop",
+    "po",
+    "p.o",
+    "attn",
+    "attention",
+    "fax",
+    "tel",
+    "telephone",
+    "phone",
+    "email",
+    "e-mail",
+    "www",
+];
+
+/// Words an organization's name is made of besides its legal form, which
+/// tell it from a title that shares a word with it: an "Office of
+/// Management and Budget" is no budget.
+const ORGANIZATION_WORDS: &[&str] = &[
+    "office",
+    "department",
+    "commission",
+    "ministry",
+    "committee",
+    "council",
+    "board",
+    "agency",
+    "bureau",
+    "authority",
+    "administration",
+    "association",
+    "society",
+    "institute",
+    "university",
+    "college",
+    "school",
+    "company",
+    "corporation",
+    "group",
+    "bank",
+    "trust",
+    "fund",
+    "foundation",
+    "service",
+    "services",
+    "division",
+    "directorate",
+    "secretariat",
+    "organisation",
+    "organization",
+    "federation",
+    "union",
+    "league",
+    "party",
+    "government",
+    "treasury",
+    "exchange",
+    "chamber",
+    "church",
+    "hospital",
+    "clinic",
+    "centre",
+    "center",
+    "library",
+    "museum",
+    "press",
+    "telegraph",
+    "journal",
+    "gazette",
+    "news",
+    "network",
+    "rail",
+    "railway",
+    "resource",
+    "guard",
+    "force",
+    "corps",
+    "army",
+    "navy",
+    "inc",
+    "llc",
+    "ltd",
+    "plc",
+    "corp",
+];
+
+/// Words a line that names a person opens with.
+const HONORIFICS: &[&str] = &[
+    "mr",
+    "mrs",
+    "ms",
+    "miss",
+    "mx",
+    "dr",
+    "prof",
+    "professor",
+    "hon",
+    "the",
+    "rt",
+    "sir",
+    "dame",
+    "lord",
+    "lady",
+    "gen",
+    "col",
+    "capt",
+    "lt",
+    "maj",
+    "judge",
+    "justice",
+    "senator",
+    "rep",
+    "rev",
+    "fr",
+];
+
+/// Whether a line names an organization the way an inside address or a
+/// signature block writes one: a short line of capitalized words with no
+/// figure, no post, no street and no greeting in it - "OFCOM", "Daily
+/// Telegraph", "Committee on Standards in Public Life", "POST AND
+/// SCHELL". A line that opens on a title of address names a person.
+fn organization_line(line: &str) -> bool {
+    let line = line
+        .trim()
+        .trim_end_matches([',', ';', '|', '\\', '.'])
+        .trim();
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    if tokens.is_empty()
+        || tokens.len() > 7
+        || line.contains(['@', ':', '(', ')'])
+        || line.contains("http")
+        || line.chars().any(|c| c.is_ascii_digit())
+    {
+        return false;
+    }
+    let loose = normalize_loosely(line);
+    let loose_words = loose.split_whitespace().collect::<Vec<_>>();
+    let line_words = words(line);
+    if loose_words
+        .iter()
+        .any(|word| JOB_TITLE_WORDS.contains(word))
+        || ends_on_an_address_word(line)
+        || loose_words
+            .first()
+            .is_some_and(|word| HONORIFICS.contains(word))
+        || line_words.first().is_some_and(|word| names_a_kind(word))
+        || (has_a_kind(&line_words)
+            && !line_words
+                .iter()
+                .any(|word| ORGANIZATION_WORDS.contains(&word.as_str())))
+        || is_greeting(line)
+        || is_closing(line)
+        || NOT_TITLE_WORDS.iter().any(|phrase| loose.contains(phrase))
+        || is_correspondence_marking(line)
+    {
+        return false;
+    }
+    const SMALL: &[&str] = &["of", "and", "the", "for", "on", "in", "at", "de", "du", "&"];
+    let capitalized = |token: &str| {
+        token
+            .chars()
+            .find(|c| c.is_alphabetic())
+            .is_some_and(char::is_uppercase)
+    };
+    let in_capitals = |token: &str| !token.chars().any(char::is_lowercase);
+    // A name has a word in it: "U. S. A." and "DJ" are letters.
+    if !tokens
+        .iter()
+        .any(|token| token.chars().filter(|c| c.is_alphabetic()).count() >= 3)
+    {
+        return false;
+    }
+    // One word alone names an organization only set in capitals, as an
+    // acronym is ("OFCOM"): a lone "London" is the address's city, "DJ"
+    // the typist's initials.
+    if let [only] = tokens.as_slice()
+        && !(in_capitals(only) && only.chars().filter(|c| c.is_alphabetic()).count() >= 4)
+    {
+        return false;
+    }
+    // "Dayton, Ohio", "Washington, D.C.": a city and its state, in two
+    // short halves around a comma, neither ending on an organization's
+    // word.
+    if let Some((city, state)) = line.split_once(',')
+        && city.split_whitespace().count() <= 2
+        && state.split_whitespace().count() <= 2
+        && !is_organization(line)
+    {
+        return false;
+    }
+    // "Department for" is the head of a name wrapped onto the next line.
+    if line_words
+        .last()
+        .is_some_and(|last| SMALL.contains(&last.as_str()))
+    {
+        return false;
+    }
+    tokens
+        .iter()
+        .all(|token| capitalized(token) || SMALL.contains(&normalize(token).as_str()))
+        && tokens.iter().filter(|token| capitalized(token)).count() >= 1
+}
+
+/// Whether a line is a street's, a building's, a city's or a contact's:
+/// a figure in it ("880 Harrow Lane", "YO1 6WP", "3rd Floor") or a word
+/// an address is written with.
+fn is_address_line(line: &str) -> bool {
+    line.chars().any(|c| c.is_ascii_digit()) || ends_on_an_address_word(line)
+}
+
+/// Whether a line ends on a word an address is written with: "Riverside
+/// House", "Horse Guards Road", "Victoria Quay". A "Building Standards
+/// Commission" is no building.
+fn ends_on_an_address_word(line: &str) -> bool {
+    words(line)
+        .last()
+        .is_some_and(|word| ADDRESS_WORDS.contains(&word.as_str()))
+}
+
+/// Letters after a person's name: "Jo Churchill MP", "Sir Gus O'Donnell
+/// KCB", "Karen D. Coombs, Esq.".
+const POST_NOMINALS: &[&str] = &[
+    "mp", "msp", "ms", "am", "qc", "kc", "esq", "esquire", "jr", "sr", "ii", "iii", "phd", "md",
+    "obe", "cbe", "mbe", "kcb", "dbe", "kbe", "frs", "frsa", "cnsl", "pc", "ch", "dl", "pe", "cpa",
+    "rn",
+];
+
+/// Whether a line names a person by how it is written: a title of
+/// address before the name, or letters after it.
+fn names_a_person(line: &str) -> bool {
+    let line_words = words(line);
+    line_words
+        .first()
+        .is_some_and(|word| HONORIFICS.contains(&word.as_str()) && word != "the")
+        || line_words
+            .last()
+            .is_some_and(|word| POST_NOMINALS.contains(&word.as_str()) && line_words.len() >= 2)
+}
+
+/// Whether `name` is a person's: the index read it as one somewhere in
+/// the context, it is written as one ([`names_a_person`]), or it is a
+/// short name with no word an organization's is made of ("Rashmi
+/// Panigrahi", never "U.S. Department of Energy").
+fn named_as_a_person(scope: &ValidationScope<'_>, name: &str) -> bool {
+    let loose = normalize_loosely(name);
+    let name_words = words(name);
+    names_a_person(name)
+        || scope.context_units().any(|unit| {
+            unit.features
+                .people
+                .iter()
+                .any(|person| normalize_loosely(person) == loose)
+        })
+        || (name_words.len() <= 3
+            && !name.chars().any(|c| c.is_ascii_digit())
+            && !name_words.iter().any(|word| {
+                ORGANIZATION_WORDS.contains(&word.as_str())
+                    || crate::cues::ORGANIZATION_ENDINGS.contains(&word.as_str())
+                    || names_a_kind(word)
+            })
+            // "Thames Water" is as short as a person's name and has no
+            // organization's word, but the index read it as a company.
+            && !named_as_an_organization(scope, name))
+}
+
+/// Whether a line holds a post someone is named by.
+fn holds_a_post(line: &str) -> bool {
+    words(line)
+        .iter()
+        .any(|word| JOB_TITLE_WORDS.contains(&word.as_str()))
+}
+
+/// The organization a post is held at, when the post's line names it after
+/// the post - "Chair, Home Affairs Select Committee", "Director of
+/// Regulation, PacifiCorp" - and it ends on an organization's word.
+fn organization_after_post(line: &str) -> Option<String> {
+    if !holds_a_post(line) {
+        return None;
+    }
+    // The post stands alone before the comma ("Chair,", "Managing
+    // Director,"): "Minister of State for Crime, Policing and the Fire
+    // Service" is one post, cut by its own comma.
+    let (post, rest) = line.split_once(',').or_else(|| line.split_once(" at "))?;
+    if post.split_whitespace().count() > 3 {
+        return None;
+    }
+    let rest = rest.trim().trim_end_matches([',', ';', '.']).trim();
+    let organization_word = words(rest)
+        .iter()
+        .any(|word| ORGANIZATION_WORDS.contains(&word.as_str()));
+    (!holds_a_post(rest)
+        && !rest.chars().any(|c| c.is_ascii_digit())
+        && (is_organization(rest)
+            || (organization_word
+                && rest.split_whitespace().count() >= 2
+                && organization_line(rest))))
+    .then(|| rest.to_owned())
+}
+
+/// The organization a signature block names under `person`: the lines
+/// after the person's own, past their post, down to the first street or
+/// contact line, where the letter's closing stands over them on its last
+/// page ("Rashmi Panigrahi / FOI Officer / Office of Manpower Economics").
+fn signer_organization<'a>(
+    scope: &ValidationScope<'a>,
+    person: &str,
+) -> Option<(String, &'a EvidenceUnit)> {
+    let person = normalize_loosely(person);
+    let units = scope.index.units();
+    let last_page = units.iter().map(|unit| unit.page).max()?;
+    let page = units
+        .iter()
+        .filter(|unit| unit.page == last_page && !unit.running)
+        .collect::<Vec<_>>();
+    // Every line of the page, with its unit.
+    let lines = page
+        .iter()
+        .flat_map(|unit| {
+            unit.text
+                .lines()
+                .flat_map(|line| line.split("<br>"))
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(move |line| (*unit, line))
+        })
+        .collect::<Vec<_>>();
+    let closing = lines.iter().rposition(|(_, line)| is_closing(line))?;
+    // The signer's name stands right under the closing, on the first line
+    // that is not a signature mark ("/s/", "By:", a rule), or the one
+    // after it when the post comes first. A name further down is in the
+    // address under the signature ("Thames Water" three lines under
+    // "Yours faithfully, Development Planning Department"), not the
+    // signer's.
+    let is_mark = |line: &str| {
+        let loose = normalize_loosely(line);
+        loose.is_empty()
+            || matches!(
+                loose.split_whitespace().next(),
+                Some("s" | "by" | "signed" | "signature")
+            ) && loose.split_whitespace().count() <= 2
+            || line
+                .chars()
+                .all(|c| c == '_' || c == '-' || c.is_whitespace())
+    };
+    let named = lines[closing + 1..]
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, line))| !is_mark(line))
+        .take(2)
+        .find(|(_, (_, line))| contains_whole(&normalize_loosely(line), &person))
+        .map(|(offset, _)| closing + 1 + offset)?;
+    let (unit, _) = lines[named];
+    // The block ends where the address begins: a street with its number,
+    // an email, a telephone. A city on the line under the street ("New
+    // York") is no organization of the signer's; a number in an
+    // organization's own name ("3M Company") is no street number. It also
+    // ends at another person's line: a co-signer's post and organization
+    // are theirs ("John Smith / Jane Doe / Director / Acme Ltd").
+    let people = page
+        .iter()
+        .flat_map(|unit| unit.features.people.iter())
+        .map(|person| normalize_loosely(person))
+        .collect::<Vec<_>>();
+    for (_, raw) in lines[named + 1..].iter().take(6) {
+        if names_a_copy(raw)
+            || raw.contains('@')
+            || (raw.chars().any(|c| c.is_ascii_digit()) && !is_organization(raw))
+        {
+            break;
+        }
+        let line = raw.trim_end_matches([',', ';', '|', '\\', '.']).trim();
+        let post = holds_a_post(line);
+        if !post
+            && (people.contains(&normalize_loosely(line))
+                || names_a_person(line)
+                || looks_like_a_persons_name(line))
+        {
+            break;
+        }
+        if let Some(organization) = organization_after_post(line) {
+            return Some((organization, unit));
+        }
+        if post {
+            continue;
+        }
+        if is_organization(line) && line.split_whitespace().count() <= ORGANIZATION_LINE_WORDS {
+            return Some((line.to_owned(), unit));
+        }
+        // A line written like a name but with no organization's word is
+        // read as one: "OFCOM", "Office of Manpower Economics".
+        if organization_line(line) {
+            return Some((line.to_owned(), unit));
+        }
+    }
+    None
+}
+
+/// Whether a line is set like a person's name alone: two or three words in
+/// mixed case, none an organization's word and none an acronym in
+/// capitals ("Jane Doe", "Mary Ann Smith"; never "OFCOM", "Daily
+/// Telegraph Group" or "Pool Re Limited").
+fn looks_like_a_persons_name(line: &str) -> bool {
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    let line_words = words(line);
+    (2..=3).contains(&tokens.len())
+        && tokens.iter().all(|token| {
+            token.chars().next().is_some_and(char::is_uppercase)
+                && token.chars().skip(1).any(char::is_lowercase)
+        })
+        && !line_words.iter().any(|word| {
+            ORGANIZATION_WORDS.contains(&word.as_str())
+                || crate::cues::ORGANIZATION_ENDINGS.contains(&word.as_str())
+                || names_a_kind(word)
+        })
+}
+
+/// Whether a line names who is copied or what is enclosed, under a
+/// signature: "cc: ...", "Enclosures", "Attachment: ...".
+fn names_a_copy(line: &str) -> bool {
+    let first = words(line);
+    matches!(
+        first.first().map(String::as_str),
+        Some(
+            "cc" | "bcc"
+                | "c"
+                | "copy"
+                | "copies"
+                | "enc"
+                | "encl"
+                | "enclosure"
+                | "enclosures"
+                | "attachment"
+                | "attachments"
+        )
+    )
+}
+
+/// Whether the index read `name` as an organization anywhere in the
+/// context: "Federal Communications Commission" ends on no legal form,
+/// but the document names it as one.
+fn named_as_an_organization(scope: &ValidationScope<'_>, name: &str) -> bool {
+    let loose = normalize_loosely(name);
+    scope.context_units().any(|unit| {
+        unit.features
+            .organizations
+            .iter()
+            .any(|organization| normalize_loosely(organization) == loose)
+    })
+}
+
+/// The organization a letterhead names when [`letterhead_organization`]
+/// finds none: the first line at the head of the first page, before the
+/// dateline, that is written as an organization's name and nothing else
+/// ("BUILDING STANDARDS COMMISSION", "GALLION & SPIELVOGEL").
+fn letterhead_name<'a>(
+    scope: &ValidationScope<'a>,
+    layout: LetterLayout,
+    addressees: &[String],
+) -> Option<(String, &'a EvidenceUnit)> {
+    let units = scope.index.units();
+    let first_page = units.iter().map(|unit| unit.page).min()?;
+    let (dateline, _) = layout.dateline.zip(layout.salutation)?;
+    let addressees = addressees
+        .iter()
+        .map(|name| normalize_loosely(name))
+        .collect::<Vec<_>>();
+    // The letterhead stands over the inside address: a unit that names an
+    // addressee, and every unit after it, is the address.
+    let address = units
+        .iter()
+        .filter(|unit| unit.page == first_page && !unit.running)
+        .find(|unit| {
+            let text = normalize_loosely(&unit.text);
+            addressees
+                .iter()
+                .any(|name| !name.is_empty() && contains_whole(&text, name))
+        })
+        .map(|unit| unit.ordinal);
+    // In a British layout the inside address stands above the dateline,
+    // so without an addressee to mark where it begins, the lines above
+    // the dateline cannot be told from it: "Acme Ltd" over the person
+    // written to is the address's, not the sender's letterhead.
+    if address.is_none() && layout.british() {
+        return None;
+    }
+    let address = address.unwrap_or(dateline);
+    units
+        .iter()
+        .filter(|unit| {
+            unit.page == first_page && !unit.running && unit.ordinal < dateline.min(address)
+        })
+        .take(4)
+        .flat_map(|unit| {
+            unit.text
+                .lines()
+                .flat_map(|line| line.split("<br>"))
+                .map(move |line| (unit, line.trim().trim_matches('*').trim()))
+        })
+        .take(8)
+        .find_map(|(unit, line)| {
+            let line = line.trim_end_matches([',', ';', '|']).trim();
+            let loose = normalize_loosely(line);
+            // A line naming an addressee is the address's, wherever it
+            // stands.
+            let names_an_addressee = addressees.iter().any(|name| {
+                !name.is_empty() && (contains_whole(&loose, name) || contains_whole(name, &loose))
+            });
+            (line.split_whitespace().count() <= ORGANIZATION_LINE_WORDS
+                && !names_an_addressee
+                && !holds_a_post(line)
+                && !line.chars().any(|c| c.is_ascii_digit())
+                && (is_organization(line) || organization_line(line)))
+            .then(|| (line.to_owned(), unit))
+        })
+}
+
 /// Words a person's job title is made of.
 const JOB_TITLE_WORDS: &[&str] = &[
     "president",
@@ -3785,6 +4921,25 @@ const JOB_TITLE_WORDS: &[&str] = &[
     "chairperson",
     "owner",
     "controller",
+    "editor",
+    "leader",
+    "analyst",
+    "specialist",
+    "assistant",
+    "attorney",
+    "esq",
+    "esquire",
+    "inspector",
+    "engineer",
+    "consultant",
+    "clerk",
+    "solicitor",
+    "adviser",
+    "advisor",
+    "commissioner",
+    "minister",
+    "governor",
+    "mayor",
 ];
 
 /// Whether a person signs for one of `organizations`: a unit names them,
@@ -4244,7 +5399,12 @@ fn with_of_phrase(unit: &EvidenceUnit, span: &str) -> String {
     else {
         return span.to_owned();
     };
-    let Some(tail) = rest.strip_prefix(" of ") else {
+    // "of" as the line writes it: a caption set in capitals says "OF".
+    let Some((of, tail)) = rest
+        .get(..4)
+        .filter(|head| head.eq_ignore_ascii_case(" of "))
+        .map(|head| (head.trim(), &rest[4..]))
+    else {
         return span.to_owned();
     };
     let mut words = Vec::new();
@@ -4261,7 +5421,7 @@ fn with_of_phrase(unit: &EvidenceUnit, span: &str) -> String {
     if words.is_empty() {
         span.to_owned()
     } else {
-        format!("{span} of {}", words.join(" "))
+        format!("{span} {of} {}", words.join(" "))
     }
 }
 
@@ -4611,6 +5771,10 @@ const ANSWERING_SIDE: &[&str] = &["defendant", "respondent", "appellee"];
 /// Words a court's, a tribunal's or an arbitration's heading names it by.
 const FORUM_WORDS: &[&str] = &["court", "tribunal", "arbitration"];
 
+/// Words a caption sets its two sides against each other with: "v.",
+/// "vs.", "versus", "- against -".
+const VERSUS_WORDS: &[&str] = &["v", "vs", "versus", "against"];
+
 /// The two sides of the case a document is filed in, by their places in
 /// the cast: a party the document labels a plaintiff, petitioner,
 /// appellant or claimant right beside its name ("Plaintiff Gilchrist
@@ -4639,13 +5803,15 @@ fn caption_sides(
     if !headed {
         return None;
     }
+    // A caption laid out as a table keeps its labels in cells of their
+    // own: the cell marks are no words.
     let segments = context
         .segments()
         .iter()
-        .map(|segment| normalize_loosely(segment))
+        .map(|segment| normalize_loosely(&segment.replace('|', " ")))
         .collect::<Vec<_>>();
     let versus = segments.iter().any(|text| {
-        ["v", "vs", "versus"]
+        VERSUS_WORDS
             .iter()
             .any(|word| !whole_positions(text, word).is_empty())
     });
@@ -4689,13 +5855,7 @@ fn caption_block_sides(
     first_page: usize,
     cast: &[CastMember],
 ) -> Option<(usize, usize)> {
-    let text = scope
-        .context_units()
-        .filter(|unit| unit.page == first_page)
-        .take(12)
-        .map(|unit| normalize_loosely(&unit.text))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let text = caption_text(scope, first_page);
     // Where any of `words` stands in the caption, singular or plural.
     let positions = |words: &[&str], from: usize, to: usize| {
         words
@@ -4709,21 +5869,23 @@ fn caption_block_sides(
             .collect::<Vec<_>>()
     };
     let forum = positions(FORUM_WORDS, 0, text.len()).into_iter().min()?;
-    let versus = ["v", "vs", "versus"]
+    let versus = VERSUS_WORDS
         .iter()
         .flat_map(|word| whole_positions(&text, word))
         .filter(|at| *at > forum)
         .min()?;
     // The bringing side's label closes its names, before "v."; the answering
-    // side's follows "v." within the caption.
-    let bringing_label = positions(BRINGING_SIDE, forum, versus).into_iter().max()?;
-    let answering_label = positions(
-        ANSWERING_SIDE,
-        versus,
-        (versus + CAPTION_REACH).min(text.len()),
-    )
-    .into_iter()
-    .min()?;
+    // side's follows "v." within the caption. A caption that labels
+    // neither side - "LUXO AS, -against- THE WALT DISNEY COMPANY" - still
+    // sets them on either side of its "against".
+    let reach = (versus + CAPTION_REACH).min(text.len());
+    let bringing_label = positions(BRINGING_SIDE, forum, versus).into_iter().max();
+    let answering_label = positions(ANSWERING_SIDE, versus, reach).into_iter().min();
+    let (bringing_label, answering_label) = match (bringing_label, answering_label) {
+        (Some(bringing), Some(answering)) => (bringing, answering),
+        (None, None) => (versus, reach),
+        _ => return None,
+    };
     let named_in = |from: usize, to: usize| {
         cast.iter()
             .enumerate()
@@ -4743,6 +5905,129 @@ fn caption_block_sides(
 
 /// How far after "v." a caption's answering side and its label can run.
 const CAPTION_REACH: usize = 400;
+
+/// The head of the first page as a caption is read from it: its first
+/// units' text, loosely normalized, in one line, a table's cell marks
+/// left out.
+fn caption_text(scope: &ValidationScope<'_>, first_page: usize) -> String {
+    scope
+        .context_units()
+        .filter(|unit| unit.page == first_page)
+        .take(12)
+        .map(|unit| normalize_loosely(&unit.text.replace('|', " ")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The side of a case the reply left out, read from the caption itself:
+/// when the first page sets the case out as "A v. B" under a forum's
+/// heading, one side's label closes its names and the other's follows,
+/// and a party is named on one side only, the first organization the
+/// caption names on the other side is the other side. Returned with the
+/// unit that names it and whether it is the bringing side (`true`) or
+/// the answering one.
+fn caption_other_side<'a>(
+    scope: &ValidationScope<'a>,
+    parties: &[ValidatedParty],
+) -> Option<(String, &'a EvidenceUnit, bool)> {
+    let first_page = scope.context_units().map(|unit| unit.page).min()?;
+    let text = caption_text(scope, first_page);
+    let positions = |words: &[&str], from: usize, to: usize| {
+        words
+            .iter()
+            .flat_map(|word| {
+                let mut found = whole_positions(&text, word);
+                found.extend(whole_positions(&text, &format!("{word}s")));
+                found
+            })
+            .filter(|at| (from..to).contains(at))
+            .collect::<Vec<_>>()
+    };
+    let forum = positions(FORUM_WORDS, 0, text.len()).into_iter().min()?;
+    let versus = VERSUS_WORDS
+        .iter()
+        .flat_map(|word| whole_positions(&text, word))
+        .filter(|at| *at > forum)
+        .min()?;
+    let reach = (versus + CAPTION_REACH).min(text.len());
+    let bringing_label = positions(BRINGING_SIDE, forum, versus).into_iter().max()?;
+    let answering_label = positions(ANSWERING_SIDE, versus, reach).into_iter().min()?;
+    let named_in = |from: usize, to: usize| {
+        parties.iter().any(|party| {
+            !party.copied
+                && !party.signatory
+                && whole_positions(&text, &normalize_loosely(&party.name))
+                    .into_iter()
+                    .any(|at| (from..to).contains(&at))
+        })
+    };
+    let (from, to, bringing) = match (
+        named_in(forum, bringing_label),
+        named_in(versus, answering_label),
+    ) {
+        (true, false) => (versus, answering_label, false),
+        (false, true) => (forum, bringing_label, true),
+        _ => return None,
+    };
+    scope
+        .context_units()
+        .filter(|unit| unit.page == first_page)
+        .take(12)
+        .find_map(|unit| {
+            unit.features.organizations.iter().find_map(|organization| {
+                let loose = normalize_loosely(organization);
+                // The court's own heading names no side: "SNOHOMISH
+                // COUNTY" under "SUPERIOR COURT" is the forum, not the
+                // plaintiff.
+                if names_a_forum(&loose) {
+                    return None;
+                }
+                whole_positions(&text, &loose)
+                    .into_iter()
+                    .any(|at| (from..to).contains(&at))
+                    .then(|| written_span(unit, organization))
+                    .flatten()
+                    // The index stops a name at its organization's word:
+                    // "First National Bank of Omaha" is read whole.
+                    .map(|span| {
+                        (
+                            without_sentence_stop(&with_of_phrase(unit, &span)),
+                            unit,
+                            bringing,
+                        )
+                    })
+            })
+        })
+}
+
+/// Words a court's, a tribunal's or a jurisdiction's heading is made of.
+const JURISDICTION_WORDS: &[&str] = &[
+    "county",
+    "district",
+    "circuit",
+    "judicial",
+    "parish",
+    "borough of",
+    "in and for",
+    "state of",
+    "commonwealth of",
+    "province of",
+];
+
+/// Whether a name is the forum's own: a court, a tribunal, or the county,
+/// district or state it sits in.
+fn names_a_forum(loose: &str) -> bool {
+    FORUM_WORDS
+        .iter()
+        .any(|word| !whole_positions(loose, word).is_empty())
+        || JURISDICTION_WORDS.iter().any(|words| {
+            if words.contains(' ') {
+                loose.contains(words)
+            } else {
+                !whole_positions(loose, words).is_empty()
+            }
+        })
+}
 
 /// Room an extension takes at the end of a filename, its dot included.
 const EXTENSION_ROOM: usize = 6;
@@ -9668,6 +10953,554 @@ The merger needs a majority of votes cast.";
             reply,
         );
         assert_eq!(outcome.proposal.document_type, None);
+    }
+
+    /// Real letters are laid out in more ways than a written-out dateline
+    /// over "Dear ...": a scan's "Dec. 26, 1907." over "Gentlemen:-", a
+    /// published reply whose addressee was removed ("Dear" alone) that signs
+    /// off "Yours sincerely", a cover letter with no greeting at all that
+    /// opens on its date and closes "Yours faithfully,". Each is a letter.
+    #[test]
+    fn a_letters_greeting_dateline_or_sign_off_in_any_of_its_forms_names_it_a_letter() {
+        let untyped = |_: &EvidenceIndex| ModelFacts::default();
+        for text in [
+            "WAR DEPARTMENT, C-B.\nOFFICE OF THE CHIEF SIGNAL OFFICER,\nWASHINGTON.\n\n\
+             Dec. 26, 1907.\n\nWright Brothers,\n1127 West Third Street,\nDayton, Ohio.\n\n\
+             Gentlemen:-\n\nYour letter of the 18th inst., with comments concerning the \
+             tentative specification for a flying machine, is appreciated.\n\n\
+             Very respectfully,\n\nChief Signal Officer of the Army.",
+            "1 The Terrace\nWellington 6140\nReference: 20240412\n\n5 July 2024\n\nDear \n\n\
+             Thank you for your Official Information Act request, transferred from the \
+             Minister for Social Development 11 June 2024.\n\nYours sincerely\n\n\
+             Laura Berntsen\nActing Manager, Welfare",
+            "Room GC.05\n1 Horse Guards Road\nLondon\n\nPublic Accounts Committee\nHouse of \
+             Commons\n\n4 January 2017\n\nThe Committee on Standards in Public Life has asked \
+             me to draw your attention to their report of June 2014.\n\nYours faithfully,\n\n\
+             Lesley Bainsfair\nHead of Secretariat",
+            "| Dear | Mr. | Pilcher: |\n| This | refers | to | the | October | 26, | 1992 | \
+             redistricting | plan |\n\nSincerely,\n\nJohn R. Dunne\nAssistant Attorney General",
+        ] {
+            let (outcome, _) = facts_for(text, untyped);
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Letter"),
+                "{text}"
+            );
+            assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
+            assert!(outcome.reasons.contains(&ReviewReason::TypeInferred));
+        }
+        // A greeting alone, with neither a dateline over it nor a sign-off
+        // under it, is still no letter's layout.
+        let (outcome, _) = facts_for(
+            "Brian C. Cornell\nChairman and CEO\nTarget Corporation\nDear Mr. Cornell,\n\
+             As Attorneys General we write to you about the company's merchandise decisions \
+             of January 4, 2017.",
+            untyped,
+        );
+        assert_eq!(outcome.proposal.document_type, None);
+        for (line, greeting) in [
+            ("Dear", true),
+            ("Dear,", true),
+            ("Dear Sir or Madam:", true),
+            ("To Whom It May Concern", true),
+            ("GENTLEMEN:", true),
+            ("| Dear | Mr. | Pilcher: |", true),
+            ("Dearborn Heights", false),
+            ("Sir Gus O'Donnell", false),
+        ] {
+            assert_eq!(is_greeting(line), greeting, "{line}");
+        }
+        for (line, closing) in [
+            ("Sincerely,", true),
+            ("Yours faithfully", true),
+            ("Very respectfully,", true),
+            ("Sincerely, Amanda L. Edens", true),
+            ("Sincerely held beliefs", false),
+            ("Regards to your family", false),
+        ] {
+            assert_eq!(is_closing(line), closing, "{line}");
+        }
+        for (line, dateline) in [
+            ("Dec. 26, 1907.", true),
+            ("18th October 2019", true),
+            ("Date: 28 March 2023", true),
+            ("June 16, 2023 at noon", false),
+        ] {
+            assert_eq!(is_dateline(line), dateline, "{line}");
+        }
+    }
+
+    /// An email by its header block and a notice by its heading stand in
+    /// for a kind the reply could not find, each a bare kind that waits for
+    /// a person.
+    #[test]
+    fn an_email_or_a_notice_stands_in_for_a_kind_the_reply_could_not_find() {
+        let untyped = |_: &EvidenceIndex| ModelFacts::default();
+        for (text, kind) in [
+            (
+                "From: <pkginfo@ups.com>\nTo: <susan.bailey@enron.com>\nDate: Wed, 20 Mar 2002 \
+                 15:48:51 -0800 (PST)\nSubject: UPS Ship Notification, 1Z7261100192688747\n\n\
+                 At the request of ENRON CORP, this notice confirms the following shipment \
+                 has been sent.",
+                "Email",
+            ),
+            (
+                "NOTICE OF THE PRIMARY UNIVERSAL SERVICE PROVIDER FOR THE EXTENDED ZONES OF \
+                 AUSTRALIA\n\nOn 1 June 2001 the Commonwealth and Telstra Corporation Limited \
+                 entered into a written agreement under section 57 of the Telstra Corporation \
+                 Act 1991. Notice is hereby given pursuant to subsection 12E(6) of the Act.",
+                "Notice",
+            ),
+        ] {
+            let (outcome, _) = facts_for(text, untyped);
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some(kind),
+                "{text}"
+            );
+            assert!(
+                outcome.reasons.contains(&ReviewReason::TypeMissing),
+                "{kind}"
+            );
+        }
+        // A sheet of figures with no such head is nothing a layout names.
+        let (outcome, _) = facts_for(
+            "Bill To:\nPHILIP MORRIS USA\n120 PARK AVENUE\n\n| 16MB UPGRADE | 55.00 | 110.00 |",
+            untyped,
+        );
+        assert_eq!(outcome.proposal.document_type, None);
+    }
+
+    /// A letter's inside address names the organization it is to under
+    /// the person, in more ways than an organization's word: a name set in
+    /// capitals, a committee a post is held at, the organization's line
+    /// over the person. The first person the address names is the
+    /// addressee; a second's organization never takes their place, and a
+    /// person's line or a city's never stands for an organization.
+    #[test]
+    fn a_letters_inside_address_names_the_organization_in_more_ways() {
+        let addressed = |person: &str| {
+            let person = person.to_owned();
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some("Letter".into()),
+                document_date: Some("2011-07-11".into()),
+                date_evidence: vec![id_of(index, "July 2011")],
+                parties: vec![party(
+                    &person,
+                    Some(PartyRole::Addressee),
+                    &[id_of(index, person.split_whitespace().next().unwrap())],
+                )],
+                ..ModelFacts::default()
+            }
+        };
+        for (text, person, organization) in [
+            (
+                "Ed Richards\nChief Executive\nOFCOM\nRiverside House\n2a Southwark Bridge Road\n\
+                 London\nSE1 9HA\n\n11 July 2011\n\nDear Ed\n\nAs you are aware, my consultation \
+                 closed on Friday.\n\nYours ever\n\nRt Hon Jeremy Hunt MP",
+                "Ed Richards",
+                "ofcom",
+            ),
+            (
+                "Lord Evans of Weardale KCB DL\nChair\nCommittee on Standards in Public Life\n\
+                 1 Horse Guards Road\nLondon SW1A 2HQ\n\n11 July 2011\n\nDear Lord Evans,\n\n\
+                 Thank you for your letter of 16 September.\n\nYours sincerely,\n\nAmelia Womack",
+                "Lord Evans of Weardale",
+                "committee on standards in public life",
+            ),
+            (
+                "Rt Hon Yvette Cooper MP\nChair, Home Affairs Select Committee\nHouse of Commons\n\
+                 London\n\n11 July 2011\n\nDear Chair,\n\nPlease find below a further update.\n\n\
+                 Yours sincerely,\n\nRt Hon Priti Patel MP",
+                "Rt Hon Yvette Cooper MP",
+                "home affairs select committee",
+            ),
+            (
+                "11 July 2011\n\nDUQUESNE LIGHT COMPANY\nEMILY M FARAH CNSL\n411 SEVENTH AVENUE\n\
+                 PITTSBURGH PA 15219\n\nDear Ms. Farah:\n\nReceipt is acknowledged of the Letter \
+                 of Notification.\n\nVery truly yours,\n\nRosemary Chiavetta",
+                "EMILY M FARAH CNSL",
+                "duquesne light company",
+            ),
+        ] {
+            let (outcome, _) = facts_for(text, addressed(person));
+            assert_eq!(
+                outcome
+                    .proposal
+                    .parties
+                    .first()
+                    .map(|name| name.to_lowercase()),
+                Some(organization.to_owned()),
+                "{text}"
+            );
+            assert_eq!(outcome.proposal.party_relation, PartyRelation::To, "{text}");
+        }
+        // Two addressees: the first has no organization under them, so the
+        // letter stays to them, not to the second's department. The lines
+        // of a street never name an organization, nor does a person's line.
+        let (outcome, _) = facts_for(
+            "Kit Malthouse MP\nMinister of State for Crime, Policing and the Fire Service\n\
+             2 Marsham Street\nLondon\nSW1P 4DF\n\nJo Churchill MP\nParliamentary Under Secretary \
+             of State\nDepartment of Health and Social Care\n39 Victoria Street\nLondon\n\n\
+             11 July 2011\n\nDear Ministers,\n\nThe Council has considered the proposal.\n\n\
+             Yours sincerely,\n\nOwen Bowden-Jones",
+            addressed("Kit Malthouse MP"),
+        );
+        assert_eq!(outcome.proposal.parties, vec!["Kit Malthouse MP"]);
+        for (line, named) in [
+            ("OFCOM", true),
+            ("Daily Telegraph", true),
+            ("POST AND SCHELL", true),
+            ("Jo Churchill MP", false),
+            ("Mr. Carl Malamud", false),
+            ("London", false),
+            ("DJ", false),
+            ("Dayton, Ohio.", false),
+            ("Department for", false),
+            ("Notice of Prior Authorization Approval", false),
+            ("2525 Natomas Park Drive", false),
+        ] {
+            assert_eq!(
+                organization_line(line) && !names_a_person(line),
+                named,
+                "{line}"
+            );
+        }
+        // A second person under the addressee is a person, not their
+        // organization.
+        let (outcome, _) = facts_for(
+            "John Smith\nJane Doe\n123 Main Street\nLondon\n\n11 July 2011\n\nDear John\n\n\
+             Thank you for your letter.\n\nYours sincerely,\n\nAmelia Womack",
+            addressed("John Smith"),
+        );
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|name| name.contains("Jane Doe")),
+            "{:?}",
+            outcome.proposal.parties
+        );
+        // A second addressee's post and organization are theirs, not the
+        // first addressee's.
+        let (outcome, _) = facts_for(
+            "John Smith\n\nJane Doe\nDirector\nAcme Ltd\n123 Main Street\nLondon\n\n\
+             11 July 2011\n\nDear John and Jane\n\nThank you for your letter.\n\n\
+             Yours sincerely,\n\nAmelia Womack",
+            addressed("John Smith"),
+        );
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|name| name.contains("Acme")),
+            "{:?}",
+            outcome.proposal.parties
+        );
+    }
+
+    /// A letter signed by a person for an organization is from the
+    /// organization: the signature block names it under the signer's post,
+    /// or the letterhead names it alone. A "cc:" line under the signature
+    /// names no one the letter is from.
+    #[test]
+    fn a_letter_signed_for_an_organization_is_from_it() {
+        let sent_by = |person: &str| {
+            let person = person.to_owned();
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some("Letter".into()),
+                document_date: Some("2019-09-16".into()),
+                date_evidence: vec![id_of(index, "September 2019")],
+                parties: vec![party(
+                    &person,
+                    Some(PartyRole::Sender),
+                    &[id_of(index, person.split_whitespace().next().unwrap())],
+                )],
+                ..ModelFacts::default()
+            }
+        };
+        let (outcome, _) = facts_for(
+            "Fleetbank House\n2-6 Salisbury Square\nLondon EC4Y 8JX\n\n16 September 2019\n\n\
+             Dear,\n\nThank you for your email of 9 September requesting information.\n\n\
+             Yours sincerely,\n\nRashmi Panigrahi\nFOI Officer\nOffice of Manpower Economics\n\
+             Fleetbank House",
+            sent_by("Rashmi Panigrahi"),
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Office of Manpower Economics"]
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        let (outcome, _) = facts_for(
+            "BUILDING STANDARDS COMMISSION\n2525 Natomas Park Drive, Suite 130\nSacramento, \
+             California 95833\n\n16 September 2019\n\nDebra Rose\nSr. Project Manager\nNational \
+             Fire Protection Association, Inc.\n1 Batterymarch Park\n\nDear Debra,\n\nPlease find an \
+             executed copy of the agreement enclosed.\n\nRegards,\n\nCynthia Biedermann",
+            sent_by("Cynthia Biedermann"),
+        );
+        assert!(
+            outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("Building Standards Commission")),
+            "{:?}",
+            outcome.proposal.parties
+        );
+        let (outcome, _) = facts_for(
+            "Federal Communications Commission\nWashington, D.C. 20554\n\n16 September 2019\n\n\
+             Andrew D. Lipman\nMorgan, Lewis & Bockius LLP\n1111 Pennsylvania Avenue, NW\n\n\
+             Dear Mr. Lipman:\n\nThis responds to your letter.\n\nSincerely,\n\nKris Monteith\n\
+             Chief\ncc: Morgan, Lewis & Bockius LLP",
+            sent_by("Kris Monteith"),
+        );
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|name| name.contains("Bockius")),
+            "{:?}",
+            outcome.proposal.parties
+        );
+        // A name in the address under the signature is not the signer's:
+        // "Thames Water" three lines under the closing stays itself, and
+        // the site on the line after it is no organization of its own.
+        let (outcome, _) = facts_for(
+            "Thames Water
+Development Planning
+
+16 September 2019
+
+Dear developer,
+
+             Thank you for your enquiry.
+
+Yours faithfully,
+
+Development Planning Department
+             Development Planning,
+Thames Water,
+Maple Lodge STW,
+Denham Way,
+Rickmansworth,
+             WD3 9SQ,",
+            sent_by("Thames Water"),
+        );
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|name| name.contains("Maple Lodge")),
+            "{:?}",
+            outcome.proposal.parties
+        );
+        // The signature block ends at the street: the city under it is no
+        // organization, and the person who signed stays.
+        let (outcome, _) = facts_for(
+            "16 September 2019\n\nDear Sir,\n\nI write about the noise.\n\nSincerely,\n\n\
+             John Smith\n123 Main Street\nNew York\nNY 10001",
+            sent_by("John Smith"),
+        );
+        assert_eq!(outcome.proposal.parties, vec!["John Smith"]);
+        // A co-signer under the signer is a person, not the signer's
+        // organization, and their post and organization are theirs.
+        let (outcome, _) = facts_for(
+            "16 September 2019\n\nDear Sir,\n\nWe write about the noise.\n\nSincerely,\n\n\
+             John Smith\nJane Doe",
+            sent_by("John Smith"),
+        );
+        assert_eq!(outcome.proposal.parties, vec!["John Smith"]);
+        let (outcome, _) = facts_for(
+            "16 September 2019\n\nDear Sir,\n\nWe write about the noise.\n\nSincerely,\n\n\
+             John Smith\nJane Doe\nDirector\nAcme Ltd",
+            sent_by("John Smith"),
+        );
+        assert_eq!(outcome.proposal.parties, vec!["John Smith"]);
+        // A number in the organization's own name is no street number.
+        let (outcome, _) = facts_for(
+            "16 September 2019\n\nDear Sir,\n\nPlease find the samples enclosed.\n\n\
+             Sincerely,\n\nJohn Smith\n3M Company\n3M Center\nSt. Paul, MN 55144",
+            sent_by("John Smith"),
+        );
+        assert_eq!(outcome.proposal.parties, vec!["3M Company"]);
+        // A British layout puts the inside address above the dateline: with
+        // no addressee named to mark where it begins, the company over the
+        // person written to is not the signer's letterhead.
+        let (outcome, _) = facts_for(
+            "Acme Ltd\nJohn Smith\n123 Main Street\nLondon\n\n16 September 2019\n\n\
+             Dear John,\n\nThank you for your letter.\n\nSincerely,\n\nJane Doe",
+            sent_by("Jane Doe"),
+        );
+        assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
+        // A marking at the head of the letter is no organization: the
+        // letterhead under it is the signer's.
+        let (outcome, _) = facts_for(
+            "WITHOUT PREJUDICE\nAcme Legal LLP\n\n16 September 2019\n\nJohn Smith\n\
+             123 Main Street\n\nDear John,\n\nThank you for your letter.\n\nSincerely,\n\n\
+             Jane Doe",
+            sent_by("Jane Doe"),
+        );
+        assert_eq!(outcome.proposal.parties, vec!["Acme Legal LLP"]);
+    }
+
+    /// A caption sets its sides "against" each other as well as "v.", with
+    /// or without a label beside each; and when the reply named one side
+    /// only, the caption's other side is the other party. A trading name
+    /// is no part of a party's name.
+    #[test]
+    fn a_caption_set_against_its_sides_or_missing_one_is_still_read() {
+        let (outcome, _) = facts_for(
+            "UNITED STATES DISTRICT COURT\nSOUTHERN DISTRICT OF NEW YORK\n\nSOMPO JAPAN INSURANCE \
+             COMPANY OF AMERICA,\nPlaintiffs,\n- against -\nNORFOLK SOUTHERN RAILWAY COMPANY,\n\
+             Defendants.\n\nNOTICE OF APPEAL\n\nNotice is hereby given that defendants hereby appeal \
+             to the United States Court of Appeals.\n\nDated: October 13, 2009",
+            |index| ModelFacts {
+                document_type: Some("Notice of Appeal".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF APPEAL")],
+                document_date: Some("2009-10-13".into()),
+                date_evidence: vec![id_of(index, "Dated")],
+                parties: vec![
+                    party(
+                        "Sompo Japan Insurance Company of America",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "SOMPO")],
+                    ),
+                    party(
+                        "Norfolk Southern Railway Company",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "NORFOLK")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        let (outcome, _) = facts_for(
+            "UNITED STATES DISTRICT COURT\nSOUTHERN DISTRICT OF NEW YORK\n\nLUXO AS,\n-against-\n\
+             THE WALT DISNEY COMPANY,\n\nNOTICE OF DISMISSAL\n\nPursuant to Rule 41(a), plaintiff \
+             hereby dismisses this action with prejudice.\n\nDated: November 2, 2009",
+            |index| ModelFacts {
+                document_type: Some("Notice of Dismissal".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF DISMISSAL")],
+                document_date: Some("2009-11-02".into()),
+                date_evidence: vec![id_of(index, "Dated")],
+                parties: vec![
+                    party("Luxo AS", Some(PartyRole::Client), &[id_of(index, "LUXO")]),
+                    party(
+                        "The Walt Disney Company",
+                        Some(PartyRole::Contractor),
+                        &[id_of(index, "DISNEY")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Luxo AS", "The Walt Disney Company"]
+        );
+        let (outcome, _) = facts_for(
+            "UNITED STATES DISTRICT COURT\nSOUTHERN DISTRICT OF NEW YORK\n\nTHE MCGRAW-HILL \
+             COMPANIES, INC., and PEARSON EDUCATION, INC.,\nPlaintiffs,\nv.\nGOOGLE INC.,\n\
+             Defendant.\n\nNOTICE OF INTENT TO SERVE SUBPOENA\n\nGoogle Inc. will serve a subpoena \
+             on the Association of American Publishers, Inc.\n\nDated: November 22, 2006",
+            |index| ModelFacts {
+                document_type: Some("Notice of Intent to Serve Subpoena".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF INTENT")],
+                document_date: Some("2006-11-22".into()),
+                date_evidence: vec![id_of(index, "Dated")],
+                parties: vec![
+                    party(
+                        "Google Inc.",
+                        Some(PartyRole::Sender),
+                        &[id_of(index, "GOOGLE")],
+                    ),
+                    party(
+                        "Association of American Publishers, Inc.",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "Association")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        assert!(
+            outcome.proposal.parties[0]
+                .to_lowercase()
+                .contains("mcgraw-hill companies"),
+            "{:?}",
+            outcome.proposal.parties
+        );
+        // The court's jurisdiction is no side of the case, and a side
+        // named with an "of" phrase is read whole.
+        let (outcome, index) = facts_for(
+            "SUPERIOR COURT\nSNOHOMISH COUNTY\n\nNORTHWIND LLC,\nPlaintiff,\nv.\n\
+             ACME INC.,\nDefendant.\n\nNOTICE OF HEARING\n\nPlease take notice that the motion \
+             will be heard.\n\nDated: November 22, 2006",
+            |index| ModelFacts {
+                document_type: Some("Notice of Hearing".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF HEARING")],
+                document_date: Some("2006-11-22".into()),
+                date_evidence: vec![id_of(index, "Dated")],
+                parties: vec![party(
+                    "Acme Inc.",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "ACME")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        assert!(
+            outcome.proposal.parties[0]
+                .to_lowercase()
+                .contains("northwind llc"),
+            "{:?}",
+            outcome.proposal.parties
+        );
+        // An "of" phrase is read whole however the caption sets it.
+        let unit = index
+            .units()
+            .iter()
+            .find(|unit| unit.text.contains("SNOHOMISH"))
+            .unwrap();
+        let mut caps = unit.clone();
+        caps.text = "FIRST NATIONAL BANK OF OMAHA,".to_owned();
+        assert_eq!(
+            with_of_phrase(&caps, "FIRST NATIONAL BANK"),
+            "FIRST NATIONAL BANK OF OMAHA"
+        );
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|name| name.to_lowercase().contains("snohomish")),
+            "{:?}",
+            outcome.proposal.parties
+        );
+        assert_eq!(
+            without_trading_name("Farringdon Energy Limited trading as Champion Energy"),
+            "Farringdon Energy Limited"
+        );
+        assert_eq!(
+            without_trading_name("CWFS Insight LLC d/b/a RealINSIGHT Marketplace"),
+            "CWFS Insight LLC"
+        );
+        assert_eq!(without_trading_name("Olymbec USA LLC"), "Olymbec USA LLC");
+        // A letter whose lowering is longer than itself leaves the cut on
+        // a character boundary.
+        assert_eq!(
+            without_trading_name("İstanbul Ağ Ltd. Şti. trading as Brand"),
+            "İstanbul Ağ Ltd. Şti."
+        );
+        assert_eq!(without_trading_name("K商 trading as Brand"), "K商");
     }
 
     /// An FCC letter in the real set, typed by the order it closes: a type

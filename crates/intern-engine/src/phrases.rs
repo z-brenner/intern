@@ -71,6 +71,53 @@ pub(crate) fn is_placeholder(value: &str) -> bool {
 /// Release".
 const CONNECTORS: &[&str] = &["of", "to", "for", "and", "on", "under"];
 
+/// Words after which a title stops to its right: a sentence has begun.
+const RIGHT_STOPS: &[&str] = &["is", "are", "was", "were", "hereby", "will", "shall"];
+
+/// Whether a token is the possessive of a side of a case - "Plaintiff's",
+/// "Defendants'", "PETITIONER'S" - which names who files a notice, not
+/// the notice.
+pub(crate) fn possessive_side(token: &str) -> bool {
+    let word = normalize(token).replace(['\u{2019}', '`'], "'");
+    let word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
+    let stem = word
+        .strip_suffix("'s")
+        .or_else(|| word.strip_suffix("s'"))
+        .map(|stem| stem.trim_end_matches('\''));
+    stem.is_some_and(|stem| {
+        SIDE_WORDS.contains(&stem) || SIDE_WORDS.contains(&format!("{stem}s").as_str())
+    })
+}
+
+/// Words a caption labels the sides of a case with, whose possessive is no
+/// part of a notice's title.
+const SIDE_WORDS: &[&str] = &[
+    "plaintiff",
+    "plaintiffs",
+    "defendant",
+    "defendants",
+    "petitioner",
+    "petitioners",
+    "respondent",
+    "respondents",
+    "appellant",
+    "appellants",
+    "appellee",
+    "appellees",
+    "claimant",
+    "claimants",
+    "movant",
+    "movants",
+    "debtor",
+    "debtors",
+    "creditor",
+    "creditors",
+    "trustee",
+    "trustees",
+    "applicant",
+    "applicants",
+];
+
 /// Kinds of document a title can name besides [`TYPE_NOUNS`].
 const MORE_KINDS: &[&str] = &[
     "assignment",
@@ -210,11 +257,17 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
     // one.
     let style = writing(tokens[at]);
     let named_for_its_subject = matches!(head, "agreement" | "contract");
+    // "Plaintiff's Notice of Motion", "Defendants' Notice of Appeal": the
+    // side filing a notice is no part of its name. "White Finding, Notice
+    // of Violation": a tag before a comma is not the title either, though
+    // a comma inside an agreement's title is its own.
     let stops_left = |token: &str| {
         let word = core(token);
         let ending = word.trim_end_matches('.');
         breaks(token)
             || token.ends_with(':')
+            || possessive_side(token)
+            || (token.ends_with(',') && !named_for_its_subject)
             || TITLE_STOPS.contains(&word.as_str())
             || LEFT_STOPS.contains(&word.as_str())
             || CONNECTORS.contains(&word.as_str())
@@ -250,18 +303,45 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
     {
         start += 1;
     }
+    // To the right, the title ends where a sentence starts ("Notice IS
+    // Hereby Given") or an aside opens ("Notice of Variation and
+    // Consolidation with introductory note"); an agreement can be named
+    // "with" what it concerns.
+    // "Will" is the noun, not the verb that starts a sentence, after
+    // "of", "the" or "last" and before "Contest" or "and Testament":
+    // "Notice of Will Contest", "Notice of Probate of Will".
+    let will_is_a_noun = |index: usize| {
+        let before = index.checked_sub(1).map(|at| core(tokens[at]));
+        let after = tokens.get(index + 1).map(|token| core(token));
+        after.is_none()
+            || before.as_deref().is_some_and(|word| {
+                matches!(
+                    word,
+                    "of" | "the" | "a" | "an" | "last" | "his" | "her" | "their" | "and"
+                )
+            })
+            || after
+                .as_deref()
+                .is_some_and(|word| matches!(word, "contest" | "contests" | "and" | "testament"))
+    };
+    let stops_right = |index: usize| {
+        let word = core(tokens[index]);
+        TITLE_STOPS.contains(&word.as_str())
+            || (RIGHT_STOPS.contains(&word.as_str()) && !(word == "will" && will_is_a_noun(index)))
+            || (word == "with" && !named_for_its_subject)
+    };
     let mut end = at + 1;
     if !tokens[at].ends_with(':') {
         while end + 1 < tokens.len()
             && CONNECTORS.contains(&core(tokens[end]).as_str())
             && !breaks(tokens[end + 1])
-            && !TITLE_STOPS.contains(&core(tokens[end + 1]).as_str())
+            && !stops_right(end + 1)
         {
             end += 2;
             while end < tokens.len()
                 && !breaks(tokens[end])
                 && !tokens[end - 1].ends_with(':')
-                && !TITLE_STOPS.contains(&core(tokens[end]).as_str())
+                && !stops_right(end)
                 && !CONNECTORS.contains(&core(tokens[end]).as_str())
             {
                 end += 1;
@@ -747,6 +827,49 @@ pub(crate) fn trim_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A title stops where a sentence starts or an aside opens to its
+    /// right, and before the side filing it or a tag set off by a comma to
+    /// its left. An agreement's title is its own across a comma.
+    #[test]
+    fn a_title_stops_at_a_side_a_tag_a_verb_or_an_aside() {
+        for (line, head, phrase) in [
+            (
+                "Plaintiff's Notice of Voluntary Dismissal",
+                "notice",
+                "Notice of Voluntary Dismissal",
+            ),
+            ("DEFENDANTS' NOTICE OF APPEAL", "notice", "Notice of Appeal"),
+            (
+                "White Finding, Notice of Violation",
+                "notice",
+                "Notice of Violation",
+            ),
+            ("Notice IS Hereby Given that", "notice", "Notice"),
+            ("Notice will be given to creditors", "notice", "Notice"),
+            ("NOTICE OF WILL CONTEST", "notice", "Notice of Will Contest"),
+            (
+                "Notice of Probate of Will",
+                "notice",
+                "Notice of Probate of Will",
+            ),
+            (
+                "Notice of Variation and Consolidation with introductory note",
+                "notice",
+                "Notice of Variation and Consolidation",
+            ),
+            (
+                "Software License, Customization and Maintenance Agreement",
+                "agreement",
+                "Software License, Customization and Maintenance Agreement",
+            ),
+        ] {
+            assert_eq!(title_phrase(line, head).as_deref(), Some(phrase), "{line}");
+        }
+        assert!(possessive_side("Plaintiff\u{2019}s"));
+        assert!(possessive_side("Defendants'"));
+        assert!(!possessive_side("Owner's"));
+    }
+
     use super::*;
 
     #[test]
