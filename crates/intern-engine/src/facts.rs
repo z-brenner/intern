@@ -2379,6 +2379,38 @@ const NOT_TITLE_WORDS: &[&str] = &[
     "privileged",
 ];
 
+/// Markings a letter carries at its head that are no organization's name,
+/// however they are set: "WITHOUT PREJUDICE", "Subject to Contract", "By
+/// Post", "URGENT". A phrase counts anywhere on the line; a single word
+/// only as the whole line.
+const CORRESPONDENCE_MARKINGS: &[&str] = &[
+    "without prejudice",
+    "subject to contract",
+    "for the attention of",
+    "recorded delivery",
+    "special delivery",
+    "first class",
+    "open letter",
+    "by post",
+    "by fax",
+    "by courier",
+    "by e mail",
+    "by mail",
+    "by messenger",
+    "save as to costs",
+];
+const CORRESPONDENCE_WORDS: &[&str] = &["urgent", "draft", "personal", "copy", "original"];
+
+/// Whether a line is such a marking.
+fn is_correspondence_marking(line: &str) -> bool {
+    let loose = normalize_loosely(line);
+    let loose = loose.trim();
+    CORRESPONDENCE_MARKINGS
+        .iter()
+        .any(|phrase| loose.contains(phrase))
+        || CORRESPONDENCE_WORDS.contains(&loose)
+}
+
 /// Whether a unit is only an organization's name - a letterhead's
 /// "Meadowlark Health Plan" - or a delivery line: no title either way.
 fn names_an_organization(unit: &EvidenceUnit) -> bool {
@@ -3453,49 +3485,57 @@ impl LetterLayout {
                 .flat_map(|unit| unit.features.people.iter())
                 .map(|person| normalize_loosely(person))
                 .collect::<Vec<_>>();
-            // A line set like a person's name right under the addressee
-            // is a second person ("John Smith / Jane Doe"); under the
-            // addressee's post it is the organization the post is held at
-            // ("Bill Reeve / Director of Rail / Transport Scotland").
+            // The organization stands between the person and the street:
+            // the address's own lines name no one, and a number in an
+            // organization's own name ("3M Company") is no street number.
+            // A line set like a person's name under the addressee is a
+            // second person, and their post and organization are theirs,
+            // so the scan ends there ("John Smith / Jane Doe / Director /
+            // Acme Ltd"); under the addressee's own post such a line is
+            // the organization the post is held at ("Bill Reeve / Director
+            // of Rail / Transport Scotland").
             let mut under_a_post = false;
-            let found = below
-                .iter()
-                .take(5)
-                // The organization stands between the person and the
-                // street: the address's own lines name no one. A number
-                // in an organization's own name ("3M Company") is no
-                // street number.
-                .take_while(|line| !is_address_line(line) || is_organization(line))
-                .find_map(|line| {
-                    let line = line.trim_end_matches([',', ';', '|', '\\']).trim();
-                    let after_a_post = under_a_post;
-                    under_a_post |= holds_a_post(line);
-                    // "Premises: ...", "Owner: ...": a field's line, not the
-                    // address's.
-                    if line.contains(':') {
-                        return None;
-                    }
-                    if let Some(organization) = organization_after_post(line) {
-                        return Some(organization);
-                    }
-                    if is_organization(line)
-                        || replied
-                            .iter()
-                            .any(|name| normalize_loosely(name) == normalize_loosely(line))
-                    {
-                        return (line.split_whitespace().count() <= ORGANIZATION_LINE_WORDS
-                            && !holds_a_post(line))
-                        .then(|| line.to_owned());
-                    }
-                    if organization_line(line)
-                        && !people.contains(&normalize_loosely(line))
-                        && !names_a_person(line)
-                        && (after_a_post || !looks_like_a_persons_name(line))
-                    {
-                        return Some(line.to_owned());
-                    }
-                    None
-                });
+            let mut found = None;
+            for raw in below.iter().take(5) {
+                if is_address_line(raw) && !is_organization(raw) {
+                    break;
+                }
+                let line = raw.trim_end_matches([',', ';', '|', '\\']).trim();
+                // A post's line ("Chief Executive") is set like a name but
+                // names none.
+                let post = holds_a_post(line);
+                let a_person = !post
+                    && (people.contains(&normalize_loosely(line))
+                        || names_a_person(line)
+                        || (!under_a_post && looks_like_a_persons_name(line)));
+                if a_person {
+                    break;
+                }
+                under_a_post |= post;
+                // "Premises: ...", "Owner: ...": a field's line, not the
+                // address's.
+                if line.contains(':') {
+                    continue;
+                }
+                if let Some(organization) = organization_after_post(line) {
+                    found = Some(organization);
+                    break;
+                }
+                if (is_organization(line)
+                    || replied
+                        .iter()
+                        .any(|name| normalize_loosely(name) == normalize_loosely(line)))
+                    && line.split_whitespace().count() <= ORGANIZATION_LINE_WORDS
+                    && !post
+                {
+                    found = Some(line.to_owned());
+                    break;
+                }
+                if organization_line(line) {
+                    found = Some(line.to_owned());
+                    break;
+                }
+            }
             found
                 .or_else(|| {
                     // The organization over the person: the line above
@@ -4491,6 +4531,7 @@ fn organization_line(line: &str) -> bool {
         || is_greeting(line)
         || is_closing(line)
         || NOT_TITLE_WORDS.iter().any(|phrase| loose.contains(phrase))
+        || is_correspondence_marking(line)
     {
         return false;
     }
@@ -11089,6 +11130,23 @@ The merger needs a majority of votes cast.";
             "{:?}",
             outcome.proposal.parties
         );
+        // A second addressee's post and organization are theirs, not the
+        // first addressee's.
+        let (outcome, _) = facts_for(
+            "John Smith\n\nJane Doe\nDirector\nAcme Ltd\n123 Main Street\nLondon\n\n\
+             11 July 2011\n\nDear John and Jane\n\nThank you for your letter.\n\n\
+             Yours sincerely,\n\nAmelia Womack",
+            addressed("John Smith"),
+        );
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|name| name.contains("Acme")),
+            "{:?}",
+            outcome.proposal.parties
+        );
     }
 
     /// A letter signed by a person for an organization is from the
@@ -11220,6 +11278,15 @@ Rickmansworth,
             sent_by("Jane Doe"),
         );
         assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
+        // A marking at the head of the letter is no organization: the
+        // letterhead under it is the signer's.
+        let (outcome, _) = facts_for(
+            "WITHOUT PREJUDICE\nAcme Legal LLP\n\n16 September 2019\n\nJohn Smith\n\
+             123 Main Street\n\nDear John,\n\nThank you for your letter.\n\nSincerely,\n\n\
+             Jane Doe",
+            sent_by("Jane Doe"),
+        );
+        assert_eq!(outcome.proposal.parties, vec!["Acme Legal LLP"]);
     }
 
     /// A caption sets its sides "against" each other as well as "v.", with
