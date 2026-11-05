@@ -9999,12 +9999,13 @@ mod runtime_tests {
         );
 
         // Loaded, it holds what it holds: the machine reports that much less
-        // free, and the model is still the one that fits.
-        world.memory(Some(
-            MIN_AVAILABLE_FOR_ACCURATE
-                - tiers::unload_gives_back(ModelTier::Accurate, ACCURATE_BYTES.len() as u64)
-                + 1,
-        ));
+        // free, and the model is still the one that fits. The fixture's file
+        // is a few bytes, so what unloading gives back is the whole resident
+        // estimate, more than the floor: the machine then reports next to
+        // nothing free, and the credit alone makes the model fit.
+        world.memory(Some((MIN_AVAILABLE_FOR_ACCURATE + 1).saturating_sub(
+            tiers::unload_gives_back(ModelTier::Accurate, ACCURATE_BYTES.len() as u64),
+        )));
         runtime.analyze(&probe(), "pdf", &[]).unwrap();
         assert_eq!(launched(&rig), [ModelTier::Fast, ModelTier::Accurate]);
     }
