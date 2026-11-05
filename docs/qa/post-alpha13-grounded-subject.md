@@ -77,5 +77,10 @@ behavior and required fidelity review remain outstanding release gates. The
 uncertain PC background run remains untouched. No PR, approval, merge or
 release was performed.
 
+Matching Windows QA is running at
+[41961091444](https://github.com/z-brenner/intern/actions/runs/41961091444),
+head `334627cea9058613a77e8928bfd26ada42075e23`. No result is claimed. Subsequent
+receipt updates under `docs/qa/` preserve the source digest.
+
 Machine-readable receipts and frozen evaluator hashes are in
 [`post-alpha13-grounded-subject.json`](post-alpha13-grounded-subject.json).
