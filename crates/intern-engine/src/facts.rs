@@ -3453,6 +3453,11 @@ impl LetterLayout {
                 .flat_map(|unit| unit.features.people.iter())
                 .map(|person| normalize_loosely(person))
                 .collect::<Vec<_>>();
+            // A line set like a person's name right under the addressee
+            // is a second person ("John Smith / Jane Doe"); under the
+            // addressee's post it is the organization the post is held at
+            // ("Bill Reeve / Director of Rail / Transport Scotland").
+            let mut under_a_post = false;
             let found = below
                 .iter()
                 .take(5)
@@ -3463,6 +3468,8 @@ impl LetterLayout {
                 .take_while(|line| !is_address_line(line) || is_organization(line))
                 .find_map(|line| {
                     let line = line.trim_end_matches([',', ';', '|', '\\']).trim();
+                    let after_a_post = under_a_post;
+                    under_a_post |= holds_a_post(line);
                     // "Premises: ...", "Owner: ...": a field's line, not the
                     // address's.
                     if line.contains(':') {
@@ -3483,6 +3490,7 @@ impl LetterLayout {
                     if organization_line(line)
                         && !people.contains(&normalize_loosely(line))
                         && !names_a_person(line)
+                        && (after_a_post || !looks_like_a_persons_name(line))
                     {
                         return Some(line.to_owned());
                     }
@@ -3515,11 +3523,16 @@ impl LetterLayout {
         let Some((salutation, _)) = self.salutation else {
             return false;
         };
-        let british = self
-            .dateline
-            .is_some_and(|dateline| salutation == dateline + 1);
         unit.ordinal <= salutation
-            && (british || self.dateline.is_none_or(|dateline| unit.ordinal > dateline))
+            && (self.british() || self.dateline.is_none_or(|dateline| unit.ordinal > dateline))
+    }
+
+    /// Whether the letter is laid out the British way: the dateline right
+    /// over the greeting, so the inside address stands above the dateline.
+    fn british(self) -> bool {
+        self.dateline
+            .zip(self.salutation)
+            .is_some_and(|(dateline, (salutation, _))| salutation == dateline + 1)
     }
 
     /// Whether the inside address - the first page between the dateline,
@@ -4797,8 +4810,15 @@ fn letterhead_name<'a>(
                 .iter()
                 .any(|name| !name.is_empty() && contains_whole(&text, name))
         })
-        .map(|unit| unit.ordinal)
-        .unwrap_or(dateline);
+        .map(|unit| unit.ordinal);
+    // In a British layout the inside address stands above the dateline,
+    // so without an addressee to mark where it begins, the lines above
+    // the dateline cannot be told from it: "Acme Ltd" over the person
+    // written to is the address's, not the sender's letterhead.
+    if address.is_none() && layout.british() {
+        return None;
+    }
+    let address = address.unwrap_or(dateline);
     units
         .iter()
         .filter(|unit| {
@@ -11053,6 +11073,22 @@ The merger needs a majority of votes cast.";
                 "{line}"
             );
         }
+        // A second person under the addressee is a person, not their
+        // organization.
+        let (outcome, _) = facts_for(
+            "John Smith\nJane Doe\n123 Main Street\nLondon\n\n11 July 2011\n\nDear John\n\n\
+             Thank you for your letter.\n\nYours sincerely,\n\nAmelia Womack",
+            addressed("John Smith"),
+        );
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|name| name.contains("Jane Doe")),
+            "{:?}",
+            outcome.proposal.parties
+        );
     }
 
     /// A letter signed by a person for an organization is from the
@@ -11175,6 +11211,15 @@ Rickmansworth,
             sent_by("John Smith"),
         );
         assert_eq!(outcome.proposal.parties, vec!["3M Company"]);
+        // A British layout puts the inside address above the dateline: with
+        // no addressee named to mark where it begins, the company over the
+        // person written to is not the signer's letterhead.
+        let (outcome, _) = facts_for(
+            "Acme Ltd\nJohn Smith\n123 Main Street\nLondon\n\n16 September 2019\n\n\
+             Dear John,\n\nThank you for your letter.\n\nSincerely,\n\nJane Doe",
+            sent_by("Jane Doe"),
+        );
+        assert_eq!(outcome.proposal.parties, vec!["Jane Doe"]);
     }
 
     /// A caption sets its sides "against" each other as well as "v.", with
