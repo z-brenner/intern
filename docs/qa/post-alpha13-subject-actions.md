@@ -86,8 +86,9 @@ requires execution; it does not yet supply a completed full-recording pair.
 These checks do not establish a live review rate or laptop performance for
 this version. The exact complete Windows recording still needs paired replay,
 and fresh Windows QA must execute this source. The previous running QA evaluates
-the initial rule and has not been cancelled or changed. The earlier passing
-run's difference remains unproven. Held-out checks, 16 GB CPU laptop behavior
+the initial rule and has not been cancelled or changed. The [CPU cohort audit](post-alpha13-hardware-cohorts.md)
+records its subsequent pass and the observational hardware association; causation
+remains unproven. Held-out checks, 16 GB CPU laptop behavior
 and required fidelity review remain release prerequisites. The uncertain PC
 background run is untouched. No PR, approval, merge or release was performed.
 

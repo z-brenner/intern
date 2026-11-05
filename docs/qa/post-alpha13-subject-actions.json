@@ -252,7 +252,11 @@
   "prior_qa_run": {
     "id": 41961091444,
     "head_sha": "334627cea9058613a77e8928bfd26ada42075e23",
-    "scope": "initial grounded acronym rule; left running, no modification or cancellation"
+    "scope": "initial grounded acronym rule; left running, no modification or cancellation",
+    "status": "completed, success",
+    "named": 9,
+    "completed": 19,
+    "statement_of_work": "still needs_review for description_unsupported; not evidence that initial fix covered captured wording"
   },
   "pc_background_run": "uncertain, untouched",
   "app_fix_commit": "f81b149fd0ba3731822f01f0e0b14de8af245dcc",
@@ -293,5 +297,6 @@
     "head_sha": "b702a134fc12826bdbf654a75c3273d476d2c28d",
     "status": "in_progress; live acceptance and complete-recording paired step pending",
     "url": "https://github.com/z-brenner/intern/actions/runs/41964133224"
-  }
+  },
+  "hardware_cohort_audit": "post-alpha13-hardware-cohorts.json"
 }
