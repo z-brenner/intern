@@ -103,12 +103,11 @@
     "retried": false
   },
   "remaining": [
-    "Integrate through a permitted route; main is still 8299690 (alpha.13); do not bypass the earlier denied draft-PR submission.",
-    "Follow docs/releasing.md with QA on exact integrated main release-input tree. Branch QA passed and matches current 730-entry digest, but is not exact-main QA.",
-    "Make the exact release capture accessible; supported artifact transfer failed here. Current image inspection covers historical alpha.13 only.",
-    "Obtain truthful named-person acceptance of the exact final capture; fidelity remains pending and preflight exits 1.",
-    "After all prerequisites, run exact-main release workflow and verify signed updater, installer attestation, latest manifest and download-page publication.",
-    "Preserve limits: no actual laptop qualification and no resolved CPU/runtime cause for confidence variation."
+    "Integrate through a permitted route; no bypass or retry of the prior denied draft-PR submission.",
+    "Follow docs/releasing.md with QA on the exact integrated main release-input tree; branch QA has passed but remains distinct.",
+    "Commit the exact final release-tree capture and obtain truthful named-person acceptance. Independent AI inspection of the branch PNG is complete; acceptance fields remain pending.",
+    "Run release preflight and the exact-main release workflow only after prerequisites, then verify published updater/installer attestation and download page.",
+    "Preserve limits: actual laptop behavior and the CPU/runtime cause of probability variation remain unestablished."
   ],
   "artifact_directory": "/workspace/artifacts/intern-alpha14-preparation",
   "artifact_files": {
@@ -244,7 +243,7 @@
   "capture_inspection": {
     "fresh_capture_inspected_here": false,
     "fresh_capture_materialization": "One supported transfer attempt for artifact 13395287384 returned download failed; no complete local archive installed; no raw URL fallback or retry.",
-    "fresh_capture_sha256": "not available on this executor",
+    "fresh_capture_sha256": "c37dbd5cffe9951863dfbd7fb24834f96997d7f4032c670b2dcecf15bb402797",
     "historical_reference_inspected": true,
     "historical_reference_path": "docs/qa/latest-implementation.png",
     "historical_reference_sha256": "a95052639f75b6e2bdad0438da20645b59490271748ca2a9dab901fdb31cbd25",
@@ -252,8 +251,34 @@
       1536,
       1024
     ],
-    "inspection_scope": "Assistant reference inspection of committed alpha.13 image only; not a person-specific sign-off or assertion of fresh capture equality.",
-    "packet": "docs/qa/alpha14-fidelity-review.md"
+    "inspection_scope": "Independent auditor reports inspecting the exact fresh branch PNG at the recorded hash. This executor inspected only historical alpha.13 pixels and records the fresh inspection with its provenance. Neither is named-human acceptance.",
+    "packet": "docs/qa/alpha14-fidelity-review.md",
+    "fresh_capture_independent_ai_inspection": {
+      "reported_by": "Parent thread 01a19ec5-e0ec-744e-aa82-5d8c078a0009, independent artifact auditor",
+      "exact_capture_dimensions": [
+        1536,
+        1024
+      ],
+      "exact_capture_sha256": "c37dbd5cffe9951863dfbd7fb24834f96997d7f4032c670b2dcecf15bb402797",
+      "visible_ledger_criteria_met": true,
+      "observations": [
+        "Distinct toolbar/table/review planes",
+        "Local privacy text",
+        "Wrapped date-first filenames",
+        "Icon and color statuses",
+        "Right-aligned confidence",
+        "Focused filename",
+        "Pinned controls",
+        "No visible collisions or unreadable text",
+        "Date and Type evidence visible"
+      ],
+      "not_established": [
+        "Parties evidence below frame fold",
+        "Scrolling behavior"
+      ],
+      "named_human_acceptance": false
+    },
+    "fresh_equals_historical_reference": false
   },
   "final_branch_followup_artifacts": {
     "qa419759-records.json": {

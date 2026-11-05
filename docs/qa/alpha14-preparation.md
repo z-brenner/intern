@@ -58,9 +58,14 @@ independently reconstructs the QA and current checkout's identical 730-entry
 release-input digest. The evidence manifest remains blocked on fidelity, and
 branch QA remains separate from required exact-main QA.
 
-The supported artifact transfer failed. Only the historical alpha.13 image was
-visually inspected here as reference. No fresh capture or person-specific
-acceptance is claimed; see [the review packet](alpha14-fidelity-review.md).
+The parent independent auditor subsequently reports AI inspection of the exact
+1536 × 1024 alpha.14 PNG, SHA-256
+`c37dbd5cffe9951863dfbd7fb24834f96997d7f4032c670b2dcecf15bb402797`,
+meeting visible ledger criteria. Parties below the fold and scrolling remain
+outside what that frame establishes. This is not named-human acceptance. The
+supported transfer failed here; this executor records the independent fresh
+review separately from its different historical alpha.13 reference inspection.
+See [the pending review packet](alpha14-fidelity-review.md).
 Integration still needs a permitted route. [The release procedure](../releasing.md)
 requires the final version and notes tree on main before exact-main QA, followed
 by the exact capture and truthful person-specific fidelity sign-off. Nothing

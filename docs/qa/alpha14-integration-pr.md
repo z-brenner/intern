@@ -54,8 +54,11 @@ below-threshold results held, only SOW readiness improved in the paired replay.
 The current checkout retains the same independently reconstructed 730-entry
 release-input digest. The parent audit verifies all 11 artifact hashes; the
 manifest remains blocked on fidelity. This is branch QA, not exact-main QA.
-Authorized integration, exact-main QA, truthful capture-specific fidelity review
-and release preflight remain required. No release is claimed.
+The independent auditor reports AI inspection of the exact branch capture
+`c37dbd5cffe9951863dfbd7fb24834f96997d7f4032c670b2dcecf15bb402797`, meeting visible ledger criteria;
+Parties below the fold and scrolling are outside that still's scope. No person
+has accepted the capture. Authorized integration, exact-main QA, truthful
+capture-specific fidelity review and release preflight remain required. No release is claimed.
 
 ## Submission state
 

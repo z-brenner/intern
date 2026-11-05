@@ -6,11 +6,18 @@ for alpha.14. Branch QA 41975965963 passed at release-input digest
 current and QA trees independently match all 730 non-QA entries. Required
 exact-main QA and person-specific acceptance remain separate.
 
-The supported transfer of that run's fresh artifact failed, so the fresh capture
-has not been visually inspected here. The assistant inspected only the existing
-historical alpha.13 image as a reference, without changing its bytes. Observations,
-access evidence and precise blockers are in the
-[pending review packet](alpha14-fidelity-review.md).
+The parent independent auditor reports AI inspection of the exact alpha.14
+1536 × 1024 branch capture, SHA-256
+`c37dbd5cffe9951863dfbd7fb24834f96997d7f4032c670b2dcecf15bb402797`. Visible ledger criteria are met,
+with no visible collisions or unreadable text. Parties remains below the frame's
+fold; the still does not establish that area or scrolling. This is AI inspection,
+not named-person acceptance.
+
+The supported transfer of that artifact failed on this executor, which viewed
+only the historical alpha.13 reference. The fresh hash differs from that image;
+no reference observation is substituted for the independent fresh review.
+[The pending review packet](alpha14-fidelity-review.md) records provenance,
+observations and precise remaining blockers.
 
 Replace the committed capture only with the exact final-tree QA image and follow
 [the reviewer rule](../releasing.md#the-reviewer-rule). No digest or reviewer

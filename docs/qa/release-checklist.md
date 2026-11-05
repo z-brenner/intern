@@ -30,7 +30,7 @@ blocked on fidelity; this is still branch QA, not exact-main QA.
 | Browser, frontend, Rust and native runtime checks | branch passed; main pending/blocked | All pass in 41975965963. Repeat/verify under the exact-main release procedure. |
 | Installer build and installed-core smoke | branch passed; main pending/blocked | Build, install, core runtime/OCR and uninstall-data retention pass in 41975965963. Exact-main procedure remains. |
 | Live model acceptance | branch passed; main pending/blocked | 41975965963 passes at 0.7 and unchanged accuracy/review limits; all six below-threshold readings held. |
-| Rendered fidelity review | pending/blocked | Exact final-tree capture, truthful named-person acceptance, matching digest and image hash. |
+| Rendered fidelity review | AI branch inspection complete; person acceptance pending/blocked | Independent auditor inspected branch PNG `c37dbd5cffe9951863dfbd7fb24834f96997d7f4032c670b2dcecf15bb402797` and reports visible criteria met; Parties below the fold/scrolling remain outside the frame. Exact-main capture and truthful named-person acceptance are still required. |
 | Release preflight | pending/blocked | Accepted sign-off, matching capture, notes and versions on exact main. |
 | Deliberately dispatched release workflow | pending/blocked | Exact-main rebuild, updater verification, SBOM/checksums, evidence acceptance, provenance, annotated tag and publication. |
 | Published updater and download verification | pending/blocked | Verify the installer attestation, latest.json version and download-page deployment after publication. |

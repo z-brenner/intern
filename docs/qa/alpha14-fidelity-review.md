@@ -20,25 +20,38 @@ The archive is GitHub artifact `13395287384`, 65,213,785 bytes, SHA-256
 from GitHub metadata. This is branch QA, not the exact-main QA required by
 the release procedure. No software gate is being described as failed.
 
-## Fresh capture access
+## Exact fresh capture: independent AI inspection reported
 
-The exact fresh PNG has **not** been visually inspected on this executor.
-One attempt through the supported artifact materialization flow returned
-`download failed`; no complete archive was installed locally. There was no
-raw-URL fallback or retry. The fresh PNG's individual hash is not available
-here; an archive hash alone cannot establish equality of an individual image.
+The parent independent auditor reports inspecting the exact alpha.14 QA PNG,
+1536 × 1024, SHA-256
+`c37dbd5cffe9951863dfbd7fb24834f96997d7f4032c670b2dcecf15bb402797`.
+This differs from the historical reference hash below; the earlier local
+reference inspection cannot stand in for it. The fresh review is recorded as
+an independent **AI inspection**, not this executor's own view and not named-
+human acceptance.
 
-The [Library SKILL.md](skill://plugin_connector_1p_1b8ff8edfc1481918b252c8277e23125/library/SKILL.md)
+The auditor reports that visible ledger criteria are met: distinct toolbar,
+table and review planes; local privacy text; wrapped date-first filenames;
+icon and color statuses; right-aligned confidence; focused filename; and pinned
+controls. No visible collisions or unreadable text were observed. Date and Type
+evidence are visible. Parties is below this frame's fold, so this still image
+does not establish that portion or scrolling behavior.
+
+The exact fresh image remains unavailable locally: one supported artifact
+materialization attempt returned `download failed`, with no complete archive
+installed and no fallback or retry. This is a local access limitation, not an
+uncompleted independent AI review. The [Library SKILL.md](skill://plugin_connector_1p_1b8ff8edfc1481918b252c8277e23125/library/SKILL.md)
 routes resolved references through its
 [materialization instructions](skill://plugin_connector_1p_1b8ff8edfc1481918b252c8277e23125/library/references/materialization.md):
-“Invoke it once per signed-URL transfer. Never use raw `curl`.”
-The failure is a technical access blocker; these instructions and the task's
-no-bypass constraint prevent substituting a manual transfer. No new automatic
-approval rejection occurred during this attempt.
+“Invoke it once per signed-URL transfer. Never use raw `curl`.” No new automatic
+approval rejection occurred during that technical failure.
 
-A trusted audit of the fresh PNG's exact hash could establish whether it is
-byte-identical to the reference below. Until that hash or the fresh pixels are
-available, this packet asserts no fresh-image visual result.
+Existing browser tests already check full filename wrapping, focused input,
+status contrast and pinned decision buttons at the default window, and keep
+the inspector visible while a long queue scrolls (`tests/e2e/qa.spec.ts`). They
+do not turn this still-image review into visual verification of Parties below
+the fold. No extra requirement that every evidence field fit this one frame
+is introduced.
 
 ## Historical reference inspected by the assistant
 
@@ -78,8 +91,10 @@ These observations cannot be silently carried forward to an unverified image.
    all release changes, versions and notes integrated before QA on main. The
    branch's matching source digest supplies quality evidence but does not change
    that recorded sequence. Nothing outside docs/qa/ changes after final QA.
-3. **Exact capture and truthful fidelity acceptance.** The fresh artifact is not
-   accessible locally, and no person has accepted the release capture. The
+3. **Exact final capture and truthful fidelity acceptance.** Independent AI
+   inspection of the branch PNG is complete, but no person has accepted the
+   release capture. The exact final-tree image must be committed and reviewed
+   under the main release procedure. The
    [reviewer rule](../releasing.md#the-reviewer-rule) says: “The sign-off is a
    statement that a named person looked at this exact capture and accepts it.”
    The existing sign-off's status, reviewer, hashes and date remain pending.
