@@ -64,17 +64,26 @@ pub const MEASURED_FLAGS: &[&str] = &[
 /// small enough that the KV cache stays a few hundred megabytes on CPU.
 pub const CONTEXT_TOKENS: u32 = 8_192;
 
-/// Threads to give the model.
+/// Threads to give the model, for generation and for prompt processing
+/// alike: every logical processor, at most eight.
 ///
-/// On a hyper-threaded laptop, llama.cpp scales with physical cores, not
-/// logical ones, and taking every core makes the rest of Windows stutter.
-/// Half the logical count is the physical count on the machines Intern targets,
-/// and it leaves the other half for whatever else the user is doing.
+/// Until alpha.13 this was half the logical count, on the reasoning that
+/// llama.cpp scales with physical cores and that taking every core makes
+/// the rest of Windows stutter. Measured on the 9B with the recorded
+/// requests on two-core, four-thread runners
+/// (`bench/reports/speed-linux-cpu-2026-11-05`), four threads against two
+/// cut the time per request by 16-18%: prompt processing by 9-19%, and on
+/// an Intel Xeon decoding by 43%. The model's threads run at low priority
+/// (`--prio -1`, below-normal on Windows) and sleep rather than spin
+/// (`--poll 0`), so the window in front still gets the cycles it asks for.
+/// Eight is the ceiling because the gain was measured on SMT siblings of
+/// a few cores, not on a hybrid chip's efficiency cores, which slow every
+/// lockstep barrier when they are drawn in.
 pub fn default_threads() -> usize {
     std::thread::available_parallelism()
-        .map(|value| value.get() / 2)
+        .map(|value| value.get())
         .unwrap_or(4)
-        .clamp(2, 12)
+        .clamp(2, 8)
 }
 
 /// How the model process should be launched.
@@ -717,7 +726,11 @@ mod tests {
     #[test]
     fn the_thread_default_leaves_the_machine_usable() {
         let threads = default_threads();
-        assert!((2..=12).contains(&threads));
+        assert!((2..=8).contains(&threads));
+        let logical = std::thread::available_parallelism()
+            .map(|value| value.get())
+            .unwrap_or(4);
+        assert_eq!(threads, logical.clamp(2, 8));
     }
 
     /// The point of the job object: a child of a process that dies without

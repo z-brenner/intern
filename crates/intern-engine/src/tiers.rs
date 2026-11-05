@@ -94,11 +94,14 @@ pub const HEADROOM: u64 = 1_024 * MIB;
 /// said in one place.
 pub const MIN_AVAILABLE_FOR_FAST: u64 = 6_656 * MIB;
 
-/// Memory that must be available before the accurate model is loaded: its
-/// server, the worker, and the headroom, rounded up to 10 GiB. A 16 GB
-/// laptop has that with little else open, and not with a browser and an
-/// office suite at work; then the fast model stands in.
-pub const MIN_AVAILABLE_FOR_ACCURATE: u64 = 10_240 * MIB;
+/// Memory that must be available before the accurate model is loaded: what
+/// its server holds under pressure ([`working_set`]), the worker, and the
+/// headroom, rounded up to 8 GiB. A 16 GB laptop has that with a browser
+/// open; not with a browser and an office suite at work; then the fast
+/// model stands in. Until alpha.13 this was 10 GiB, the server's resident
+/// high-water mark plus the rest, before the mapped weights were measured
+/// under a memory limit (`bench/reports/speed-linux-cpu-2026-11-05`).
+pub const MIN_AVAILABLE_FOR_ACCURATE: u64 = 8_192 * MIB;
 
 /// The memory a tier needs available before it is loaded.
 pub const fn min_available_for(tier: ModelTier) -> u64 {
@@ -127,6 +130,22 @@ pub const fn resident_estimate(tier: ModelTier) -> u64 {
     match tier {
         ModelTier::Fast => 4_700 * MIB,
         ModelTier::Accurate => 8_300 * MIB,
+    }
+}
+
+/// What a loaded tier's server must keep in memory to read at its speed:
+/// less than [`resident_estimate`], because the mapped weights the CPU
+/// backend repacks are read once and never again, and the system reclaims
+/// those pages first. Measured for the 9B under a memory limit on Linux
+/// (`bench/reports/speed-linux-cpu-2026-11-05`): 3.4 GB of anonymous memory
+/// and 2.7 GB of weights it keeps reading, about 6.2 GB in all. At a 6 GB
+/// limit it read a document in 95 s against 72 s with no limit; at 5 GB it
+/// thrashed (421 s). The 4B was not measured under a limit; its resident
+/// set stands in.
+pub const fn working_set(tier: ModelTier) -> u64 {
+    match tier {
+        ModelTier::Fast => 4_700 * MIB,
+        ModelTier::Accurate => 6_300 * MIB,
     }
 }
 
@@ -671,10 +690,11 @@ mod tests {
         assert!(!fits(F, Some(MIN_AVAILABLE_FOR_FAST - 1)));
         assert_eq!(min_available_for(F), MIN_AVAILABLE_FOR_FAST);
         assert_eq!(min_available_for(A), MIN_AVAILABLE_FOR_ACCURATE);
-        // The guard asks for more than either model holds, and more for the
-        // larger model.
+        // The guard asks for more than either model must keep, with the
+        // worker beside it, and more for the larger model.
         for tier in ModelTier::ALL {
-            assert!(min_available_for(tier) > resident_estimate(tier));
+            assert!(min_available_for(tier) > working_set(tier) + WORKER_PEAK);
+            assert!(working_set(tier) <= resident_estimate(tier));
         }
         assert!(min_available_for(A) > min_available_for(F));
     }
@@ -745,7 +765,7 @@ mod tests {
     #[test]
     fn each_guard_covers_the_model_the_worker_and_the_headroom() {
         for tier in ModelTier::ALL {
-            assert!(min_available_for(tier) >= resident_estimate(tier) + WORKER_PEAK + HEADROOM);
+            assert!(min_available_for(tier) >= working_set(tier) + WORKER_PEAK + HEADROOM);
         }
     }
 
