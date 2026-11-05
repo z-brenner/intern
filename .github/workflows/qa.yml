@@ -209,6 +209,46 @@ jobs:
             -RecordingPath docs\qa\model-evaluation-recording.json `
             -OutputPath docs\qa\model-evaluation.json 2>&1 | Tee-Object -FilePath docs\qa\logs\model-evaluation.log
           node scripts/validate-model-evaluation.mjs docs/qa/model-evaluation.json
+      # Replaying in place preserves a full paired comparison even when a
+      # live run fails acceptance or its artifact cannot be materialized.
+      # The control predates the action-noun anchor fix. Both runs use this
+      # job's one recording; no extra inference or acceptance exception.
+      - name: Compare the captured replies against the pinned prior validator
+        if: ${{ !cancelled() && startsWith(github.ref, 'refs/heads/qualification/') && hashFiles('docs/qa/model-evaluation-recording.json') != '' }}
+        shell: pwsh
+        timeout-minutes: 30
+        run: |
+          $ControlCommit = "777071d2582eb8dbdc861367f9bd47d20e32125d"
+          $Control = Join-Path $env:RUNNER_TEMP "intern-replay-control"
+          $Before = Join-Path $env:RUNNER_TEMP "intern-evaluate-before.exe"
+          $After = Join-Path $env:RUNNER_TEMP "intern-evaluate-after.exe"
+          $Evaluator = Join-Path $env:GITHUB_WORKSPACE "target\release\intern-evaluate.exe"
+          $Recording = Join-Path $env:GITHUB_WORKSPACE "docs\qa\model-evaluation-recording.json"
+          $Report = Get-Content docs\qa\model-evaluation.json -Raw | ConvertFrom-Json
+          $RecordingHash = (Get-FileHash $Recording -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($Report.commit -ne $env:GITHUB_SHA -or $Report.recording_sha256 -ne $RecordingHash) { throw "Recording is not bound to this live run" }
+          Copy-Item $Evaluator $After -Force
+          $Added = $false
+          try {
+            git fetch --no-tags origin $ControlCommit
+            if ($LASTEXITCODE -ne 0) { throw "Could not fetch pinned replay control" }
+            git worktree add --detach $Control $ControlCommit
+            if ($LASTEXITCODE -ne 0) { throw "Could not isolate replay control" }
+            $Added = $true
+            cargo build --locked --release --manifest-path (Join-Path $Control "Cargo.toml") -p intern-engine --bin intern-evaluate --target-dir (Join-Path $env:GITHUB_WORKSPACE "target")
+            if ($LASTEXITCODE -ne 0) { throw "Control evaluator did not build" }
+            Copy-Item $Evaluator $Before -Force
+            & $Before --fixtures fixtures/generated --expected fixtures/expected.json --replay $Recording --min-token-confidence 0.7 --output docs/qa/model-replay-before.json
+            if ($LASTEXITCODE -ne 0) { throw "Control replay failed or has stale inputs" }
+            & $After --fixtures fixtures/generated --expected fixtures/expected.json --replay $Recording --min-token-confidence 0.7 --output docs/qa/model-replay-after.json
+            if ($LASTEXITCODE -ne 0) { throw "Current replay failed or has stale inputs" }
+            [ordered]@{ control_commit = $ControlCommit; current_commit = $env:GITHUB_SHA; recording_sha256 = $RecordingHash; before_exe_sha256 = (Get-FileHash $Before -Algorithm SHA256).Hash.ToLowerInvariant(); after_exe_sha256 = (Get-FileHash $After -Algorithm SHA256).Hash.ToLowerInvariant() } | ConvertTo-Json | Set-Content docs/qa/model-replay-inputs.json -Encoding utf8NoBOM
+            node scripts/compare-evaluation-replays.mjs docs/qa/model-replay-before.json docs/qa/model-replay-after.json docs/qa/model-replay-comparison.json
+            if ($LASTEXITCODE -ne 0) { throw "Paired replay changed emitted facts or lost readiness" }
+          } finally {
+            Copy-Item $After $Evaluator -Force
+            if ($Added) { git worktree remove --force $Control }
+          }
       - name: Write run-specific command, count, and exit-code checklist
         if: success()
         shell: pwsh
@@ -293,6 +333,10 @@ jobs:
             docs/qa/fidelity-ledger.md
             docs/qa/model-evaluation.json
             docs/qa/model-evaluation-recording.json
+            docs/qa/model-replay-before.json
+            docs/qa/model-replay-after.json
+            docs/qa/model-replay-inputs.json
+            docs/qa/model-replay-comparison.json
             docs/qa/latest-implementation.png
             docs/qa/rendered-fidelity-signoff.json
             docs/qa/installed-core-smoke.json
