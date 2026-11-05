@@ -2585,8 +2585,9 @@ fn significant_words(value: &str) -> Vec<String> {
 
 /// Expand one otherwise unstated acronym for the optional subject's claim
 /// check only. Its other significant words must anchor it to the same shown
-/// unit as one unique expansion of consecutive substantive words. This never
-/// changes the subject checked word by word, a filename, a party or a date.
+/// unit, literally or through the checked action-noun pairs below, with at
+/// least one literal anchor and one unique expansion of consecutive words.
+/// This never changes the subject checked word by word, a filename, a party or a date.
 fn grounded_subject_acronym(scope: &ValidationScope<'_>, value: &str) -> Option<String> {
     let tokens = value.split_whitespace().collect::<Vec<_>>();
     let candidates = tokens
@@ -2614,7 +2615,24 @@ fn grounded_subject_acronym(scope: &ValidationScope<'_>, value: &str) -> Option<
     let mut expansions = BTreeSet::new();
     for unit in scope.context_units() {
         let normalized = normalize(&unit.text);
-        if !anchors.iter().all(|word| contains_whole(&normalized, word)) {
+        // Only locating the passage: no general stemming, new specifics or
+        // permission to emit these paraphrases. The original subject still
+        // has to pass the unchanged literal-word check to be written.
+        const ACTION_NOUNS: &[(&str, &str)] = &[
+            ("implementation", "implement"),
+            ("migration", "migrate"),
+            ("configuration", "configure"),
+            ("validation", "validate"),
+        ];
+        let literal = |word: &String| contains_whole(&normalized, word);
+        if !anchors.iter().any(literal)
+            || !anchors.iter().all(|word| {
+                literal(word)
+                    || ACTION_NOUNS
+                        .iter()
+                        .any(|(noun, verb)| word == noun && contains_whole(&normalized, verb))
+            })
+        {
             continue;
         }
         for sentence in unit.text.split(['.', ';', '!', '?']) {
@@ -6960,6 +6978,69 @@ Dated May 12, 2026";
             outcome.proposal.parties,
             vec!["Halvorsen Fixture Works LLC"]
         );
+    }
+
+    #[test]
+    fn an_omitted_acronym_subject_can_use_checked_action_nouns() {
+        for (passage, value) in [
+            (
+                "We implement the customer relationship management platform and migrate records.",
+                "CRM platform implementation and migration",
+            ),
+            (
+                "We configure the application programming interface platform and validate records.",
+                "API platform configuration and validation",
+            ),
+        ] {
+            let index = index_of(&format!("{INVOICE}\n\n{passage}"));
+            let mut facts = invoice_facts(&index);
+            facts.subject = Some(value.into());
+            facts.subject_evidence = vec![id_of(&index, "We ")];
+            let outcome = check(facts, &whole(&index), &index);
+            assert_eq!(
+                outcome.status,
+                ProposalStatus::Ready,
+                "{value}: {:?}",
+                outcome.reasons
+            );
+            assert!(outcome.facts.as_ref().unwrap().subject.is_none());
+            assert!(!outcome.proposal.description.contains(value));
+            assert_eq!(
+                outcome.proposal.document_date.as_deref(),
+                Some("2025-05-01")
+            );
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["Halvorsen Fixture Works LLC"]
+            );
+        }
+    }
+
+    #[test]
+    fn action_nouns_do_not_excuse_new_claims_or_replace_literal_anchors() {
+        let index = index_of(&format!(
+            "{INVOICE}\n\nWe implement the customer relationship management platform and migrate records. We state the plan here."
+        ));
+        for value in [
+            "CRM implementation and migration",
+            "CRM platform transformation",
+            "CRM platform station",
+            "CRM platform implementation and migration for Zanzibar",
+            "CRM platform implementation and migration for $9,999",
+        ] {
+            let mut facts = invoice_facts(&index);
+            facts.subject = Some(value.into());
+            facts.subject_evidence = vec![id_of(&index, "We implement")];
+            let outcome = check(facts, &whole(&index), &index);
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview, "{value}");
+            assert!(
+                outcome
+                    .reasons
+                    .contains(&ReviewReason::DescriptionUnsupported),
+                "{value}"
+            );
+            assert!(outcome.facts.as_ref().unwrap().subject.is_none());
+        }
     }
 
     #[test]
