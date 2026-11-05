@@ -123,8 +123,8 @@ OCR, and inference all ship inside the app.
 Upgrading from a build that had Qwen3.5 2B, or it and Bonsai 2 2B, setup asks
 for the two new models the same way: the 4B first, then the 9B behind the
 window. The earlier models' files are not deleted; nothing in Intern ever
-deletes a model file. The 9B needs about 10 GB of memory free to load, which a
-16 GB laptop has with little else open and not with a browser and an office
+deletes a model file. The 9B needs about 8 GB of memory free to load, which a
+16 GB laptop has with a browser open and not with a browser and an office
 suite at work; then the 4B, which needs about 6.5 GB, reads in its place, its
 names wait for your check, and the 9B reads them again when memory comes back.
 Both are slower than the 2B was - the 4B about two and a half times, the 9B

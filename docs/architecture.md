@@ -725,7 +725,7 @@ named as it was keeps whatever the reviewer had typed.
 | Models | Qwen3.5 9B, Q4_K_M GGUF (5.29 GiB), the accurate model; Qwen3.5 4B, Q4_K_M GGUF (2.55 GiB), the quick one, which stands in while memory is short and reads first on a new install. One loaded at a time |
 | Runtime | two llama.cpp builds, CPU only: upstream `b11946` runs both models; the PrismML fork, release `prism-b10826-c9c34bc`, is still packaged and runs nothing the manifest pins |
 | Context | 8,192 tokens |
-| Threads | half the logical processors, clamped to 2–12, for generation and for prompt processing alike |
+| Threads | every logical processor, at most 8, for generation and for prompt processing alike |
 | Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below) |
 | Vision | none. No projector is pinned, downloaded, or loaded, and the request type has no field for an image |
 
@@ -800,13 +800,16 @@ one named constant.
 
 The memory guard: a model is loaded only when the machine reports enough
 available memory for it (`MemAvailable` on Linux, `GlobalMemoryStatusEx` on
-Windows; memory that cannot be read counts as enough): its server's resident
-set with the prompt cache off as the live runs measured it (Qwen3.5 4B about
-4.7 GB, Qwen3.5 9B about 8.3 GB, almost all of it the mapped weights), the
+Windows; memory that cannot be read counts as enough): what its server must
+keep resident to read at its speed (Qwen3.5 4B about 4.7 GB, its whole
+resident set; Qwen3.5 9B about 6.2 GB, measured under a memory limit in
+`bench/reports/speed-linux-cpu-2026-11-05`: 3.4 GB of anonymous memory and
+the 2.7 GB of mapped weights it reads on every token, the rest of the mapped
+file being the original of what was repacked and reclaimable at no cost), the
 parser worker's 0.71 GB OCR peak, and 1 GiB left for the person's own work -
-6.5 GiB for the quick model, 10 GiB for the accurate one. A 16 GB laptop has
-the latter with little else open, and not with a browser and an office suite
-at work, which is what the quick model is for. What unloading the loaded model would free counts as
+6.5 GiB for the quick model, 8 GiB for the accurate one. A 16 GB laptop has
+the latter with a browser open, and not with a browser and an office suite at
+work, which is what the quick model is for. What unloading the loaded model would free counts as
 available too - its context and buffers, not its mapped weights, which the
 machine already reports as reclaimable. When the accurate model is wanted - by
 Automatic or by name - but is not installed yet or does not fit, the quick
@@ -867,12 +870,17 @@ identity and of the prompt version a recording carries, and `--prompt-profile`
 on `intern-evaluate`, `intern-analyze` and InternBench chooses one
 explicitly.
 
-Threads are half the logical processors on purpose. llama.cpp scales with
-physical cores rather than SMT threads, and taking every core makes the rest of
-Windows stutter — the product's premise is that it runs while you work. For the
-same reason both sidecars run at below-normal priority on Windows, and ten
-steps of niceness below Intern on Linux: they still get every cycle nothing
-else wants, and the window in front never waits on them.
+Threads are every logical processor, at most eight. Until alpha.13 they were
+half the logical count, on the reasoning that llama.cpp scales with physical
+cores and that taking every core makes the rest of Windows stutter, the
+product's premise being that it runs while you work. Measured on the 9B on
+two-core, four-thread runners (`bench/reports/speed-linux-cpu-2026-11-05`),
+four threads against two cut the time per request by 16 to 18%, and the
+sidecars run at below-normal priority on Windows, and ten steps of niceness
+below Intern on Linux: they still get every cycle nothing else wants, and the
+window in front never waits on them. Eight is the ceiling because the gain was
+measured on the SMT siblings of a few cores, not on a hybrid chip's efficiency
+cores.
 
 A reply may run to 1,024 tokens. The grammar's closing brace ends it long
 before that - the corpus's longest is about 200 - but a contract whose opening

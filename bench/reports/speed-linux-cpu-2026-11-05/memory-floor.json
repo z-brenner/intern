@@ -1,0 +1,68 @@
+{
+ "none": {
+  "requests": 6,
+  "errors": 0,
+  "latency_p50_s": 71.73,
+  "latency_mean_s": 146.1,
+  "prompt_ms_p50": 33328.6,
+  "predicted_ms_p50": 31824.1,
+  "decode_tok_per_s_p50": 3.14,
+  "rss_anon_kb": 3396644,
+  "rss_file_kb": 5554464
+ },
+ "9G": {
+  "requests": 6,
+  "errors": 0,
+  "latency_p50_s": 79.09,
+  "latency_mean_s": 179.79,
+  "prompt_ms_p50": 46877.2,
+  "predicted_ms_p50": 28921.3,
+  "decode_tok_per_s_p50": 3.29,
+  "rss_anon_kb": 3396668,
+  "rss_file_kb": 5554444
+ },
+ "8G": {
+  "requests": 6,
+  "errors": 0,
+  "latency_p50_s": 104.24,
+  "latency_mean_s": 147.1,
+  "prompt_ms_p50": 43548.9,
+  "predicted_ms_p50": 35171.5,
+  "decode_tok_per_s_p50": 2.7,
+  "rss_anon_kb": 3396660,
+  "rss_file_kb": 4946920
+ },
+ "7G": {
+  "requests": 6,
+  "errors": 0,
+  "latency_p50_s": 94.62,
+  "latency_mean_s": 148.15,
+  "prompt_ms_p50": 42096.3,
+  "predicted_ms_p50": 34461.7,
+  "decode_tok_per_s_p50": 2.85,
+  "rss_anon_kb": 3396664,
+  "rss_file_kb": 3857148
+ },
+ "6G": {
+  "requests": 6,
+  "errors": 0,
+  "latency_p50_s": 95.49,
+  "latency_mean_s": 187.88,
+  "prompt_ms_p50": 38309.5,
+  "predicted_ms_p50": 35571.9,
+  "decode_tok_per_s_p50": 2.62,
+  "rss_anon_kb": 3396676,
+  "rss_file_kb": 2791680
+ },
+ "5G": {
+  "requests": 6,
+  "errors": 5,
+  "latency_p50_s": 421.29,
+  "latency_mean_s": 421.29,
+  "prompt_ms_p50": 38718.5,
+  "predicted_ms_p50": 376379.8,
+  "decode_tok_per_s_p50": 0.25,
+  "rss_anon_kb": 3396240,
+  "rss_file_kb": 1810116
+ }
+}

@@ -1,0 +1,382 @@
+{
+ "runs": {
+  "fa-off": {
+   "runner_cpu": "AMD EPYC 9V74 80-Core Processor",
+   "variant_flags": "--flash-attn off",
+   "rounds": {
+    "baseline-r1": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 60.53,
+     "latency_p50_s": 53.87,
+     "prompt_ms_p50": 36822.4,
+     "predicted_ms_p50": 16640.3,
+     "decode_tok_per_s_p50": 5.63,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 0,
+     "compared_with_reference": 0
+    },
+    "variant-r1": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 60.3,
+     "latency_p50_s": 52.42,
+     "prompt_ms_p50": 37591.2,
+     "predicted_ms_p50": 15021.2,
+     "decode_tok_per_s_p50": 5.95,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 6,
+     "compared_with_reference": 13
+    },
+    "baseline-r2": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 60.16,
+     "latency_p50_s": 54.12,
+     "prompt_ms_p50": 36654.1,
+     "predicted_ms_p50": 16492.8,
+     "decode_tok_per_s_p50": 5.69,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 13,
+     "compared_with_reference": 13
+    },
+    "variant-r2": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 60.66,
+     "latency_p50_s": 52.25,
+     "prompt_ms_p50": 37573.1,
+     "predicted_ms_p50": 15149.9,
+     "decode_tok_per_s_p50": 5.82,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 6,
+     "compared_with_reference": 13
+    }
+   }
+  },
+  "kv-q8": {
+   "runner_cpu": "AMD EPYC 7763 64-Core Processor",
+   "variant_flags": "-ctk q8_0 -ctv q8_0",
+   "rounds": {
+    "baseline-r1": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 99.93,
+     "latency_p50_s": 87.82,
+     "prompt_ms_p50": 64747.9,
+     "predicted_ms_p50": 22187.4,
+     "decode_tok_per_s_p50": 3.97,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 0,
+     "compared_with_reference": 0
+    },
+    "variant-r1": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 104.32,
+     "latency_p50_s": 86.62,
+     "prompt_ms_p50": 68409.7,
+     "predicted_ms_p50": 21196.4,
+     "decode_tok_per_s_p50": 4.16,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 1,
+     "compared_with_reference": 13
+    },
+    "baseline-r2": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 99.31,
+     "latency_p50_s": 86.4,
+     "prompt_ms_p50": 64452.8,
+     "predicted_ms_p50": 22070.2,
+     "decode_tok_per_s_p50": 4.04,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 13,
+     "compared_with_reference": 13
+    },
+    "variant-r2": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 104.7,
+     "latency_p50_s": 86.77,
+     "prompt_ms_p50": 68364.7,
+     "predicted_ms_p50": 22346.4,
+     "decode_tok_per_s_p50": 4.12,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 1,
+     "compared_with_reference": 13
+    }
+   }
+  },
+  "t3-tb4": {
+   "runner_cpu": "AMD EPYC 9V45 96-Core Processor",
+   "variant_flags": "--threads 3 --threads-batch 4",
+   "rounds": {
+    "baseline-r1": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 43.27,
+     "latency_p50_s": 39.5,
+     "prompt_ms_p50": 24314.3,
+     "predicted_ms_p50": 13985.7,
+     "decode_tok_per_s_p50": 6.55,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 0,
+     "compared_with_reference": 0
+    },
+    "variant-r1": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 37.21,
+     "latency_p50_s": 34.6,
+     "prompt_ms_p50": 19738.6,
+     "predicted_ms_p50": 13469.5,
+     "decode_tok_per_s_p50": 6.86,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 8,
+     "compared_with_reference": 13
+    },
+    "baseline-r2": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 44.13,
+     "latency_p50_s": 39.31,
+     "prompt_ms_p50": 25019.9,
+     "predicted_ms_p50": 13823.8,
+     "decode_tok_per_s_p50": 6.45,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 13,
+     "compared_with_reference": 13
+    },
+    "variant-r2": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 36.21,
+     "latency_p50_s": 34.07,
+     "prompt_ms_p50": 19722.6,
+     "predicted_ms_p50": 12549.5,
+     "decode_tok_per_s_p50": 7.29,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 8,
+     "compared_with_reference": 13
+    }
+   }
+  },
+  "t4-tb4": {
+   "runner_cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+   "variant_flags": "--threads 4 --threads-batch 4",
+   "rounds": {
+    "baseline-r1": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 81.92,
+     "latency_p50_s": 77.37,
+     "prompt_ms_p50": 41107.6,
+     "predicted_ms_p50": 33076.1,
+     "decode_tok_per_s_p50": 2.81,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 0,
+     "compared_with_reference": 0
+    },
+    "variant-r1": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 67.8,
+     "latency_p50_s": 62.11,
+     "prompt_ms_p50": 37317.5,
+     "predicted_ms_p50": 23333.4,
+     "decode_tok_per_s_p50": 4.03,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 6,
+     "compared_with_reference": 13
+    },
+    "baseline-r2": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 82.72,
+     "latency_p50_s": 78.5,
+     "prompt_ms_p50": 41543.4,
+     "predicted_ms_p50": 33252.9,
+     "decode_tok_per_s_p50": 2.82,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 13,
+     "compared_with_reference": 13
+    },
+    "variant-r2": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 67.9,
+     "latency_p50_s": 62.37,
+     "prompt_ms_p50": 37560.4,
+     "predicted_ms_p50": 23414.2,
+     "decode_tok_per_s_p50": 4.03,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 6,
+     "compared_with_reference": 13
+    }
+   }
+  },
+  "tb4": {
+   "runner_cpu": "AMD EPYC 7763 64-Core Processor",
+   "variant_flags": "--threads-batch 4",
+   "rounds": {
+    "baseline-r1": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 98.44,
+     "latency_p50_s": 85.09,
+     "prompt_ms_p50": 64779.5,
+     "predicted_ms_p50": 21214.3,
+     "decode_tok_per_s_p50": 4.27,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 0,
+     "compared_with_reference": 0
+    },
+    "variant-r1": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 91.79,
+     "latency_p50_s": 80.39,
+     "prompt_ms_p50": 60023.6,
+     "predicted_ms_p50": 19743.4,
+     "decode_tok_per_s_p50": 4.37,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 13,
+     "compared_with_reference": 13
+    },
+    "baseline-r2": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 97.13,
+     "latency_p50_s": 83.41,
+     "prompt_ms_p50": 64055.9,
+     "predicted_ms_p50": 20832.6,
+     "decode_tok_per_s_p50": 4.4,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 13,
+     "compared_with_reference": 13
+    },
+    "variant-r2": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 92.61,
+     "latency_p50_s": 79.59,
+     "prompt_ms_p50": 59976.1,
+     "predicted_ms_p50": 20697.9,
+     "decode_tok_per_s_p50": 4.32,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 13,
+     "compared_with_reference": 13
+    }
+   }
+  },
+  "ub512": {
+   "runner_cpu": "AMD EPYC 9V45 96-Core Processor",
+   "variant_flags": "-ub 512",
+   "rounds": {
+    "baseline-r1": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 42.81,
+     "latency_p50_s": 39.58,
+     "prompt_ms_p50": 24515.1,
+     "predicted_ms_p50": 13515.5,
+     "decode_tok_per_s_p50": 6.78,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 0,
+     "compared_with_reference": 0
+    },
+    "variant-r1": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 42.14,
+     "latency_p50_s": 38.65,
+     "prompt_ms_p50": 24632.0,
+     "predicted_ms_p50": 12951.8,
+     "decode_tok_per_s_p50": 7.02,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 6,
+     "compared_with_reference": 13
+    },
+    "baseline-r2": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 41.32,
+     "latency_p50_s": 38.0,
+     "prompt_ms_p50": 23674.6,
+     "predicted_ms_p50": 12736.6,
+     "decode_tok_per_s_p50": 7.05,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 13,
+     "compared_with_reference": 13
+    },
+    "variant-r2": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 41.3,
+     "latency_p50_s": 38.19,
+     "prompt_ms_p50": 23529.1,
+     "predicted_ms_p50": 13096.8,
+     "decode_tok_per_s_p50": 7.2,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 6,
+     "compared_with_reference": 13
+    }
+   }
+  },
+  "lm-none": {
+   "runner_cpu": "AMD EPYC 7763 64-Core Processor",
+   "variant_flags": "-lm none",
+   "rounds": {
+    "baseline-r1": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 103.03,
+     "latency_p50_s": 92.03,
+     "prompt_ms_p50": 64913.8,
+     "predicted_ms_p50": 25338.7,
+     "decode_tok_per_s_p50": 3.51,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 0,
+     "compared_with_reference": 0
+    },
+    "variant-r1": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 103.58,
+     "latency_p50_s": 91.12,
+     "prompt_ms_p50": 65013.3,
+     "predicted_ms_p50": 25939.7,
+     "decode_tok_per_s_p50": 3.45,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 13,
+     "compared_with_reference": 13
+    },
+    "baseline-r2": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 103.04,
+     "latency_p50_s": 91.65,
+     "prompt_ms_p50": 64606.9,
+     "predicted_ms_p50": 25738.7,
+     "decode_tok_per_s_p50": 3.51,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 13,
+     "compared_with_reference": 13
+    },
+    "variant-r2": {
+     "requests": 13,
+     "errors": 0,
+     "wall_per_request_s": 103.01,
+     "latency_p50_s": 91.2,
+     "prompt_ms_p50": 64634.7,
+     "predicted_ms_p50": 24710.5,
+     "decode_tok_per_s_p50": 3.57,
+     "prompt_tokens_p50": 860,
+     "identical_to_reference": 13,
+     "compared_with_reference": 13
+    }
+   }
+  }
+ }
+}
