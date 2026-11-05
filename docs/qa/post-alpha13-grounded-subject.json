@@ -256,5 +256,6 @@
     "head_sha": "334627cea9058613a77e8928bfd26ada42075e23",
     "status": "in_progress; no outcome claimed",
     "url": "https://github.com/z-brenner/intern/actions/runs/41961091444"
-  }
+  },
+  "superseded_by": "post-alpha13-subject-actions.json"
 }

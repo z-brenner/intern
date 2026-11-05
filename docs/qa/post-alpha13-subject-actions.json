@@ -1,0 +1,291 @@
+{
+  "source_commit": "08567177b5cc1e055b34b8635367c290c8bc62d3",
+  "release_inputs_sha256": "e8a4ddb7775398f8cf902df329a973dc90ce11b8b7f68efe845ed29fcd871aeb",
+  "release_qualified": false,
+  "captured_subject_from_independent_audit": "CRM platform implementation and migration",
+  "gap_executed_before_fix": true,
+  "failing_reason": "DescriptionUnsupported: initial helper required literal implementation/migration anchors",
+  "complete_latest_windows_recording_replayed_here": false,
+  "paired_experiment_scope": "Only the audit-supplied SOW subject wording replaces the subject in historical fixtures/corpus-recording.json. Extraction, prompt hashes, other reply fields and probabilities remain historical. This is not the complete latest Windows recording.",
+  "checked_action_pairs": [
+    [
+      "implementation",
+      "implement"
+    ],
+    [
+      "migration",
+      "migrate"
+    ],
+    [
+      "configuration",
+      "configure"
+    ],
+    [
+      "validation",
+      "validate"
+    ]
+  ],
+  "literal_anchor_required": true,
+  "original_subject_literal_word_check_unchanged": true,
+  "subject_still_omitted": true,
+  "emitted_filename_description_proposal_probabilities_identical_in_pair": true,
+  "all_other_records_identical": true,
+  "confidence_guard": {
+    "constructed_min": 0.699,
+    "readiness": "needs_review",
+    "reason": "low_confidence"
+  },
+  "thresholds_unchanged": {
+    "minimum_probability": 0.7,
+    "maximum_review_rate": 0.6
+  },
+  "gold_baselines_tolerances_unchanged": true,
+  "checks": {
+    "portable_rust_passed": 1502,
+    "portable_rust_failed": 0,
+    "portable_rust_ignored": 6,
+    "desktop_excluded": true,
+    "strict_clippy": "passed, portable workspace/all targets",
+    "formatting": "passed",
+    "default_77_document_and_fixture_replays_semantically_identical_to_previous_version": true,
+    "new_guards": "unknown actions, station/state prefix collision, derived-only anchors, invented names and amounts",
+    "frontend_files": 78,
+    "frontend_tests": 765,
+    "types_and_build": "passed",
+    "focused_qa_and_comparison_tests": 15
+  },
+  "replay_receipts": {
+    "captured-wording-regression.json": {
+      "sha256": "16685fc4aaa81cae1a85257d7280221704736b95a71a5cda1fb05fd773134bc2",
+      "bytes": 979458,
+      "scope": "controlled substitution in historical recording, not complete latest Windows recording"
+    },
+    "captured-wording-confidence-guard.json": {
+      "sha256": "3492fadbaee22bff46afb65e4d23629d7c1fa76122217b97679e9b2a6ec493bd",
+      "bytes": 979541,
+      "scope": "controlled substitution in historical recording, not complete latest Windows recording"
+    },
+    "captured-before.json": {
+      "sha256": "bcb5d753ef2452499d324b104697a6ec164629326b49175b5ea96117474ab377",
+      "bytes": 84698,
+      "scope": "controlled substitution in historical recording, not complete latest Windows recording",
+      "records": 21,
+      "stale_prompts": 0,
+      "statement_of_work": {
+        "filename": "2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso Worldwide, Inc.pdf",
+        "description": "STATEMENT OF WORK between Ridgeline Cartography LLC and Contoso Worldwide, Inc., reference SOW-2026-004, fixed fee of $248,000.",
+        "readiness": "needs_review",
+        "review_reasons": [
+          "description_unsupported"
+        ],
+        "token_confidence": {
+          "mean": 0.993872344493866,
+          "min": 0.9466327428817749,
+          "tokens": 23
+        },
+        "scores": {
+          "date_correct": true,
+          "date_exact": true,
+          "date_forbidden": false,
+          "date_present": true,
+          "date_role_correct": true,
+          "description_covers_facts": true,
+          "description_specific": true,
+          "filename_correct": true,
+          "parties_correct": true,
+          "parties_expected": 2,
+          "parties_matched": 2,
+          "parties_spurious": 0,
+          "party_forbidden": false,
+          "readiness_match": false,
+          "ready": false,
+          "relation_correct": true,
+          "type_correct": true,
+          "type_present": true
+        }
+      }
+    },
+    "captured-after.json": {
+      "sha256": "fc5d04198ca1d0ad16b493465e03915f9ba00db62f1413f263a4433d821a9f66",
+      "bytes": 84803,
+      "scope": "controlled substitution in historical recording, not complete latest Windows recording",
+      "records": 21,
+      "stale_prompts": 0,
+      "statement_of_work": {
+        "filename": "2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso Worldwide, Inc.pdf",
+        "description": "STATEMENT OF WORK between Ridgeline Cartography LLC and Contoso Worldwide, Inc., reference SOW-2026-004, fixed fee of $248,000.",
+        "readiness": "ready",
+        "review_reasons": [],
+        "token_confidence": {
+          "mean": 0.993872344493866,
+          "min": 0.9466327428817749,
+          "tokens": 23
+        },
+        "scores": {
+          "date_correct": true,
+          "date_exact": true,
+          "date_forbidden": false,
+          "date_present": true,
+          "date_role_correct": true,
+          "description_covers_facts": true,
+          "description_specific": true,
+          "filename_correct": true,
+          "parties_correct": true,
+          "parties_expected": 2,
+          "parties_matched": 2,
+          "parties_spurious": 0,
+          "party_forbidden": false,
+          "readiness_match": true,
+          "ready": true,
+          "relation_correct": true,
+          "type_correct": true,
+          "type_present": true
+        }
+      }
+    },
+    "confidence-guard.json": {
+      "sha256": "7a98befcfab14b94eec6a4f744820c853b901aef7e000a35fa726575f24829b1",
+      "bytes": 84694,
+      "scope": "controlled substitution in historical recording, not complete latest Windows recording",
+      "records": 21,
+      "stale_prompts": 0,
+      "statement_of_work": {
+        "filename": "2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso Worldwide, Inc.pdf",
+        "description": "STATEMENT OF WORK between Ridgeline Cartography LLC and Contoso Worldwide, Inc., reference SOW-2026-004, fixed fee of $248,000.",
+        "readiness": "needs_review",
+        "review_reasons": [
+          "low_confidence"
+        ],
+        "token_confidence": {
+          "mean": 0.993872344493866,
+          "min": 0.6990000009536743,
+          "tokens": 23
+        },
+        "scores": {
+          "date_correct": true,
+          "date_exact": true,
+          "date_forbidden": false,
+          "date_present": true,
+          "date_role_correct": true,
+          "description_covers_facts": true,
+          "description_specific": true,
+          "filename_correct": true,
+          "parties_correct": true,
+          "parties_expected": 2,
+          "parties_matched": 2,
+          "parties_spurious": 0,
+          "party_forbidden": false,
+          "readiness_match": false,
+          "ready": false,
+          "relation_correct": true,
+          "type_correct": true,
+          "type_present": true
+        }
+      }
+    },
+    "fixtures-current.json": {
+      "sha256": "fd79a1cb80051f1041ed83f641b6d83190a7746ff21f6b5bba568932eff20142",
+      "bytes": 84807,
+      "scope": "historical recorded-response replay, not live inference",
+      "records": 21,
+      "stale_prompts": 0,
+      "baseline_regressions": []
+    },
+    "fixtures-digest.json": {
+      "sha256": "8a21fb6a7417af0c0158bb8d660ff037bce28ef526c201a22e4df0524590f64b",
+      "bytes": 45550,
+      "scope": "historical recorded-response replay, not live inference",
+      "records": 21,
+      "stale_prompts": 0,
+      "baseline_regressions": []
+    },
+    "bench9b.json": {
+      "sha256": "93b02ff4109fcbc6f960d6685f84699c8de85e09b7751b950c8c7e691d12e080",
+      "bytes": 1655686,
+      "scope": "historical recorded-response replay, not live inference",
+      "records": 77,
+      "stale_prompts": 0,
+      "baseline_passed": true,
+      "scores": {
+        "filename_correct": 73,
+        "date_correct": 77,
+        "parties_correct": 77,
+        "unsafe_ready": 0,
+        "ready": 37
+      }
+    },
+    "bench2b.json": {
+      "sha256": "44006b5fd9bb720b24cb79de0d47bf4cf226575fedd085e8d55ab9b1fc575989",
+      "bytes": 1639983,
+      "scope": "historical recorded-response replay, not live inference",
+      "records": 77,
+      "stale_prompts": 0,
+      "baseline_passed": true,
+      "scores": {
+        "filename_correct": 71,
+        "date_correct": 76,
+        "parties_correct": 75,
+        "unsafe_ready": 1,
+        "ready": 65
+      }
+    }
+  },
+  "frozen_evaluators": {
+    "intern-evaluate-after": {
+      "sha256": "6855d992fa4242424288c080a7ef1e99505d9b008c1f8a4e5286f90a6a444a69",
+      "bytes": 8088168
+    },
+    "intern-evaluate-before": {
+      "sha256": "d2dc70349fa3514b182b232cc4fd0526013fcb02c653341fe271fd9c7f167b00",
+      "bytes": 8088112
+    }
+  },
+  "facts_source_sha256": "5698c7eb2da4d6521f77630e147385d20cb8d02b596292c53a32027b73ec25ae",
+  "outstanding": [
+    "paired replay of complete latest Windows recording",
+    "matching Windows QA on this source",
+    "explanation of earlier passing run remains unproven",
+    "held-out document checks",
+    "16 GB CPU laptop qualification",
+    "required fidelity review"
+  ],
+  "prior_qa_run": {
+    "id": 41961091444,
+    "head_sha": "334627cea9058613a77e8928bfd26ada42075e23",
+    "scope": "initial grounded acronym rule; left running, no modification or cancellation"
+  },
+  "pc_background_run": "uncertain, untouched",
+  "app_fix_commit": "f81b149fd0ba3731822f01f0e0b14de8af245dcc",
+  "qualification_runner_paired_replay": {
+    "status": "implemented, pending Windows execution",
+    "control_commit": "777071d2582eb8dbdc861367f9bd47d20e32125d",
+    "same_recording_checked_against_live_report_hash": true,
+    "fresh_inference_requests": 0,
+    "threshold": 0.7,
+    "preserves_failed_live_acceptance": true,
+    "diagnostic_only": true,
+    "refuses_emission_changes_or_readiness_loss": true,
+    "scope": "qualification branches; main and release acceptance policy unchanged"
+  },
+  "local_replay_comparison": {
+    "sha256": "50b9095066d6e0ae5b8a759707d13225ee8fc15ec857b4ab9df199404851e54d",
+    "result": {
+      "diagnostic_only": true,
+      "records": 21,
+      "changes": [
+        {
+          "file": "statement-of-work.pdf",
+          "changed_emissions": [],
+          "before_readiness": "needs_review",
+          "after_readiness": "ready",
+          "before_reasons": [
+            "description_unsupported"
+          ],
+          "after_reasons": []
+        }
+      ],
+      "emissions_unchanged": true,
+      "readiness_regressions": []
+    }
+  }
+}

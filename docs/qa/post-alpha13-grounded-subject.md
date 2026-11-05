@@ -1,5 +1,10 @@
 # Reducing unnecessary review without changing confidence policy
 
+The [captured-wording follow-up](post-alpha13-subject-actions.md) confirms that
+the initial literal-anchor rule missed `implementation`/`migration` wording
+and records the bounded correction. Historical results below remain valid
+for the different subject wording they actually tested.
+
 The branch remains experimental and unqualified for release. Source commit
 `6c51362b5caf279d9fb1625f5092c3b06d442ab7` has release-input digest
 `35f3e854a27f7b50ebc05e027a87569ebc05efcef0ed868fd8bf29fa79160c02`.
