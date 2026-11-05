@@ -8402,6 +8402,34 @@ Date of notice: August 12, 2026";
     }
 
     #[test]
+    fn a_copied_effective_date_is_removed_from_the_type_but_kept_as_the_date() {
+        const LEASE: &str =
+            "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024\n\nAcme LLC and Contoso Inc.";
+        let (outcome, _) = facts_for(LEASE, |index| ModelFacts {
+            document_type: Some("LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024".into()),
+            type_evidence: vec![id_of(index, "LEASE")],
+            document_date: Some("2024-09-01".into()),
+            date_role: Some(DateRole::Effective),
+            date_evidence: vec![id_of(index, "LEASE")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome
+                .proposal
+                .document_type
+                .as_deref()
+                .map(str::to_lowercase)
+                .as_deref(),
+            Some("lease agreement")
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2024-09-01")
+        );
+        assert_eq!(outcome.proposal.date_role, Some(DateRole::Effective));
+    }
+
+    #[test]
     fn a_name_cut_short_is_completed_to_the_organization_and_its_scattered_capitals_tidied() {
         const ORDER: &str =
             "PURCHASE ORDER PO-310\n\nDAtE JULY 14 20z5\n\nEMBer POSt MANUFACtURInG LLC";

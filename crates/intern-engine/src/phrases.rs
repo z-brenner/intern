@@ -8,7 +8,7 @@
 //! back is always words the document states, in the order it states them.
 
 use crate::cues::{NOT_A_TITLE, ORGANIZATION_ENDINGS, TYPE_NOUNS};
-use crate::evidence::normalize;
+use crate::evidence::{date_match_positions, extract_stated_dates, normalize};
 use crate::index::LEGAL_FORMS;
 
 /// The lower-case words of `text`, split at anything that is not a letter
@@ -366,6 +366,43 @@ pub(crate) fn without_identifier(value: &str) -> String {
         }
         let token = tokens[at];
         let next = tokens.get(at + 1).copied();
+        // An effective/dated field copied onto the title names this copy,
+        // not the kind. Cut only a whole terminal date, immediately after
+        // the kind; never a topic, an invalid date or a coverage interval.
+        if matches!(core(token).as_str(), "effective" | "dated")
+            && names_a_kind(&core(tokens[at - 1]))
+        {
+            let mut date_at = at + 1;
+            if tokens.get(date_at).is_some_and(|token| core(token) == "as")
+                && tokens
+                    .get(date_at + 1)
+                    .is_some_and(|token| core(token) == "of")
+            {
+                date_at += 2;
+            }
+            let date_tokens = tokens[date_at..]
+                .iter()
+                .map(|token| core(token))
+                .collect::<Vec<_>>();
+            let date_shape = match date_tokens.as_slice() {
+                [_] => true,
+                [first, second, year] => {
+                    (MONTHS.contains(&first.as_str()) || MONTHS.contains(&second.as_str()))
+                        && year.len() == 4
+                        && year.chars().all(|c| c.is_ascii_digit())
+                }
+                _ => false,
+            };
+            let date = date_tokens.join(" ");
+            if date_shape
+                && extract_stated_dates(&date)
+                    .iter()
+                    .any(|iso| date_match_positions(iso, &date).contains(&0))
+            {
+                end = at;
+                break;
+            }
+        }
         let introduces = identifier_word(token) && next.is_none_or(has_digit);
         let numbered = token.starts_with('#') && has_digit(token);
         let dashed = matches!(token, "-" | "\u{2013}" | "\u{2014}") && at + 1 < tokens.len();
@@ -793,6 +830,33 @@ mod tests {
             "Amendment No. 3",
             "Change Order No. 7",
             "ADDENDUM NO. 2",
+        ] {
+            assert_eq!(without_identifier(kept), kept);
+        }
+    }
+
+    #[test]
+    fn a_terminal_date_field_is_no_part_of_the_document_kind() {
+        for value in [
+            "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024",
+            "Lease Agreement effective as of September 1, 2024",
+            "Lease Agreement dated 2024-09-01",
+            "Lease Agreement dated as of 1 September 2024",
+        ] {
+            assert_eq!(
+                without_identifier(value).to_lowercase(),
+                "lease agreement",
+                "{value}"
+            );
+        }
+        for kept in [
+            "Effective Date Agreement",
+            "Agreement on Effective Remedies",
+            "Lease Agreement Effective September 1 2024 Amendment",
+            "Lease Agreement effective September 1, 2024 through August 31, 2025",
+            "Lease Agreement effective September 31, 2024",
+            "2025 Annual Report",
+            "Lease Agreement dated 2024-09-01 Plan 2025",
         ] {
             assert_eq!(without_identifier(kept), kept);
         }
