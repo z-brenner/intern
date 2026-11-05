@@ -376,9 +376,11 @@
     "median_seconds_reported_by_parent": 20.692
   },
   "remaining": [
-    "Completion and inspection of fresh Windows QA and its complete-recording paired step.",
-    "Applicable capture-specific fidelity review and release preflight; prepare a new version and matching notes before any subsequent release.",
-    "Additional held-out checks and laptop performance characterization remain useful; constrained PC replay establishes neither fresh timing nor actual laptop behavior."
+    "Prepare next version and release notes in isolation before fresh QA, as docs/releasing.md requires.",
+    "Integrate through an authorized route; do not bypass or retry the prior denied PR submission without evidence addressing that denial.",
+    "Run whole-product QA on the exact integrated release-input tree and obtain truthful capture-specific fidelity sign-off.",
+    "Run release preflight and the exact-main release workflow only after all gates pass.",
+    "Retain limitations: PC results are reported replay; laptop behavior and runtime/CPU variant cause remain unestablished."
   ],
   "default_model_changed": false,
   "pr_created_approved_or_merged": false,
@@ -469,28 +471,45 @@
     "run_id": 41970479658,
     "head": "a3910ba22e313d5862642748ab8342c4c807a24c",
     "url": "https://github.com/z-brenner/intern/actions/runs/41970479658",
-    "status": "in_progress",
+    "status": "completed, success",
     "covers_new_ownership_fix": true,
-    "completed_or_qualified": false,
-    "checkpoint_utc": "2026-11-05 05:22 UTC",
+    "completed_or_qualified": true,
     "passed_so_far": [
-      "Frontend unit/type/build checks",
-      "Browser core path, accessibility, responsive and screenshot QA",
-      "Rust formatting",
-      "Full Windows workspace strict Clippy",
-      "Full Windows workspace Rust tests",
-      "Pinned Windows assets verification",
-      "Native parser fixture integration",
-      "Staged package runtime",
-      "PP-OCR scan checks",
-      "Windows installer build",
-      "Per-user installer and uninstall-data-retention smoke"
+      "All Windows whole-product steps, including frontend/browser, native Rust and lint, parser/OCR/runtime, installer build/smoke, live acceptance, paired replay, evidence binding and upload"
     ],
-    "pending_at_checkpoint": [
-      "Live model acceptance (in progress)",
-      "Complete-recording paired replay",
-      "Evidence binding and upload"
-    ]
+    "qualification_scope": "Windows whole-product gates passed; no release or human fidelity attestation",
+    "completed": 19,
+    "ready": 10,
+    "review": 9,
+    "review_rate": 0.47368421052631576,
+    "below_0_7_all_held": true,
+    "live_equals_after_replay_logged_fields": true,
+    "paired_confidences_unchanged": true,
+    "paired_comparison": {
+      "diagnostic_only": true,
+      "records": 21,
+      "changes": [
+        {
+          "file": "statement-of-work.pdf",
+          "changed_emissions": [],
+          "before_readiness": "needs_review",
+          "after_readiness": "ready",
+          "before_reasons": [
+            "description_unsupported"
+          ],
+          "after_reasons": []
+        }
+      ],
+      "emissions_unchanged": true,
+      "readiness_regressions": []
+    },
+    "evaluation_wall_seconds": 725.0,
+    "artifact": {
+      "id": 13391101300,
+      "bytes": 65212214,
+      "sha256": "c115c23f261243791cd57eb9db4841c52e3b58ae9d72b0ff2fef871c66284498"
+    },
+    "provenance": "Completed job logs independently verified here; parent independent archive audit additionally confirms guarded ownership tests, only SOW readiness change and no new emissions or safety regression. Archive bytes not materialized here."
   },
   "matched_pc_replay_reported_2026_11_05": {
     "provenance": "PC worker completion reported by parent thread 01a19ec5-e0ec-744e-aa82-5d8c078a0009. Reports and verification remain on the PC; original files have not been independently inspected on this executor.",

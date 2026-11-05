@@ -118,14 +118,19 @@ feasibility, without establishing actual 16 GB laptop latency, headroom with
 other applications or battery behavior. Existing model selection, memory
 floors and mandatory review for the fast tier are unchanged.
 
-Fresh matching Windows QA is running at
-[41970479658](https://github.com/z-brenner/intern/actions/runs/41970479658),
-head `a3910ba22e313d5862642748ab8342c4c807a24c`. At the 05:22 UTC checkpoint,
-frontend checks, browser QA, formatting, full Windows workspace strict Clippy,
-full Windows workspace tests, verified native assets, parser integration, staged
-runtime, PP-OCR, installer build and installer smoke checks passed. Live
-acceptance is in progress; paired replay and final evidence binding remain
-pending.
+Matching Windows QA
+[41970479658](https://github.com/z-brenner/intern/actions/runs/41970479658)
+completed successfully at head `a3910ba22e313d5862642748ab8342c4c807a24c`.
+All frontend, browser, Rust, native runtime, OCR, installer build and smoke,
+live acceptance, paired replay and artifact binding/upload steps passed.
+The live run completes 19 documents: ten ready and nine reviewed (47.4%).
+Every below-0.7 result is held. The same-recording comparison changes only SOW
+readiness and no emitted fields, with no readiness regression. This executor
+independently verifies all 57 logged rows across live/control/current arms;
+the parent independent archive audit confirms the complete artifact and guarded
+ownership tests. The 77-document PC replay separately exercises the CEO case.
+The workflow itself does not exercise that annual-report fixture.
+
 The earlier [41964133224](https://github.com/z-brenner/intern/actions/runs/41964133224)
 is preserved and completed successfully on the preceding source. Its live
 result is eight ready and eleven reviewed (57.9%); the paired replay improves
@@ -144,7 +149,8 @@ No sign-off fields were edited. [The reviewer rule](../releasing.md#the-reviewer
 requires a named person to accept the exact capture; an assistant cannot invent
 that attestation. A new release also needs its own aligned version and notes.
 
-Windows acceptance and the capture-specific preflight are still pending, so
-the branch remains unqualified for release. No PR approval, merge,
+Windows whole-product gates now pass for this source. Integration, next-version
+preparation, exact release-tree QA and capture-specific preflight remain, so
+the branch is not yet a qualified release. No PR approval, merge,
 default-model change or release was performed. These docs-only receipts retain
 the same release-input digest and do not restart either QA run.
