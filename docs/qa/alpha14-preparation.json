@@ -103,11 +103,12 @@
     "retried": false
   },
   "remaining": [
-    "Complete and inspect fresh whole-product branch QA 41975965963; it cannot publish or substitute for required exact-main QA.",
-    "Integrate through a permitted route; no bypass of the earlier PR-submission denial and no self-approval.",
-    "Follow docs/releasing.md: final release tree on exact main, fresh QA, exact capture and truthful named-person fidelity sign-off; changes after QA restricted to docs/qa/.",
-    "Run preflight, then deliberately dispatch the exact-main release workflow, and verify published installer/updater/provenance afterward.",
-    "Retain latency, confidence-variation and laptop-characterization limitations in the published evidence."
+    "Integrate through a permitted route; main is still 8299690 (alpha.13); do not bypass the earlier denied draft-PR submission.",
+    "Follow docs/releasing.md with QA on exact integrated main release-input tree. Branch QA passed and matches current 730-entry digest, but is not exact-main QA.",
+    "Make the exact release capture accessible; supported artifact transfer failed here. Current image inspection covers historical alpha.13 only.",
+    "Obtain truthful named-person acceptance of the exact final capture; fidelity remains pending and preflight exits 1.",
+    "After all prerequisites, run exact-main release workflow and verify signed updater, installer attestation, latest manifest and download-page publication.",
+    "Preserve limits: no actual laptop qualification and no resolved CPU/runtime cause for confidence variation."
   ],
   "artifact_directory": "/workspace/artifacts/intern-alpha14-preparation",
   "artifact_files": {
@@ -194,9 +195,78 @@
     "head": "e4a61211e916921afefdbbd0112661245ff89e45",
     "release_inputs_sha256": "01f0d67e72987a0cf196dad7ed1dd1c34b5abe4163b3673d787b7ee9d9208f24",
     "url": "https://github.com/z-brenner/intern/actions/runs/41975965963",
-    "status": "in_progress",
-    "completed": false,
+    "status": "completed, success",
+    "completed": true,
     "publication_enabled": false,
-    "is_exact_main_qa": false
+    "is_exact_main_qa": false,
+    "completed_records": 19,
+    "ready": 10,
+    "review": 9,
+    "review_rate": 0.47368421052631576,
+    "below_0_7_count": 6,
+    "below_0_7_all_held": true,
+    "paired_comparison": {
+      "diagnostic_only": true,
+      "records": 21,
+      "changes": [
+        {
+          "file": "statement-of-work.pdf",
+          "changed_emissions": [],
+          "before_readiness": "needs_review",
+          "after_readiness": "ready",
+          "before_reasons": [
+            "description_unsupported"
+          ],
+          "after_reasons": []
+        }
+      ],
+      "emissions_unchanged": true,
+      "readiness_regressions": []
+    },
+    "all_logged_live_rows_equal_current_replay": true,
+    "all_completed_paired_confidence_objects_equal": true,
+    "evaluation_wall_seconds_from_log": 769.9,
+    "artifact": {
+      "id": 13395287384,
+      "bytes": 65213785,
+      "sha256": "fffbe4c98d9663dafccca2e0a7131c8e2b93a21740935cd2b5e98e3e2e761d37"
+    },
+    "verification": "Completed job logs independently checked here; parent independent artifact audit confirms all 11 artifact hashes. Archive bytes were not materialized on this executor."
+  },
+  "release_input_tree_verification": {
+    "qa_head": "e4a61211e916921afefdbbd0112661245ff89e45",
+    "current_head_at_check": "2441d657df3a2f93b0bb08c3f7c46f2b8eb8fe04",
+    "entries": 730,
+    "both_sha256": "01f0d67e72987a0cf196dad7ed1dd1c34b5abe4163b3673d787b7ee9d9208f24",
+    "independently_reconstructed_here": true,
+    "all_11_artifact_hashes": "verified by parent independent audit, not locally reverified"
+  },
+  "capture_inspection": {
+    "fresh_capture_inspected_here": false,
+    "fresh_capture_materialization": "One supported transfer attempt for artifact 13395287384 returned download failed; no complete local archive installed; no raw URL fallback or retry.",
+    "fresh_capture_sha256": "not available on this executor",
+    "historical_reference_inspected": true,
+    "historical_reference_path": "docs/qa/latest-implementation.png",
+    "historical_reference_sha256": "a95052639f75b6e2bdad0438da20645b59490271748ca2a9dab901fdb31cbd25",
+    "historical_dimensions": [
+      1536,
+      1024
+    ],
+    "inspection_scope": "Assistant reference inspection of committed alpha.13 image only; not a person-specific sign-off or assertion of fresh capture equality.",
+    "packet": "docs/qa/alpha14-fidelity-review.md"
+  },
+  "final_branch_followup_artifacts": {
+    "qa419759-records.json": {
+      "bytes": 15945,
+      "sha256": "8e256fbe0853af51078be937d7c6536e4a427c4c1ce7daa2102208c301a26640"
+    },
+    "capture-access-result.json": {
+      "bytes": 390,
+      "sha256": "7d5c2a52ebe33345ab9c3b47b9e0cf4f87f08edcef463116cc94715d36d2b4bc"
+    },
+    "preflight-final-branch.log": {
+      "bytes": 163,
+      "sha256": "7d8c63848faf84a2357815eda63b276047bccc1fb0365390e3bafb0e789b84ff"
+    }
   }
 }

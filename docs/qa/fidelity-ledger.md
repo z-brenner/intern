@@ -1,18 +1,22 @@
 # Intern alpha.14 rendered-fidelity ledger
 
 **Current rendered sign-off status: pending.** No person has accepted a capture
-for alpha.14. The version and release notes change the release-input tree;
-previous qualification passes do not supply its final capture or sign-off.
+for alpha.14. Branch QA 41975965963 passed at release-input digest
+`01f0d67e72987a0cf196dad7ed1dd1c34b5abe4163b3673d787b7ee9d9208f24`;
+current and QA trees independently match all 730 non-QA entries. Required
+exact-main QA and person-specific acceptance remain separate.
 
-The committed image remains the historical alpha.13 capture. Replace it only
-with the exact image from QA on the final release tree and follow
-[the reviewer rule](../releasing.md#the-reviewer-rule). Do not reuse a digest,
-name a person who did not review it, or treat automated screenshot tests as a
-human attestation.
+The supported transfer of that run's fresh artifact failed, so the fresh capture
+has not been visually inspected here. The assistant inspected only the existing
+historical alpha.13 image as a reference, without changing its bytes. Observations,
+access evidence and precise blockers are in the
+[pending review packet](alpha14-fidelity-review.md).
 
-The alpha.13 record below is retained as historical provenance, including its
-explicit statement that no person looked. It is superseded for the current
-release and does not satisfy alpha.14's reviewer rule.
+Replace the committed capture only with the exact final-tree QA image and follow
+[the reviewer rule](../releasing.md#the-reviewer-rule). No digest or reviewer
+identity is carried forward. The alpha.13 record below is retained as history,
+including its explicit statement that no person looked; it does not satisfy
+alpha.14's reviewer rule.
 
 ## Historical alpha.13 ledger
 

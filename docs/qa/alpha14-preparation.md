@@ -48,9 +48,19 @@ actual laptop performance. See [the evidence](post-alpha13-report-organization.m
 ## Remaining publication boundary
 
 The isolated branch was pushed and verified at
-`e4a61211e916921afefdbbd0112661245ff89e45`. Fresh version-tree QA is running at
+`e4a61211e916921afefdbbd0112661245ff89e45`. Version-tree QA
 [41975965963](https://github.com/z-brenner/intern/actions/runs/41975965963)
-on that head. It cannot publish and is separate from required exact-main QA.
+completed successfully on that head. It completes 19 documents: ten ready,
+nine reviewed, with all six below 0.7 held. The pair changes only SOW readiness,
+with unchanged emitted fields and probabilities. Completed logs are independently
+checked here; the parent audit verifies all 11 artifact hashes. This executor
+independently reconstructs the QA and current checkout's identical 730-entry
+release-input digest. The evidence manifest remains blocked on fidelity, and
+branch QA remains separate from required exact-main QA.
+
+The supported artifact transfer failed. Only the historical alpha.13 image was
+visually inspected here as reference. No fresh capture or person-specific
+acceptance is claimed; see [the review packet](alpha14-fidelity-review.md).
 Integration still needs a permitted route. [The release procedure](../releasing.md)
 requires the final version and notes tree on main before exact-main QA, followed
 by the exact capture and truthful person-specific fidelity sign-off. Nothing

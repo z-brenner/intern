@@ -6,5 +6,5 @@
   "screenshot_sha256": "pending",
   "reviewer": "pending",
   "reviewed_at": "pending",
-  "notes": "Alpha.14 release preparation. Qualification runs 41964133224 and 41970479658 passed the preceding application source, but this version and release-note tree requires fresh QA. The committed capture is still historical alpha.13 evidence until replaced byte for byte from the final release-tree QA artifact. No person has reviewed a capture for this release; no fidelity acceptance is asserted."
+  "notes": "Alpha.14 branch QA 41975965963 passed all substantive gates at e4a61211e916921afefdbbd0112661245ff89e45; the current checkout has the same 730-entry release-input digest. This is branch QA, not exact-main QA. The fresh artifact could not be materialized on this executor, so only the committed historical alpha.13 image has been inspected by the assistant as reference. No person has accepted a capture for this release. Keep status, reviewer, hashes and review date pending until exact final-tree capture review under docs/releasing.md. No screenshot bytes or acceptance hash were changed."
 }

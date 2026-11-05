@@ -47,8 +47,13 @@ remain 55.77 seconds versus 13.97 seconds, a roughly fourfold latency cost.
 Local alpha.14 checks pass: 765 frontend tests in 78 files, types and build;
 1,507 portable Rust tests with zero failures and six ignored; strict portable
 Clippy, formatting and optimized worker/evaluator/benchmark builds. Version
-contracts pass. Fresh preparation-tree Windows QA is running at
-[41975965963](https://github.com/z-brenner/intern/actions/runs/41975965963).
+contracts pass. Preparation-tree Windows QA
+[41975965963](https://github.com/z-brenner/intern/actions/runs/41975965963)
+passed all substantive gates: 19 completed, ten ready and nine reviewed, all six
+below-threshold results held, only SOW readiness improved in the paired replay.
+The current checkout retains the same independently reconstructed 730-entry
+release-input digest. The parent audit verifies all 11 artifact hashes; the
+manifest remains blocked on fidelity. This is branch QA, not exact-main QA.
 Authorized integration, exact-main QA, truthful capture-specific fidelity review
 and release preflight remain required. No release is claimed.
 
