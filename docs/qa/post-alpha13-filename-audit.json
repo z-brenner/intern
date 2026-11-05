@@ -1,0 +1,585 @@
+{
+  "source_commit": "4b1c1af28336a8ae993e80cf87bbb7c1c904865f",
+  "release_inputs_sha256": "8f3091501b8251a047790c96846ab723dcd5c3a0afee26f492592d05af76e659",
+  "release_qualified": false,
+  "previous_windows_run": {
+    "run_id": 41940189938,
+    "head_sha": "875bb6e49b10d3feb38ad23c21377941d667090a",
+    "status": "product checks passed; post-job cache saving pending at inspection",
+    "artifact_id": 13379942626,
+    "artifact_digest": "sha256:c1de5b127e372f2cbe69189375ff46ca3ae501cd6676846257ae31ac31e9b376",
+    "artifact_bytes_independently_inspected_here": false,
+    "materialization": "supported helper failed download; no alternative route attempted",
+    "library_read": "file not visible to Library read",
+    "parent_reported_strict_wrong_ready": 4,
+    "parent_reported_minimum_confidences": [
+      0.803,
+      0.773,
+      0.751,
+      0.849
+    ]
+  },
+  "independently_inspected_published_report": {
+    "tag": "v0.1.0-alpha.13",
+    "sha256": "0ab0c9e0ec73c839b0fb5d038d67c6cf1f6627fbb9bd80de11784cecfed504eb",
+    "probabilities_collected": false,
+    "records": [
+      {
+        "file": "scanned-lease.pdf",
+        "filename": "2024-09-01 Lease Agreement Effective September 1 2024 between Cedar Finch Properties Llc and Orion Glass Studio inc.pdf",
+        "readiness": "ready",
+        "proposal": {
+          "confidence": 1.0,
+          "date_role": "effective",
+          "description": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024 between Cedar Finch Properties Llc and Orion Glass Studio inc for Property 47 Juniper Loop.",
+          "document_date": "2024-09-01",
+          "document_type": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024",
+          "evidence": {
+            "date": "EFFECTIVE SEPTEMBER 1 2024",
+            "document_type": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024",
+            "parties": [
+              "Cedar Finch Properties Llc",
+              "Orion Glass Studio inc"
+            ]
+          },
+          "parties": [
+            "Cedar Finch Properties Llc",
+            "Orion Glass Studio inc"
+          ],
+          "party_relation": "between"
+        },
+        "scores": {
+          "date_correct": true,
+          "date_exact": true,
+          "date_forbidden": false,
+          "date_present": true,
+          "date_role_correct": true,
+          "description_covers_facts": true,
+          "description_specific": true,
+          "filename_correct": false,
+          "parties_correct": true,
+          "parties_expected": 2,
+          "parties_matched": 2,
+          "parties_spurious": 0,
+          "party_forbidden": false,
+          "readiness_match": false,
+          "ready": true,
+          "relation_correct": true,
+          "type_correct": true,
+          "type_present": true
+        },
+        "source_evidence": [
+          {
+            "confidence": 96,
+            "id": "p1.b1",
+            "page": 1,
+            "source": "ocr",
+            "text": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024"
+          },
+          {
+            "confidence": 96,
+            "id": "p1.b1",
+            "page": 1,
+            "source": "ocr",
+            "text": "EFFECTIVE SEPTEMBER 1 2024"
+          },
+          {
+            "confidence": 68,
+            "id": "p1.b2",
+            "page": 1,
+            "source": "ocr",
+            "text": "Cedar Finch Properties Llc"
+          },
+          {
+            "confidence": 68,
+            "id": "p1.b2",
+            "page": 1,
+            "source": "ocr",
+            "text": "Orion Glass Studio inc"
+          },
+          {
+            "confidence": 68,
+            "id": "p1.b2",
+            "page": 1,
+            "source": "ocr",
+            "text": "PrOperty 47 JUniper LOOP"
+          }
+        ],
+        "gold": {
+          "file": "scanned-lease.pdf",
+          "kind": "image_only_pdf",
+          "document_type": "Lease Agreement",
+          "acceptable_types": [],
+          "document_date": "2024-09-01",
+          "acceptable_dates": [],
+          "forbidden_dates": [],
+          "date_role": "effective",
+          "parties": [
+            "Cedar Finch Properties LLC",
+            "Orion Glass Studio Inc."
+          ],
+          "forbidden_parties": [],
+          "party_relation": "between",
+          "expected_readiness": "needs_review",
+          "ambiguity": [
+            "image_only",
+            "ocr_required"
+          ],
+          "acceptable_description_facts": [
+            "lease"
+          ],
+          "expected_routing": "ocr"
+        }
+      },
+      {
+        "file": "long-document-100-pages.pdf",
+        "filename": "2025-07-01 Moonlit Archive Project Journal.pdf",
+        "readiness": "ready",
+        "proposal": {
+          "confidence": 1.0,
+          "date_role": "issuance",
+          "description": "MOONLIT ARCHIVE PROJECT JOURNAL, dated July 1, 2025.",
+          "document_date": "2025-07-01",
+          "document_type": "MOONLIT ARCHIVE PROJECT JOURNAL",
+          "evidence": {
+            "date": "Journal date: July 1, 2025",
+            "document_type": "MOONLIT ARCHIVE PROJECT JOURNAL - PAGE 1",
+            "parties": []
+          },
+          "parties": [],
+          "party_relation": "none"
+        },
+        "scores": {
+          "date_correct": true,
+          "date_exact": true,
+          "date_forbidden": false,
+          "date_present": true,
+          "date_role_correct": true,
+          "description_covers_facts": true,
+          "description_specific": true,
+          "filename_correct": false,
+          "parties_correct": true,
+          "parties_expected": 0,
+          "parties_matched": 0,
+          "parties_spurious": 0,
+          "party_forbidden": false,
+          "readiness_match": true,
+          "ready": true,
+          "type_correct": true,
+          "type_present": true
+        },
+        "source_evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "MOONLIT ARCHIVE PROJECT JOURNAL - PAGE 1"
+          },
+          {
+            "id": "p1.b2.f1",
+            "page": 1,
+            "source": "native",
+            "text": "Journal date: July 1, 2025"
+          }
+        ],
+        "gold": {
+          "file": "long-document-100-pages.pdf",
+          "kind": "long_pdf",
+          "document_type": "Project Journal",
+          "acceptable_types": [],
+          "document_date": "2025-07-01",
+          "acceptable_dates": [],
+          "forbidden_dates": [],
+          "date_role": "issuance",
+          "parties": [],
+          "forbidden_parties": [],
+          "party_relation": "none",
+          "expected_readiness": "ready",
+          "ambiguity": [],
+          "acceptable_description_facts": [
+            "journal"
+          ],
+          "expected_routing": "native_text"
+        }
+      },
+      {
+        "file": "termination-notice.pdf",
+        "filename": "2026-12-29 Notice of Termination to John Smith.pdf",
+        "readiness": "ready",
+        "proposal": {
+          "confidence": 1.0,
+          "date_role": "notice",
+          "description": "Notice of Termination to John Smith regarding termination of the Employment Agreement.",
+          "document_date": "2026-12-29",
+          "document_type": "Notice of Termination",
+          "evidence": {
+            "date": "Date of this Notice: December 29, 2026",
+            "document_type": "NOTICE OF TERMINATION",
+            "parties": [
+              "To: John Smith, 1420 Fielder Lane, Cedar Rapids, IA 52402"
+            ]
+          },
+          "parties": [
+            "John Smith"
+          ],
+          "party_relation": "to"
+        },
+        "scores": {
+          "date_correct": true,
+          "date_exact": true,
+          "date_forbidden": false,
+          "date_present": true,
+          "date_role_correct": true,
+          "description_covers_facts": true,
+          "description_specific": true,
+          "filename_correct": false,
+          "parties_correct": true,
+          "parties_expected": 1,
+          "parties_matched": 1,
+          "parties_spurious": 0,
+          "party_forbidden": false,
+          "readiness_match": true,
+          "ready": true,
+          "relation_correct": false,
+          "type_correct": true,
+          "type_present": true
+        },
+        "source_evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "NOTICE OF TERMINATION"
+          },
+          {
+            "id": "p1.b3.f1",
+            "page": 1,
+            "source": "native",
+            "text": "Date of this Notice: December 29, 2026"
+          },
+          {
+            "id": "p1.b4.f1",
+            "page": 1,
+            "source": "native",
+            "text": "To: John Smith, 1420 Fielder Lane, Cedar Rapids, IA 52402"
+          },
+          {
+            "id": "p1.b4.f2",
+            "page": 1,
+            "source": "native",
+            "text": "From: Harriet Voss, Vice President of People Operations"
+          },
+          {
+            "id": "p1.b6.f1",
+            "page": 1,
+            "source": "native",
+            "text": "Re: Termination of the Employment Agreement dated March 3, 2024"
+          }
+        ],
+        "gold": {
+          "file": "termination-notice.pdf",
+          "kind": "text_pdf",
+          "document_type": "Notice of Termination",
+          "acceptable_types": [],
+          "document_date": "2026-12-29",
+          "acceptable_dates": [
+            "2027-01-31"
+          ],
+          "forbidden_dates": [
+            "2024-03-03",
+            "2027-02-14",
+            "2027-02-28",
+            "2025-05-12"
+          ],
+          "date_role": "notice",
+          "parties": [
+            "John Smith"
+          ],
+          "forbidden_parties": [
+            "Marcus Reyes",
+            "Reyes and Tolliver LLP",
+            "Harriet Voss"
+          ],
+          "party_relation": "for",
+          "expected_readiness": "ready",
+          "ambiguity": [
+            "notice_date_and_termination_date",
+            "response_deadlines",
+            "lawyer_copied"
+          ],
+          "acceptable_description_facts": [
+            "termination"
+          ],
+          "expected_routing": "native_text"
+        }
+      },
+      {
+        "file": "board-deck.pptx",
+        "filename": "2026-05-21 Quarterly Business Review for Contoso Worldwide, Inc.pptx",
+        "readiness": "ready",
+        "proposal": {
+          "confidence": 1.0,
+          "date_role": "issuance",
+          "description": "Quarterly Business Review for Contoso Worldwide, Inc., prepared by Ridgeline Cartography LLC.",
+          "document_date": "2026-05-21",
+          "document_type": "Quarterly Business Review",
+          "evidence": {
+            "date": "Presented on May 21, 2026",
+            "document_type": "QUARTERLY BUSINESS REVIEW",
+            "parties": [
+              "Prepared for Contoso Worldwide, Inc."
+            ]
+          },
+          "parties": [
+            "Contoso Worldwide, Inc."
+          ],
+          "party_relation": "for"
+        },
+        "scores": {
+          "date_correct": true,
+          "date_exact": true,
+          "date_forbidden": false,
+          "date_present": true,
+          "date_role_correct": true,
+          "description_covers_facts": true,
+          "description_specific": true,
+          "filename_correct": false,
+          "parties_correct": false,
+          "parties_expected": 2,
+          "parties_matched": 1,
+          "parties_spurious": 0,
+          "party_forbidden": false,
+          "readiness_match": true,
+          "ready": true,
+          "relation_correct": true,
+          "type_correct": true,
+          "type_present": true
+        },
+        "source_evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "QUARTERLY BUSINESS REVIEW"
+          },
+          {
+            "id": "p1.b4",
+            "page": 1,
+            "source": "native",
+            "text": "Presented on May 21, 2026"
+          },
+          {
+            "id": "p1.b2",
+            "page": 1,
+            "source": "native",
+            "text": "Prepared for Contoso Worldwide, Inc."
+          },
+          {
+            "id": "p1.b3",
+            "page": 1,
+            "source": "native",
+            "text": "Presented by Ridgeline Cartography LLC"
+          }
+        ],
+        "gold": {
+          "file": "board-deck.pptx",
+          "kind": "pptx",
+          "document_type": "Quarterly Business Review",
+          "acceptable_types": [
+            "Business Review"
+          ],
+          "document_date": "2026-05-21",
+          "acceptable_dates": [],
+          "forbidden_dates": [
+            "2026-08-20",
+            "2027-12-31"
+          ],
+          "date_role": "issuance",
+          "parties": [
+            "Ridgeline Cartography LLC",
+            "Contoso Worldwide, Inc."
+          ],
+          "forbidden_parties": [
+            "Dana Ruiz"
+          ],
+          "party_relation": "for",
+          "expected_readiness": "ready",
+          "ambiguity": [
+            "next_review_date",
+            "roadmap_end_date"
+          ],
+          "acceptable_description_facts": [
+            "review"
+          ],
+          "expected_routing": "anydoc"
+        }
+      }
+    ]
+  },
+  "local_tests": {
+    "portable_rust_passed": 1498,
+    "portable_rust_failed": 0,
+    "portable_rust_ignored": 6,
+    "desktop_excluded": true,
+    "strict_clippy": "passed",
+    "formatting": "passed",
+    "regression_tests_failed_before_fix": 2
+  },
+  "replays": {
+    "bench9b.json": {
+      "sha256": "6f96b15f260d4182645fad7f530673238071b9b213ad7a92db106ff1b62bf4f6",
+      "bytes": 1655632,
+      "scope": "recorded-response replay only",
+      "records": 77,
+      "stale_prompts": 0,
+      "statuses": {
+        "completed": 77
+      },
+      "baseline_passed": true,
+      "scores": {
+        "filename_correct": 73,
+        "date_correct": 77,
+        "parties_correct": 77,
+        "unsafe_ready": 0,
+        "ready": 37
+      }
+    },
+    "bench2b.json": {
+      "sha256": "45b720e7a14e54b44b661790b38f60514093bb6522b515838f5c6b4d1047a4b3",
+      "bytes": 1639983,
+      "scope": "recorded-response replay only",
+      "records": 77,
+      "stale_prompts": 0,
+      "statuses": {
+        "completed": 77
+      },
+      "baseline_passed": true,
+      "scores": {
+        "filename_correct": 71,
+        "date_correct": 76,
+        "parties_correct": 75,
+        "unsafe_ready": 1,
+        "ready": 65
+      }
+    },
+    "fixtures.json": {
+      "sha256": "7b1a0bbaf98353f8ec8f3ae70968c8cca8d23f68f1742a694a6bcb4f2765c4af",
+      "bytes": 84788,
+      "scope": "recorded-response replay only",
+      "records": 21,
+      "stale_prompts": 0,
+      "statuses": {
+        "completed": 19,
+        "expected_error": 2
+      },
+      "baseline_regressions": []
+    },
+    "fixtures-digest.json": {
+      "sha256": "ed97f55bd87ba99aca92f9865fa290641be0bee9331666a39a8f5a5f8f38765f",
+      "bytes": 45557,
+      "scope": "recorded-response replay only",
+      "records": 21,
+      "stale_prompts": 0,
+      "statuses": {
+        "completed": 18,
+        "expected_error": 2,
+        "model_failed": 1
+      },
+      "baseline_regressions": []
+    },
+    "controlled-before.json": {
+      "sha256": "3eeb7099165c88588045a635e15a9fe56b606f45666645bff2c1feae10d41dbf",
+      "bytes": 84884,
+      "scope": "constructed regression replay",
+      "records": 21,
+      "stale_prompts": 0,
+      "statuses": {
+        "completed": 19,
+        "expected_error": 2
+      },
+      "scanned_lease": {
+        "filename": "2024-09-01 Lease Agreement Effective September 1 2024 between Cedar Finch Properties Llc and Orion Glass Studio inc.pdf",
+        "readiness": "ready",
+        "token_confidence": {
+          "mean": 0.9867085218429565,
+          "min": 0.7388045191764832,
+          "tokens": 21
+        },
+        "scores": {
+          "date_correct": true,
+          "date_exact": true,
+          "date_forbidden": false,
+          "date_present": true,
+          "date_role_correct": true,
+          "description_covers_facts": true,
+          "description_specific": true,
+          "filename_correct": false,
+          "parties_correct": true,
+          "parties_expected": 2,
+          "parties_matched": 2,
+          "parties_spurious": 0,
+          "party_forbidden": false,
+          "readiness_match": false,
+          "ready": true,
+          "relation_correct": true,
+          "type_correct": true,
+          "type_present": true
+        }
+      }
+    },
+    "controlled-after.json": {
+      "sha256": "558c4c3c1e5a2880e5e6649c6e3027c5023a1212cf05d066ffe08727994196a6",
+      "bytes": 84690,
+      "scope": "constructed regression replay",
+      "records": 21,
+      "stale_prompts": 0,
+      "statuses": {
+        "completed": 19,
+        "expected_error": 2
+      },
+      "scanned_lease": {
+        "filename": "2024-09-01 Lease Agreement between Cedar Finch Properties Llc and Orion Glass Studio inc.pdf",
+        "readiness": "ready",
+        "token_confidence": {
+          "mean": 0.9867085218429565,
+          "min": 0.7388045191764832,
+          "tokens": 21
+        },
+        "scores": {
+          "date_correct": true,
+          "date_exact": true,
+          "date_forbidden": false,
+          "date_present": true,
+          "date_role_correct": true,
+          "description_covers_facts": true,
+          "description_specific": true,
+          "filename_correct": true,
+          "parties_correct": true,
+          "parties_expected": 2,
+          "parties_matched": 2,
+          "parties_spurious": 0,
+          "party_forbidden": false,
+          "readiness_match": false,
+          "ready": true,
+          "relation_correct": true,
+          "type_correct": true,
+          "type_present": true
+        }
+      }
+    },
+    "controlled-full-heading-recording.json": {
+      "sha256": "0f455e5ec6e0f7afeef439aaaaed8f99eb362139fd668f7eeeafa6068de53311",
+      "bytes": 979470,
+      "scope": "constructed regression replay"
+    }
+  },
+  "preserved": "All existing replay semantic outputs identical. Gold, baselines, tolerances, thresholds, gates and PC uncertain background run unchanged.",
+  "outstanding": [
+    "independent inspection of new Windows artifact bytes",
+    "matching Windows QA for new cleanup",
+    "recovery of uncertain PC run before restarting",
+    "broader held-out document checks",
+    "16 GB CPU laptop behavior",
+    "required fidelity review"
+  ]
+}

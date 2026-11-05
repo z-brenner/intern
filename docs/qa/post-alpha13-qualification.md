@@ -5,6 +5,11 @@ This is experimental follow-up evidence, not a release sign-off. The branch
 `8299690cd2713fd53bb120f81a9a0adbee58c432` and preserves its release history.
 The earlier `fix/pr62-qualification` branch is unchanged.
 
+This file records the initial qualification checkpoint through `3f2e198`.
+The later [filename audit](post-alpha13-filename-audit.md) adds a terminal-date
+type cleanup and supersedes this checkpoint's pending-check status and source
+digest for the current branch. Historical measurements below remain unchanged.
+
 ## Published confidence-policy audit
 
 The alpha.13 `model-evaluation.json`, `release-evidence-manifest.json` and
