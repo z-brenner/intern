@@ -47,7 +47,10 @@ actual laptop performance. See [the evidence](post-alpha13-report-organization.m
 
 ## Remaining publication boundary
 
-Push and verify this isolated branch, then complete fresh whole-product QA.
+The isolated branch was pushed and verified at
+`e4a61211e916921afefdbbd0112661245ff89e45`. Fresh version-tree QA is running at
+[41975965963](https://github.com/z-brenner/intern/actions/runs/41975965963)
+on that head. It cannot publish and is separate from required exact-main QA.
 Integration still needs a permitted route. [The release procedure](../releasing.md)
 requires the final version and notes tree on main before exact-main QA, followed
 by the exact capture and truthful person-specific fidelity sign-off. Nothing

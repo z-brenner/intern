@@ -47,8 +47,9 @@ remain 55.77 seconds versus 13.97 seconds, a roughly fourfold latency cost.
 Local alpha.14 checks pass: 765 frontend tests in 78 files, types and build;
 1,507 portable Rust tests with zero failures and six ignored; strict portable
 Clippy, formatting and optimized worker/evaluator/benchmark builds. Version
-contracts pass. Fresh final-tree Windows QA remains required after version
-preparation, along with authorized integration, exact-main QA, truthful
+contracts pass. Fresh preparation-tree Windows QA is running at
+[41975965963](https://github.com/z-brenner/intern/actions/runs/41975965963).
+Authorized integration, exact-main QA, truthful
 capture-specific fidelity review and release preflight. No release is claimed.
 
 ## Submission state

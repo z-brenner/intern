@@ -103,7 +103,7 @@
     "retried": false
   },
   "remaining": [
-    "Push and verify this isolated preparation branch; obtain fresh whole-product branch QA without publication.",
+    "Complete and inspect fresh whole-product branch QA 41975965963; it cannot publish or substitute for required exact-main QA.",
     "Integrate through a permitted route; no bypass of the earlier PR-submission denial and no self-approval.",
     "Follow docs/releasing.md: final release tree on exact main, fresh QA, exact capture and truthful named-person fidelity sign-off; changes after QA restricted to docs/qa/.",
     "Run preflight, then deliberately dispatch the exact-main release workflow, and verify published installer/updater/provenance afterward.",
@@ -183,5 +183,20 @@
       "bytes": 147,
       "sha256": "f43670584eba2bb1684cb6c2cba5b38a2d808cb08d4a0c246f28d68ecc919578"
     }
+  },
+  "pushed_and_verified": {
+    "branch": "qualification/alpha14-preparation",
+    "initial_remote_head": "e4a61211e916921afefdbbd0112661245ff89e45",
+    "qualification_branch_preserved_at": "4cd578da214db817ce72f6debf020e62020d1878"
+  },
+  "fresh_preparation_qa": {
+    "run_id": 41975965963,
+    "head": "e4a61211e916921afefdbbd0112661245ff89e45",
+    "release_inputs_sha256": "01f0d67e72987a0cf196dad7ed1dd1c34b5abe4163b3673d787b7ee9d9208f24",
+    "url": "https://github.com/z-brenner/intern/actions/runs/41975965963",
+    "status": "in_progress",
+    "completed": false,
+    "publication_enabled": false,
+    "is_exact_main_qa": false
   }
 }
