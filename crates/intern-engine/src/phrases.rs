@@ -307,10 +307,27 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
     // Hereby Given") or an aside opens ("Notice of Variation and
     // Consolidation with introductory note"); an agreement can be named
     // "with" what it concerns.
-    let stops_right = |token: &str| {
-        let word = core(token);
+    // "Will" is the noun, not the verb that starts a sentence, after
+    // "of", "the" or "last" and before "Contest" or "and Testament":
+    // "Notice of Will Contest", "Notice of Probate of Will".
+    let will_is_a_noun = |index: usize| {
+        let before = index.checked_sub(1).map(|at| core(tokens[at]));
+        let after = tokens.get(index + 1).map(|token| core(token));
+        after.is_none()
+            || before.as_deref().is_some_and(|word| {
+                matches!(
+                    word,
+                    "of" | "the" | "a" | "an" | "last" | "his" | "her" | "their" | "and"
+                )
+            })
+            || after
+                .as_deref()
+                .is_some_and(|word| matches!(word, "contest" | "contests" | "and" | "testament"))
+    };
+    let stops_right = |index: usize| {
+        let word = core(tokens[index]);
         TITLE_STOPS.contains(&word.as_str())
-            || RIGHT_STOPS.contains(&word.as_str())
+            || (RIGHT_STOPS.contains(&word.as_str()) && !(word == "will" && will_is_a_noun(index)))
             || (word == "with" && !named_for_its_subject)
     };
     let mut end = at + 1;
@@ -318,13 +335,13 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
         while end + 1 < tokens.len()
             && CONNECTORS.contains(&core(tokens[end]).as_str())
             && !breaks(tokens[end + 1])
-            && !stops_right(tokens[end + 1])
+            && !stops_right(end + 1)
         {
             end += 2;
             while end < tokens.len()
                 && !breaks(tokens[end])
                 && !tokens[end - 1].ends_with(':')
-                && !stops_right(tokens[end])
+                && !stops_right(end)
                 && !CONNECTORS.contains(&core(tokens[end]).as_str())
             {
                 end += 1;
@@ -828,6 +845,13 @@ mod tests {
                 "Notice of Violation",
             ),
             ("Notice IS Hereby Given that", "notice", "Notice"),
+            ("Notice will be given to creditors", "notice", "Notice"),
+            ("NOTICE OF WILL CONTEST", "notice", "Notice of Will Contest"),
+            (
+                "Notice of Probate of Will",
+                "notice",
+                "Notice of Probate of Will",
+            ),
             (
                 "Notice of Variation and Consolidation with introductory note",
                 "notice",
