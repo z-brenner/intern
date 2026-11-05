@@ -4578,7 +4578,10 @@ fn named_as_a_person(scope: &ValidationScope<'_>, name: &str) -> bool {
                 ORGANIZATION_WORDS.contains(&word.as_str())
                     || crate::cues::ORGANIZATION_ENDINGS.contains(&word.as_str())
                     || names_a_kind(word)
-            }))
+            })
+            // "Thames Water" is as short as a person's name and has no
+            // organization's word, but the index read it as a company.
+            && !named_as_an_organization(scope, name))
 }
 
 /// Whether a line holds a post someone is named by.
@@ -4643,18 +4646,37 @@ fn signer_organization<'a>(
         })
         .collect::<Vec<_>>();
     let closing = lines.iter().rposition(|(_, line)| is_closing(line))?;
-    let named = lines[closing..]
+    // The signer's name stands right under the closing, on the first line
+    // that is not a signature mark ("/s/", "By:", a rule), or the one
+    // after it when the post comes first. A name further down is in the
+    // address under the signature ("Thames Water" three lines under
+    // "Yours faithfully, Development Planning Department"), not the
+    // signer's.
+    let is_mark = |line: &str| {
+        let loose = normalize_loosely(line);
+        loose.is_empty()
+            || matches!(
+                loose.split_whitespace().next(),
+                Some("s" | "by" | "signed" | "signature")
+            ) && loose.split_whitespace().count() <= 2
+            || line
+                .chars()
+                .all(|c| c == '_' || c == '-' || c.is_whitespace())
+    };
+    let named = lines[closing + 1..]
         .iter()
-        .take(10)
-        .position(|(_, line)| contains_whole(&normalize_loosely(line), &person))?
-        + closing;
+        .enumerate()
+        .filter(|(_, (_, line))| !is_mark(line))
+        .take(2)
+        .find(|(_, (_, line))| contains_whole(&normalize_loosely(line), &person))
+        .map(|(offset, _)| closing + 1 + offset)?;
     let (unit, _) = lines[named];
     lines[named + 1..]
         .iter()
         .take(6)
         .take_while(|(_, line)| !names_a_copy(line))
         .find_map(|(_, line)| {
-            let line = line.trim_end_matches([',', ';', '|']).trim();
+            let line = line.trim_end_matches([',', ';', '|', '\\', '.']).trim();
             if line.chars().any(|c| c.is_ascii_digit()) || line.contains('@') {
                 return None;
             }
@@ -11050,6 +11072,39 @@ The merger needs a majority of votes cast.";
                 .parties
                 .iter()
                 .any(|name| name.contains("Bockius")),
+            "{:?}",
+            outcome.proposal.parties
+        );
+        // A name in the address under the signature is not the signer's:
+        // "Thames Water" three lines under the closing stays itself, and
+        // the site on the line after it is no organization of its own.
+        let (outcome, _) = facts_for(
+            "Thames Water
+Development Planning
+
+16 September 2019
+
+Dear developer,
+
+             Thank you for your enquiry.
+
+Yours faithfully,
+
+Development Planning Department
+             Development Planning,
+Thames Water,
+Maple Lodge STW,
+Denham Way,
+Rickmansworth,
+             WD3 9SQ,",
+            sent_by("Thames Water"),
+        );
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|name| name.contains("Maple Lodge")),
             "{:?}",
             outcome.proposal.parties
         );

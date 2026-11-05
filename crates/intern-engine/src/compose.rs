@@ -564,9 +564,21 @@ fn relation_from_supported_roles(
             }
             // A letter is written to someone: the client it warns, the
             // licensee it approves, is the one it is addressed to, so a
-            // "Warning Letter to Toledo Refining", never "for".
-            if let Some(party) = with(SUBSTANTIVE) {
+            // "Warning Letter to Toledo Refining", never "for". A letter
+            // about an employee or a borrower is still for them: the
+            // relation table's gold keeps an employment letter "for" its
+            // employee.
+            if let Some(party) = with(&[
+                PartyRole::Client,
+                PartyRole::Customer,
+                PartyRole::Tenant,
+                PartyRole::Licensee,
+                PartyRole::Buyer,
+            ]) {
                 return one(PartyRelation::To, party, "the party it is addressed to");
+            }
+            if let Some(party) = with(SUBSTANTIVE) {
+                return one(PartyRelation::For, party, "the party it is about");
             }
             if let Some(party) = counterpart(false) {
                 return one(PartyRelation::For, party, "the provider's counterpart");
