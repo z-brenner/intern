@@ -226,6 +226,33 @@ document`), the server's peak RSS, the wall time, the runner's CPU and the
 are an artifact named `candidate-<label>-<set>-<run id>`, kept 14 days.
 Runners differ, so compare jobs that the summary puts on the same CPU.
 
+### Server settings on GitHub runners
+
+`.github/workflows/speed-battery.yml` measures one `llama-server` setting
+against the app's own flags, on one runner, with one model and the recorded
+requests under `bench/reports/speed-linux-cpu-2026-10-29/requests`. It is
+laboratory tooling too: run only by hand (Actions > Server speed battery on
+Linux > Run workflow), it gates nothing and publishes nothing. Each variant
+is a job of its own. A job fetches the pinned upstream build (verified
+against the pin in `scripts/fetch-linux-assets.sh`; a release named by
+`llama_release` runs instead, recorded by digest) and the model (refused
+unless its `model_sha256` matches), then runs
+`scripts/bonsai-eval/replay-server.sh` four times: the app's flags, the
+variant's flags appended, the app's, the variant's, every slot warmed
+first, replies compared with the first baseline's. The job summary tables
+the four runs (time per request, prefill and decode medians, replies
+identical to the first baseline) and gives the variant's mean against the
+baseline's; the replays and server logs are an artifact named
+`speed-<label>-<run id>`, kept 14 days. The number to read is the ratio
+within a job: the fleet hands each job its own CPU.
+
+Inputs: `model_url` and `model_sha256` (as for a candidate above);
+`variants`, a JSON array of `{"label", "args"}`, the flags appended after
+the app's (a repeated flag's last value wins, so `--threads-batch 4`
+replaces the app's); `threads` (default 2, the app's rule on a 4-processor
+runner); `every` (default 2: every second recorded request, 13 of 26);
+`llama_release` (optional).
+
 Inputs:
 
 * `candidates` (required): a JSON array, one object per model, each with a
