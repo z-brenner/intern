@@ -1,0 +1,458 @@
+{
+  "source_commit": "234fb6b81d25036afd7303d54ecb7b136239ac6d",
+  "release_inputs_sha256": "4bf697c02e68553462f4a5987498a05325968604692118fc1ffc9f73570daade",
+  "release_qualified": false,
+  "source_file_sha256": "ad62463ff11266c848537f330060f96b41124815042b1f3821570a81a2105fcc",
+  "source_provenance_note": "Binaries and reports were built/executed from the final dirty source before committing it as source_commit. Report git metadata retains the preceding f3a335a commit; the committed facts.rs bytes match those tested. Binaries are frozen by SHA-256.",
+  "parent_reported_pc_comparison": {
+    "independently_replayed_on_this_executor": false,
+    "documents": 77,
+    "memory_cap_gib": 12,
+    "cpu_cores": 4,
+    "swap": false,
+    "requests_byte_identical": true,
+    "two_b": {
+      "filenames": 67,
+      "dates": 76,
+      "unsafe_ready": 1,
+      "median_seconds": 13.97
+    },
+    "nine_b": {
+      "filenames": 69,
+      "dates": 74,
+      "unsafe_ready": 3,
+      "median_seconds": 55.77
+    },
+    "nine_b_with_date_fix": {
+      "filenames": 72,
+      "dates": 77,
+      "unsafe_ready": 1
+    },
+    "median_ratio_9b_over_2b": 3.9921259842519685,
+    "true_16gb_laptop_qualification": false
+  },
+  "controlled_experiment": {
+    "scope": "Only the annual-report party, party evidence and minimum confidence replace fields in the historical 9B recording. Not the complete PC recording. All source fixture bytes, extraction, prompt identities, other model fields/replies and timing/memory records remain historical.",
+    "changes": [
+      {
+        "path": "/exchanges/0/reply/proposal/facts/parties/0/evidence/0",
+        "before": "p1.b1",
+        "after": "p2.b14"
+      },
+      {
+        "path": "/exchanges/0/reply/proposal/facts/parties/0/name",
+        "before": "Rookwood Precision Metals Corporation",
+        "after": "Casimir Ellingsen"
+      },
+      {
+        "path": "/exchanges/0/reply/proposal/parties/0",
+        "before": "Rookwood Precision Metals Corporation",
+        "after": "Casimir Ellingsen"
+      },
+      {
+        "path": "/exchanges/0/reply/token_confidence/min",
+        "before": 0.97875845,
+        "after": 0.792065
+      }
+    ],
+    "confidence_guard_constructed_min": 0.699,
+    "comparison": [
+      {
+        "name": "controlled-after",
+        "records": 77,
+        "changes": [
+          {
+            "id": "annual-report-excerpt-8p",
+            "fields": [
+              "filename",
+              "description",
+              "proposal",
+              "scores"
+            ]
+          }
+        ],
+        "stale_prompts": 0,
+        "annual": {
+          "filename": "2026-03-12 2025 Annual Report from Rookwood Precision Metals Corporation.pdf",
+          "readiness": "ready",
+          "review_reasons": [],
+          "token_confidence": {
+            "mean": 0.9978457093238831,
+            "min": 0.7920650243759155,
+            "tokens": 16
+          }
+        }
+      },
+      {
+        "name": "confidence-guard",
+        "records": 77,
+        "changes": [
+          {
+            "id": "annual-report-excerpt-8p",
+            "fields": [
+              "filename",
+              "description",
+              "proposal",
+              "readiness",
+              "review_reasons",
+              "token_confidence",
+              "scores"
+            ]
+          }
+        ],
+        "stale_prompts": 0,
+        "annual": {
+          "filename": "2026-03-12 2025 Annual Report from Rookwood Precision Metals Corporation.pdf",
+          "readiness": "needs_review",
+          "review_reasons": [
+            "LOW_CONFIDENCE"
+          ],
+          "token_confidence": {
+            "mean": 0.9978457093238831,
+            "min": 0.6990000009536743,
+            "tokens": 16
+          }
+        }
+      },
+      {
+        "name": "bench9b",
+        "records": 77,
+        "changes": [],
+        "stale_prompts": 0
+      },
+      {
+        "name": "bench2b",
+        "records": 77,
+        "changes": [],
+        "stale_prompts": 0
+      },
+      {
+        "name": "fixtures-current",
+        "records": 21,
+        "changes": [],
+        "stale_prompts": 0
+      },
+      {
+        "name": "fixtures-digest",
+        "records": 21,
+        "changes": [],
+        "stale_prompts": 0
+      }
+    ]
+  },
+  "replays": {
+    "controlled-before": {
+      "documents": 77,
+      "filename_correct": {
+        "correct": 72,
+        "rate": 0.9351,
+        "total": 77
+      },
+      "date_correct": {
+        "correct": 77,
+        "rate": 1.0,
+        "total": 77
+      },
+      "parties_correct": {
+        "correct": 76,
+        "rate": 0.987,
+        "total": 77
+      },
+      "ready": {
+        "correct": 37,
+        "rate": 0.4805,
+        "total": 77
+      },
+      "review_rate": 0.5195,
+      "unsafe_ready": 1,
+      "stale_prompts": 0,
+      "report_git_commit": "f3a335a2d741ff28b812d2e23dee0e0e92cb66a8-dirty",
+      "timings_are_fresh": false
+    },
+    "controlled-after": {
+      "documents": 77,
+      "filename_correct": {
+        "correct": 73,
+        "rate": 0.9481,
+        "total": 77
+      },
+      "date_correct": {
+        "correct": 77,
+        "rate": 1.0,
+        "total": 77
+      },
+      "parties_correct": {
+        "correct": 77,
+        "rate": 1.0,
+        "total": 77
+      },
+      "ready": {
+        "correct": 37,
+        "rate": 0.4805,
+        "total": 77
+      },
+      "review_rate": 0.5195,
+      "unsafe_ready": 0,
+      "stale_prompts": 0,
+      "report_git_commit": "f3a335a2d741ff28b812d2e23dee0e0e92cb66a8-dirty",
+      "timings_are_fresh": false
+    },
+    "confidence-guard": {
+      "documents": 77,
+      "filename_correct": {
+        "correct": 73,
+        "rate": 0.9481,
+        "total": 77
+      },
+      "date_correct": {
+        "correct": 77,
+        "rate": 1.0,
+        "total": 77
+      },
+      "parties_correct": {
+        "correct": 77,
+        "rate": 1.0,
+        "total": 77
+      },
+      "ready": {
+        "correct": 36,
+        "rate": 0.4675,
+        "total": 77
+      },
+      "review_rate": 0.5325,
+      "unsafe_ready": 0,
+      "stale_prompts": 0,
+      "report_git_commit": "f3a335a2d741ff28b812d2e23dee0e0e92cb66a8-dirty",
+      "timings_are_fresh": false
+    },
+    "bench9b": {
+      "documents": 77,
+      "filename_correct": {
+        "correct": 73,
+        "rate": 0.9481,
+        "total": 77
+      },
+      "date_correct": {
+        "correct": 77,
+        "rate": 1.0,
+        "total": 77
+      },
+      "parties_correct": {
+        "correct": 77,
+        "rate": 1.0,
+        "total": 77
+      },
+      "ready": {
+        "correct": 37,
+        "rate": 0.4805,
+        "total": 77
+      },
+      "review_rate": 0.5195,
+      "unsafe_ready": 0,
+      "stale_prompts": 0,
+      "report_git_commit": "f3a335a2d741ff28b812d2e23dee0e0e92cb66a8-dirty",
+      "timings_are_fresh": false
+    },
+    "bench2b": {
+      "documents": 77,
+      "filename_correct": {
+        "correct": 71,
+        "rate": 0.9221,
+        "total": 77
+      },
+      "date_correct": {
+        "correct": 76,
+        "rate": 0.987,
+        "total": 77
+      },
+      "parties_correct": {
+        "correct": 75,
+        "rate": 0.974,
+        "total": 77
+      },
+      "ready": {
+        "correct": 65,
+        "rate": 0.8442,
+        "total": 77
+      },
+      "review_rate": 0.1558,
+      "unsafe_ready": 1,
+      "stale_prompts": 0,
+      "report_git_commit": "f3a335a2d741ff28b812d2e23dee0e0e92cb66a8-dirty",
+      "timings_are_fresh": false
+    },
+    "fixtures-current": {
+      "documents": 21,
+      "filename_correct": {
+        "correct": 10,
+        "rate": 0.5555555555555556,
+        "total": 18
+      },
+      "date_correct": {
+        "correct": 16,
+        "rate": 0.8888888888888888,
+        "total": 18
+      },
+      "parties_correct": {
+        "correct": 15,
+        "rate": 0.7894736842105263,
+        "total": 19
+      },
+      "ready": {
+        "correct": 9,
+        "rate": 0.47368421052631576,
+        "total": 19
+      },
+      "review_rate": 0.5263157894736843,
+      "unsafe_ready": null,
+      "stale_prompts": 0,
+      "report_git_commit": null,
+      "timings_are_fresh": false
+    },
+    "fixtures-digest": {
+      "documents": 21,
+      "filename_correct": {
+        "correct": 11,
+        "rate": 0.6470588235294118,
+        "total": 17
+      },
+      "date_correct": {
+        "correct": 14,
+        "rate": 0.8235294117647058,
+        "total": 17
+      },
+      "parties_correct": {
+        "correct": 16,
+        "rate": 0.8888888888888888,
+        "total": 18
+      },
+      "ready": {
+        "correct": 11,
+        "rate": 0.6111111111111112,
+        "total": 18
+      },
+      "review_rate": 0.38888888888888884,
+      "unsafe_ready": null,
+      "stale_prompts": 0,
+      "report_git_commit": null,
+      "timings_are_fresh": false
+    }
+  },
+  "checks": {
+    "portable_rust_passed": 1507,
+    "portable_rust_failed": 0,
+    "portable_rust_ignored": 6,
+    "portable_command": "timeout 300 cargo test --locked --workspace --exclude intern-app --all-targets -- --test-threads=1",
+    "portable_exit_code": 0,
+    "strict_clippy": "cargo clippy --locked --workspace --exclude intern-app --all-targets -- -D warnings",
+    "strict_clippy_exit_code": 0,
+    "format_check_exit_code": 0,
+    "release_build_exit_code": 0,
+    "new_fact_tests": 5,
+    "earlier_attempt": "Concurrent full-suite attempt stalled in pre-existing default_policy_cancels_header_acquisition_and_joins_network_work; owned processes were terminated (exit 143). The bounded serial full rerun passes that test and all remaining tests. No downloader or test policy changed.",
+    "full_native_linux": "Unavailable: GTK development dependencies absent"
+  },
+  "thresholds_unchanged": {
+    "min_token_confidence": 0.7,
+    "maximum_live_review_rate": 0.6
+  },
+  "gold_baselines_tolerances_unchanged": true,
+  "preserved_windows_qa": {
+    "run_id": 41964133224,
+    "head": "b702a134fc12826bdbf654a75c3273d476d2c28d",
+    "url": "https://github.com/z-brenner/intern/actions/runs/41964133224",
+    "status_at_last_check": "in_progress: real inference; native tests and installer smoke passed; paired replay pending",
+    "covers_new_ownership_fix": false
+  },
+  "remaining": [
+    "Replay both complete actual matched PC recordings through the same final validator without allowing stale inputs.",
+    "Fresh Windows QA and complete-recording paired step for this source.",
+    "Held-out document cases and true CPU-only 16 GB laptop cold/warm latency and peak-memory checks.",
+    "Applicable fidelity review and release preflight."
+  ],
+  "default_model_changed": false,
+  "pr_created_approved_or_merged": false,
+  "release_created": false,
+  "artifact_directory": "/workspace/artifacts/intern-report-organization",
+  "artifact_files": {
+    "bench2b.json": {
+      "bytes": 1639955,
+      "sha256": "4f4f7442468e4af759bf058929944109b2db6dde9af7ffc29878342e23719e8a"
+    },
+    "bench9b.json": {
+      "bytes": 1655692,
+      "sha256": "b08338c8f4ee813a14b1b7196b2a166558a38208fee5a666b115446988046096"
+    },
+    "bin/intern-bench-after": {
+      "bytes": 10355312,
+      "sha256": "9e1dd5d265f6e4c186f31fce47ca7bbb30fb5fbfd340c0ecf00e5fd7cf7a644f"
+    },
+    "bin/intern-bench-before": {
+      "bytes": 10351096,
+      "sha256": "9504c9d099468c013c8adde726b926c0de0519092a06ef609d9a230af5d13ed8"
+    },
+    "bin/intern-evaluate-after": {
+      "bytes": 8092424,
+      "sha256": "4de263c421bb332065d4ac2b2232ebf135ea142ad98246a1dfbc900217908386"
+    },
+    "bin/intern-evaluate-before": {
+      "bytes": 8088168,
+      "sha256": "6855d992fa4242424288c080a7ef1e99505d9b008c1f8a4e5286f90a6a444a69"
+    },
+    "build.log": {
+      "bytes": 305,
+      "sha256": "3b4560e3bcbece5f97b672ef66b5a3e026147546a1a03b69a410c42dc4c24424"
+    },
+    "clippy.log": {
+      "bytes": 599,
+      "sha256": "3bbeef9709a941ecb55f35837973fe21821c3572ad3e43a7933e095f99dd0898"
+    },
+    "comparison.json": {
+      "bytes": 1688,
+      "sha256": "03563074a96cef223625376c55740c416dffa8fc14c8f5316e1902c65f83ce68"
+    },
+    "confidence-guard.json": {
+      "bytes": 1651603,
+      "sha256": "99a724c2cc8839a818d055cb9aa7f5c183ca6be9aaed688664f6bac0ae11872f"
+    },
+    "controlled-after.json": {
+      "bytes": 1655565,
+      "sha256": "dfc732aa6962d750f8e811fa2562a6fb61503f6a36da67501b7c0f0e62917122"
+    },
+    "controlled-before.json": {
+      "bytes": 1651800,
+      "sha256": "5caf7194018a8bee7e6d65bcc506e3bd686cf839e477fb51141c3b9fea4d9f1f"
+    },
+    "controlled-ceo-recording.json": {
+      "bytes": 17284231,
+      "sha256": "c1d0f2145c5c1216cc30ab05ab18d04d20198ef30fad118a1d23bbd028d7b8e7"
+    },
+    "controlled-confidence-guard-recording.json": {
+      "bytes": 17284077,
+      "sha256": "16290f7e82c41471720f79a9681c311d7da470119ca7ee08d73960ca68b83620"
+    },
+    "fixtures-current.json": {
+      "bytes": 84809,
+      "sha256": "96cecf3e4c5fe90a9f97b702ae40ffaefd6660a02975c2d119bc38e5c5120832"
+    },
+    "fixtures-digest.json": {
+      "bytes": 45557,
+      "sha256": "6f237e039c3d9e81a2cc8bd6cbe3ec362bd94e4cef32a6c94d2aa48f671b5fdb"
+    },
+    "portable-interrupted.log": {
+      "bytes": 62160,
+      "sha256": "0fc02fa1408feb2c7748e405557deba41815f83a095abd81013186a146e98fd0"
+    },
+    "portable.log": {
+      "bytes": 128278,
+      "sha256": "febe83ab229ba41a54e89adfc994cda3a2b0077194c990d727a3b4e28dbd6949"
+    }
+  },
+  "replay_commands": [
+    "intern-bench run --corpus bench/generated --gold bench/gold.json --manifest bench/manifest.json --replay bench/recording.json --min-token-confidence 0.7 --baseline bench/baseline.json --output bench9b.json",
+    "intern-bench run --corpus bench/generated --gold bench/gold.json --manifest bench/manifest.json --replay control-2b-recording.json --min-token-confidence 0.7 --baseline control-2b-baseline.json --output bench2b.json",
+    "intern-bench run --corpus bench/generated --gold bench/gold.json --manifest bench/manifest.json --replay controlled-ceo-recording.json --min-token-confidence 0.7 --output controlled.json",
+    "intern-evaluate --fixtures fixtures/generated --expected fixtures/expected.json --replay fixtures/corpus-recording.json --min-token-confidence 0.7 --baseline fixtures/corpus-baseline.json --output fixtures-current.json",
+    "intern-evaluate --fixtures fixtures/generated --expected fixtures/expected.json --pipeline digest --replay fixtures/corpus-recording-digest.json --min-token-confidence 0.7 --baseline fixtures/corpus-baseline-digest.json --output fixtures-digest.json"
+  ]
+}
