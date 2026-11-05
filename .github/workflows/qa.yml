@@ -2,6 +2,13 @@ name: Whole-product QA evidence
 
 on:
   workflow_dispatch:
+  # Opt-in model qualification branches need native Windows and live-model
+  # evidence before integration. QA only uploads artifacts; it cannot publish.
+  push:
+    branches:
+      - 'qualification/**'
+    paths-ignore:
+      - 'docs/qa/**'
   pull_request:
     paths:
       - .github/workflows/qa.yml
