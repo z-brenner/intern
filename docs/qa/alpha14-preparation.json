@@ -1,0 +1,187 @@
+{
+  "prepared_source_commit": "ed490a87dbb9c28ee88930da51275c2d605933ae",
+  "release_inputs_sha256": "01f0d67e72987a0cf196dad7ed1dd1c34b5abe4163b3673d787b7ee9d9208f24",
+  "version": "0.1.0-alpha.14",
+  "release_qualified": false,
+  "integration_performed": false,
+  "release_performed": false,
+  "tag_created": false,
+  "fidelity_status": "pending",
+  "person_reviewed_current_capture": false,
+  "model_or_runtime_changed_in_preparation": false,
+  "dependencies_changed_in_preparation": false,
+  "updater_identity_address_key_changed": false,
+  "quality_thresholds_gold_or_baselines_changed_in_preparation": false,
+  "checked_repository_state": {
+    "main": "8299690cd2713fd53bb120f81a9a0adbee58c432",
+    "latest_release": "v0.1.0-alpha.13",
+    "pr_56": "merged; head c08f31ba7efc3a452486371f55dc5c80c0ab2dd9 is an ancestor of preparation",
+    "main_ancestor": true,
+    "open_prs_at_check": [
+      19,
+      25
+    ],
+    "alpha14_tag_at_initial_check": "absent"
+  },
+  "local_checks": {
+    "frontend_tests": 765,
+    "frontend_files": 78,
+    "types_and_production_build": "passed",
+    "release_version_contracts": "passed",
+    "portable_rust_passed": 1507,
+    "portable_rust_failed": 0,
+    "portable_rust_ignored": 6,
+    "portable_rust_command": "timeout 360 cargo test --locked --workspace --exclude intern-app --all-targets -- --test-threads=1",
+    "format": "passed",
+    "strict_portable_clippy": "passed",
+    "optimized_worker_evaluator_benchmark_builds": "passed",
+    "optimized_worker_hello_version": "0.1.0-alpha.14",
+    "full_native_linux": "Not run: GTK development dependencies absent; fresh Windows QA will supply native checks."
+  },
+  "replay_comparison": [
+    {
+      "suite": "bench9b",
+      "records": 77,
+      "changed_semantic_records": [],
+      "stale_records": 0,
+      "timings_are_fresh": false
+    },
+    {
+      "suite": "bench2b",
+      "records": 77,
+      "changed_semantic_records": [],
+      "stale_records": 0,
+      "timings_are_fresh": false
+    },
+    {
+      "suite": "fixtures-current",
+      "records": 21,
+      "changed_semantic_records": [],
+      "stale_records": 0,
+      "timings_are_fresh": false
+    },
+    {
+      "suite": "fixtures-digest",
+      "records": 21,
+      "changed_semantic_records": [],
+      "stale_records": 0,
+      "timings_are_fresh": false
+    }
+  ],
+  "replay_limit": "Both 77-document historical model recordings and both 21-fixture pipelines have identical semantic outputs to preceding source, zero stale prompts, unchanged baselines. Timings and memory are inherited; no fresh model inference occurred here. These historical recordings are separate from the actual matched PC experiment.",
+  "preceding_source_windows_qa": {
+    "run": 41970479658,
+    "head": "a3910ba22e313d5862642748ab8342c4c807a24c",
+    "input_digest": "4bf697c02e68553462f4a5987498a05325968604692118fc1ffc9f73570daade",
+    "result": "success",
+    "completed": 19,
+    "ready": 10,
+    "review": 9,
+    "same_recording_pair": "only SOW readiness improves; no changed emissions or safety regression",
+    "artifact_sha256": "c115c23f261243791cd57eb9db4841c52e3b58ae9d72b0ff2fef871c66284498",
+    "covers_version_preparation": false
+  },
+  "pc_evidence": "Parent reports both actual matched recordings replayed at 0.7 through a14b4ef with zero stale records and unchanged prompt hashes, raw proposals and confidence: 9B 73 names/77 dates/77 parties/0 wrong-ready, 2B 67 names/76 dates/75 parties/1 wrong-ready. Original 9B median 55.77 seconds versus 13.97 seconds. Reports remain on PC, not independently materialized here; no fresh inference or actual laptop qualification.",
+  "self_review": {
+    "reviewer": "Codex assistant, code and release-preparation review only; no human fidelity attestation or PR approval",
+    "findings": "No outstanding code blocker identified in the preparation diff; it changes aligned version surfaces, notes and pending QA records. Application rules and model/runtime/third-party dependency pins are unchanged from the passing source. Main and PR56 ancestry retained. Current source gates have passed; publication gates below remain open.",
+    "baseline_note": "The inherited application branch refreshed historical benchmark date-case scores when fixing the dates. It strengthens date/name/trap expectations while preserving gold and tolerances. Version preparation does not change that baseline."
+  },
+  "preflight": {
+    "command": "node scripts/release-preflight.mjs --root=.",
+    "exit": 1,
+    "only_reported_problem": "rendered-fidelity sign-off is pending",
+    "intentional_block": true
+  },
+  "pr_submission": {
+    "performed": false,
+    "prepared_body": "docs/qa/alpha14-integration-pr.md",
+    "prior_action": "Draft PR submission to z-brenner/intern",
+    "prior_result": "denied by automatic approval review",
+    "stated_reason_available_in_retained_context": false,
+    "history_check": "Room read/search confirms the prior generic denial; no explanation addressing its specific reason was found. Unrelated standing approvals were not used.",
+    "retried": false
+  },
+  "remaining": [
+    "Push and verify this isolated preparation branch; obtain fresh whole-product branch QA without publication.",
+    "Integrate through a permitted route; no bypass of the earlier PR-submission denial and no self-approval.",
+    "Follow docs/releasing.md: final release tree on exact main, fresh QA, exact capture and truthful named-person fidelity sign-off; changes after QA restricted to docs/qa/.",
+    "Run preflight, then deliberately dispatch the exact-main release workflow, and verify published installer/updater/provenance afterward.",
+    "Retain latency, confidence-variation and laptop-characterization limitations in the published evidence."
+  ],
+  "artifact_directory": "/workspace/artifacts/intern-alpha14-preparation",
+  "artifact_files": {
+    "bench2b.json": {
+      "bytes": 1639953,
+      "sha256": "64d8b5a3a6f4f2a96f28b638d917d89cf835b856e824ef2cf1ed83293c397af6"
+    },
+    "bench2b.log": {
+      "bytes": 1566,
+      "sha256": "f43a7a776ca50d1fe7b33881376d8220fc7bbcddfb8ae3e1453d85c1cf853c45"
+    },
+    "bench9b.json": {
+      "bytes": 1655665,
+      "sha256": "9fcf00cdbfc9bb1b0eea59068bbefd8710c4864a8dc20e8372477a40a5513f00"
+    },
+    "bench9b.log": {
+      "bytes": 1017,
+      "sha256": "e00daaadbbfbf1557a05abcb54271a931ac2d88028f0d909486a03f40f743425"
+    },
+    "bin/intern-bench": {
+      "bytes": 10356120,
+      "sha256": "ffd99d31f845a0d10631efa726a9943e8a8bd897f86166fac610029fb2235a9a"
+    },
+    "bin/intern-evaluate": {
+      "bytes": 8092752,
+      "sha256": "f9de36db22af5844808cd84091903fca5261e02f7679a39f0c5cf631b7c188a1"
+    },
+    "bin/intern-worker": {
+      "bytes": 14049592,
+      "sha256": "15610fba5111c699a75bf00211442c200c2e2df30802e8d0999aa0db963356e6"
+    },
+    "build.log": {
+      "bytes": 406,
+      "sha256": "79d38b44839a77eb86da7ee9226f41efbb552495c076f3e36e3ab1c701a8a89a"
+    },
+    "clippy.log": {
+      "bytes": 878,
+      "sha256": "d101f5cad65476274b5c54a4f8c8d2a4b317d26774f8f2ff87b88a81c1ef7d0c"
+    },
+    "comparison.json": {
+      "bytes": 592,
+      "sha256": "8e18afc1ab4e1876022b5342d070fcdf5f068771f2cc8f28055a34988bafd9c9"
+    },
+    "fixtures-current.json": {
+      "bytes": 84784,
+      "sha256": "590f2550f2f6b872af97621bccbdcee6a7962bf050ba4ce1ba5410de3d674a82"
+    },
+    "fixtures-current.log": {
+      "bytes": 4888,
+      "sha256": "f72961f9689ed19d5e3a23c11cffe9407c1cc5e30018959209e36dada893a858"
+    },
+    "fixtures-digest.json": {
+      "bytes": 45555,
+      "sha256": "897d867aec407aea8f5ebca8aa35ea9c853b95c73c390cb298289016c2e2f183"
+    },
+    "fixtures-digest.log": {
+      "bytes": 4386,
+      "sha256": "75e00c9be1c1b3a4fb825ea00643cf79f6da0aef60b3d627d7b641462d01bd79"
+    },
+    "frontend.log": {
+      "bytes": 1092,
+      "sha256": "fbfb25c7c79f5d30b932face0c38310425aba751222e54fbae49134cd46df0e5"
+    },
+    "portable.log": {
+      "bytes": 129096,
+      "sha256": "be4839d1fa25a49975ae30b8e44d596ba486ddc5b9db2470c7c02d99869ff5e0"
+    },
+    "preflight.log": {
+      "bytes": 163,
+      "sha256": "7d8c63848faf84a2357815eda63b276047bccc1fb0365390e3bafb0e789b84ff"
+    },
+    "worker-hello.json": {
+      "bytes": 147,
+      "sha256": "f43670584eba2bb1684cb6c2cba5b38a2d808cb08d4a0c246f28d68ecc919578"
+    }
+  }
+}
