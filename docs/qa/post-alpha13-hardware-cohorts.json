@@ -438,5 +438,15 @@
         "low_confidence"
       ]
     }
-  ]
+  ],
+  "active_qa_checkpoint": {
+    "checked_at": "2026-11-05 04:09:47 UTC",
+    "run_id": 41964133224,
+    "status": "in_progress",
+    "full_windows_rust_workspace_tests": "passed",
+    "strict_windows_workspace_clippy": "passed",
+    "active_step": "NSIS installer build",
+    "live_acceptance": "pending",
+    "pinned_control_pair": "pending"
+  }
 }

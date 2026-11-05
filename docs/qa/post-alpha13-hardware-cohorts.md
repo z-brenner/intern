@@ -5,6 +5,10 @@ release qualification. The current action-noun fix is still under Windows QA
 [41964133224](https://github.com/z-brenner/intern/actions/runs/41964133224),
 source `b702a134fc12826bdbf654a75c3273d476d2c28d`, release-input digest
 `e8a4ddb7775398f8cf902df329a973dc90ce11b8b7f68efe845ed29fcd871aeb`.
+At the 2026-11-05 04:09 UTC checkpoint, the revised source has passed the
+full Windows Rust workspace suite and strict workspace Clippy. Installer
+building is active; live acceptance and the pinned-control paired replay
+remain pending. These step results do not establish release qualification.
 
 ## Evidence sources
 
