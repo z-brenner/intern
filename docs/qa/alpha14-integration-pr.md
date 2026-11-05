@@ -49,8 +49,8 @@ Local alpha.14 checks pass: 765 frontend tests in 78 files, types and build;
 Clippy, formatting and optimized worker/evaluator/benchmark builds. Version
 contracts pass. Fresh preparation-tree Windows QA is running at
 [41975965963](https://github.com/z-brenner/intern/actions/runs/41975965963).
-Authorized integration, exact-main QA, truthful
-capture-specific fidelity review and release preflight. No release is claimed.
+Authorized integration, exact-main QA, truthful capture-specific fidelity review
+and release preflight remain required. No release is claimed.
 
 ## Submission state
 
