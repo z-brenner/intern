@@ -4069,7 +4069,10 @@ fn display_name(name: &str) -> String {
 /// RealINSIGHT Marketplace": the company is the party, the trading name
 /// a style.
 fn without_trading_name(name: &str) -> String {
-    let lower = name.to_lowercase();
+    // The markers are ASCII, and an ASCII lowering keeps every byte offset
+    // of `name`: a Unicode lowering can change a letter's length ("İ")
+    // and leave the cut inside a character.
+    let lower = name.to_ascii_lowercase();
     let cut = [
         " trading as ",
         " t/a ",
@@ -4671,15 +4674,17 @@ fn signer_organization<'a>(
         .find(|(_, (_, line))| contains_whole(&normalize_loosely(line), &person))
         .map(|(offset, _)| closing + 1 + offset)?;
     let (unit, _) = lines[named];
+    // The block ends where the address begins: a street with its number,
+    // an email, a telephone. A city on the line under the street ("New
+    // York") is no organization of the signer's.
     lines[named + 1..]
         .iter()
         .take(6)
-        .take_while(|(_, line)| !names_a_copy(line))
+        .take_while(|(_, line)| {
+            !names_a_copy(line) && !line.chars().any(|c| c.is_ascii_digit()) && !line.contains('@')
+        })
         .find_map(|(_, line)| {
             let line = line.trim_end_matches([',', ';', '|', '\\', '.']).trim();
-            if line.chars().any(|c| c.is_ascii_digit()) || line.contains('@') {
-                return None;
-            }
             if let Some(organization) = organization_after_post(line) {
                 return Some((organization, unit));
             }
@@ -11108,6 +11113,14 @@ Rickmansworth,
             "{:?}",
             outcome.proposal.parties
         );
+        // The signature block ends at the street: the city under it is no
+        // organization, and the person who signed stays.
+        let (outcome, _) = facts_for(
+            "16 September 2019\n\nDear Sir,\n\nI write about the noise.\n\nSincerely,\n\n\
+             John Smith\n123 Main Street\nNew York\nNY 10001",
+            sent_by("John Smith"),
+        );
+        assert_eq!(outcome.proposal.parties, vec!["John Smith"]);
     }
 
     /// A caption sets its sides "against" each other as well as "v.", with
@@ -11209,6 +11222,13 @@ Rickmansworth,
             "CWFS Insight LLC"
         );
         assert_eq!(without_trading_name("Olymbec USA LLC"), "Olymbec USA LLC");
+        // A letter whose lowering is longer than itself leaves the cut on
+        // a character boundary.
+        assert_eq!(
+            without_trading_name("İstanbul Ağ Ltd. Şti. trading as Brand"),
+            "İstanbul Ağ Ltd. Şti."
+        );
+        assert_eq!(without_trading_name("K商 trading as Brand"), "K商");
     }
 
     /// An FCC letter in the real set, typed by the order it closes: a type
