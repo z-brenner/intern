@@ -1,9 +1,9 @@
 {
   "release_qualified": false,
-  "source_under_active_qa": "b702a134fc12826bdbf654a75c3273d476d2c28d",
+  "completed_action_noun_qa_source": "b702a134fc12826bdbf654a75c3273d476d2c28d",
   "release_inputs_sha256": "e8a4ddb7775398f8cf902df329a973dc90ce11b8b7f68efe845ed29fcd871aeb",
   "cohorts": {
-    "amd": {
+    "run_41961091444": {
       "run_id": 41961091444,
       "job_id": 127027370859,
       "conclusion": "success",
@@ -12,7 +12,7 @@
       "processor_identifier": "AMD Family 25 Model 1",
       "processor_source": "parent independent artifact audit"
     },
-    "intel": {
+    "run_41955071603": {
       "run_id": 41955071603,
       "job_id": 127007912513,
       "conclusion": "failure, review ceiling",
@@ -20,433 +20,761 @@
       "named": 7,
       "processor_identifier": "Intel Family 6 Model 207",
       "processor_source": "parent independent artifact audit"
+    },
+    "run_41964133224": {
+      "run_id": 41964133224,
+      "job_id": 127037080033,
+      "conclusion": "success",
+      "completed": 19,
+      "named": 8,
+      "review": 11,
+      "processor_identifier": "AMD Family 25 Model 17",
+      "processor_source": "parent independent artifact audit"
     }
   },
   "independently_verified_from_job_logs": {
-    "completed_records": 19,
-    "differing_confidence_objects": 19,
-    "readiness_differences": [
+    "original_pair_completed_records": 19,
+    "original_pair_differing_confidence_objects": 19,
+    "original_pair_readiness_differences": [
       "long-document-100-pages.pdf",
       "termination-notice.pdf"
     ],
-    "statement_of_work": "needs_review for description_unsupported in both cohorts",
-    "confidence_token_count_difference": "ambiguous-note.pdf: AMD 16, Intel 12; both held"
+    "latest_run_confidences_equal_run_41955071603": 19,
+    "latest_run_ready": 8,
+    "latest_run_review": 11,
+    "latest_run_review_rate": 0.5789473684210527,
+    "latest_run_below_0_7_all_held": true,
+    "paired_completed_records_per_arm": 19,
+    "paired_confidence_objects_unchanged": 19,
+    "live_equals_after_replay_for_all_logged_fields": true,
+    "paired_comparison": {
+      "diagnostic_only": true,
+      "records": 21,
+      "changes": [
+        {
+          "file": "statement-of-work.pdf",
+          "changed_emissions": [],
+          "before_readiness": "needs_review",
+          "after_readiness": "ready",
+          "before_reasons": [
+            "description_unsupported"
+          ],
+          "after_reasons": []
+        }
+      ],
+      "emissions_unchanged": true,
+      "readiness_regressions": []
+    },
+    "latest_statement_of_work": "ready, versus description_unsupported review in the pinned control"
   },
   "parent_reported_matched_inputs": {
-    "fixture_hashes": 21,
-    "extractions": 21,
-    "prompt_hashes": 19,
-    "model_hash_equal": true,
-    "server_hash_equal": true,
-    "amd_probabilities_match_earlier_passing_run_exactly": true
+    "original_pair": {
+      "fixture_hashes": 21,
+      "extractions": 21,
+      "prompt_hashes": 19,
+      "model_hash_equal": true,
+      "server_hash_equal": true,
+      "older_passing_probabilities_match_earlier_passing_run_exactly": true
+    },
+    "latest_run": "Independent artifact audit confirms unchanged proposal/facts/confidence across paired replay, only SOW readiness change, and median 20.692 seconds. Latest processor metadata is AMD Family 25 Model 17."
   },
   "archive_bytes_independently_inspected_here": false,
-  "causal_limit": "Hardware/runtime association is supported; CPU causation is unproven. Matched prompt/model/server hashes do not by themselves isolate all runtime effects.",
+  "latest_artifact": {
+    "id": 13389917568,
+    "bytes": 65210149,
+    "sha256": "c4d7b41e61ae2d5b340183ecd212c529e471e31abefb5034658a59cfab43330e",
+    "provenance": "GitHub artifact metadata, archive not materialized here"
+  },
+  "latency": {
+    "evaluation_wall_seconds": 463.2,
+    "wall_seconds_source": "completed job log and parent artifact audit",
+    "median_seconds": 20.692,
+    "median_source": "parent independent artifact audit",
+    "pre_evaluation_gap_minutes_approx": 52,
+    "gap_source": "parent independent artifact audit; job step spans approximately one hour while report states 463.2 evaluation seconds",
+    "gap_cause": "unresolved",
+    "actual_16gb_laptop_measurement": false,
+    "evaluation_timer_starts_after_server_health": true,
+    "cold_start_qualification": false
+  },
+  "causal_limit": "A vendor split is contradicted: AMD Family 25 Model 17 shares all 19 confidence objects with Intel Family 6 Model 207, while AMD Family 25 Model 1 produced different values. Runtime/CPU variant association and causation remain unresolved; matching prompt/model/server hashes do not isolate every execution path.",
   "implications": [
-    "Do not use the older AMD pass to qualify the revised action-noun fix.",
-    "Keep original 0.7 gating for journal and termination; Intel review behavior is correct.",
-    "Current revised fix requires live acceptance and a same-recording pinned-control pair.",
-    "Passing hosted QA is not 16 GB CPU laptop or held-out document qualification."
+    "Label confidence groups by run identifier, not AMD versus Intel.",
+    "Do not credit the older pass to the later action-noun fix.",
+    "The completed same-recording pair supports the SOW action-noun fix with unchanged emitted fields and probabilities.",
+    "The later ownership fix requires its own Windows QA, run 41970479658, which remains in progress.",
+    "Preserve the unchanged 0.7 gate and both original confidence groups; no hardware-based routing.",
+    "Hosted QA does not establish fresh laptop performance or fulfill capture-specific fidelity review."
   ],
   "records": [
     {
       "file": "employment-agreement.pdf",
-      "amd": {
-        "mean": 0.9757916331291199,
-        "min": 0.5686560869216919,
-        "tokens": 18
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9757916331291199,
+          "min": 0.5686560869216919,
+          "tokens": 18
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "low_confidence"
+        ]
       },
-      "intel": {
-        "mean": 0.9765939712524414,
-        "min": 0.5856608152389526,
-        "tokens": 18
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.9765939712524414,
+          "min": 0.5856608152389526,
+          "tokens": 18
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "low_confidence"
+        ]
       },
-      "amd_readiness": "needs_review",
-      "intel_readiness": "needs_review",
-      "amd_reasons": [
-        "low_confidence"
-      ],
-      "intel_reasons": [
-        "low_confidence"
-      ]
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.9765939712524414,
+          "min": 0.5856608152389526,
+          "tokens": 18
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "low_confidence"
+        ]
+      }
     },
     {
       "file": "scanned-lease.pdf",
-      "amd": {
-        "mean": 0.9900912642478943,
-        "min": 0.8030213117599487,
-        "tokens": 21
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9900912642478943,
+          "min": 0.8030213117599487,
+          "tokens": 21
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "intel": {
-        "mean": 0.9922020435333252,
-        "min": 0.8494911789894104,
-        "tokens": 21
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.9922020435333252,
+          "min": 0.8494911789894104,
+          "tokens": 21
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "amd_readiness": "ready",
-      "intel_readiness": "ready",
-      "amd_reasons": [],
-      "intel_reasons": []
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.9922020435333252,
+          "min": 0.8494911789894104,
+          "tokens": 21
+        },
+        "readiness": "ready",
+        "reasons": []
+      }
     },
     {
       "file": "mixed-signature.pdf",
-      "amd": {
-        "mean": 0.9991315603256226,
-        "min": 0.9932611584663391,
-        "tokens": 19
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9991315603256226,
+          "min": 0.9932611584663391,
+          "tokens": 19
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "intel": {
-        "mean": 0.9989905953407288,
-        "min": 0.992223858833313,
-        "tokens": 19
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.9989905953407288,
+          "min": 0.992223858833313,
+          "tokens": 19
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "amd_readiness": "ready",
-      "intel_readiness": "ready",
-      "amd_reasons": [],
-      "intel_reasons": []
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.9989905953407288,
+          "min": 0.992223858833313,
+          "tokens": 19
+        },
+        "readiness": "ready",
+        "reasons": []
+      }
     },
     {
       "file": "nda.docx",
-      "amd": {
-        "mean": 0.9990437626838684,
-        "min": 0.9862344264984131,
-        "tokens": 21
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9990437626838684,
+          "min": 0.9862344264984131,
+          "tokens": 21
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "intel": {
-        "mean": 0.997958242893219,
-        "min": 0.9743442535400391,
-        "tokens": 21
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.997958242893219,
+          "min": 0.9743442535400391,
+          "tokens": 21
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "amd_readiness": "ready",
-      "intel_readiness": "ready",
-      "amd_reasons": [],
-      "intel_reasons": []
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.997958242893219,
+          "min": 0.9743442535400391,
+          "tokens": 21
+        },
+        "readiness": "ready",
+        "reasons": []
+      }
     },
     {
       "file": "multi-date-invoice.pdf",
-      "amd": {
-        "mean": 0.9695591330528259,
-        "min": 0.5756229162216187,
-        "tokens": 20
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9695591330528259,
+          "min": 0.5756229162216187,
+          "tokens": 20
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "type_unsupported",
+          "type_inferred",
+          "low_confidence"
+        ]
       },
-      "intel": {
-        "mean": 0.966098964214325,
-        "min": 0.5213189125061035,
-        "tokens": 20
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.966098964214325,
+          "min": 0.5213189125061035,
+          "tokens": 20
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "type_unsupported",
+          "type_inferred",
+          "low_confidence"
+        ]
       },
-      "amd_readiness": "needs_review",
-      "intel_readiness": "needs_review",
-      "amd_reasons": [
-        "type_unsupported",
-        "type_inferred",
-        "low_confidence"
-      ],
-      "intel_reasons": [
-        "type_unsupported",
-        "type_inferred",
-        "low_confidence"
-      ]
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.966098964214325,
+          "min": 0.5213189125061035,
+          "tokens": 20
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "type_unsupported",
+          "type_inferred",
+          "low_confidence"
+        ]
+      }
     },
     {
       "file": "meeting-minutes.md",
-      "amd": {
-        "mean": 0.9773207902908325,
-        "min": 0.642614483833313,
-        "tokens": 16
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9773207902908325,
+          "min": 0.642614483833313,
+          "tokens": 16
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "party_unsupported",
+          "low_confidence"
+        ]
       },
-      "intel": {
-        "mean": 0.9699116349220276,
-        "min": 0.5348996520042419,
-        "tokens": 16
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.9699116349220276,
+          "min": 0.5348996520042419,
+          "tokens": 16
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "party_unsupported",
+          "low_confidence"
+        ]
       },
-      "amd_readiness": "needs_review",
-      "intel_readiness": "needs_review",
-      "amd_reasons": [
-        "party_unsupported",
-        "low_confidence"
-      ],
-      "intel_reasons": [
-        "party_unsupported",
-        "low_confidence"
-      ]
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.9699116349220276,
+          "min": 0.5348996520042419,
+          "tokens": 16
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "party_unsupported",
+          "low_confidence"
+        ]
+      }
     },
     {
       "file": "rotated-low-resolution-scan.png",
-      "amd": {
-        "mean": 0.9895594120025635,
-        "min": 0.8421406149864197,
-        "tokens": 22
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9895594120025635,
+          "min": 0.8421406149864197,
+          "tokens": 22
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "parser_warning"
+        ]
       },
-      "intel": {
-        "mean": 0.9932405948638916,
-        "min": 0.9098108410835266,
-        "tokens": 22
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.9932405948638916,
+          "min": 0.9098108410835266,
+          "tokens": 22
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "parser_warning"
+        ]
       },
-      "amd_readiness": "needs_review",
-      "intel_readiness": "needs_review",
-      "amd_reasons": [
-        "parser_warning"
-      ],
-      "intel_reasons": [
-        "parser_warning"
-      ]
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.9932405948638916,
+          "min": 0.9098108410835266,
+          "tokens": 22
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "parser_warning"
+        ]
+      }
     },
     {
       "file": "long-document-100-pages.pdf",
-      "amd": {
-        "mean": 0.9805601239204407,
-        "min": 0.7725790739059448,
-        "tokens": 12
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9805601239204407,
+          "min": 0.7725790739059448,
+          "tokens": 12
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "intel": {
-        "mean": 0.9654887914657593,
-        "min": 0.6038329005241394,
-        "tokens": 12
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.9654887914657593,
+          "min": 0.6038329005241394,
+          "tokens": 12
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "low_confidence"
+        ]
       },
-      "amd_readiness": "ready",
-      "intel_readiness": "needs_review",
-      "amd_reasons": [],
-      "intel_reasons": [
-        "low_confidence"
-      ]
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.9654887914657593,
+          "min": 0.6038329005241394,
+          "tokens": 12
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "low_confidence"
+        ]
+      }
     },
     {
       "file": "document-image.png",
-      "amd": {
-        "mean": 0.9563946723937988,
-        "min": 0.5648670196533203,
-        "tokens": 22
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9563946723937988,
+          "min": 0.5648670196533203,
+          "tokens": 22
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "date_unsupported",
+          "parser_warning",
+          "low_confidence"
+        ]
       },
-      "intel": {
-        "mean": 0.9566832780838013,
-        "min": 0.6177124381065369,
-        "tokens": 22
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.9566832780838013,
+          "min": 0.6177124381065369,
+          "tokens": 22
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "date_unsupported",
+          "parser_warning",
+          "low_confidence"
+        ]
       },
-      "amd_readiness": "needs_review",
-      "intel_readiness": "needs_review",
-      "amd_reasons": [
-        "date_unsupported",
-        "parser_warning",
-        "low_confidence"
-      ],
-      "intel_reasons": [
-        "date_unsupported",
-        "parser_warning",
-        "low_confidence"
-      ]
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.9566832780838013,
+          "min": 0.6177124381065369,
+          "tokens": 22
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "date_unsupported",
+          "parser_warning",
+          "low_confidence"
+        ]
+      }
     },
     {
       "file": "document-image.jpg",
-      "amd": {
-        "mean": 0.9928572177886963,
-        "min": 0.8843013048171997,
-        "tokens": 18
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9928572177886963,
+          "min": 0.8843013048171997,
+          "tokens": 18
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "parser_warning"
+        ]
       },
-      "intel": {
-        "mean": 0.9921885132789612,
-        "min": 0.8738372921943665,
-        "tokens": 18
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.9921885132789612,
+          "min": 0.8738372921943665,
+          "tokens": 18
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "parser_warning"
+        ]
       },
-      "amd_readiness": "needs_review",
-      "intel_readiness": "needs_review",
-      "amd_reasons": [
-        "parser_warning"
-      ],
-      "intel_reasons": [
-        "parser_warning"
-      ]
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.9921885132789612,
+          "min": 0.8738372921943665,
+          "tokens": 18
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "parser_warning"
+        ]
+      }
     },
     {
       "file": "document-image.tiff",
-      "amd": {
-        "mean": 0.8775237202644348,
-        "min": 0.8125497698783875,
-        "tokens": 3
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.8775237202644348,
+          "min": 0.8125497698783875,
+          "tokens": 3
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "type_missing",
+          "date_missing",
+          "parser_warning"
+        ]
       },
-      "intel": {
-        "mean": 0.822272539138794,
-        "min": 0.665378749370575,
-        "tokens": 3
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.822272539138794,
+          "min": 0.665378749370575,
+          "tokens": 3
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "type_missing",
+          "date_missing",
+          "parser_warning",
+          "low_confidence"
+        ]
       },
-      "amd_readiness": "needs_review",
-      "intel_readiness": "needs_review",
-      "amd_reasons": [
-        "type_missing",
-        "date_missing",
-        "parser_warning"
-      ],
-      "intel_reasons": [
-        "type_missing",
-        "date_missing",
-        "parser_warning",
-        "low_confidence"
-      ]
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.822272539138794,
+          "min": 0.665378749370575,
+          "tokens": 3
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "type_missing",
+          "date_missing",
+          "parser_warning",
+          "low_confidence"
+        ]
+      }
     },
     {
       "file": "statement-of-work.pdf",
-      "amd": {
-        "mean": 0.9930886626243591,
-        "min": 0.9344902634620667,
-        "tokens": 23
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9930886626243591,
+          "min": 0.9344902634620667,
+          "tokens": 23
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "description_unsupported"
+        ]
       },
-      "intel": {
-        "mean": 0.9952310919761658,
-        "min": 0.9439870715141296,
-        "tokens": 23
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.9952310919761658,
+          "min": 0.9439870715141296,
+          "tokens": 23
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "description_unsupported"
+        ]
       },
-      "amd_readiness": "needs_review",
-      "intel_readiness": "needs_review",
-      "amd_reasons": [
-        "description_unsupported"
-      ],
-      "intel_reasons": [
-        "description_unsupported"
-      ]
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.9952310919761658,
+          "min": 0.9439870715141296,
+          "tokens": 23
+        },
+        "readiness": "ready",
+        "reasons": []
+      }
     },
     {
       "file": "termination-notice.pdf",
-      "amd": {
-        "mean": 0.9789013266563416,
-        "min": 0.7505289316177368,
-        "tokens": 16
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9789013266563416,
+          "min": 0.7505289316177368,
+          "tokens": 16
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "intel": {
-        "mean": 0.9717264771461487,
-        "min": 0.6733022928237915,
-        "tokens": 16
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.9717264771461487,
+          "min": 0.6733022928237915,
+          "tokens": 16
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "low_confidence"
+        ]
       },
-      "amd_readiness": "ready",
-      "intel_readiness": "needs_review",
-      "amd_reasons": [],
-      "intel_reasons": [
-        "low_confidence"
-      ]
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.9717264771461487,
+          "min": 0.6733022928237915,
+          "tokens": 16
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "low_confidence"
+        ]
+      }
     },
     {
       "file": "consulting-amendment.pdf",
-      "amd": {
-        "mean": 0.9860154390335083,
-        "min": 0.7738268375396729,
-        "tokens": 19
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9860154390335083,
+          "min": 0.7738268375396729,
+          "tokens": 19
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "intel": {
-        "mean": 0.9855077266693115,
-        "min": 0.7642558217048645,
-        "tokens": 19
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.9855077266693115,
+          "min": 0.7642558217048645,
+          "tokens": 19
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "amd_readiness": "ready",
-      "intel_readiness": "ready",
-      "amd_reasons": [],
-      "intel_reasons": []
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.9855077266693115,
+          "min": 0.7642558217048645,
+          "tokens": 19
+        },
+        "readiness": "ready",
+        "reasons": []
+      }
     },
     {
       "file": "vendor-invoice.pdf",
-      "amd": {
-        "mean": 0.9928706288337708,
-        "min": 0.876720130443573,
-        "tokens": 19
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9928706288337708,
+          "min": 0.876720130443573,
+          "tokens": 19
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "intel": {
-        "mean": 0.9914708137512207,
-        "min": 0.8528093695640564,
-        "tokens": 19
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.9914708137512207,
+          "min": 0.8528093695640564,
+          "tokens": 19
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "amd_readiness": "ready",
-      "intel_readiness": "ready",
-      "amd_reasons": [],
-      "intel_reasons": []
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.9914708137512207,
+          "min": 0.8528093695640564,
+          "tokens": 19
+        },
+        "readiness": "ready",
+        "reasons": []
+      }
     },
     {
       "file": "settlement-agreement.pdf",
-      "amd": {
-        "mean": 0.9952172040939331,
-        "min": 0.9603666663169861,
-        "tokens": 26
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9952172040939331,
+          "min": 0.9603666663169861,
+          "tokens": 26
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "intel": {
-        "mean": 0.996463418006897,
-        "min": 0.9729169011116028,
-        "tokens": 26
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.996463418006897,
+          "min": 0.9729169011116028,
+          "tokens": 26
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "amd_readiness": "ready",
-      "intel_readiness": "ready",
-      "amd_reasons": [],
-      "intel_reasons": []
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.996463418006897,
+          "min": 0.9729169011116028,
+          "tokens": 26
+        },
+        "readiness": "ready",
+        "reasons": []
+      }
     },
     {
       "file": "ambiguous-note.pdf",
-      "amd": {
-        "mean": 0.8793412446975708,
-        "min": 0.06371978670358658,
-        "tokens": 16
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.8793412446975708,
+          "min": 0.06371978670358658,
+          "tokens": 16
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "type_missing",
+          "date_unsupported",
+          "party_unsupported",
+          "description_invalid",
+          "low_confidence"
+        ]
       },
-      "intel": {
-        "mean": 0.8169411420822144,
-        "min": 0.2031736522912979,
-        "tokens": 12
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.8169411420822144,
+          "min": 0.2031736522912979,
+          "tokens": 12
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "type_unsupported",
+          "date_unsupported",
+          "description_invalid",
+          "low_confidence"
+        ]
       },
-      "amd_readiness": "needs_review",
-      "intel_readiness": "needs_review",
-      "amd_reasons": [
-        "type_missing",
-        "date_unsupported",
-        "party_unsupported",
-        "description_invalid",
-        "low_confidence"
-      ],
-      "intel_reasons": [
-        "type_unsupported",
-        "date_unsupported",
-        "description_invalid",
-        "low_confidence"
-      ]
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.8169411420822144,
+          "min": 0.2031736522912979,
+          "tokens": 12
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "type_unsupported",
+          "date_unsupported",
+          "description_invalid",
+          "low_confidence"
+        ]
+      }
     },
     {
       "file": "board-deck.pptx",
-      "amd": {
-        "mean": 0.9918860197067261,
-        "min": 0.8494361042976379,
-        "tokens": 23
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9918860197067261,
+          "min": 0.8494361042976379,
+          "tokens": 23
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "intel": {
-        "mean": 0.9898054599761963,
-        "min": 0.8431218266487122,
-        "tokens": 23
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.9898054599761963,
+          "min": 0.8431218266487122,
+          "tokens": 23
+        },
+        "readiness": "ready",
+        "reasons": []
       },
-      "amd_readiness": "ready",
-      "intel_readiness": "ready",
-      "amd_reasons": [],
-      "intel_reasons": []
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.9898054599761963,
+          "min": 0.8431218266487122,
+          "tokens": 23
+        },
+        "readiness": "ready",
+        "reasons": []
+      }
     },
     {
       "file": "order-form.docx",
-      "amd": {
-        "mean": 0.9808854460716248,
-        "min": 0.6292691230773926,
-        "tokens": 22
+      "run_41961091444": {
+        "confidence": {
+          "mean": 0.9808854460716248,
+          "min": 0.6292691230773926,
+          "tokens": 22
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "low_confidence"
+        ]
       },
-      "intel": {
-        "mean": 0.981827974319458,
-        "min": 0.6523521542549133,
-        "tokens": 22
+      "run_41955071603": {
+        "confidence": {
+          "mean": 0.981827974319458,
+          "min": 0.6523521542549133,
+          "tokens": 22
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "low_confidence"
+        ]
       },
-      "amd_readiness": "needs_review",
-      "intel_readiness": "needs_review",
-      "amd_reasons": [
-        "low_confidence"
-      ],
-      "intel_reasons": [
-        "low_confidence"
-      ]
+      "run_41964133224": {
+        "confidence": {
+          "mean": 0.981827974319458,
+          "min": 0.6523521542549133,
+          "tokens": 22
+        },
+        "readiness": "needs_review",
+        "reasons": [
+          "low_confidence"
+        ]
+      }
     }
-  ],
-  "active_qa_checkpoint": {
-    "checked_at": "2026-11-05 04:09:47 UTC",
-    "run_id": 41964133224,
-    "status": "in_progress",
-    "full_windows_rust_workspace_tests": "passed",
-    "strict_windows_workspace_clippy": "passed",
-    "active_step": "NSIS installer build",
-    "live_acceptance": "pending",
-    "pinned_control_pair": "pending"
-  }
+  ]
 }

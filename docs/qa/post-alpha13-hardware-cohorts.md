@@ -1,62 +1,77 @@
-# CPU cohorts and release interpretation
+# Observed confidence groups and runtime interpretation
 
-This records an observational association, not proof of CPU causation or
-release qualification. The current action-noun fix is still under Windows QA
-[41964133224](https://github.com/z-brenner/intern/actions/runs/41964133224),
-source `b702a134fc12826bdbf654a75c3273d476d2c28d`, release-input digest
+The completed action-noun QA
+[41964133224](https://github.com/z-brenner/intern/actions/runs/41964133224)
+passed live acceptance and the in-place paired replay at source
+`b702a134fc12826bdbf654a75c3273d476d2c28d`, release-input digest
 `e8a4ddb7775398f8cf902df329a973dc90ce11b8b7f68efe845ed29fcd871aeb`.
-At the 2026-11-05 04:09 UTC checkpoint, the revised source has passed the
-full Windows Rust workspace suite and strict workspace Clippy. Installer
-building is active; live acceptance and the pinned-control paired replay
-remain pending. These step results do not establish release qualification.
+This supports that fix; the later report-ownership fix has separate Windows
+QA [41970479658](https://github.com/z-brenner/intern/actions/runs/41970479658),
+which remains in progress. Neither result alone qualifies a release.
 
-## Evidence sources
+## Confidence observations, without a vendor split
 
-The parent independent audit reports matching hashes for all 21 fixture
-files/extractions, 19 prompts, the model and server executable. It identifies
-AMD Family 25 Model 1 in passing run
-[41961091444](https://github.com/z-brenner/intern/actions/runs/41961091444) and
-Intel Family 6 Model 207 in failed diagnostic run
-[41955071603](https://github.com/z-brenner/intern/actions/runs/41955071603).
-It also reports that the AMD confidence values exactly match the earlier
-passing run. These archive comparisons and processor identifiers have not
-been independently inspected from archive bytes on this executor.
+The parent independent artifact audit identifies these processors:
 
-This executor independently read both completed job logs and compared every
-completed record's confidence summary, readiness and reasons:
+| Run | Processor identifier | Live ready / reviewed |
+| --- | --- | --- |
+| 41961091444 | AMD Family 25 Model 1 | 9 / 10 |
+| 41955071603 | Intel Family 6 Model 207 | 7 / 12 |
+| 41964133224 | AMD Family 25 Model 17 | 8 / 11 |
 
-| Case | AMD minimum / readiness | Intel minimum / readiness |
-|---|---|---|
+The original two runs have matching hashes for all 21 fixture files and
+extractions, 19 prompts, the model and server executable, according to the
+parent audit. This executor independently compared all 19 completed-record
+confidence objects in their job logs; every object differs. Only the journal
+and termination notice changed readiness under the unchanged 0.7 gate. The
+SOW stayed in review for unsupported description wording in both runs.
+
+| Case | Run 41961091444 minimum / readiness | Run 41955071603 minimum / readiness |
+| --- | --- | --- |
 | Journal | 0.7725790739059448 / ready | 0.6038329005241394 / review |
 | Termination notice | 0.7505289316177368 / ready | 0.6733022928237915 / review |
 | Statement of work | 0.9344902634620667 / review | 0.9439870715141296 / review |
 
-All 19 confidence objects differ. Only the journal and termination readiness
-decisions differ, as the unchanged 0.7 gate requires. The SOW has only
-`description_unsupported` in both: the initial grounded-acronym fix did not
-correct its captured noun wording. The ambiguous note's confidence-summary
-token count also differs (AMD 16, Intel 12), but it stays in review in both.
-These are critical-value confidence-summary counts, not total generated
-token counts.
+The newer run's 19 confidence objects **exactly match run 41955071603**,
+independently checked here from completed job logs. Yet its processor is
+AMD Family 25 Model 17 according to the parent artifact audit. A split by
+CPU vendor is therefore contradicted. Runtime and CPU variant effects remain
+unresolved; no particular instruction set, dispatch path or cause has been
+isolated. No confidence group is discarded and no routing uses processor
+vendor. The original ambiguous-note counts, 16 versus 12, are counts of
+critical-value confidence summaries, not total generated tokens.
 
-## Consequences for the revised fix
+## What the completed pair establishes
 
-The CPU/runtime association is stronger evidence than unexplained random
-variation. It does not isolate the cause; matched inputs and executable
-hashes alone do not disentangle all runtime effects. Neither cohort is
-discarded, and the AMD pass is not credited to the later action-noun fix.
+The job logs independently show 19 completed live documents: eight ready,
+eleven reviewed (57.9%), with every below-0.7 result held. The in-place control
+and current replays each complete the same 21 fixture records, including two
+expected extraction errors. Their 19 completed replies retain identical
+confidence objects; all logged current-replay fields equal the live run.
 
-The [revised fix](post-alpha13-subject-actions.md) does not alter probabilities
-or use the processor identifier to change routing. Its current QA must finish
-live acceptance and replay the same fresh recording through pinned before/after
-validators. The comparison must preserve emitted facts and probabilities, with
-no stale prompts or readiness loss. Both existing cohort recordings remain
-useful for additional paired validation when available.
+The comparison reports one change: the SOW moves from
+`description_unsupported` review to ready. Filename, description, proposal,
+status and confidence are unchanged, with no readiness regression. The parent
+independent archive audit additionally confirms unchanged proposal/facts and
+confidence. Archive bytes have not been independently materialized here; the
+GitHub artifact metadata and the independently checked log ledger are retained
+in the companion JSON.
 
-A hosted pass alone does not establish held-out document correctness, actual
-16 GB CPU laptop cold/warm behavior, or the required fidelity review. The
-branch remains unqualified for release. No PR, approval, merge or release was
-performed, and the uncertain PC run is untouched.
+The reported evaluation takes **463.2 seconds**, with median **20.692 seconds**.
+The wall time is also visible in the completed job log. The apparent hour-long
+step includes an approximately 52-minute pre-evaluation gap reported by the
+parent audit. The cause of that gap is unresolved; it must not be presented as
+an hour of model inference. The evaluation timer starts after server health,
+so model provisioning and startup are outside these measurements. These hosted
+Windows results establish neither application cold-start time nor laptop
+qualification.
 
-All 19 compared diagnostic rows and their provenance are retained in
+The successful pair supports the [action-noun fix](post-alpha13-subject-actions.md)
+without crediting any older pass to it. The later ownership fix, capture-specific
+fidelity review and release preflight remain separate. The completed matched
+PC run and reported replay are recorded in the
+[ownership evidence](post-alpha13-report-organization.md). No PR approval,
+merge or release was performed.
+
+All 19 rows from each observed run and their provenance are retained in
 [`post-alpha13-hardware-cohorts.json`](post-alpha13-hardware-cohorts.json).

@@ -120,13 +120,22 @@ floors and mandatory review for the fast tier are unchanged.
 
 Fresh matching Windows QA is running at
 [41970479658](https://github.com/z-brenner/intern/actions/runs/41970479658),
-head `a3910ba22e313d5862642748ab8342c4c807a24c`. At the 05:11 UTC checkpoint,
+head `a3910ba22e313d5862642748ab8342c4c807a24c`. At the 05:22 UTC checkpoint,
 frontend checks, browser QA, formatting, full Windows workspace strict Clippy,
 full Windows workspace tests, verified native assets, parser integration, staged
-runtime and PP-OCR checks passed. The installer is building; its smoke test,
-live acceptance, paired replay and final evidence binding remain pending.
+runtime, PP-OCR, installer build and installer smoke checks passed. Live
+acceptance is in progress; paired replay and final evidence binding remain
+pending.
 The earlier [41964133224](https://github.com/z-brenner/intern/actions/runs/41964133224)
-is preserved and still in live inference; it covers the preceding source.
+is preserved and completed successfully on the preceding source. Its live
+result is eight ready and eleven reviewed (57.9%); the paired replay improves
+only SOW readiness without changing emitted fields or probabilities. This
+supports the preceding action-noun fix, not the ownership change. The
+[confidence-group correction](post-alpha13-hardware-cohorts.md) records why
+this AMD Family 25 Model 17 run matching the earlier diagnostic's probabilities
+contradicts a vendor split. Measured evaluation is 463.2 seconds, with a
+reported 20.692-second median; an approximately 52-minute pre-evaluation gap
+must not be counted as inference time.
 
 The read-only release preflight exits 1 because the existing fidelity sign-off
 names the old release-input digest `40df3381aac1a22c7cbfcd50944dc4f5c4dd629ba710e03eaef9f6d0a3864c32`,

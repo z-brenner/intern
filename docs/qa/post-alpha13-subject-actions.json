@@ -242,12 +242,10 @@
   },
   "facts_source_sha256": "5698c7eb2da4d6521f77630e147385d20cb8d02b596292c53a32027b73ec25ae",
   "outstanding": [
-    "paired replay of complete latest Windows recording",
-    "matching Windows QA on this source",
-    "explanation of earlier passing run remains unproven",
-    "held-out document checks",
-    "16 GB CPU laptop qualification",
-    "required fidelity review"
+    "Completion of later report-ownership Windows QA 41970479658",
+    "Unresolved runtime/CPU variant effects on confidence objects",
+    "Further held-out checks and actual laptop characterization",
+    "Capture-specific fidelity review and release preflight"
   ],
   "prior_qa_run": {
     "id": 41961091444,
@@ -258,10 +256,10 @@
     "completed": 19,
     "statement_of_work": "still needs_review for description_unsupported; not evidence that initial fix covered captured wording"
   },
-  "pc_background_run": "uncertain, untouched",
+  "pc_background_run": "Parent reports the matched 77-document run and both patched replays completed. See post-alpha13-report-organization.json; no PC execution resources accessed here.",
   "app_fix_commit": "f81b149fd0ba3731822f01f0e0b14de8af245dcc",
   "qualification_runner_paired_replay": {
-    "status": "implemented, pending Windows execution",
+    "status": "completed successfully in Windows QA 41964133224",
     "control_commit": "777071d2582eb8dbdc861367f9bd47d20e32125d",
     "same_recording_checked_against_live_report_hash": true,
     "fresh_inference_requests": 0,
@@ -269,7 +267,17 @@
     "preserves_failed_live_acceptance": true,
     "diagnostic_only": true,
     "refuses_emission_changes_or_readiness_loss": true,
-    "scope": "qualification branches; main and release acceptance policy unchanged"
+    "scope": "qualification branches; main and release acceptance policy unchanged",
+    "comparison": {
+      "records": 21,
+      "completed_per_arm": 19,
+      "changed_files": [
+        "statement-of-work.pdf"
+      ],
+      "changed_emitted_fields": [],
+      "readiness_regressions": [],
+      "probabilities_unchanged_for_all_completed": true
+    }
   },
   "local_replay_comparison": {
     "sha256": "50b9095066d6e0ae5b8a759707d13225ee8fc15ec857b4ab9df199404851e54d",
@@ -295,8 +303,26 @@
   "matching_windows_qa": {
     "id": 41964133224,
     "head_sha": "b702a134fc12826bdbf654a75c3273d476d2c28d",
-    "status": "in_progress; live acceptance and complete-recording paired step pending",
-    "url": "https://github.com/z-brenner/intern/actions/runs/41964133224"
+    "status": "completed, success",
+    "url": "https://github.com/z-brenner/intern/actions/runs/41964133224",
+    "completed": 19,
+    "ready": 8,
+    "review": 11,
+    "review_rate": 0.5789473684210527,
+    "below_threshold_all_held": true,
+    "evaluation_wall_seconds": 463.2,
+    "median_seconds_reported_by_parent": 20.692,
+    "cpu_identifier_reported_by_parent": "AMD Family 25 Model 17",
+    "confidence_objects_equal_run_41955071603": 19,
+    "evaluation_is_fresh_inference": true,
+    "actual_laptop_qualification": false,
+    "verification_provenance": "Live counts, wall seconds, all 19 confidence summaries and paired comparison independently checked from completed job logs. Parent independent archive audit confirms unchanged proposal/facts/confidence, median, processor identifier and approximately 52-minute pre-evaluation gap. Archive bytes not materialized on this executor.",
+    "artifact": {
+      "id": 13389917568,
+      "sha256": "c4d7b41e61ae2d5b340183ecd212c529e471e31abefb5034658a59cfab43330e",
+      "bytes": 65210149
+    },
+    "latency_caution": "The step included an approximately 52-minute pre-evaluation gap, of unresolved cause; measured evaluation is 463.2 seconds, not the full step duration."
   },
   "hardware_cohort_audit": "post-alpha13-hardware-cohorts.json"
 }

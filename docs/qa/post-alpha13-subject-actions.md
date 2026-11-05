@@ -73,30 +73,51 @@ reports one readiness improvement with identical emitted fields. Its tests
 expose changed emitted dates/probabilities and ready-to-review regressions,
 and reject live, stale, duplicate or mismatched inputs.
 
-Qualification branches now replay their own fresh recording in place on the
+Qualification branches replay their own fresh recording in place on the
 Windows runner against pinned control `777071d2582eb8dbdc861367f9bd47d20e32125d`.
 The runner checks the recording's binding to the live report, isolates and
 builds the control, replays both frozen executables at 0.7 without stale
 inputs, and records the commit and executable hashes. It restores the current
 evaluator after the control build. The comparison is diagnostic only, runs
 after a failed live acceptance too, and preserves that failure. Changed emitted
-facts or lost readiness fail the comparison. This new Windows step still
-requires execution; it does not yet supply a completed full-recording pair.
+fields or lost readiness fail the comparison.
 
-These checks do not establish a live review rate or laptop performance for
-this version. The exact complete Windows recording still needs paired replay,
-and fresh Windows QA must execute this source. The previous running QA evaluates
-the initial rule and has not been cancelled or changed. The [CPU cohort audit](post-alpha13-hardware-cohorts.md)
-records its subsequent pass and the observational hardware association; causation
-remains unproven. Held-out checks, 16 GB CPU laptop behavior
-and required fidelity review remain release prerequisites. The uncertain PC
-background run is untouched. No PR, approval, merge or release was performed.
+## Completed Windows evidence
 
-Matching Windows QA is running at
-[41964133224](https://github.com/z-brenner/intern/actions/runs/41964133224),
-head `b702a134fc12826bdbf654a75c3273d476d2c28d`. Its live acceptance and new
-complete-recording paired step are both pending. Later receipt edits under
-`docs/qa/` preserve the source digest.
+Matching QA [41964133224](https://github.com/z-brenner/intern/actions/runs/41964133224)
+completed successfully at head `b702a134fc12826bdbf654a75c3273d476d2c28d`.
+It passes native product tests, installer smoke, live acceptance and the
+complete-recording pair. The live run completes 19 documents: eight ready and
+eleven reviewed (57.9%), passing the unchanged 60% ceiling, with all results
+below the unchanged 0.7 probability gate held.
+
+The pair changes only SOW readiness, from unsupported-description review to
+ready, with unchanged emitted fields and probabilities and no readiness loss.
+The parent independent archive audit confirms unchanged proposal/facts and
+confidence. This executor independently checks the completed job-log comparison,
+all 19 probability objects in both arms and equality of the current replay's
+logged rows to the live run. The complete archive was not materialized here;
+the earlier controlled substitution remains separately identified above.
+
+Measured evaluation takes 463.2 seconds (also in the job log), with median
+20.692 seconds according to the parent archive audit. An approximately
+52-minute pre-evaluation gap, of unresolved cause, accounts for most of the
+apparent long step duration. These hosted Windows timings do not establish
+actual laptop behavior.
+
+The run uses AMD Family 25 Model 17, according to the parent audit, yet its
+19 confidence objects exactly match the earlier Intel Family 6 Model 207 run,
+independently verified here from logs. A vendor split is contradicted; runtime
+and CPU variant effects remain unresolved. The
+[confidence-group audit](post-alpha13-hardware-cohorts.md) retains all runs
+without discarding either original group or crediting an older pass to this fix.
+
+The [later report-ownership fix](post-alpha13-report-organization.md) has its
+own QA at [41970479658](https://github.com/z-brenner/intern/actions/runs/41970479658).
+Completion of this preceding run cannot qualify that newer source. Capture-
+specific fidelity review and release preflight also remain separate. No PR
+approval, merge or release was performed. All receipt edits stay under
+`docs/qa/` and preserve the corresponding release-input digests.
 
 Machine-readable receipts and frozen evaluator hashes are in
 [`post-alpha13-subject-actions.json`](post-alpha13-subject-actions.json).

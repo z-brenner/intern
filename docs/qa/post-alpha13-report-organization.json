@@ -368,8 +368,12 @@
     "run_id": 41964133224,
     "head": "b702a134fc12826bdbf654a75c3273d476d2c28d",
     "url": "https://github.com/z-brenner/intern/actions/runs/41964133224",
-    "status_at_last_check": "in_progress: real inference; native tests and installer smoke passed; paired replay pending",
-    "covers_new_ownership_fix": false
+    "status_at_last_check": "completed, success; live 8 ready / 11 review of 19, 57.9%; paired replay changes only SOW readiness and preserves emitted fields and confidence, without readiness regression",
+    "covers_new_ownership_fix": false,
+    "source_scope": "Preceding action-noun fix, before the ownership fix; completion does not qualify current source",
+    "hardware_correction": "Parent audit identifies AMD Family 25 Model 17; all 19 confidence objects match prior Intel Family 6 Model 207 job logs. No vendor-based split or causal conclusion.",
+    "evaluation_wall_seconds": 463.2,
+    "median_seconds_reported_by_parent": 20.692
   },
   "remaining": [
     "Completion and inspection of fresh Windows QA and its complete-recording paired step.",
@@ -468,7 +472,7 @@
     "status": "in_progress",
     "covers_new_ownership_fix": true,
     "completed_or_qualified": false,
-    "checkpoint_utc": "2026-11-05 05:11 UTC",
+    "checkpoint_utc": "2026-11-05 05:22 UTC",
     "passed_so_far": [
       "Frontend unit/type/build checks",
       "Browser core path, accessibility, responsive and screenshot QA",
@@ -478,11 +482,12 @@
       "Pinned Windows assets verification",
       "Native parser fixture integration",
       "Staged package runtime",
-      "PP-OCR scan checks"
+      "PP-OCR scan checks",
+      "Windows installer build",
+      "Per-user installer and uninstall-data-retention smoke"
     ],
     "pending_at_checkpoint": [
-      "Installer build (in progress) and smoke",
-      "Live model acceptance",
+      "Live model acceptance (in progress)",
       "Complete-recording paired replay",
       "Evidence binding and upload"
     ]
