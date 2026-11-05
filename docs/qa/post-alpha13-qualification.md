@@ -43,6 +43,15 @@ not a 16 GB laptop measurement.
 
 ## Checks and pending evidence
 
+- The PC workstream reports that alpha.13's 9B model marked two incorrect
+  dates ready despite the 0.7 confidence gate. Replaying the same responses
+  and probabilities through this branch corrected all three targeted date
+  cases. This is reported regression evidence from the parent workstream;
+  its raw artifacts have not been independently inspected on this executor.
+  It is not a held-out model comparison or full qualification. The broader
+  77-document PC control run lost its connection after at least 49 cases;
+  the background run's outcome is uncertain and must be checked before any
+  rerun. This branch has not restarted or interfered with that run.
 - Reconciled portable Rust workspace: **1,496 passed, 6 ignored**, excluding
   `intern-app`; strict Rust 1.88 Clippy and formatting pass.
 - Frontend: **761 tests in 77 files**, type checking and production build pass.
@@ -67,8 +76,9 @@ not a 16 GB laptop measurement.
 - Matching Windows QA has passed the frontend checks, browser QA, formatting,
   strict full-workspace Clippy and the **full Windows Rust workspace tests**,
   including the desktop app tests. This is the workflow step result, not an
-  independently downloaded test-count receipt. At 2026-11-05 00:39 UTC the run
-  is building the parser and evaluator. Installer checks and fresh
+  independently downloaded test-count receipt. At 2026-11-05 00:54 UTC the
+  parser/evaluator build has also passed and native asset fetching is running.
+  Installer checks and fresh
   confidence-aware model results are still pending. Real-document and CUAD
   checks after the date rules, and actual 16 GB laptop cold/warm behavior,
   also remain outstanding. Partial CI success does not establish release quality.

@@ -46,15 +46,16 @@
     "head_sha": "875bb6e49b10d3feb38ad23c21377941d667090a",
     "url": "https://github.com/z-brenner/intern/actions/runs/41940189938",
     "qualification": "partial checks passed; installer and live model results pending; no full Windows or release qualification claim",
-    "checked_at": "2026-11-05 00:39:13 UTC",
+    "checked_at": "2026-11-05 00:54:28 UTC",
     "passed_steps": [
       "frontend checks",
       "browser QA",
       "workspace formatting",
       "strict full-workspace Clippy",
-      "full Windows Rust workspace tests"
+      "full Windows Rust workspace tests",
+      "release parser and evaluator build"
     ],
-    "active_step": "Build parser worker and the corpus evaluator",
+    "active_step": "Fetch and verify pinned Windows assets",
     "count_receipt": "workflow step metadata only; completed job logs and full test count not yet available"
   },
   "replay_abba": {
@@ -243,5 +244,20 @@
     "scripts/run-model-evaluation.ps1": "07c1e7fa732c9ba2fc86b075d1ac6407499eed1cd0059ac8448f2ebbb481635f",
     "scripts/validate-model-evaluation.mjs": "d89c7d03f08f2da942eb01e6dd9cb2faae33a74635ae34af7cffc3cc8dc54e34",
     ".github/workflows/qa.yml": "6e84ae49bc5873cf0495793f3034bf7d59c4bfd03e53ed6b5b35c6f96da0aa48"
+  },
+  "pc_targeted_regressions": {
+    "source": "parent delegation received 2026-11-05; user-room checkpoint Sentinel_d25c19c30c9481919d97e3f2a99d17ff",
+    "independently_inspected_on_this_executor": false,
+    "model": "alpha.13 Qwen3.5 9B with 0.7 confidence gate",
+    "reported_wrong_ready_dates": 2,
+    "reported_fixed_targeted_cases": 3,
+    "paired_evidence": "same model responses and token probabilities",
+    "scope": "targeted regression evidence only, not full qualification",
+    "broader_control": {
+      "planned_documents": 77,
+      "observed_progress_at_least": 49,
+      "outcome": "uncertain after executor-key change; check existing background run before rerunning",
+      "restarted_here": false
+    }
   }
 }
