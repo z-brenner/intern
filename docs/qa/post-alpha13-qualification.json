@@ -1,0 +1,51 @@
+{
+  "released_tag": "v0.1.0-alpha.13",
+  "released_commit": "8299690cd2713fd53bb120f81a9a0adbee58c432",
+  "assets": {
+    "model-evaluation.json": {
+      "sha256": "0ab0c9e0ec73c839b0fb5d038d67c6cf1f6627fbb9bd80de11784cecfed504eb",
+      "bytes": 88600
+    },
+    "release-evidence-manifest.json": {
+      "sha256": "e3a7d606e6267fe6638c741474edfee76befe16511845bd63a60b1246c4f2147",
+      "bytes": 8624
+    },
+    "latest.json": {
+      "sha256": "c1f6a4216805f66dc2aad098c93f461ecc5bdca959b64c7f03ca49644f431c52",
+      "bytes": 790
+    }
+  },
+  "published_evaluation": {
+    "model_id": "qwen3.5-9b-instruct-q4-k-m",
+    "pipeline": "evidence",
+    "mode": "live",
+    "completed": 19,
+    "returned_confidence_records": 0,
+    "min_token_confidence_field": null,
+    "median_inference_ms": 20413,
+    "peak_model_rss_bytes": 8534339584,
+    "ready": 11,
+    "exact_filenames": {
+      "correct": 9,
+      "rate": 0.5,
+      "total": 18
+    }
+  },
+  "source_commit_before_evidence": "902b9520e42d73777c406f0e9e2c6afd3512c9b5",
+  "local_checks": {
+    "portable_rust_passed": 1496,
+    "portable_rust_ignored": 6,
+    "frontend_passed": 761,
+    "strict_clippy": "passed, portable workspace excluding intern-app",
+    "format": "passed"
+  },
+  "native_desktop": "blocked: missing GTK development libraries; configured Debian snapshot source denied by enforced proxy policy",
+  "windows_qa": {
+    "status": "not_started"
+  },
+  "replay_abba": {
+    "status": "running",
+    "scope": "Recorded-response pipeline CPU only; no model inference or laptop performance claim"
+  },
+  "release_inputs_sha256": "e1e96bd395259779eec3557b9b146d066bd426933d95f881ddf20308fa011530"
+}
