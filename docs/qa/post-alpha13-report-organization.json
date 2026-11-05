@@ -350,7 +350,14 @@
     "release_build_exit_code": 0,
     "new_fact_tests": 5,
     "earlier_attempt": "Concurrent full-suite attempt stalled in pre-existing default_policy_cancels_header_acquisition_and_joins_network_work; owned processes were terminated (exit 143). The bounded serial full rerun passes that test and all remaining tests. No downloader or test policy changed.",
-    "full_native_linux": "Unavailable: GTK development dependencies absent"
+    "full_native_linux": "Unavailable: GTK development dependencies absent",
+    "release_preflight_checkpoint": {
+      "command": "node scripts/release-preflight.mjs --root=.",
+      "exit_code": 1,
+      "executed_at_utc": "2026-11-05 05:09 UTC",
+      "reason": "Existing rendered-fidelity sign-off names prior release-input digest 40df3381aac1a22c7cbfcd50944dc4f5c4dd629ba710e03eaef9f6d0a3864c32; current source digest is 4bf697c02e68553462f4a5987498a05325968604692118fc1ffc9f73570daade. No sign-off fields were changed.",
+      "log_sha256": "aeb61d4e820654f08e365f9f258ad95292c2426671b300fea3f16029a87c1489"
+    }
   },
   "thresholds_unchanged": {
     "min_token_confidence": 0.7,
@@ -365,10 +372,9 @@
     "covers_new_ownership_fix": false
   },
   "remaining": [
-    "Replay both complete actual matched PC recordings through the same final validator without allowing stale inputs.",
-    "Fresh Windows QA and complete-recording paired step for this source.",
-    "Held-out document cases and true CPU-only 16 GB laptop cold/warm latency and peak-memory checks.",
-    "Applicable fidelity review and release preflight."
+    "Completion and inspection of fresh Windows QA and its complete-recording paired step.",
+    "Applicable capture-specific fidelity review and release preflight; prepare a new version and matching notes before any subsequent release.",
+    "Additional held-out checks and laptop performance characterization remain useful; constrained PC replay establishes neither fresh timing nor actual laptop behavior."
   ],
   "default_model_changed": false,
   "pr_created_approved_or_merged": false,
@@ -461,6 +467,68 @@
     "url": "https://github.com/z-brenner/intern/actions/runs/41970479658",
     "status": "in_progress",
     "covers_new_ownership_fix": true,
-    "completed_or_qualified": false
+    "completed_or_qualified": false,
+    "checkpoint_utc": "2026-11-05 05:11 UTC",
+    "passed_so_far": [
+      "Frontend unit/type/build checks",
+      "Browser core path, accessibility, responsive and screenshot QA",
+      "Rust formatting",
+      "Full Windows workspace strict Clippy",
+      "Full Windows workspace Rust tests",
+      "Pinned Windows assets verification",
+      "Native parser fixture integration",
+      "Staged package runtime",
+      "PP-OCR scan checks"
+    ],
+    "pending_at_checkpoint": [
+      "Installer build (in progress) and smoke",
+      "Live model acceptance",
+      "Complete-recording paired replay",
+      "Evidence binding and upload"
+    ]
+  },
+  "matched_pc_replay_reported_2026_11_05": {
+    "provenance": "PC worker completion reported by parent thread 01a19ec5-e0ec-744e-aa82-5d8c078a0009. Reports and verification remain on the PC; original files have not been independently inspected on this executor.",
+    "source_commit": "a14b4ef187ab81a931abd58d589d3c150861171c",
+    "min_token_confidence": 0.7,
+    "documents_per_model": 77,
+    "stale_records": 0,
+    "input_verification_reported": {
+      "prompt_hashes_match_original": true,
+      "raw_proposals_match_original": true,
+      "confidence_values_match_original": true
+    },
+    "two_b": {
+      "before": {
+        "filenames": 67,
+        "dates": 76,
+        "parties": 75,
+        "unsafe_ready": 1
+      },
+      "after": {
+        "filenames": 67,
+        "dates": 76,
+        "parties": 75,
+        "unsafe_ready": 1
+      }
+    },
+    "nine_b": {
+      "before": {
+        "filenames": 69,
+        "dates": 74,
+        "parties": 76,
+        "unsafe_ready": 3
+      },
+      "after": {
+        "filenames": 73,
+        "dates": 77,
+        "parties": 77,
+        "unsafe_ready": 0
+      }
+    },
+    "fresh_inference": false,
+    "fresh_latency_or_memory_measurements": false,
+    "true_16gb_laptop_qualification": false,
+    "review_rate": "Not included in the parent report; not inferred."
   }
 }
