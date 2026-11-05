@@ -1429,7 +1429,15 @@ pub fn validate_facts_at(
     let stated_words = StatedWords::of(scope);
     let mut subject = None;
     if let Some(value) = content(facts.subject.as_deref(), scope) {
-        let found = claims_found(scope, &facts.subject_evidence, value);
+        // A short acronym derived from one uniquely stated expansion is
+        // not an invented name. The literal-word check still uses `value`:
+        // an unstated acronym is omitted, never written into the output.
+        let expanded = grounded_subject_acronym(scope, value);
+        let found = claims_found(
+            scope,
+            &facts.subject_evidence,
+            expanded.as_deref().unwrap_or(value),
+        );
         support.subject = found.support;
         support.miscited_ids += found.miscited;
         if found.support == Support::Unsupported {
@@ -2573,6 +2581,78 @@ fn significant_words(value: &str) -> Vec<String> {
         })
         .map(str::to_owned)
         .collect()
+}
+
+/// Expand one otherwise unstated acronym for the optional subject's claim
+/// check only. Its other significant words must anchor it to the same shown
+/// unit as one unique expansion of consecutive substantive words. This never
+/// changes the subject checked word by word, a filename, a party or a date.
+fn grounded_subject_acronym(scope: &ValidationScope<'_>, value: &str) -> Option<String> {
+    let tokens = value.split_whitespace().collect::<Vec<_>>();
+    let candidates = tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(at, raw)| {
+            let token = raw.trim_matches([',', ';', ':', '.', '(', ')', '"', '\'']);
+            ((3..=6).contains(&token.len())
+                && token.bytes().all(|letter| letter.is_ascii_uppercase())
+                && !digest_contains(scope.context(), token))
+            .then_some((at, token))
+        })
+        .collect::<Vec<_>>();
+    let [(at, acronym)] = candidates.as_slice() else {
+        return None;
+    };
+    let acronym_lower = acronym.to_ascii_lowercase();
+    let anchors = significant_words(value)
+        .into_iter()
+        .filter(|word| word != &acronym_lower)
+        .collect::<Vec<_>>();
+    if anchors.is_empty() {
+        return None;
+    }
+    let mut expansions = BTreeSet::new();
+    for unit in scope.context_units() {
+        let normalized = normalize(&unit.text);
+        if !anchors.iter().all(|word| contains_whole(&normalized, word)) {
+            continue;
+        }
+        for sentence in unit.text.split(['.', ';', '!', '?']) {
+            let source_words = words(sentence);
+            for span in source_words.windows(acronym.len()) {
+                if span.iter().all(|word| {
+                    word.len() >= 3
+                        && word.bytes().all(|letter| letter.is_ascii_alphabetic())
+                        && !STOPWORDS.contains(&word.as_str())
+                }) && span
+                    .iter()
+                    .zip(acronym.bytes())
+                    .all(|(word, initial)| word.as_bytes()[0] == initial.to_ascii_lowercase())
+                {
+                    expansions.insert(span.join(" "));
+                }
+            }
+        }
+    }
+    let mut expansions = expansions.into_iter();
+    let expansion = expansions.next()?;
+    if expansions.next().is_some() {
+        return None;
+    }
+    Some(
+        tokens
+            .iter()
+            .enumerate()
+            .map(|(index, token)| {
+                if index == *at {
+                    expansion.as_str()
+                } else {
+                    *token
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 /// Finds a free-text fact by its claims - its numbers and capitalized
@@ -6853,6 +6933,92 @@ Dated May 12, 2026";
             Support::Unsupported
         );
         assert_eq!(outcome.facts.as_ref().unwrap().subject, None);
+    }
+
+    #[test]
+    fn a_grounded_acronym_in_an_omitted_subject_does_not_block_literal_facts() {
+        let index = index_of(&format!(
+            "{INVOICE}\n\nWe implement the customer relationship management platform and migrate records."
+        ));
+        let mut facts = invoice_facts(&index);
+        facts.subject = Some("implement CRM platform and migrate records".into());
+        facts.subject_evidence = vec![id_of(&index, "We implement")];
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(outcome.facts.as_ref().unwrap().subject.is_none());
+        assert!(!outcome.proposal.description.contains("CRM"));
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2025-05-01")
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Halvorsen Fixture Works LLC"]
+        );
+    }
+
+    #[test]
+    fn a_subject_acronym_requires_one_expansion_in_one_relevant_shown_passage() {
+        for (passage, value) in [
+            (
+                "We implement the customer relationship management platform and migrate records.",
+                "implement ERP platform and migrate records",
+            ),
+            (
+                "We implement the customer relationship management platform and migrate records.",
+                "implement CRM platform for Zanzibar",
+            ),
+            (
+                "We implement the customer relationship management platform and migrate records.",
+                "implement CRM platform for $9,999",
+            ),
+            (
+                "We implement the platform and migrate records.\n\nThe customer relationship management system is retired.",
+                "implement CRM platform and migrate records",
+            ),
+            (
+                "We implement the customer relationship management platform and migrate records. The current release management platform is also included.",
+                "implement CRM platform and migrate records",
+            ),
+            (
+                "We implement the customer relationship management platform and migrate records.",
+                "CRM",
+            ),
+        ] {
+            let index = index_of(&format!("{INVOICE}\n\n{passage}"));
+            let mut facts = invoice_facts(&index);
+            facts.subject = Some(value.into());
+            facts.subject_evidence = vec![id_of(&index, "We implement")];
+            let outcome = check(facts, &whole(&index), &index);
+            assert!(
+                outcome
+                    .reasons
+                    .contains(&ReviewReason::DescriptionUnsupported),
+                "{value}: {passage}: {:?}",
+                outcome.reasons
+            );
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+            assert!(outcome.facts.as_ref().unwrap().subject.is_none());
+        }
+        let index = index_of(&format!(
+            "{INVOICE}\n\nWe implement the customer relationship management platform and migrate records."
+        ));
+        let context = context_of(&index, |unit| !unit.text.contains("relationship"));
+        let mut facts = invoice_facts(&index);
+        facts.subject = Some("implement CRM platform and migrate records".into());
+        facts.subject_evidence = vec![id_of(&index, "We implement")];
+        let outcome = check(facts, &context, &index);
+        assert!(
+            outcome
+                .reasons
+                .contains(&ReviewReason::DescriptionUnsupported)
+        );
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
     }
 
     /// A subject cited to the wrong line is written into the description
