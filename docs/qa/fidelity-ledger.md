@@ -1,16 +1,111 @@
-# Intern alpha.13 rendered-fidelity ledger
+# Intern alpha.14 rendered-fidelity ledger
 
-**Rendered sign-off status: accepted for alpha.13, by Claude Code under the
+**Rendered sign-off status: accepted for alpha.14, by Claude Code under the
 maintainer's standing instruction; no person has looked at this capture.**
 `docs/qa/rendered-fidelity-signoff.json` is bound to release-input digest
-`40df3381aac1a22c7cbfcd50944dc4f5c4dd629ba710e03eaef9f6d0a3864c32` and to the
+`c233331e1444f3edb9e3d65e7eef8f5e726cbd19926dc7830886fa134c9f0d25` and to the
 1536x1024 capture `docs/qa/latest-implementation.png`, SHA-256
-`a95052639f75b6e2bdad0438da20645b59490271748ca2a9dab901fdb31cbd25`, taken by
-Whole-product QA evidence run 41777820194 (attempt 1) at commit
-`d900c11604efefaa56616230f0b0818c26df3911`, `main` after the alpha.13
+`e5f68d84302602dfb63feecf3518223dfa51fa3559409ccb19a000d0cd34f3b0`, taken by
+Whole-product QA evidence run 42129423153 (attempt 1) at commit
+`1710056f98df097b42e96f8cf4b03b57d3d9d3bf`, `main` after the alpha.14
 release preparation.
 
-## alpha.13 record
+## alpha.14 record
+
+Run 42129423153 passed every gate on Windows:
+
+- frontend checks (77 Vitest files, 753 tests passed and 1 skipped), and the
+  browser QA suite (30 tests) including its contrast assertions;
+- `cargo fmt --check`, workspace clippy with warnings denied, and the Rust
+  workspace tests (1,759);
+- native fixture parsing with the pinned assets (4 tests on the 21 gold
+  fixtures), and the verified pinned runtime (76 runtime files, 27 license
+  files) carrying both llama.cpp builds: the PrismML release
+  `prism-b10826-c9c34bc` and upstream build 11946 for the Qwen3.5 models;
+- an NSIS build, and installer and uninstall smoke with user data retained,
+  with both installed llama-server builds started;
+- an accepted whole-corpus evaluation with real inference: 19 documents on the
+  pinned Qwen3.5 9B model (the accurate tier, `Qwen3.5-9B-Q4_K_M.gguf`), on the
+  two threads the hosted evaluation sets for itself on the four-core runner,
+  median 15.8 s and at most 30.5 s of inference a document, 329.6 s in all,
+  peak model memory 8,124 MiB.
+
+The corpus scores are the same as alpha.13's on every count: date role 16/16,
+descriptions covering the expected facts 16/18, type 17/18, parties 15/19,
+description specific 16/19, dates right for 16 of 18, the expected filename
+matched exactly for 9 of 18, a review rate of 42.1% at the 0.7
+token-confidence gate, and nothing filed under a date or a party the corpus
+marks as a trap. This synthetic corpus does not exercise what this release
+changes (letters, notices and captions are measured on the real-document
+sets cited in the release notes and in
+`docs/accuracy-research-2026-10.md`), so an unchanged score here is the
+expected result. The run was faster than alpha.13's (median 21.7 s, 490.8 s
+in all); this record does not credit that to the release, since the hosted
+evaluation sets its own thread count and the runners differ.
+
+The capture was inspected against the accepted concept:
+
+- The counts strip and toolbar, the queue table and the review panel read as
+  three distinct planes.
+- The header states the privacy posture (Private, On this device).
+- Date-first proposed filenames and em-dashes for absent values stay consistent
+  down the column; the model's confidence is a right-aligned percentage beside
+  its track in the panel.
+- Ready, Needs review, Proposing a name and Waiting are each distinguishable by
+  icon as well as color.
+- The panel opens with "What to check" and the reason for review; evidence
+  stays attributed under Date and Type headings, each value on its own line.
+- The approve and keep actions sit in a pinned bar at the foot of the panel,
+  with their keyboard shortcuts.
+- No collisions, clipping, illegible copy, excessive density or ambiguous focus
+  were observed, and the run's automated contrast assertions passed.
+
+What changed in the frame: nothing of substance. This release changes the
+engine's reading rules, the thread count and the memory floor, none of which
+this screen shows. Compared pixel by pixel with the accepted alpha.13 capture,
+the frame differs in 15 pixels on the outline of the Queue and Completed tabs,
+which is anti-aliasing, and is otherwise identical. The frame was still taken
+again and reviewed rather than carried over, because the sign-off binds the
+capture to the release inputs and those changed.
+
+The alpha.13 observation stands, and is not a defect of this frame: at this
+size Parties sits below the fold under the pinned action bar and is reached by
+scrolling the panel.
+
+### Reviewer
+
+Reviewed by Claude Code, which opened the capture named above from the run's
+artifact at full size, checked it against the concept, compared it with the
+alpha.13 capture, and accepted it. No person has looked at this capture. The
+maintainer, Zachary Brenner, instructed in advance that this release be cut
+without further questions and that the work be reviewed and approved by Claude
+Code; this record is written under that standing instruction and says so,
+rather than naming a person who did not look. The maintainer can look at the
+same capture and re-sign this record without a new QA run, since neither the
+digest nor the capture hash changes.
+
+### Freshness boundary
+
+The sign-off is accepted only for the digest and screenshot named above.
+`scripts/hash-release-inputs.mjs` derives that digest from the committed non-QA
+release inputs. Any relevant source change invalidates this record and requires
+a new capture and review. Exact-main validation and the deliberately dispatched
+release workflow must still reproduce and accept their own evidence before a tag
+or publication is allowed.
+
+## Superseded alpha.13 record
+
+The alpha.13 sign-off was accepted by Claude Code, under the maintainer's
+standing instruction, for the capture from run 41777820194 at commit
+`d900c11604efefaa56616230f0b0818c26df3911`, bound to release-input digest
+`40df3381aac1a22c7cbfcd50944dc4f5c4dd629ba710e03eaef9f6d0a3864c32`; the
+capture SHA-256 was
+`a95052639f75b6e2bdad0438da20645b59490271748ca2a9dab901fdb31cbd25`. Pull
+requests #65 through #68 have changed the non-QA release inputs since, so that
+digest no longer describes what would ship. Its record is kept below for
+history.
+
+### alpha.13 run
 
 Run 41777820194 passed every gate on Windows:
 
@@ -81,7 +176,7 @@ panel, where alpha.12 showed it; the reason for review took that space. The
 "Read by" line in the Details panel is not in this frame, which shows the
 review panel; it is held by unit tests.
 
-### Reviewer
+#### Reviewer
 
 Reviewed by Claude Code, which opened the capture named above from the run's
 artifact at full size, checked it against the concept, and accepted it. No
@@ -92,7 +187,7 @@ that standing instruction and says so, rather than naming a person who did not
 look. The maintainer can look at the same capture and re-sign this record
 without a new QA run, since neither the digest nor the capture hash changes.
 
-### Freshness boundary
+#### Freshness boundary
 
 The sign-off is accepted only for the digest and screenshot named above.
 `scripts/hash-release-inputs.mjs` derives that digest from the committed non-QA
