@@ -1238,7 +1238,32 @@ pub fn validate_facts_at(
                     .proposed_role
                     .is_some_and(|role| matches!(role, PartyRole::Sender | PartyRole::Issuer))
             };
-            if party.copied || is_organization_name(&party.name) || !addressed {
+            if party.copied || !addressed {
+                continue;
+            }
+            // An organization the reply named, which the letter's inside
+            // address names, receives the letter, whatever its support for
+            // the reply's role: "Robert L. Sacks / Kane Kessler, P.C." over
+            // "Dear Mr. Sacks" is to Kane Kessler, not from the agency whose
+            // letterhead heads the page. One addressee is enough.
+            if is_organization_name(&party.name) {
+                if class == DocumentClass::Letter
+                    && party.role != Some(PartyRole::Addressee)
+                    && !party
+                        .document_role
+                        .is_some_and(|role| matches!(role, PartyRole::Sender | PartyRole::Issuer))
+                    && layout.addresses(scope, &party.name)
+                    && !parties.iter().any(|other| {
+                        other.role == Some(PartyRole::Addressee) && other.name != party.name
+                    })
+                {
+                    let party = &mut parties[index];
+                    party.signatory = false;
+                    party.role = Some(PartyRole::Addressee);
+                    party.role_support = Support::Context;
+                    party.document_role = Some(PartyRole::Addressee);
+                    break;
+                }
                 continue;
             }
             let named = parties
@@ -3595,6 +3620,33 @@ impl LetterLayout {
                     usize::MAX
                 })
                 .any(|line| contains_whole(&normalize_loosely(line), &person))
+        })
+    }
+
+    /// Whether the inside address names `organization` on a line of its
+    /// own words: a "Re:" or "Subject:" line, and the lines of its unit
+    /// after it, name the matter the letter is about ("Re: Nike, Inc. v.
+    /// StockX LLC", "Re: Toledo Refining Company LLC - Warning Letter"),
+    /// not who it is to.
+    fn addresses(self, scope: &ValidationScope<'_>, organization: &str) -> bool {
+        let Some((salutation, at)) = self.salutation else {
+            return false;
+        };
+        let wanted = normalize_loosely(organization);
+        scope.context_units().any(|unit| {
+            if !self.in_address(unit) {
+                return false;
+            }
+            unit.text
+                .lines()
+                .flat_map(|line| line.split("<br>"))
+                .take(if unit.ordinal == salutation {
+                    at
+                } else {
+                    usize::MAX
+                })
+                .take_while(|line| !names_a_matter(line.trim().trim_matches('*')))
+                .any(|line| contains_whole(&normalize_loosely(line), &wanted))
         })
     }
 
@@ -11908,5 +11960,71 @@ Rickmansworth,
         ));
         assert!(!defines_role(" employer id numbernn-nnnnnnn", employer));
         assert!(!defines_role(" company reg. no. 0412", employer));
+    }
+
+    /// An organization the reply named as the recipient, which the inside
+    /// address names under the person written to, is the letter's
+    /// addressee, though the agency's letterhead supports its sender.
+    #[test]
+    fn an_organization_in_the_inside_address_is_the_addressee() {
+        let (outcome, _) = facts_for(
+            "U.S. DEPARTMENT OF JUSTICE\nAntitrust Division\n950 Pennsylvania Avenue, N.W.\n\
+             Washington, D.C. 20530\n\nApril 16, 2020\n\nRobert L. Sacks\nKane Kessler, P.C.\n\
+             666 Third Avenue\nNew York, NY 10017\n\nDear Mr. Sacks:\n\nThis letter responds \
+             to your request for a business review letter.\n\nSincerely,\n\nMakan Delrahim",
+            |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some("2020-04-16".into()),
+                date_evidence: vec![id_of(index, "April 16, 2020")],
+                parties: vec![
+                    party(
+                        "Kane Kessler, P.C.",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "Kane Kessler")],
+                    ),
+                    party(
+                        "U.S. Department of Justice",
+                        Some(PartyRole::Sender),
+                        &[id_of(index, "DEPARTMENT OF JUSTICE")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(outcome.proposal.parties, vec!["Kane Kessler, P.C."]);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        // A "Re:" line names the matter, not who the letter is to.
+        let (outcome, _) = facts_for(
+            "DLA Piper LLP (US)\n1251 Avenue of the Americas\nNew York, New York 10020\n\n\
+             October 7, 2024\n\nThe Honorable Valerie Caproni\nUnited States District Court\n\
+             40 Foley Square\nRe: Nike, Inc. v. StockX LLC, No. 22 CV 00983\n\nDear Judge \
+             Caproni:\n\nWe represent Nike in connection with the above-referenced matter.\n\n\
+             Respectfully submitted,",
+            |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some("2024-10-07".into()),
+                date_evidence: vec![id_of(index, "October 7, 2024")],
+                parties: vec![
+                    party(
+                        "Nike, Inc.",
+                        Some(PartyRole::Client),
+                        &[id_of(index, "Re: Nike")],
+                    ),
+                    party(
+                        "DLA Piper LLP (US)",
+                        Some(PartyRole::Sender),
+                        &[id_of(index, "DLA Piper")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            },
+        );
+        assert_ne!(
+            (
+                outcome.proposal.party_relation,
+                outcome.proposal.parties.clone()
+            ),
+            (PartyRelation::To, vec!["Nike, Inc.".to_owned()])
+        );
     }
 }
