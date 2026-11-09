@@ -55,7 +55,7 @@ contain document text.
 ```sh
 LAB=target/prompt-model-experiments
 export INTERN_BENCH="$PWD/target/release/intern-bench"
-export INTERN_BENCH_TOKEN_CONFIDENCE=1
+export INTERN_BENCH_TOKEN_CONFIDENCE=0
 
 MODEL="$QWEN_9B" scripts/run-internbench.sh "$LAB/qwen9"
 MODEL="$QWEN_9B" scripts/run-internbench.sh "$LAB/qwen9-short" -- \
@@ -78,12 +78,11 @@ Pass `--server-pid` for memory sampling and `--model-path` for the GGUF hash.
 Keep the test corpus and output on the same drive for each arm.
 
 The model comparison uses the same evidence-only readiness rules in all arms.
-The Qwen arms also record token confidence so the prompt A/B can be replayed
-at the shipping 9B threshold. For that comparison, replay both 9B recordings
-with `--min-token-confidence 0.7`, passing `--short-document-tokens 750` only
-for the short recording. Replay timings are from the original live run.
-NuExtract's native replies are decoded without Qwen's token-confidence gate.
-A benchmark Ready result is a scoring label.
+For a separate prompt A/B at the shipping review threshold, add
+`--min-token-confidence 0.7` to both live 9B arms. This also measures the
+cost of collecting token probabilities. NuExtract's native replies are
+decoded without Qwen's token-confidence gate. A benchmark Ready result
+is a scoring label.
 
 Track full filenames, date traps, subject and description quality, Ready
 coverage and wrong names marked Ready, model failures, prefill and total
