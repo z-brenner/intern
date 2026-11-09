@@ -23,16 +23,17 @@ rule and each document's reason. The documents themselves are never committed.
 
 | Set | Sample | Cleared | Committed | Named right | Named wrong | No filename gold | Wrong names filed ready | Gold date or party not in the prompt |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| real1 | `sample.json` (60) | 33 | 30 | 12 | 16 | 2 | 1 | 6 (5 named wrong) |
+| real1 | `sample.json` (60) | 26 | 23 | 9 | 12 | 2 | 0 | 6 (5 named wrong) |
 | real2 | `sample-heldout.json` (60) | 36 | 36 | 15 | 21 | 0 | 0 | 4 (4) |
 | real3 | `sample-heldout2.json` (59) | 25 | 24 | 8 | 16 | 0 | 0 | 5 (5) |
 | real4 | `sample-heldout3.json` (58) | 29 | 29 | 9 | 17 | 3 | 0 | 7 (6) |
-| total | 237 | 123 | 119 | 44 | 70 | 5 | 1 | 22 (20) |
+| total | 237 | 116 | 112 | 41 | 66 | 5 | 0 | 22 (20) |
 
 Four cleared documents are not committed because the runner never fetched them (ftc.gov answered
 403 to two, archive.org 500 to one, tile.loc.gov 429 to one). The committed documents are a
 harder half than the whole sets: the same recordings name 92 of 219 scored documents right
-across all four sets, 44 of 114 here. Replaying a set takes 2 to 4 s in a release build.
+across all four sets, 41 of 107 here. Replaying a set takes under 5 s in a release build: 0.7 to
+1.7 s each on a GitHub runner (CI run 42578520445), 2.0 to 4.4 s on a loaded 4-core box.
 
 ## How CI runs it
 
@@ -61,7 +62,9 @@ documents `SOURCES.md` marks as recorded and that each baseline covers exactly t
 Measured on 2026-11-09 by running the job's steps exactly as `ci.yml` writes them, on a copy of the
 tree with one change each (never committed), in a cold release build on a 4-core box (2 min 6 s
 to build, then 1.5 s for the fixtures, 0.4 s for the digest fixtures, 11 s for InternBench and
-3.4, 3.3, 1.9 and 3.9 s for the real sets):
+3.4, 3.3, 1.9 and 3.9 s for the real sets). real1 then held 30 documents; the seven Enron records
+left out since (`SOURCES.md`) are none of the documents named below, and a replay scores each
+document on its own, so the outcomes stand:
 
 - Unchanged: every step passes.
 - The rule "a letter is to its client" in `compose.rs` reverted (`To` back to `For`): the fixtures,

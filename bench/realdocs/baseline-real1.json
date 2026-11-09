@@ -1,26 +1,26 @@
 {
   "aggregate": {
-    "date_correct": 0.7931,
-    "date_exact": 0.7931,
-    "date_forbidden": 0.1,
-    "date_present": 0.8621,
-    "date_role_correct": 0.3478,
+    "date_correct": 0.7273,
+    "date_exact": 0.7273,
+    "date_forbidden": 0.1304,
+    "date_present": 0.8182,
+    "date_role_correct": 0.25,
     "description_factual": 1.0,
-    "description_specific": 0.8,
+    "description_specific": 0.7391,
     "filename_correct": 0.4286,
-    "forbidden_party_count": 1.0,
-    "needless_review": 0.4444,
-    "parties_correct": 0.7667,
-    "party_forbidden": 0.0333,
-    "party_role_correct": 0.8182,
-    "readiness_match": 0.3,
-    "relation_correct": 0.6667,
+    "forbidden_party_count": 0.0,
+    "needless_review": 0.3571,
+    "parties_correct": 0.7391,
+    "party_forbidden": 0.0,
+    "party_role_correct": 0.875,
+    "readiness_match": 0.3125,
+    "relation_correct": 0.7,
     "trap_date_count": 3.0,
-    "type_correct": 0.7,
-    "type_present": 0.8,
-    "unsafe_ready": 0.0357,
-    "unsafe_ready_count": 1.0,
-    "unsupported_fact_doc": 0.5667
+    "type_correct": 0.6957,
+    "type_present": 0.7826,
+    "unsafe_ready": 0.0,
+    "unsafe_ready_count": 0.0,
+    "unsupported_fact_doc": 0.5652
   },
   "documents": {
     "real-invoice-02": {
@@ -1238,434 +1238,59 @@
         "context_type_recall": 0.0,
         "prompt_recall": 1.0
       }
-    },
-    "real-office-09": {
-      "scores": {
-        "date_correct": true,
-        "date_exact": true,
-        "date_forbidden": false,
-        "date_present": true,
-        "date_role_correct": true,
-        "description_factual": true,
-        "description_specific": true,
-        "filename_correct": true,
-        "needless_review": true,
-        "parties_correct": true,
-        "party_forbidden": false,
-        "readiness_match": false,
-        "ready": false,
-        "relation_correct": true,
-        "type_correct": true,
-        "type_present": true,
-        "unsafe_ready": false,
-        "unsupported_fact_doc": false
-      },
-      "status": "completed",
-      "timings": {
-        "analyze_wall_ms": 47628.372,
-        "distill_ms": 2.806,
-        "extraction_wall_ms": 1.246,
-        "generation_ms": 14216.833,
-        "index_ms": 3.737,
-        "inference_ms": 47593.0,
-        "naming_ms": 0.63,
-        "prefill_ms": 33367.47,
-        "prompt_ms": 0.026,
-        "retrieval_ms": 0.03,
-        "total_ms": 47629.618,
-        "validation_ms": 30.962,
-        "worker_analysis_ms": 0.0,
-        "worker_image_decode_ms": 0.0,
-        "worker_ocr_encode_ms": 0.0,
-        "worker_ocr_engine_ms": 0.0,
-        "worker_ocr_ms": 0.0,
-        "worker_parse_ms": 0.596,
-        "worker_render_ms": 0.0,
-        "worker_snapshot_ms": 0.208,
-        "worker_total_ms": 0.894,
-        "worker_vision_ms": 0.0
-      },
-      "values": {
-        "context_date_recall": 1.0,
-        "context_party_recall": 1.0,
-        "context_recall": 1.0,
-        "context_type_recall": 1.0,
-        "prompt_recall": 1.0
-      }
-    },
-    "real-office-10": {
-      "scores": {
-        "date_correct": true,
-        "date_exact": true,
-        "date_forbidden": false,
-        "date_present": true,
-        "date_role_correct": true,
-        "description_factual": true,
-        "description_specific": true,
-        "filename_correct": false,
-        "needless_review": false,
-        "parties_correct": false,
-        "party_forbidden": true,
-        "party_role_correct": false,
-        "readiness_match": true,
-        "ready": true,
-        "relation_correct": false,
-        "type_correct": true,
-        "type_present": true,
-        "unsafe_ready": true,
-        "unsupported_fact_doc": false
-      },
-      "status": "completed",
-      "timings": {
-        "analyze_wall_ms": 81775.697,
-        "distill_ms": 2.335,
-        "extraction_wall_ms": 1.549,
-        "generation_ms": 17716.699,
-        "index_ms": 3.308,
-        "inference_ms": 81733.0,
-        "naming_ms": 0.276,
-        "prefill_ms": 64008.552,
-        "prompt_ms": 0.05,
-        "retrieval_ms": 0.062,
-        "total_ms": 81777.246,
-        "validation_ms": 39.573,
-        "worker_analysis_ms": 0.0,
-        "worker_image_decode_ms": 0.0,
-        "worker_ocr_encode_ms": 0.0,
-        "worker_ocr_engine_ms": 0.0,
-        "worker_ocr_ms": 0.0,
-        "worker_parse_ms": 0.774,
-        "worker_render_ms": 0.0,
-        "worker_snapshot_ms": 0.198,
-        "worker_total_ms": 1.063,
-        "worker_vision_ms": 0.0
-      },
-      "values": {
-        "context_date_recall": 1.0,
-        "context_party_recall": 1.0,
-        "context_recall": 1.0,
-        "context_type_recall": 1.0,
-        "prompt_recall": 1.0
-      }
-    },
-    "real-office-11": {
-      "scores": {
-        "date_correct": true,
-        "date_exact": true,
-        "date_forbidden": false,
-        "date_present": true,
-        "date_role_correct": true,
-        "description_factual": true,
-        "description_specific": true,
-        "filename_correct": false,
-        "parties_correct": true,
-        "party_forbidden": false,
-        "ready": false,
-        "relation_correct": false,
-        "type_correct": false,
-        "type_present": true,
-        "unsafe_ready": false,
-        "unsupported_fact_doc": false
-      },
-      "status": "completed",
-      "timings": {
-        "analyze_wall_ms": 56164.072,
-        "distill_ms": 1.296,
-        "extraction_wall_ms": 1.7,
-        "generation_ms": 18129.03,
-        "index_ms": 1.875,
-        "inference_ms": 56140.0,
-        "naming_ms": 0.234,
-        "prefill_ms": 38003.334,
-        "prompt_ms": 0.033,
-        "retrieval_ms": 0.137,
-        "total_ms": 56165.772,
-        "validation_ms": 22.412,
-        "worker_analysis_ms": 0.0,
-        "worker_image_decode_ms": 0.0,
-        "worker_ocr_encode_ms": 0.0,
-        "worker_ocr_engine_ms": 0.0,
-        "worker_ocr_ms": 0.0,
-        "worker_parse_ms": 1.026,
-        "worker_render_ms": 0.0,
-        "worker_snapshot_ms": 0.193,
-        "worker_total_ms": 1.309,
-        "worker_vision_ms": 0.0
-      },
-      "values": {
-        "context_date_recall": 1.0,
-        "context_party_recall": 1.0,
-        "context_recall": 1.0,
-        "context_type_recall": 1.0,
-        "prompt_recall": 1.0
-      }
-    },
-    "real-office-12": {
-      "scores": {
-        "date_correct": true,
-        "date_exact": true,
-        "date_forbidden": false,
-        "date_present": true,
-        "date_role_correct": false,
-        "description_factual": true,
-        "description_specific": true,
-        "filename_correct": true,
-        "needless_review": true,
-        "parties_correct": true,
-        "party_forbidden": false,
-        "party_role_correct": true,
-        "readiness_match": false,
-        "ready": false,
-        "relation_correct": true,
-        "type_correct": true,
-        "type_present": true,
-        "unsafe_ready": false,
-        "unsupported_fact_doc": true
-      },
-      "status": "completed",
-      "timings": {
-        "analyze_wall_ms": 98564.884,
-        "distill_ms": 2.557,
-        "extraction_wall_ms": 1.855,
-        "generation_ms": 17946.99,
-        "index_ms": 7.548,
-        "inference_ms": 98520.0,
-        "naming_ms": 0.315,
-        "prefill_ms": 80564.497,
-        "prompt_ms": 0.041,
-        "retrieval_ms": 0.117,
-        "total_ms": 98566.739,
-        "validation_ms": 41.625,
-        "worker_analysis_ms": 0.0,
-        "worker_image_decode_ms": 0.0,
-        "worker_ocr_encode_ms": 0.0,
-        "worker_ocr_engine_ms": 0.0,
-        "worker_ocr_ms": 0.0,
-        "worker_parse_ms": 0.809,
-        "worker_render_ms": 0.0,
-        "worker_snapshot_ms": 0.211,
-        "worker_total_ms": 1.127,
-        "worker_vision_ms": 0.0
-      },
-      "values": {
-        "context_date_recall": 1.0,
-        "context_party_recall": 1.0,
-        "context_recall": 1.0,
-        "context_type_recall": 1.0,
-        "prompt_recall": 1.0
-      }
-    },
-    "real-office-13": {
-      "scores": {
-        "date_correct": true,
-        "date_exact": true,
-        "date_forbidden": false,
-        "date_present": true,
-        "date_role_correct": true,
-        "description_factual": true,
-        "description_specific": true,
-        "filename_correct": true,
-        "needless_review": true,
-        "parties_correct": true,
-        "party_forbidden": false,
-        "party_role_correct": true,
-        "readiness_match": false,
-        "ready": false,
-        "relation_correct": true,
-        "type_correct": true,
-        "type_present": true,
-        "unsafe_ready": false,
-        "unsupported_fact_doc": true
-      },
-      "status": "completed",
-      "timings": {
-        "analyze_wall_ms": 52494.073,
-        "distill_ms": 2.218,
-        "extraction_wall_ms": 1.377,
-        "generation_ms": 14520.871,
-        "index_ms": 2.85,
-        "inference_ms": 52457.0,
-        "naming_ms": 0.334,
-        "prefill_ms": 37926.041,
-        "prompt_ms": 0.035,
-        "retrieval_ms": 0.095,
-        "total_ms": 52495.45,
-        "validation_ms": 34.021,
-        "worker_analysis_ms": 0.0,
-        "worker_image_decode_ms": 0.0,
-        "worker_ocr_encode_ms": 0.0,
-        "worker_ocr_engine_ms": 0.0,
-        "worker_ocr_ms": 0.0,
-        "worker_parse_ms": 0.603,
-        "worker_render_ms": 0.0,
-        "worker_snapshot_ms": 0.179,
-        "worker_total_ms": 0.858,
-        "worker_vision_ms": 0.0
-      },
-      "values": {
-        "context_date_recall": 1.0,
-        "context_party_recall": 1.0,
-        "context_recall": 1.0,
-        "context_type_recall": 1.0,
-        "prompt_recall": 1.0
-      }
-    },
-    "real-office-14": {
-      "scores": {
-        "date_correct": true,
-        "date_exact": true,
-        "date_forbidden": false,
-        "date_present": true,
-        "date_role_correct": false,
-        "description_factual": true,
-        "description_specific": true,
-        "filename_correct": false,
-        "parties_correct": true,
-        "party_forbidden": false,
-        "ready": false,
-        "relation_correct": true,
-        "type_correct": false,
-        "type_present": false,
-        "unsafe_ready": false,
-        "unsupported_fact_doc": true
-      },
-      "status": "completed",
-      "timings": {
-        "analyze_wall_ms": 96540.584,
-        "distill_ms": 16.806,
-        "extraction_wall_ms": 1.915,
-        "generation_ms": 19373.341,
-        "index_ms": 24.142,
-        "inference_ms": 96490.0,
-        "naming_ms": 1.267,
-        "prefill_ms": 77109.757,
-        "prompt_ms": 0.025,
-        "retrieval_ms": 0.735,
-        "total_ms": 96542.499,
-        "validation_ms": 31.574,
-        "worker_analysis_ms": 0.0,
-        "worker_image_decode_ms": 0.0,
-        "worker_ocr_encode_ms": 0.0,
-        "worker_ocr_engine_ms": 0.0,
-        "worker_ocr_ms": 0.0,
-        "worker_parse_ms": 1.049,
-        "worker_render_ms": 0.0,
-        "worker_snapshot_ms": 0.187,
-        "worker_total_ms": 1.321,
-        "worker_vision_ms": 0.0
-      },
-      "values": {
-        "context_date_recall": 1.0,
-        "context_party_recall": 1.0,
-        "context_recall": 1.0,
-        "context_type_recall": 1.0,
-        "prompt_recall": 1.0
-      }
-    },
-    "real-office-15": {
-      "scores": {
-        "date_correct": true,
-        "date_exact": true,
-        "date_forbidden": false,
-        "date_present": true,
-        "date_role_correct": false,
-        "description_factual": true,
-        "description_specific": true,
-        "filename_correct": false,
-        "parties_correct": true,
-        "party_forbidden": false,
-        "ready": false,
-        "relation_correct": false,
-        "type_correct": true,
-        "type_present": true,
-        "unsafe_ready": false,
-        "unsupported_fact_doc": true
-      },
-      "status": "completed",
-      "timings": {
-        "analyze_wall_ms": 41867.33,
-        "distill_ms": 1.904,
-        "extraction_wall_ms": 1.121,
-        "generation_ms": 12651.323,
-        "index_ms": 2.534,
-        "inference_ms": 41843.0,
-        "naming_ms": 0.403,
-        "prefill_ms": 29185.109,
-        "prompt_ms": 0.026,
-        "retrieval_ms": 0.028,
-        "total_ms": 41868.451,
-        "validation_ms": 21.0,
-        "worker_analysis_ms": 0.0,
-        "worker_image_decode_ms": 0.0,
-        "worker_ocr_encode_ms": 0.0,
-        "worker_ocr_engine_ms": 0.0,
-        "worker_ocr_ms": 0.0,
-        "worker_parse_ms": 0.141,
-        "worker_render_ms": 0.0,
-        "worker_snapshot_ms": 0.151,
-        "worker_total_ms": 0.361,
-        "worker_vision_ms": 0.0
-      },
-      "values": {
-        "context_date_recall": 1.0,
-        "context_party_recall": 1.0,
-        "context_recall": 1.0,
-        "context_type_recall": 1.0,
-        "prompt_recall": 1.0
-      }
     }
   },
   "latency": {
     "analyze_wall_ms": {
-      "p50": 52494.073,
-      "p95": 96540.584
+      "p50": 52392.929,
+      "p95": 94046.096
     },
     "distill_ms": {
-      "p50": 2.85,
+      "p50": 3.355,
       "p95": 47.992
     },
     "extraction_wall_ms": {
-      "p50": 3.415,
+      "p50": 5.252,
       "p95": 3165.688
     },
     "generation_ms": {
       "p50": 15103.885,
-      "p95": 19226.11
+      "p95": 16748.326
     },
     "index_ms": {
-      "p50": 4.745,
-      "p95": 67.992
+      "p50": 7.016,
+      "p95": 76.019
     },
     "inference_ms": {
-      "p50": 52457.0,
-      "p95": 96490.0
+      "p50": 52362.0,
+      "p95": 93801.0
     },
     "naming_ms": {
-      "p50": 0.63,
+      "p50": 0.748,
       "p95": 6.434
     },
     "prefill_ms": {
-      "p50": 37313.816,
-      "p95": 80564.497
+      "p50": 36973.562,
+      "p95": 78687.043
     },
     "prompt_ms": {
       "p50": 0.027,
-      "p95": 0.05
+      "p95": 0.041
     },
     "retrieval_ms": {
-      "p50": 0.062,
-      "p95": 4.122
+      "p50": 0.063,
+      "p95": 7.16
     },
     "total_ms": {
-      "p50": 52495.45,
-      "p95": 96542.499
+      "p50": 52394.713,
+      "p95": 94048.56
     },
     "validation_ms": {
-      "p50": 30.962,
+      "p50": 28.485,
       "p95": 93.383
     },
     "worker_analysis_ms": {
-      "p50": 0.0,
+      "p50": 0.041,
       "p95": 2.365
     },
     "worker_image_decode_ms": {
@@ -1685,7 +1310,7 @@
       "p95": 3018.386
     },
     "worker_parse_ms": {
-      "p50": 1.247,
+      "p50": 3.885,
       "p95": 55.914
     },
     "worker_render_ms": {
@@ -1693,11 +1318,11 @@
       "p95": 223.655
     },
     "worker_snapshot_ms": {
-      "p50": 0.198,
+      "p50": 0.221,
       "p95": 1.758
     },
     "worker_total_ms": {
-      "p50": 2.052,
+      "p50": 4.984,
       "p95": 3165.29
     },
     "worker_vision_ms": {

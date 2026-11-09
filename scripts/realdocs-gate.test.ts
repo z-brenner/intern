@@ -24,7 +24,15 @@ const recordingOf = (set: SetName) => `bench/realdocs/recordings/${set}-qwen35-9
 
 /** The licences the rule admits, as SOURCES.md names them. */
 const ADMITTED =
-  /^(US federal government work \(17 U\.S\.C\. 105\)|Public Domain Mark 1\.0|Public-domain dedication|CC0 1\.0 \(the SheetJS repackaging\); the underlying data set is CC BY 3\.0 US|UK Open Government Licence v3\.0|CC BY 4\.0|CC BY 3\.0 US)$/;
+  /^(US federal government work \(17 U\.S\.C\. 105\)|Public Domain Mark 1\.0|Public-domain dedication|CC0 1\.0|UK Open Government Licence v3\.0|CC BY 4\.0|CC BY 3\.0 US)$/;
+
+/**
+ * Words a sample's licence statement uses when it says someone other than the
+ * licensor wrote, produced or repackaged the document: a licence, mark or
+ * dedication covers only what its giver could license (SOURCES.md, "The
+ * rule"), so a cleared document's statement never says so.
+ */
+const SOMEONE_ELSE = /written by|authored by|third.party|uploader|produced by|repackag|underlying|made public by/i;
 
 interface Cleared {
   id: string;
@@ -84,6 +92,7 @@ describe('the committed real-document recordings', () => {
         const document = sample.documents.find((candidate: { id: string }) => candidate.id === row.id);
         expect(row.url, row.id).toBe(document.source.url);
         expect(row.licence, row.id).toMatch(ADMITTED);
+        expect(document.source.license, row.id).not.toMatch(SOMEONE_ELSE);
         // A CC BY row names the version the source states.
         if (row.licence.startsWith('CC BY ')) {
           expect(document.source.license, row.id).toContain(row.licence.slice('CC BY '.length));
@@ -92,7 +101,7 @@ describe('the committed real-document recordings', () => {
         if (row.licence.includes('Open Government Licence')) {
           expect(row.attribution, row.id).toContain('Contains public sector information licensed under the Open Government Licence v3.0');
         }
-        if (row.licence.includes('CC BY') || row.licence.startsWith('CC0')) {
+        if (row.licence.includes('CC BY')) {
           expect(row.attribution, row.id).toMatch(/licensed under CC BY (4\.0|3\.0 US) \(https:\/\/creativecommons\.org\/licenses\/by\//);
         }
       }
