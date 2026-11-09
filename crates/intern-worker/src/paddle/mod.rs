@@ -271,12 +271,13 @@ const MAX_WORKERS: usize = 2;
 /// From four logical processors up, two pages at once on two threads each:
 /// the queue extracts a document and only then asks the model about it, so
 /// while pages are read the model server is idle and its processors are
-/// free. On a 4-core machine that reads InternBench's scans in 42.8 s
-/// rather than 77.0 s, with the same text (docs/ocr.md). Below four, at
-/// most half of them, so Windows stays responsive, in workers of
-/// [`INTRA_THREADS`] threads each and never fewer than one. Were extraction
-/// ever to overlap the model's reading of another document, this would
-/// have to go back to half the machine.
+/// free. Below four, at most half of them, so Windows stays responsive, in
+/// workers of [`INTRA_THREADS`] threads each and never fewer than one. Were
+/// extraction ever to overlap the model's reading of another document, this
+/// would have to go back to half the machine. Whether a document's pages are
+/// in fact read two at a time is decided when it is read, by the memory
+/// there is then ([`pages_at_once`]); docs/ocr.md has what each costs and
+/// saves.
 pub fn thread_budget(logical_cores: usize) -> ThreadBudget {
     if logical_cores >= MAX_WORKERS * INTRA_THREADS {
         return ThreadBudget {
@@ -289,6 +290,49 @@ pub fn thread_budget(logical_cores: usize) -> ThreadBudget {
     ThreadBudget {
         workers: (budget / intra_threads).clamp(1, MAX_WORKERS),
         intra_threads,
+    }
+}
+
+const MB: u64 = 1_000_000;
+const GIB: u64 = 1024 * 1024 * 1024;
+
+/// The worker's peak while two pages are read at once: 1.4 GB over all of
+/// InternBench (`VmHWM`), against 0.79 GB one page at a time (docs/ocr.md).
+const TWO_PAGE_PEAK: u64 = 1_400 * MB;
+/// The weights a loaded accurate model keeps reading: 2.7 GB of its 5.7 GB
+/// file (`intern_engine::tiers::working_set`). On Linux they are page cache,
+/// which the available memory counts although the model needs them.
+const MODEL_WEIGHTS_IN_USE: u64 = 2_700 * MB;
+/// What the tier plan leaves for the person's own work
+/// (`intern_engine::tiers::HEADROOM`).
+const HEADROOM: u64 = GIB;
+
+/// Memory that must be available when a document's pages start to be read
+/// for two of them to be read at once: the worker's two-page peak, the
+/// weights a loaded accurate model keeps reading, and the person's
+/// headroom, rounded up to whole GiB - 5 GiB.
+///
+/// The tier plan judges a model to fit with room for the worker reading one
+/// page at a time (`intern_engine::tiers::WORKER_PEAK`), not two, so on a
+/// machine near a model's memory floor a second set of sessions would come
+/// out of the person's headroom, or out of the model's weights. There pages
+/// are read one at a time, as a 4-core machine read them until alpha.15.
+/// On Windows the available memory leaves out a loaded model's working set,
+/// weights included, so there the bar is higher than it needs to be by up to
+/// the weights' share, and a busy machine reads one page at a time a little
+/// more often than it must.
+pub const TWO_PAGES_MIN_AVAILABLE: u64 =
+    (TWO_PAGE_PEAK + MODEL_WEIGHTS_IN_USE + HEADROOM).div_ceil(GIB) * GIB;
+
+/// How many pages to read at once: the `workers` the thread budget allows
+/// when `available` bytes of memory are at least
+/// [`TWO_PAGES_MIN_AVAILABLE`], and one otherwise, or when the memory
+/// cannot be read.
+pub fn pages_at_once(workers: usize, available: Option<u64>) -> usize {
+    if available.is_some_and(|bytes| bytes >= TWO_PAGES_MIN_AVAILABLE) {
+        workers.max(1)
+    } else {
+        1
     }
 }
 
@@ -480,6 +524,24 @@ mod tests {
         let dictionary = ctc::Dictionary::from_lines(RECOGNITION_DICTIONARY);
         // The pinned recognizer outputs 438 classes.
         assert_eq!(dictionary.classes(), 438);
+    }
+
+    /// A second page is read at once only with the memory for it there: the
+    /// bar is 5 GiB, a rounding up of the tier plan's headroom, the two-page
+    /// peak above the one page the plan counts, and the model's weights.
+    #[test]
+    fn a_second_page_waits_for_the_memory_it_needs() {
+        const {
+            assert!(TWO_PAGE_PEAK > intern_engine::tiers::WORKER_PEAK);
+            assert!(TWO_PAGES_MIN_AVAILABLE >= TWO_PAGE_PEAK + MODEL_WEIGHTS_IN_USE + HEADROOM);
+        }
+        assert_eq!(TWO_PAGES_MIN_AVAILABLE, 5 * GIB);
+        assert_eq!(HEADROOM, intern_engine::tiers::HEADROOM);
+        assert_eq!(pages_at_once(2, Some(TWO_PAGES_MIN_AVAILABLE)), 2);
+        assert_eq!(pages_at_once(2, Some(TWO_PAGES_MIN_AVAILABLE - 1)), 1);
+        assert_eq!(pages_at_once(2, None), 1, "unknown memory: one page");
+        assert_eq!(pages_at_once(1, Some(u64::MAX)), 1);
+        assert_eq!(pages_at_once(0, Some(u64::MAX)), 1);
     }
 
     /// Two pages at once on two threads each from four logical processors

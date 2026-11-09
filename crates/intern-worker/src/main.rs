@@ -153,15 +153,18 @@ impl OcrBackend for LazyOcr {
 }
 
 /// How many pages the engine [`select_ocr_backend`] would choose reads at
-/// once: PP-OCR's own thread budget when it is installed, [`ocr_workers`]
-/// Tesseract processes otherwise.
+/// once: PP-OCR's, by its thread budget and the memory there is now, when it
+/// is installed, [`ocr_workers`] Tesseract processes otherwise.
 fn planned_ocr_workers() -> usize {
     let paddle = cfg!(feature = "onnx-ocr")
         && runtime_directory().is_ok_and(|runtime| {
             intern_worker::paddle::PaddleAssets::in_directory(&runtime).present()
         });
     if paddle {
-        intern_worker::paddle::default_thread_budget().workers
+        intern_worker::paddle::pages_at_once(
+            intern_worker::paddle::default_thread_budget().workers,
+            intern_worker::memory::available_bytes(),
+        )
     } else {
         ocr_workers()
     }
