@@ -12820,6 +12820,12 @@ Rickmansworth,
             },
         );
         assert_eq!(outcome.proposal.parties, vec!["Mr and Mrs Smith"]);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
     }
 
     /// A redaction's marker names no one; a name with the word in it is
