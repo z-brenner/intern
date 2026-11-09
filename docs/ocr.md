@@ -89,12 +89,14 @@ score, the mean over every character, crowds every real reading into
 
 **Threads and memory.** Each page's networks use two intra-op threads. On a
 machine with four or more logical processors a second page is read at the
-same time, with its own sessions; below four, OCR uses at most half of
-them. Never more than two pages' worth of memory - about 570 MB each at
-their peak. Four threads on a 4-core machine is the whole machine, which
-is free while a document is extracted: the queue extracts a document and
-only then sends it to the model, so the model server is idle while its
-pages are read (below). A page that arrives while every set of sessions is busy
+same time, with its own sessions, when at least 5 GiB of memory are
+available as the document's pages start to be read
+(`paddle::pages_at_once`); otherwise, and below four logical processors,
+one page at a time, on at most half of them. Never more than two pages'
+worth of memory - about 570 MB each at their peak. Four threads on a 4-core
+machine is the whole machine, which is free while a document is extracted:
+the queue extracts a document and only then sends it to the model, so the
+model server is idle while its pages are read (below). A page that arrives while every set of sessions is busy
 waits for one. A document's pages share their sessions, and ONNX Runtime's
 arena keeps each page's buffers for the next run instead of allocating them
 again. When the document has been read, the worker drops the sessions,
@@ -331,27 +333,45 @@ processors allowed, so a 4-core machine read one page at a time, on half
 its processors, while the model server beside it sat idle: the queue
 extracts a document and only then asks the model about it. From four
 logical processors it now reads two pages at once on two threads each
-(`paddle::thread_budget`). Measured with `intern-bench run --extract-only`
-over all of InternBench on the 4-core Xeon these reports use (shared with
-other work, load 2-6), the build of alpha.14 against this one, alternated
-over two rounds, and each worker's text dumped for every file:
+(`paddle::thread_budget`), when the memory for the second set of sessions
+is there (below). Measured with `scripts/bonsai-eval/ocr-pages.py` over
+all of InternBench, alpha.14's worker against this one, both built from
+source on the machine that ran them, alternated over three rounds, every
+document's reading hashed
+([`bench/reports/ocr-pages-linux-2026-11-09`](../bench/reports/ocr-pages-linux-2026-11-09/README.md),
+every run's figures kept there):
 
-| Build | Whole set, wall | The 20 documents with OCR (56 pages) | `scan-lease-25p` | `scan-agreement-10p` | Worker peak resident |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 1 page x 2 threads (alpha.14) | 142.7 s, 137.2 s | 134.7 s, 131.4 s | 59.0 s | 26.5 s, 26.3 s | 790 MB |
-| 2 pages x 2 threads | 99.8 s, 97.4 s | 94.3 s, 91.9 s | 33.4 s, 31.5 s | 15.0 s, 15.1 s | 1,400 MB |
+| Machine | Build | The 20 documents with OCR (56 pages), three rounds | `scan-lease-25p` | Worker peak resident |
+| --- | --- | ---: | ---: | ---: |
+| Runner, 2 cores x 2 threads, idle | 1 page x 2 threads (alpha.14) | 118.3, 115.6, 116.4 s | 52.6-53.5 s | 779-915 MB |
+| | 2 pages x 2 threads | 107.9, 107.5, 104.6 s | 44.9-47.1 s | 1,304-1,317 MB |
+| Shared box, 4 cores x 1 thread | 1 page x 2 threads (alpha.14) | 136.3, 151.7, 140.8 s | 61.4-67.0 s | 747-816 MB |
+| | 2 pages x 2 threads | 95.9, 128.8, 137.9 s | 33.9-58.0 s | 1,368-1,421 MB |
 
-The documents with OCR are read 30% faster and a 25-page scan 45%
-faster; every page's text, source and confidence, and every document's
-warnings, are byte for byte the same for all 78 files, and so are the OCR
-scores (CER 1.81%, WER 1.86%, every date, name and identifier found). The
-worker's peak resident memory rises from 790 MB to 1.4 GB while two pages
-are read (`VmHWM` over the whole corpus); it falls back when the document
-is done, since the sessions are dropped then. That peak sits beside a
-loaded model only between its documents, never during a reading, and on a
-16 GB machine running the 9B (about 8.3 GB resident) it leaves room. On 8
-or more logical processors nothing changes: they already read two pages
-at once.
+On the runner, the speed battery's `ocr_pages` job, the documents with OCR
+were read 9% sooner and the 25-page lease 13% sooner, in every round. On
+the shared box, in the round with the least other work there, they were
+read 30% sooner and the lease 45% sooner; the later rounds, with other
+work on the box, gained little. Two pages at once gain what idle processors
+can give: most on four idle cores, about a tenth on two cores with two
+threads each, little on a busy machine. Every document - every page's text,
+source and confidence, and its warnings - was read the same in all twelve
+runs.
+
+The worker's peak resident memory rises from about 0.8 GB to 1.3-1.4 GB
+while two pages are read (`VmHWM` over the whole corpus); it falls back
+when the document is done, since the sessions are dropped then. The tier
+plan judges a model to fit with room for the worker reading one page
+(`tiers::WORKER_PEAK`), so the second set of sessions waits for memory
+beyond that: a document's pages are read two at a time only when 5 GiB are
+available as they start, the two-page peak (1.4 GB), the weights a loaded
+9B keeps reading (2.7 GB, which Linux counts as available) and the plan's
+1 GiB of headroom, rounded up. On a machine near a model's floor pages are
+read one at a time, as before. Windows does not count a loaded model's
+working set as available, so there the bar is higher than it needs to be,
+and a busy machine reads one page at a time a little more often than it
+must. On 8 or more logical processors two pages were read at once before
+too, whatever the memory; they now wait for it as well.
 
 ### Model bytes
 
@@ -393,7 +413,7 @@ The shipped configuration:
 | orientation | classifier first, then the search | one pass for a turned page instead of two to four |
 | leveling | past 10 degrees only | lines are cut along their own slopes; leveling bought nothing up to 10 |
 | second reading | binarized, least certain character under 0.9, at most 12 lines a page | most dates for the time; +20% |
-| threads | 2 a page; 2 pages at once from 4 logical processors, else 1 | 1.8 times as fast as one thread; the model server is idle while pages are read; memory caps the pages at once |
+| threads | 2 a page; 2 pages at once from 4 logical processors with 5 GiB available, else 1 | 1.8 times as fast as one thread; the model server is idle while pages are read; memory caps the pages at once |
 | recognition batch | 6 lines | reading lines one at a time drops trailing periods and commas at the end of long lines |
 
 Shipped together: InternBench CER 0.49%, WER 1.78%, dates 29/30, names
