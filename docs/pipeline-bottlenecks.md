@@ -488,6 +488,25 @@ The maintainer confirmed four decisions on 2026-10-08.
   `To:` field when a reply names none, and quotes the lines a reply cites,
   so neither proves the model read the notice.
 
+### Evidence recall on the real sets (November 2026)
+
+Point 2 above, measured where it bites. In the 9B's alpha.14 recordings of
+the four real sets, 44 of 225 documents do not get a gold date form or a
+gold party into the prompt the engine builds (`prompt_recall` below 1), and
+40 of them are named wrong. Read one by one, retrieval dropped a line the
+text holds on 4 of the 44; on 24 the extracted text does not hold the item
+in a readable form (historic handwriting, OCR misreads, spaced stamp
+digits, one-word table cells), on 13 the gold's wording is not the
+document's, and on 3 the item is in the prompt split over two lines. The
+two causes behind the 4 (a public body named head first, and an invoice's
+issue date under a line of labels) are fixed in the index; live with the
+9B on runners, names right rise from 159 to 162 of 283 documents against
+alpha.14 (from 155 against main's same-day run) with wrong names filed
+ready 3, as before, and prompt tokens unchanged per set within 0.3
+percent: [Evidence retrieval](evidence-retrieval.md#recall-on-the-real-sets-november-2026).
+Prefill is 64 to 79 percent of a 9B document's time, so a retrieval change
+that adds tokens costs time in proportion; this one adds none in aggregate.
+
 ## The highest-value changes
 
 Ranked by what the measurements say they are worth, as the baseline showed

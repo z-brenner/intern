@@ -650,9 +650,12 @@ Reports of record, the baseline first, are in [`bench/reports/`](../bench/report
 
 The recording and baseline of record are `bench/recording.json` and
 `bench/baseline.json`: the evidence pipeline's, all 77 documents recorded
-live with Qwen3.5 9B on a GitHub-hosted runner from `c427aff` (the candidate
-benchmark workflow's run 41718479983), and the baseline written at the app's
-review gate. A live run writes them (`--record`,
+live with Qwen3.5 9B on a GitHub-hosted runner (AMD EPYC 7763) from
+`bd195ed` (the candidate benchmark workflow's run 42576431342), every
+reply's token probabilities kept, and the baseline written at the app's
+review gate. Every prompt in it is the one `c427aff`'s recording held
+(run 41718479983), and it replays against the earlier baseline with no
+score changed; the baseline differs from that one in its timings only. A live run writes them (`--record`,
 `--write-baseline`), and they are committed with the change that produced
 them; replay and the gates read them. A recording keeps its header indented
 and each document compact on a line of its own, its layouts without their

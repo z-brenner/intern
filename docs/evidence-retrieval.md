@@ -56,14 +56,29 @@ Features are read once per unit:
   validation's on the corpus fixtures' date lines. Beside them, a date in
   a table row also takes its column's header as a label (`| Invoice Date
   | Due Date |` over the row's dates), which nothing on the row's own line
-  says, and a date standing alone on its line is a dateline.
+  says, and a date standing alone on its line is a dateline. A form whose
+  labels and values came out as lines rather than a table is read the same
+  way for its issue date: a line of labels with no figure in it that opens
+  with "Invoice Date" (or issue date, date of issue, statement date, bill
+  date), at most five units above a value line on the same page with no
+  dated unit between, labels the first date of the value line, two-digit
+  year included ("Invoice Date Invoice Month Invoice Period" over
+  "1327345-1 01/28/24 January 2024 01/01/24 - 01/21/24").
 * **Defined terms**: every `"X" means` entry in a unit, so the definition
   of the Services, the Products or the Premises reads as subject evidence.
 * **Money** (amounts, and whether a label such as Total, Rent or Principal
   makes one a key fact), **likely organizations** (capitalized runs ending
-  in a legal form or an institution word), **likely people** (after a
-  courtesy title, "Dear", a party label, `/s/`), **identifiers** (letters
-  and figures, or figures a number label introduces).
+  in a legal form or an institution word), **public bodies** named head
+  first ("Royal Borough of Greenwich", "City of Stanfield", "U.S.
+  Department of Justice": a borough, city, council, department, ministry,
+  office, parish, province, town or the like, "of", and the capitalized
+  words after it; not "State of", "County of" or "District of", which a
+  governing-law clause, a notary or a court caption names), **likely
+  people** (after a courtesy title, "Dear", a party label, `/s/`),
+  **identifiers** (letters and figures, or figures a number label
+  introduces). Public bodies are kept apart from organizations, which
+  validation and the rules read; retrieval counts both as the names a
+  party's line adds.
 * **Cue counts** from the lists distillation and inference already use,
   moved unchanged into `cues.rs` and re-imported there.
 * **BM25 terms**: folded, split, stopwords dropped, lightly stemmed; the
@@ -457,6 +472,85 @@ search to sections first. The verdict: hierarchical retrieval is not
 needed on this corpus. It is at least as good at fewer tokens, so it
 stays on from 300 units, as the plan's rule asks; it can be removed
 without loss if it ever costs anything.
+
+## Recall on the real sets (November 2026)
+
+InternBench's 77 documents all reach the prompt with their gold date and
+parties (`prompt_recall` 1.0), so a retrieval loss there is invisible. On
+the four real sets it is not: in the 9B's alpha.14 runner recordings 44 of
+225 documents have `prompt_recall` below 1, and 40 of those are named
+wrong. Each was read item by item (the gold item, whether the extracted
+text holds it in the scorer's form, and if so why retrieval left it out):
+
+| Why the gold item is not in the prompt | Documents | Named wrong |
+| --- | ---: | ---: |
+| Not readable in the extracted text: historic handwriting or faded print (10), a modern OCR misread (7), a rubber stamp with spaced digits such as "SEP 1 8 2015" (4), an OCR layer built into one-word table cells (2), a date absent from the text layer (1) | 24 | 22 |
+| The gold party or date is not written that way in the document: "Antitrust Division" over "U.S. Department of Justice", a body named only in an email domain or a logo, "November 22,1923", "02-JUN-17" | 13 | 11 |
+| In the prompt, split over two lines (`prompt_recall` reads the prompt as one string with the handles between lines; the context score joins neighbouring units) | 3 | 3 |
+| Retrieval left out a line the text holds | 4 | 4 |
+
+Most of the loss is extraction and the scorer's strictness, not
+retrieval. The four retrieval losses had two general causes, both fixed in
+the index: a public body named head first ("Royal Borough of Greenwich"
+in an email signature, "City of Stanfield") was no name to the party
+field, and a WTTG broadcast invoice's "Invoice Date Invoice Month Invoice
+Period" line stood above its "1327345-1 01/28/24 ..." line, so its
+two-digit-year issue date was not read and no unit carried a date at all.
+
+Replayed on every runner recording of alpha.14 (InternBench 9B and 4B,
+real1 to real4 9B and 4B, real4 2B) and the committed recordings, with
+`--allow-stale`: `prompt_recall` rises from 0.5 to 1.0 on `real3-office-10`,
+`real4-notice-13`, `real4-invoice-10` and `real4-invoice-14` in every
+model's recording and falls on no document (real3 0.7685 to 0.7778, real4
+0.8994 to 0.9253; real4's documents below 1 from 11 to 8). InternBench and
+the fixture corpus build exactly the prompts they did, and every document
+whose prompt did not change replays identically to main. 26 real-set
+contexts change per model (3, 6, 4 and 13 on real1 to real4); the
+context's estimated tokens summed per set move -0.26 to +0.30 percent,
+the medians do not move (real4 864 to 855), p95 stays or falls, and the
+largest context grows on real4 only (1,796 to 1,902 tokens).
+
+Live, the shipped 9B on the branch (candidate-bench runs 42576431342 for
+InternBench and real1 to real3, 42586129345 for real4) against main's
+same-day run (42571844552) and alpha.14's runner recordings replayed on
+main, all at the 0.7 gate, on the documents all three runs fetched:
+
+| Set (documents) | Right: branch / main today / alpha.14 | Wrong names filed ready | Prompts changed: right |
+| --- | --- | --- | --- |
+| InternBench (77) | 71 / 70 / 71 | 1 / 2 / 1 | none changed |
+| real1 (54) | 23 / 22 / 23 | 2 / 3 / 2 | 3: 0 / 0 / 0 |
+| real2 (56) | 28 / 26 / 28 | 0 / 0 / 0 | 6: 2 / 2 / 2 |
+| real3 (48) | 16 / 15 / 15 | 0 / 1 / 0 | 4: 1 / 0 / 0 |
+| real4 (48) | 24 / 22 / 22 | 0 / 0 / 0 | 10: 5 / 3 / 3 |
+| total (283) | 162 / 155 / 159 | 3 / 6 / 3 | 23: 8 / 5 / 5 |
+
+The runners' CPUs differ, so replies drift at temperature 0: on the 265
+documents whose prompt did not change, main's run today differs from
+alpha.14 on 8 names and 20 readiness decisions, the branch's runs on no
+name and one readiness decision. Judged on the 23 documents whose prompt changed, the branch
+names three more right - `real3-office-10`, `real4-invoice-10` and
+`real4-invoice-14`, the documents the fixes brought the gold line to - and
+files no wrong name. Prompt tokens as the server counted them, on the
+documents both live runs recorded: real1 +0.3 percent, real2 -0.2, real3
+0.0, real4 0.0 (its 11 changed prompts sum to 15,192 tokens on both sides,
++66 on each WTTG invoice, -97 on one DEQ notice), InternBench 0.0; every
+median unchanged, real4's p95 1,951 to 1,879. At the runners' 14 to 20
+prompt tokens a second that is at most about 5 s of prefill on one
+document and nothing in aggregate.
+
+A third change was measured and taken out: reading again by OCR a scanned
+page whose invisible layer is laid down twice (research H1, the router's
+`overlap` at least 500 per mille on a layered full-page scan; only the 56
+pages of real4's four Oregon DEQ notices qualify in any recording). On the
+runner the re-read worked - 56 of 56 pages read again in 151 s, "June 17,
+2025" and "City of Stanfield" where the layer read "June 1 7, / 1 7, 2025",
+the four notices' contexts 972 to 1,698 estimated tokens where the doubled
+layer's were 1,506 to 1,769 - but on the four notices the names went from two
+right to one (one gained, two lost), and `real4-notice-14` was filed ready
+under a wrong name, because two rules after the model act on the clean
+text: the title line "Notice of Civil Penalty Assessment and Order Case No.
+WQ-..." becomes the type "...and Order Case", and a recipient in a "c/o ...
+Registered Agent" block is dropped. It waits for those rules.
 
 ## Is an embedding model justified?
 

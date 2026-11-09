@@ -184,6 +184,15 @@ ones. `candidate-bench.yml` runs it on an Ubuntu runner as the set
 `fixtures`, beside InternBench and the real sets, with the worker, PDFium and
 PP-OCR the Linux package stages: a recording made on the branch that changed
 the prompt, on the same machine class as that branch's InternBench run.
+Its first run (42576431342, on `zack/evidence-recall`, whose retrieval
+changes reach no fixture) built all 21 prompts exactly as the committed
+recording holds them, and 11 replies came back different from the ones
+recorded on the 4-core Xeon: `scanned-lease.pdf` lost its name ("Lease
+Agreement Effective September 1 2024 between ...") and two fixtures were
+routed as the gold wants where they were not. That is drift between
+machines, not a change to measure, so the committed recording stays, as
+"Re-recording only some fixtures" below asks: splice in what a change
+touched, nothing else.
 
 A recording made with `--token-confidence` keeps, beside the gate's
 `token_confidence` (`min`, `mean`, `tokens`), every token of the reply as the
