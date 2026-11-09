@@ -3936,16 +3936,30 @@ fn is_bare_date(unit: &EvidenceUnit) -> bool {
 /// "Dec. 26, 1907", "18th October 2019".
 fn is_dateline(line: &str) -> bool {
     let line_words = words(line);
-    let rest = line_words
-        .strip_prefix(&["date".to_owned()])
-        .unwrap_or(&line_words);
-    !rest.is_empty()
+    // An agency's letter dates itself as released, issued or sent.
+    let rest = match line_words.first().map(String::as_str) {
+        Some("date" | "dated" | "released" | "issued" | "sent") => &line_words[1..],
+        _ => &line_words[..],
+    };
+    let written = !rest.is_empty()
         && rest.len() <= 4
         && rest.iter().any(|word| names_a_month(word))
         && rest
             .iter()
             .all(|word| names_a_month(word) || is_date_number(word))
-        && !extract_stated_dates(&normalize(line)).is_empty()
+        && !extract_stated_dates(&normalize(line)).is_empty();
+    // Or a date in figures alone, its year whole: "02/09/2018".
+    let figures = || {
+        let normalized = normalize(line);
+        let dates = numeric_dates(&normalized);
+        let [date] = dates.as_slice() else {
+            return false;
+        };
+        date.parts.iter().any(|part| part.len() == 4)
+            && rest.len() == 3
+            && normalized.trim().trim_end_matches('.').len() == date.end - date.start
+    };
+    written || figures()
 }
 
 /// Greetings a letter opens with besides "Dear ...", as a line of their own.
@@ -11404,7 +11418,12 @@ The merger needs a majority of votes cast.";
             ("Dec. 26, 1907.", true),
             ("18th October 2019", true),
             ("Date: 28 March 2023", true),
+            ("Released January 3, 2024", true),
+            ("02/09/2018", true),
             ("June 16, 2023 at noon", false),
+            ("Released for public availability", false),
+            ("Invoice 02/09/2018", false),
+            ("02/09/18", false),
         ] {
             assert_eq!(is_dateline(line), dateline, "{line}");
         }
