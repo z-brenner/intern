@@ -130,4 +130,48 @@ print(json.dumps({"results": results, "slept": slept}))
     expect(stderr).toContain(`${base}/reset: `);
     expect(stderr).not.toContain('/gone:');
   });
+
+  // Each of these fails the same way on every try, so asking again would only
+  // hold the document up 40 s before it fails.
+  it('never asks again after a failure that is not the network\'s', async () => {
+    const driver = `
+import json, socket, ssl, sys, urllib.error
+sys.path.insert(0, "scripts/realdocs-eval")
+import fetch
+slept, results = [], {}
+# TLS spoken to a server that answers plain HTTP, and a scheme urllib has no handler for.
+for name, url in [("tls", sys.argv[1].replace("http://", "https://") + "/tls"), ("scheme", "gopher-x://example.invalid/")]:
+    try:
+        fetch.get(url, wait=7, sleep=slept.append, timeout=5)
+        results[name] = "fetched"
+    except Exception as error:
+        results[name] = type(error).__name__
+transient = {
+    "refused": fetch.transient(urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))),
+    "reset": fetch.transient(ConnectionResetError(104, "Connection reset by peer")),
+    "timeout": fetch.transient(TimeoutError("timed out")),
+    "cut short": fetch.transient(fetch.http.client.IncompleteRead(b"")),
+    "name lookup for now": fetch.transient(urllib.error.URLError(socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution"))),
+    "no such name": fetch.transient(urllib.error.URLError(socket.gaierror(socket.EAI_NONAME, "Name or service not known"))),
+    "certificate": fetch.transient(urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed"))),
+    "unknown scheme": fetch.transient(urllib.error.URLError("unknown url type: gopher-x")),
+}
+print(json.dumps({"results": results, "slept": slept, "transient": transient}))
+`;
+    const { stdout, stderr } = await exec('python3', ['-I', '-c', driver, base], { env });
+    const { results, slept, transient } = JSON.parse(stdout);
+    expect(results).toEqual({ tls: 'URLError', scheme: 'URLError' });
+    expect(slept).toEqual([]);
+    expect(stderr).not.toContain('asking again');
+    expect(transient).toEqual({
+      refused: true,
+      reset: true,
+      timeout: true,
+      'cut short': true,
+      'name lookup for now': true,
+      'no such name': false,
+      certificate: false,
+      'unknown scheme': false,
+    });
+  });
 });

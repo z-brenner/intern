@@ -278,8 +278,10 @@ Inputs:
   (`sample-heldout.json`), `real3` (`sample-heldout2.json`) and `real4`
   (`sample-heldout3.json`), the real
   documents fetched by `scripts/realdocs-eval/fetch.py` from their public
-  sources; a source that answers 429 or a 5xx is asked again (three tries,
-  20 s apart), and one that is still down costs its document, not the run.
+  sources; a source that answers 429 or a 5xx, or whose connection is
+  refused, reset, cut short or timed out, is asked again (three tries, 20 s
+  apart), and one that is still down costs its document, not the run. A 403,
+  a 404 or a certificate that does not verify is not asked again.
   A scheduled run takes all five.
 * `threads` (default `4`): the server's model threads.
 * `extra_server_args` (default empty): flags appended after the app's own,

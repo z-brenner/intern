@@ -26,13 +26,16 @@ and public-domain or openly licensed archives; sample.json names each one's sour
 They are fetched from their sources, never committed. A file already in OUT_DIR/corpus is kept
 when its bytes match the pins, so a document whose site refuses scripted downloads (ftc.gov
 answers 403) can be saved there by hand first. A source that answers 429 (too many requests) or
-a 5xx, or whose connection fails, resets or times out, is asked again, three tries in all, about
-20 seconds apart; any other refusal (a 403, a 404) is final.
+a 5xx, or whose connection is refused, reset, cut short or timed out, or whose name the resolver
+could not look up for now, is asked again, three tries in all, about 20 seconds apart. Any other
+answer or failure is final: a 403 or a 404, a certificate that does not verify, a name that does
+not exist.
 """
 import hashlib
 import http.client
 import json
 import os
+import socket
 import sys
 import time
 import urllib.error
@@ -106,9 +109,9 @@ def main():
 
 
 def get(url, tries=TRIES, wait=RETRY_SECONDS, sleep=time.sleep, timeout=120):
-    """The body at url. A 429 or a 5xx, or a connection that fails, resets or times out
-    (runners see these now and then), is asked again, `tries` times in all, `wait` seconds apart
-    (or what a 429's or 5xx's Retry-After asks, up to a minute); any other HTTP answer is
+    """The body at url. A 429 or a 5xx, or a failure transient() calls the network's (runners
+    see these now and then), is asked again, `tries` times in all, `wait` seconds apart (or what
+    a 429's or 5xx's Retry-After asks, up to a minute); any other HTTP answer or failure is
     raised at once."""
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     for attempt in range(1, tries + 1):
@@ -121,14 +124,24 @@ def get(url, tries=TRIES, wait=RETRY_SECONDS, sleep=time.sleep, timeout=120):
             delay = retry_after(error.headers.get("Retry-After"), wait)
             what = f"HTTP {error.code}"
         except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as error:
-            # Refused, reset, timed out or cut short: the network, not the source's answer.
-            if attempt == tries:
+            if attempt == tries or not transient(error):
                 raise
             delay = wait
             what = f"{type(error).__name__}: {getattr(error, 'reason', error)}"
         print(f"{url}: {what}, try {attempt} of {tries}; asking again in {delay} s", file=sys.stderr)
         sleep(delay)
     raise AssertionError("unreachable")
+
+
+def transient(error):
+    """Whether a failure to fetch is the network's, which asking again may get past: a connection
+    refused, reset, timed out or cut short, or a name the resolver could not look up for now. A
+    certificate that does not verify, a name that does not exist or a URL urllib cannot open
+    fails the same way every time."""
+    reason = error.reason if isinstance(error, urllib.error.URLError) else error
+    if isinstance(reason, (ConnectionError, TimeoutError, http.client.HTTPException)):
+        return True
+    return isinstance(reason, socket.gaierror) and reason.errno == socket.EAI_AGAIN
 
 
 def retry_after(header, default):
