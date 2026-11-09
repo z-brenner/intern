@@ -3969,10 +3969,11 @@
     "memorandum",
     "agency_guidance",
     "reference_number",
+    "issuer_not_named",
     "us_federal",
     "modern"
    ],
-   "notes": "'OFFICE OF THE GENERAL COUNSEL, MEMORANDUM GC 25-05, February 14, 2025, TO: Regional Directors, Officers-in-Charge, and Resident Officers, FROM: William B. Cowen, Acting General Counsel, SUBJECT: Rescission of Certain General Counsel Memoranda.' Lists rescinded memoranda by number (GC 21-02 to GC 25-04). Traps: the memo numbers carrying years; the Acting General Counsel's name.",
+   "notes": "'OFFICE OF THE GENERAL COUNSEL, MEMORANDUM GC 25-05, February 14, 2025, TO: Regional Directors, Officers-in-Charge, and Resident Officers, FROM: William B. Cowen, Acting General Counsel, SUBJECT: Rescission of Certain General Counsel Memoranda.' Lists rescinded memoranda by number (GC 21-02 to GC 25-04). The Board's name is not printed: only the National Labor Relations Act is, so the issuer is inferred. Traps: the memo numbers carrying years; the Acting General Counsel's name.",
    "source": {
     "name": "National Labor Relations Board, General Counsel memos",
     "url": "https://apps.nlrb.gov/link/document.aspx/09031d4583f3f58c",
@@ -4028,7 +4029,7 @@
       "why": "Acting General Counsel who signs"
      }
     ],
-    "expected_readiness": "ready"
+    "expected_readiness": "either"
    }
   },
   {
