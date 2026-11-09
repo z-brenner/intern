@@ -1,0 +1,5045 @@
+{
+ "notice": "A fourth held-out set of real documents (the fifth set in all), none in the four earlier samples (sample.json, sample-heldout.json, sample-heldout2.json, sample-heldout3.json) and from issuers and source collections those samples did not use: public records and openly licensed or public-domain archives in the United States, the United Kingdom (Wales and Northern Ireland, not GOV.UK), New Zealand and the European Union, fetched from their sources at evaluation time; each entry names its source and licence, most of them US government works, Open Government Licence or Creative Commons. It mixes letters, notices, invoices, receipts and statements, forms, memoranda and minutes, an e-mail printed to PDF and office files, in native PDF, scanned PDF, JPEG, DOCX and XLSX. It was gathered after every rule written from the earlier samples, and no rule has been written from it. The gold answers were written for Intern by reading each document, before Intern read any of them.",
+ "documents": [
+  {
+   "id": "real5-letter-01",
+   "file": "real5-letter-01.pdf",
+   "title": "New Zealand Commerce Commission Fair Trading Act warning letter to Inghams Enterprises (NZ) Pty Limited about chicken size labelling, the reissued version (scanned PDF with an OCR layer, 3 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "pages": 3,
+   "categories": [
+    "letter",
+    "scanned",
+    "ocr_text_layer",
+    "warning_letter",
+    "regulator",
+    "care_of_counsel",
+    "competing_dates",
+    "reissued",
+    "named_person_at_org",
+    "new_zealand",
+    "modern"
+   ],
+   "notes": "Letter dated 8 May 2017 (top left of page 1) from the Commerce Commission's Auckland office to Inghams Enterprises (NZ) PTY Limited, c/- Bell Gully, 'Dear Mr Brannan', heading 'Fair Trading Act 1986: Warning'. Says Inghams' chicken size labels likely breached the Act. Signed John Lyall, Auckland Manager. A note at the foot of page 3 says the letter was originally issued on 1 February 2017, contained an error and was reissued; the source URL's file name also carries 1 February 2017. Traps: the original issue date; the law firm the letter is sent care of; the Poultry Industry Association named in a footnote; the addressee and the signer.",
+   "source": {
+    "name": "Commerce Commission (New Zealand), published warning letters",
+    "url": "https://www.comcom.govt.nz/__data/assets/pdf_file/0034/69658/Warning-letter-to-Inghams-Enterprises-NZ-PTY-Limited-1-February-2017.pdf",
+    "page": "https://www.comcom.govt.nz/case-register",
+    "license": "Crown copyright; the Commerce Commission's website states that its copyright material is licensed for re-use under a Creative Commons Attribution 4.0 International licence (comcom.govt.nz copyright page)",
+    "size": 1227443,
+    "sha256": "fb6c7366a7e2e2d6f477606ab643a10c9e0bdc844e05c1c19f1dab5f941d063e"
+   },
+   "gold": {
+    "document_type": "Warning Letter",
+    "acceptable_types": [
+     "Letter",
+     "Fair Trading Act Warning Letter",
+     "Fair Trading Act Warning",
+     "Warning"
+    ],
+    "document_date": "2017-05-08",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2017-02-01",
+      "why": "date the original letter was issued; this is the reissued letter"
+     }
+    ],
+    "parties": [
+     "Inghams Enterprises (NZ) Pty Limited"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Inghams Enterprises (NZ) PTY Limited"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Inghams Enterprises"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Inghams"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Commerce Commission"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Commerce Commission New Zealand"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Inghams Enterprises (NZ) Pty Limited",
+      "role": "recipient"
+     },
+     {
+      "name": "Commerce Commission",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "John Lyall",
+      "why": "Auckland Manager who signs"
+     },
+     {
+      "name": "Mr Brannan",
+      "why": "addressee, a person at the company or its counsel"
+     },
+     {
+      "name": "Bell Gully",
+      "why": "law firm the letter is sent care of"
+     },
+     {
+      "name": "Poultry Industry Association of New Zealand",
+      "why": "industry body named in the body and a footnote"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-letter-02",
+   "file": "real5-letter-02.pdf",
+   "title": "New Zealand Commerce Commission Fair Trading Act warning letter to Slingshot Communications Limited about a false claim made to a customer (scanned PDF with an OCR layer, 3 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "pages": 3,
+   "categories": [
+    "letter",
+    "scanned",
+    "ocr_text_layer",
+    "warning_letter",
+    "regulator",
+    "addressee_redacted",
+    "trading_name",
+    "new_zealand",
+    "modern"
+   ],
+   "notes": "Letter dated 31 August 2018 (top left of page 1) from the Commerce Commission to 'NZ Senior Corporate Counsel, Slingshot Communications Limited', by email only, with the salutation's name removed. Heading 'Fair Trading Act 1986: Warning'. Says Slingshot told a consumer that a Commission decision prevented splitting landline and broadband between providers. Signed Kirsten Mannix, Wellington Consumer Manager; contact Zeb Walker. No other dates. Traps: the signer and the contact; 'Slingshot' as the trading name.",
+   "source": {
+    "name": "Commerce Commission (New Zealand), published warning letters",
+    "url": "https://www.comcom.govt.nz/__data/assets/pdf_file/0025/96154/Warning-letter-to-Slingshot-Communications-Limited-ta-Slingshot-31-August-2018.pdf",
+    "page": "https://www.comcom.govt.nz/case-register",
+    "license": "Crown copyright; the Commerce Commission's website states that its copyright material is licensed for re-use under a Creative Commons Attribution 4.0 International licence (comcom.govt.nz copyright page)",
+    "size": 3475542,
+    "sha256": "0dc943ec31a7e656742f5c8ef1827ab19d4ac6006e187722c5289651422a4026"
+   },
+   "gold": {
+    "document_type": "Warning Letter",
+    "acceptable_types": [
+     "Letter",
+     "Fair Trading Act Warning Letter",
+     "Fair Trading Act Warning",
+     "Warning"
+    ],
+    "document_date": "2018-08-31",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [],
+    "parties": [
+     "Slingshot Communications Limited"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Slingshot Communications"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Slingshot"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Commerce Commission"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Commerce Commission New Zealand"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Slingshot Communications Limited",
+      "role": "recipient"
+     },
+     {
+      "name": "Commerce Commission",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Kirsten Mannix",
+      "why": "Wellington Consumer Manager who signs"
+     },
+     {
+      "name": "Zeb Walker",
+      "why": "Commission contact named at the end"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-letter-03",
+   "file": "real5-letter-03.pdf",
+   "title": "New Zealand Commerce Commission Commerce Act warning letter to Coast to Coast Limited (Bayleys Manawatu) about price fixing of Trade Me listing costs, public version (scanned PDF with an OCR layer, 4 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "pages": 4,
+   "categories": [
+    "letter",
+    "scanned",
+    "ocr_text_layer",
+    "warning_letter",
+    "regulator",
+    "care_of_counsel",
+    "trading_name",
+    "competing_dates",
+    "body_recounts_events",
+    "reference_number",
+    "new_zealand",
+    "modern"
+   ],
+   "notes": "Letter dated 16 December 2015 (top left, beside file reference 14633 / 2303229) from the Commerce Commission to Coast to Coast Limited, c/o Chapman Tripp, 'Dear Lucy', heading 'Commerce Act 1986: warning'. Public version with confidential material removed. Says Coast to Coast, trading as Bayleys Manawatu, likely joined an agreement among Manawatu agencies to pass Trade Me listing costs to vendors. Recounts an earlier letter of 21 September 2015, a meeting on 17 October 2013 and a start date of 1 February 2014; names Property Brokers Limited, Unique Realty Limited, Manawatu 1994 Limited, JVL Prestige Realty Limited and Trade Me. Signed Ritchie Hutton, Head of Investigations. Traps: the recounted dates; the competitors and Trade Me; the law firm; the trading name.",
+   "source": {
+    "name": "Commerce Commission (New Zealand), published warning letters",
+    "url": "https://www.comcom.govt.nz/__data/assets/pdf_file/0020/68600/Warning-letter-to-Coast-to-Coast-Limited-16-December-2015.PDF",
+    "page": "https://www.comcom.govt.nz/case-register",
+    "license": "Crown copyright; the Commerce Commission's website states that its copyright material is licensed for re-use under a Creative Commons Attribution 4.0 International licence (comcom.govt.nz copyright page)",
+    "size": 836358,
+    "sha256": "d9f55ea4b44f869e615f2880ad68a77d8af42e26d543899fb643706d0b1109fa"
+   },
+   "gold": {
+    "document_type": "Warning Letter",
+    "acceptable_types": [
+     "Letter",
+     "Commerce Act Warning Letter",
+     "Commerce Act Warning",
+     "Warning"
+    ],
+    "document_date": "2015-12-16",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2015-09-21",
+      "why": "date of the Commission's earlier letter"
+     },
+     {
+      "date": "2013-10-17",
+      "why": "date of the meeting where the agreement was made"
+     },
+     {
+      "date": "2014-02-01",
+      "why": "date from which listing costs were passed on"
+     }
+    ],
+    "parties": [
+     "Coast to Coast Limited"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Coast to Coast"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Bayleys Manawatu"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Commerce Commission"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Commerce Commission New Zealand"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Coast to Coast Limited",
+      "role": "recipient"
+     },
+     {
+      "name": "Commerce Commission",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Chapman Tripp",
+      "why": "law firm the letter is sent care of"
+     },
+     {
+      "name": "Ritchie Hutton",
+      "why": "Head of Investigations who signs"
+     },
+     {
+      "name": "Property Brokers Limited",
+      "why": "competitor named in the body"
+     },
+     {
+      "name": "Trade Me",
+      "why": "listing website named in the body"
+     },
+     {
+      "name": "JVL Prestige Realty Limited",
+      "why": "agency named in the body"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-letter-04",
+   "file": "real5-letter-04.pdf",
+   "title": "NTSB safety recommendation letters on the Williamsburg, Virginia rear-end collision report: a cover note and letters to FMCSA, the Governor of Virginia, a truck carrier and the Commercial Vehicle Safety Alliance (born-digital PDF, 19 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 19,
+   "categories": [
+    "letter",
+    "born_digital",
+    "safety_recommendation",
+    "multiple_letters",
+    "cover_letter",
+    "competing_dates",
+    "named_person_at_org",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "Packet of letters all dated August 28, 2024. Page 1 is an Executive Secretariat cover note to Mr. Vinn White, Deputy Administrator, Federal Motor Carrier Safety Administration; the first full letter (from the NTSB Office of the Chair) is addressed to him, issues Safety Recommendation H-24-19 to the FMCSA and reiterates H-22-4. Later letters in the same file, of the same date, go to the Governor of Virginia, to Triton Logistics Incorporated (the truck carrier) and to the Commercial Vehicle Safety Alliance. Each letter refers to the NTSB's August 12, 2024 report on a December 16, 2022 collision. Traps: the report date and the accident date; the other recipients later in the file; the addressee's name.",
+   "source": {
+    "name": "National Transportation Safety Board, safety recommendation letters H-24-019 to H-24-024",
+    "url": "https://www.ntsb.gov/safety/safety-recs/recletters/H-24-019-024.pdf",
+    "page": "https://www.ntsb.gov/safety/safety-recs/",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 327350,
+    "sha256": "2fa90a8c21990071e5ee4fb3f555da26f374b73b7b1cb51db28ff8144b0a993e"
+   },
+   "gold": {
+    "document_type": "Safety Recommendation Letter",
+    "acceptable_types": [
+     "Letter",
+     "Safety Recommendation",
+     "Safety Recommendations",
+     "Safety Recommendation Letters"
+    ],
+    "document_date": "2024-08-28",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2024-08-12",
+      "why": "date of the NTSB report the letters describe"
+     },
+     {
+      "date": "2022-12-16",
+      "why": "date of the accident"
+     }
+    ],
+    "parties": [
+     "Federal Motor Carrier Safety Administration"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "FMCSA"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "National Transportation Safety Board"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "NTSB"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Federal Motor Carrier Safety Administration",
+      "role": "recipient"
+     },
+     {
+      "name": "National Transportation Safety Board",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Vinn White",
+      "why": "addressee, FMCSA's Deputy Administrator"
+     },
+     {
+      "name": "Glenn Youngkin",
+      "why": "addressee of a later letter in the file"
+     },
+     {
+      "name": "Triton Logistics Incorporated",
+      "why": "recipient of a later letter in the file"
+     },
+     {
+      "name": "Commercial Vehicle Safety Alliance",
+      "why": "recipient of a later letter in the file"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-letter-05",
+   "file": "real5-letter-05.pdf",
+   "title": "NTSB safety recommendation letters on Cessna 210 landing gear actuator cracking, to the FAA Administrator and to Textron (born-digital PDF, 5 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 5,
+   "categories": [
+    "letter",
+    "born_digital",
+    "safety_recommendation",
+    "multiple_letters",
+    "competing_dates",
+    "named_person_at_org",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "Two letters dated September 23, 2025 from the NTSB Office of the Chairwoman: the first to The Honorable Bryan Bedford, Administrator, Federal Aviation Administration (recommendation A-25-36, an airworthiness directive), the second to Mr. Ron Draper of Textron, Inc. (A-25-37, a service bulletin from Textron Aviation), with a cc to Henry Soderlund. Both refer to the NTSB's September 18, 2025 report AIR-25-06. Traps: the report date; Cessna as a product name; the second letter's recipient.",
+   "source": {
+    "name": "National Transportation Safety Board, safety recommendation letters A-25-036 and A-25-037",
+    "url": "https://www.ntsb.gov/safety/safety-recs/recletters/A-25-036-037.pdf",
+    "page": "https://www.ntsb.gov/safety/safety-recs/",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 190802,
+    "sha256": "61c3dbcbacd9f4b6b0411f41c3daa1f4daa1c35bfc07156fd6a5c694310482a7"
+   },
+   "gold": {
+    "document_type": "Safety Recommendation Letter",
+    "acceptable_types": [
+     "Letter",
+     "Safety Recommendation",
+     "Safety Recommendation Letters"
+    ],
+    "document_date": "2025-09-23",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-09-18",
+      "why": "date of the NTSB report the letters describe"
+     }
+    ],
+    "parties": [
+     "Federal Aviation Administration"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "FAA"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "National Transportation Safety Board"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "NTSB"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Federal Aviation Administration",
+       "Textron"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Federal Aviation Administration",
+       "Textron, Inc."
+      ],
+      "relation": "to"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Federal Aviation Administration",
+      "role": "recipient"
+     },
+     {
+      "name": "Textron, Inc.",
+      "role": "recipient"
+     },
+     {
+      "name": "National Transportation Safety Board",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Bryan Bedford",
+      "why": "addressee, FAA Administrator"
+     },
+     {
+      "name": "Ron Draper",
+      "why": "addressee of the second letter"
+     },
+     {
+      "name": "Cessna",
+      "why": "aircraft model named in the subject"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-letter-06",
+   "file": "real5-letter-06.pdf",
+   "title": "CFTC staff no-action letter 26-26 to Eurex Clearing AG on holding customer securities at Clearstream Banking (born-digital PDF, 9 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 9,
+   "categories": [
+    "letter",
+    "born_digital",
+    "no_action_letter",
+    "regulator",
+    "competing_dates",
+    "named_person_at_org",
+    "reference_number",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "Letter headed 'CFTC Letter No. 26-26 No-Action September 17, 2026' and dated September 17, 2026, from the CFTC's Division of Clearing and Risk and Market Participants Division to Matthias Graulich and Eric Seinsheimer of Eurex Clearing AG, Eschborn. Responds to Eurex Clearing's letter dated August 10, 2026, and grants no-action relief for its FCM clearing members and Clearstream Banking S.A. Cites a December 20, 2018 no-action letter and EU regulations of various dates. Traps: the request letter's date; the 2018 letter; Clearstream Banking S.A.; the addressees.",
+   "source": {
+    "name": "Commodity Futures Trading Commission, staff letter 26-26",
+    "url": "https://www.cftc.gov/csl/26-26/download",
+    "page": "https://www.cftc.gov/LawRegulation/CFTCStaffLetters/letters.htm",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 322429,
+    "sha256": "9daedcef3cce0dec3a4405c31ec8e92eb5c2167e2175e8e7d48d12df8abaab88"
+   },
+   "gold": {
+    "document_type": "No-Action Letter",
+    "acceptable_types": [
+     "Letter",
+     "CFTC No-Action Letter",
+     "Staff Letter",
+     "CFTC Letter"
+    ],
+    "document_date": "2026-09-17",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2026-08-10",
+      "why": "date of Eurex Clearing's request letter"
+     },
+     {
+      "date": "2018-12-20",
+      "why": "date of an earlier no-action letter"
+     }
+    ],
+    "parties": [
+     "Eurex Clearing AG"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Eurex Clearing"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Commodity Futures Trading Commission"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "CFTC"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Eurex Clearing AG",
+      "role": "recipient"
+     },
+     {
+      "name": "Commodity Futures Trading Commission",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Clearstream Banking S.A.",
+      "why": "depository the relief also covers"
+     },
+     {
+      "name": "Matthias Graulich",
+      "why": "addressee"
+     },
+     {
+      "name": "Eric Seinsheimer",
+      "why": "addressee"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-letter-07",
+   "file": "real5-letter-07.pdf",
+   "title": "Eurex Clearing AG's request letter to the CFTC Division of Clearing and Risk for no-action relief on customer securities held at Clearstream Banking (PDF, 13 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 13,
+   "categories": [
+    "letter",
+    "born_digital",
+    "request_letter",
+    "letter_from_company",
+    "letterhead",
+    "competing_dates",
+    "named_person_at_org",
+    "foreign_company",
+    "modern"
+   ],
+   "notes": "Letter on Eurex Clearing AG letterhead (Eschborn), 'VIA EMAIL', to Mr. Richard Haynes, Acting Director, Division of Clearing and Risk, Commodity Futures Trading Commission, dated August 10, 2026. Requests no-action relief for itself, its FCM clearing members and Clearstream Banking S.A. under CFTC Regulations 1.49 and 22.9. Recounts a December 20, 2018 no-action letter and cites Luxembourg and EU laws of various dates. Traps: the CFTC as addressee versus Eurex as sender; Clearstream; the 2018 relief.",
+   "source": {
+    "name": "Commodity Futures Trading Commission, request letter published with staff letter 26-26",
+    "url": "https://www.cftc.gov/csl/26-26/request_letter/0/download",
+    "page": "https://www.cftc.gov/LawRegulation/CFTCStaffLetters/letters.htm",
+    "license": "Letter written by Eurex Clearing AG and published by the CFTC with its staff letter 26-26; not a US government work; no licence stated",
+    "size": 709483,
+    "sha256": "dedbf2daecf26f021a351b6f8ac1864ee4062db89a8d8cfb0679bbf2049b2568"
+   },
+   "gold": {
+    "document_type": "Request for No-Action Relief",
+    "acceptable_types": [
+     "Request Letter",
+     "Letter",
+     "No-Action Request",
+     "No-Action Relief Request",
+     "Request"
+    ],
+    "document_date": "2026-08-10",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2018-12-20",
+      "why": "date of the earlier no-action relief it recounts"
+     }
+    ],
+    "parties": [
+     "Eurex Clearing AG"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Eurex Clearing"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Commodity Futures Trading Commission"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "CFTC"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Eurex Clearing AG",
+       "Commodity Futures Trading Commission"
+      ],
+      "relation": "between"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Eurex Clearing AG",
+      "role": "sender"
+     },
+     {
+      "name": "Commodity Futures Trading Commission",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Richard Haynes",
+      "why": "addressee, CFTC Acting Director"
+     },
+     {
+      "name": "Clearstream Banking S.A.",
+      "why": "depository named in the request"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-letter-08",
+   "file": "real5-letter-08.pdf",
+   "title": "CFTC staff no-action letter 26-21 extending time-limited relief for Kraken Derivatives Exchange (born-digital PDF, 5 pages, no inside address)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 5,
+   "categories": [
+    "letter",
+    "born_digital",
+    "no_action_letter",
+    "regulator",
+    "no_inside_address",
+    "former_name",
+    "competing_dates",
+    "deadline_in_body",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "Letter headed 'CFTC Letter No. 26-21 No-Action July 24, 2026' from the CFTC Division of Market Oversight (DJ Hennes, Acting Director), with no inside address or salutation: 'Re: Kraken Derivatives Exchange Inc. (f/k/a Small Exchange, Inc.) – Request for Extension of Time-Limited No-Action Relief'. Extends relief from the dormancy rules to August 10, 2027. Mentions the request of July 20, 2026, CFTC Letter 25-46 of December 11, 2025, a last trade on January 10, 2025, and relief that ran to October 10, 2026. Traps: the many dates; the former name Small Exchange; Payward, Inc. named in the body.",
+   "source": {
+    "name": "Commodity Futures Trading Commission, staff letter 26-21",
+    "url": "https://www.cftc.gov/csl/26-21/download",
+    "page": "https://www.cftc.gov/LawRegulation/CFTCStaffLetters/letters.htm",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 238275,
+    "sha256": "b0ad3a023b7b6cdac7f63803b5fed4ad6e6f9ae29f76c7d1872f6d494a61ca94"
+   },
+   "gold": {
+    "document_type": "No-Action Letter",
+    "acceptable_types": [
+     "Letter",
+     "CFTC No-Action Letter",
+     "Staff Letter",
+     "CFTC Letter",
+     "No-Action Relief Extension"
+    ],
+    "document_date": "2026-07-24",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2026-07-20",
+      "why": "date of the request"
+     },
+     {
+      "date": "2025-12-11",
+      "why": "date of CFTC Letter No. 25-46"
+     },
+     {
+      "date": "2027-08-10",
+      "why": "end date of the extended relief"
+     },
+     {
+      "date": "2026-10-10",
+      "why": "end date of the earlier relief"
+     }
+    ],
+    "parties": [
+     "Kraken Derivatives Exchange Inc."
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Kraken Derivatives Exchange"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Commodity Futures Trading Commission"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "CFTC"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Kraken Derivatives Exchange Inc.",
+      "role": "recipient"
+     },
+     {
+      "name": "Commodity Futures Trading Commission",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Small Exchange, Inc.",
+      "why": "the exchange's former name"
+     },
+     {
+      "name": "Payward, Inc.",
+      "why": "company named in the body"
+     },
+     {
+      "name": "DJ Hennes",
+      "why": "Acting Director who signs"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-letter-09",
+   "file": "real5-letter-09.pdf",
+   "title": "CMS letter to the Maryland Department of Health approving a Medicaid managed care state directed payment for primary care, with the approved preprint (born-digital PDF)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 23,
+   "categories": [
+    "letter",
+    "born_digital",
+    "approval_letter",
+    "attachments",
+    "long_document",
+    "competing_dates",
+    "named_person_at_org",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "Letter dated June 23, 2025 from the Centers for Medicare & Medicaid Services (Baltimore) to Mr. Ryan Moran, Medicaid Director, Maryland Department of Health, approving Maryland's proposal MD_Fee_PC_New_20250101-20251231 under 42 CFR 438.6(c). Says the proposal was received on December 9, 2024 and a final revised preprint on June 6, 2025, for the rating period January 1 to December 31, 2025. The rest of the file is the state's preprint form with many dates. Traps: the receipt dates; the rating period; the preprint's dates; the addressee.",
+   "source": {
+    "name": "Centers for Medicare & Medicaid Services, Medicaid managed care state directed payment approvals (medicaid.gov)",
+    "url": "https://www.medicaid.gov/medicaid/managed-care/downloads/MD_Fee_PC_New_20250101-20251231.pdf",
+    "page": "https://www.medicaid.gov/medicaid/managed-care/guidance/state-directed-payments",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 897516,
+    "sha256": "2c9e80fecc25e7f5f07b4c10f13821ca6d986559c642e84337b66860b5358106"
+   },
+   "gold": {
+    "document_type": "Approval Letter",
+    "acceptable_types": [
+     "Letter",
+     "State Directed Payment Approval Letter",
+     "State Directed Payment Approval",
+     "Approval"
+    ],
+    "document_date": "2025-06-23",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2024-12-09",
+      "why": "date CMS received the proposal"
+     },
+     {
+      "date": "2025-06-06",
+      "why": "date CMS received the final revised preprint"
+     },
+     {
+      "date": "2025-01-01",
+      "why": "start of the rating period"
+     },
+     {
+      "date": "2025-12-31",
+      "why": "end of the rating period"
+     }
+    ],
+    "parties": [
+     "Maryland Department of Health"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Centers for Medicare & Medicaid Services"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "CMS"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Centers for Medicare and Medicaid Services"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Maryland Department of Health",
+      "role": "recipient"
+     },
+     {
+      "name": "Centers for Medicare & Medicaid Services",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Ryan Moran",
+      "why": "addressee, the Medicaid Director"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-letter-10",
+   "file": "real5-letter-10.pdf",
+   "title": "CMS letter to Delaware Health and Social Services approving a nursing facility state directed payment renewal for 2026, with the preprint (born-digital PDF)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 23,
+   "categories": [
+    "letter",
+    "born_digital",
+    "approval_letter",
+    "attachments",
+    "long_document",
+    "competing_dates",
+    "named_person_at_org",
+    "digital_signature_date",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "Letter dated July 21, 2026 (and digitally signed 2026.07.21 by John Giles, Director, Managed Care Group) from CMS to Andrew Wilson, Deputy Secretary of Medicaid, Delaware Health and Social Services, approving DE_Fee_NF2_Renewal_20260101-20261231. Says the proposal was received on October 3, 2025 and a final revised preprint on January 30, 2026, for January 1 to December 31, 2026; mentions a July 4, 2025 law and an October 31, 2024 preprint. The rest is the preprint. Traps: the receipt dates; the rating period; the addressee and signer.",
+   "source": {
+    "name": "Centers for Medicare & Medicaid Services, Medicaid managed care state directed payment approvals (medicaid.gov)",
+    "url": "https://www.medicaid.gov/medicaid/managed-care/downloads/DE_Fee_NF2_Renewal_20260101-20261231.pdf",
+    "page": "https://www.medicaid.gov/medicaid/managed-care/guidance/state-directed-payments",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 843951,
+    "sha256": "6d28795523793a9294d24ea8f3ab4e1e83fc589d5adb576396446c275767a708"
+   },
+   "gold": {
+    "document_type": "Approval Letter",
+    "acceptable_types": [
+     "Letter",
+     "State Directed Payment Approval Letter",
+     "State Directed Payment Approval",
+     "Approval"
+    ],
+    "document_date": "2026-07-21",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-10-03",
+      "why": "date CMS received the proposal"
+     },
+     {
+      "date": "2026-01-30",
+      "why": "date CMS received the final revised preprint"
+     },
+     {
+      "date": "2026-01-01",
+      "why": "start of the rating period"
+     },
+     {
+      "date": "2026-12-31",
+      "why": "end of the rating period"
+     },
+     {
+      "date": "2025-07-04",
+      "why": "date of the law the letter cites"
+     },
+     {
+      "date": "2024-10-31",
+      "why": "date an earlier preprint was submitted"
+     }
+    ],
+    "parties": [
+     "Delaware Health and Social Services"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Delaware Department of Health and Social Services"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Department of Health and Social Services"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Centers for Medicare & Medicaid Services"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "CMS"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Delaware Health and Social Services",
+      "role": "recipient"
+     },
+     {
+      "name": "Centers for Medicare & Medicaid Services",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Andrew Wilson",
+      "why": "addressee"
+     },
+     {
+      "name": "John Giles",
+      "why": "CMS director who signs"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-letter-11",
+   "file": "real5-letter-11.pdf",
+   "title": "CMS letter to the Oklahoma Health Care Authority approving a state directed payment renewal for July 2025 to June 2026, with the preprint (born-digital PDF)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 24,
+   "categories": [
+    "letter",
+    "born_digital",
+    "approval_letter",
+    "attachments",
+    "long_document",
+    "competing_dates",
+    "named_person_at_org",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "Letter dated June 2, 2026 from CMS to Melissa Miller, Medicaid Director, Oklahoma Health Care Authority, approving OK_Fee_Oth2_Renewal_20250701-20260630 under 42 CFR 438.6(c). The proposal was received on June 30, 2025 and a final revised preprint on January 7, 2026, for the rating period July 1, 2025 to June 30, 2026. The rest is the preprint, with claims-data periods from 2023 and 2024. Traps: the receipt dates; the rating period; the addressee.",
+   "source": {
+    "name": "Centers for Medicare & Medicaid Services, Medicaid managed care state directed payment approvals (medicaid.gov)",
+    "url": "https://www.medicaid.gov/medicaid/managed-care/downloads/OK_Fee_Oth2_Renewal_20250701-20260630.pdf",
+    "page": "https://www.medicaid.gov/medicaid/managed-care/guidance/state-directed-payments",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 930352,
+    "sha256": "b19cf3d7600d92b9cb961ca8c00b000e12039d95d5fab35a4d1593fd519f5c76"
+   },
+   "gold": {
+    "document_type": "Approval Letter",
+    "acceptable_types": [
+     "Letter",
+     "State Directed Payment Approval Letter",
+     "State Directed Payment Approval",
+     "Approval"
+    ],
+    "document_date": "2026-06-02",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-06-30",
+      "why": "date CMS received the proposal; also the rating period's end"
+     },
+     {
+      "date": "2026-01-07",
+      "why": "date CMS received the final revised preprint"
+     },
+     {
+      "date": "2025-07-01",
+      "why": "start of the rating period"
+     },
+     {
+      "date": "2026-06-30",
+      "why": "end of the rating period"
+     }
+    ],
+    "parties": [
+     "Oklahoma Health Care Authority"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Centers for Medicare & Medicaid Services"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "CMS"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Oklahoma Health Care Authority",
+      "role": "recipient"
+     },
+     {
+      "name": "Centers for Medicare & Medicaid Services",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Melissa Miller",
+      "why": "addressee, the Medicaid Director"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-letter-12",
+   "file": "real5-letter-12.pdf",
+   "title": "Welsh Government response to freedom of information request ATISN 20183 about Companies House, Crown Way, Cardiff, requester's name removed (born-digital PDF, 1 page)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "letter",
+    "born_digital",
+    "foi_response",
+    "addressee_redacted",
+    "competing_dates",
+    "reference_number",
+    "uk",
+    "wales",
+    "modern"
+   ],
+   "notes": "One-page letter dated 14 February 2024, 'Dear' with the name removed, heading 'ATISN 20183 - FOI Request: Acquisition of Companies House, Crown Way, Cardiff.' The request was received on 8 February 2024 and asked for correspondence with Cardiff Council between 1st September 2023 and 6th February 2024; the Welsh Government holds no information. Ends 'Yours sincerely' with no name; the Information Commissioner's Office address is given for complaints. Traps: the request date and the request's period; Cardiff Council, Companies House and the ICO are subjects, not parties.",
+   "source": {
+    "name": "Welsh Government, FOI release ATISN 20183",
+    "url": "https://www.gov.wales/sites/default/files/publications/2024-02/atisn20183.pdf",
+    "page": "https://www.gov.wales/atisn20183",
+    "license": "Crown copyright; Welsh Government content on gov.wales is available under the Open Government Licence v3.0 (gov.wales copyright statement)",
+    "size": 133552,
+    "sha256": "ded7c9a0e902f7a7f751b146fbeb1d271f956bc98092bd7107cc71e898dd0a28"
+   },
+   "gold": {
+    "document_type": "Freedom of Information Response",
+    "acceptable_types": [
+     "FOI Response",
+     "Response Letter",
+     "Letter",
+     "Freedom of Information Request Response",
+     "FOI Request Response"
+    ],
+    "document_date": "2024-02-14",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2024-02-08",
+      "why": "date the request was received"
+     },
+     {
+      "date": "2023-09-01",
+      "why": "start of the period requested"
+     },
+     {
+      "date": "2024-02-06",
+      "why": "end of the period requested"
+     }
+    ],
+    "parties": [
+     "Welsh Government"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [],
+    "party_roles": [
+     {
+      "name": "Welsh Government",
+      "role": "issuer"
+     },
+     {
+      "name": "(requester, name removed)",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Cardiff Council",
+      "why": "subject of the request"
+     },
+     {
+      "name": "Companies House",
+      "why": "building the request is about"
+     },
+     {
+      "name": "Information Commissioner's Office",
+      "why": "complaints body named at the end"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-letter-13",
+   "file": "real5-letter-13.pdf",
+   "title": "Welsh Government response to freedom of information request ATISN 26666 about a payment to Miller Research UK Ltd (born-digital PDF, 2 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "letter",
+    "born_digital",
+    "foi_response",
+    "addressee_redacted",
+    "competing_dates",
+    "reference_number",
+    "uk",
+    "wales",
+    "modern"
+   ],
+   "notes": "Letter dated 25 February 2026 from the Welsh Government's Education, Culture and Welsh Language Group, 'Dear ,' with the name removed, heading 'ATISN 26666 Miller Research Payment (2)'. The request was received on 4 February 2026 and concerned a payment of 3 October 2025 to Miller Research UK Ltd; the letter explains an invoice cancelled for an administrative error and points to a report published on 24 February 2026. Unsigned 'Yours sincerely'. Traps: the request, payment and publication dates; Miller Research is the subject.",
+   "source": {
+    "name": "Welsh Government, FOI release ATISN 26666",
+    "url": "https://www.gov.wales/sites/default/files/publications/2026-02/ATISN%2026666.pdf",
+    "page": "https://www.gov.wales/atisn26666",
+    "license": "Crown copyright; Welsh Government content on gov.wales is available under the Open Government Licence v3.0 (gov.wales copyright statement)",
+    "size": 184646,
+    "sha256": "7abe366c1d24deb2d0fd6643037611c28fdd216380ab942bbd7b784fc7b1380a"
+   },
+   "gold": {
+    "document_type": "Freedom of Information Response",
+    "acceptable_types": [
+     "FOI Response",
+     "Response Letter",
+     "Letter",
+     "Freedom of Information Request Response",
+     "FOI Request Response"
+    ],
+    "document_date": "2026-02-25",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2026-02-04",
+      "why": "date the request was received"
+     },
+     {
+      "date": "2025-10-03",
+      "why": "date of the payment asked about"
+     },
+     {
+      "date": "2026-02-24",
+      "why": "date a report was published"
+     }
+    ],
+    "parties": [
+     "Welsh Government"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [],
+    "party_roles": [
+     {
+      "name": "Welsh Government",
+      "role": "issuer"
+     },
+     {
+      "name": "(requester, name removed)",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Miller Research UK Ltd",
+      "why": "company the request is about"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-letter-14",
+   "file": "real5-letter-14.pdf",
+   "title": "Letter from the Chair of ESMA to the European Commission's Director-General for Financial Services on prioritising ESMA's 2025 deliverables, with an annex table (born-digital PDF, 4 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 4,
+   "categories": [
+    "letter",
+    "born_digital",
+    "eu_agency",
+    "named_person_at_org",
+    "reference_number",
+    "annex_table",
+    "many_dates",
+    "competing_dates",
+    "modern"
+   ],
+   "notes": "Letter from 'The Chair' of the European Securities and Markets Authority dated 3 March 2025 (top right, with reference ESMA22-50751485-1598) to John Berrigan, Director General, Directorate General Financial Services, Financial Stability and Capital Markets Union, European Commission. 'Ref: Prioritisation of 2025 ESMA deliverables', salutation 'Dear Mr Berrigan, dear Sean,'. Signed Verena Ross. The annex table lists deliverables with original deadlines in 2025 and 2026 and new delays. Traps: the annex's deadlines; the work programme date of 1 October 2024; the person addressed and the signer.",
+   "source": {
+    "name": "European Securities and Markets Authority (ESMA), letter ESMA22-50751485-1598",
+    "url": "https://www.esma.europa.eu/sites/default/files/2025-03/ESMA22-50751485-1598_Letter_from_Chair_on_prioritisation_2025.pdf",
+    "page": "https://www.esma.europa.eu/databases-library/esma-library",
+    "license": "Copyright ESMA; ESMA's legal notice authorises reproduction of its material, except where otherwise stated, provided the source is acknowledged (wording as on ESMA's registers legal notice; not checked on the main site's notice)",
+    "size": 152959,
+    "sha256": "676c63f83ddbeaaf5aaefe51659f9df7d2c7a795440a073bf3430b130ba2e009"
+   },
+   "gold": {
+    "document_type": "Letter",
+    "acceptable_types": [
+     "Prioritisation Letter",
+     "Letter on Prioritisation of 2025 ESMA Deliverables"
+    ],
+    "document_date": "2025-03-03",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2024-10-01",
+      "why": "date of ESMA's 2025 Annual Work Programme"
+     },
+     {
+      "date": "2025-04-16",
+      "why": "deadline of a deliverable in the annex"
+     },
+     {
+      "date": "2025-07-01",
+      "why": "deadline of a deliverable in the annex"
+     }
+    ],
+    "parties": [
+     "European Commission"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "European Securities and Markets Authority"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "ESMA"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Directorate General Financial Services, Financial Stability and Capital Markets Union"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "DG FISMA"
+      ],
+      "relation": "to"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "European Commission",
+      "role": "recipient"
+     },
+     {
+      "name": "European Securities and Markets Authority",
+      "role": "sender"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "John Berrigan",
+      "why": "addressee, the Director General"
+     },
+     {
+      "name": "Verena Ross",
+      "why": "ESMA Chair who signs"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-letter-15",
+   "file": "real5-letter-15.pdf",
+   "title": "Letter from the Chair of the European Data Protection Board to two European Commissioners about Israel's registration requirements for NGOs (born-digital PDF, 3 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "letter",
+    "born_digital",
+    "eu_body",
+    "two_addressees",
+    "named_person_at_org",
+    "competing_dates",
+    "modern"
+   ],
+   "notes": "Letter from Anu Talus, Chair of the European Data Protection Board, to Commissioner Michael McGrath and Commissioner Hadja Lahbib, European Commission, Brussels, dated 'Brussels, 20 April 2026'. 'Subject: Concerns on Israel's registration requirements imposed on NGOs'. A footnote mentions a hearing before the Israeli High Court on 23 March 2026. Traps: the hearing date; the two Commissioners; the State of Israel and the NGOs as subjects.",
+   "source": {
+    "name": "European Data Protection Board, letters",
+    "url": "https://www.edpb.europa.eu/system/files/2026-05/edpb_letter_20260420_regarding_ingo_registration_requirements_en.pdf",
+    "page": "https://www.edpb.europa.eu/our-work-tools/documents/letters_en",
+    "license": "Copyright EDPB; the EDPB's copyright notice authorises reuse of the website's information for commercial and non-commercial purposes, with acknowledgement of the source and without distorting it",
+    "size": 211648,
+    "sha256": "93503b7823d365aa343f62803dbf442b62d63b15040e40d169d62015406e77e6"
+   },
+   "gold": {
+    "document_type": "Letter",
+    "acceptable_types": [],
+    "document_date": "2026-04-20",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2026-03-23",
+      "why": "date of an Israeli High Court hearing"
+     }
+    ],
+    "parties": [
+     "European Commission"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "European Data Protection Board"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "EDPB"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "European Commission",
+      "role": "recipient"
+     },
+     {
+      "name": "European Data Protection Board",
+      "role": "sender"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Anu Talus",
+      "why": "EDPB Chair who signs"
+     },
+     {
+      "name": "Michael McGrath",
+      "why": "Commissioner addressed"
+     },
+     {
+      "name": "Hadja Lahbib",
+      "why": "Commissioner addressed"
+     },
+     {
+      "name": "State of Israel",
+      "why": "subject of the letter"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-letter-16",
+   "file": "real5-letter-16.pdf",
+   "title": "Letter from the Chair of the European Data Protection Board to Moritz Körner MEP answering his inquiry on in-car cameras and dashcams (born-digital PDF, 3 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "letter",
+    "born_digital",
+    "eu_body",
+    "reply_letter",
+    "addressed_to_person",
+    "competing_dates",
+    "modern"
+   ],
+   "notes": "Letter from Anu Talus, Chair of the European Data Protection Board, to Mr. Moritz Körner MEP, European Parliament, dated 'Brussels, 5 May 2025', by e-mail only. 'Subject: Response to your Inquiry Regarding the Data Protection Assessment of In-Car Video Cameras and Dashcams and GDPR Requirements'. Replies to his letter dated 19 February 2025 and cites guidelines adopted on 9 March 2021 and other EU acts. Traps: his letter's date; the guidelines' dates; the European Parliament as his institution.",
+   "source": {
+    "name": "European Data Protection Board, letters",
+    "url": "https://www.edpb.europa.eu/system/files/documents/2025-05/edpb_letter_20250505_in_car-video-cameras-and-dashcams_en.pdf",
+    "page": "https://www.edpb.europa.eu/our-work-tools/documents/letters_en",
+    "license": "Copyright EDPB; the EDPB's copyright notice authorises reuse of the website's information for commercial and non-commercial purposes, with acknowledgement of the source and without distorting it",
+    "size": 290318,
+    "sha256": "bf847a9f3164e4a48512611755c190af711d2731c8c092885988283d334a3a03"
+   },
+   "gold": {
+    "document_type": "Response Letter",
+    "acceptable_types": [
+     "Letter",
+     "Reply Letter",
+     "Response"
+    ],
+    "document_date": "2025-05-05",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-02-19",
+      "why": "date of the MEP's letter"
+     },
+     {
+      "date": "2021-03-09",
+      "why": "date guidelines were adopted"
+     }
+    ],
+    "parties": [
+     "Moritz Körner"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Moritz Körner MEP"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "European Parliament"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "European Data Protection Board"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "EDPB"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Moritz Körner",
+      "role": "recipient"
+     },
+     {
+      "name": "European Data Protection Board",
+      "role": "sender"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Anu Talus",
+      "why": "EDPB Chair who signs"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-letter-17",
+   "file": "real5-letter-17.pdf",
+   "title": "FAA Office of the Chief Counsel letter to Island Air Charters declining to interpret 'recommended' in FAA Order 8900.1, date stamped (scanned PDF with an OCR layer, 1 page)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "pages": 1,
+   "categories": [
+    "letter",
+    "scanned",
+    "ocr_text_layer",
+    "stamped_date",
+    "date_partly_illegible",
+    "named_person_at_org",
+    "us_federal"
+   ],
+   "notes": "One-page scanned letter from the U.S. Department of Transportation, Federal Aviation Administration, Office of the Chief Counsel, to David J. Culver, Vice President & General Manager, Island Air Charters, Fort Lauderdale. The date is a rubber stamp reading 'FEB 16 201?': the last digit of the year is smudged and the OCR layer reads it as 'FEB 15 -201f'; it looks like 2017 but could be read as 2011. Declines a legal interpretation of 'recommended' in FAA Order 8900.1. Signed Rebecca MacPherson, Assistant Chief Counsel for Regulations, AGC-200; contact Sabrina Jawed. Gold takes 2017 and accepts 2011, and expects review because the year cannot be read without guessing.",
+   "source": {
+    "name": "Federal Aviation Administration, Office of the Chief Counsel legal interpretations (faa.gov media)",
+    "url": "https://www.faa.gov/media/13556",
+    "page": "https://www.faa.gov/about/office_org/headquarters_offices/agc/practice_areas/regulations/interpretations",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 182820,
+    "sha256": "438739ff1099d1011616e4d01cf88d7ac8fec502bfcaa898e4d99d76facd37ae"
+   },
+   "gold": {
+    "document_type": "Letter",
+    "acceptable_types": [
+     "Response Letter",
+     "Legal Interpretation",
+     "Legal Interpretation Letter",
+     "Interpretation Letter"
+    ],
+    "document_date": "2017-02-16",
+    "acceptable_dates": [
+     "2011-02-16"
+    ],
+    "date_role": "issuance",
+    "forbidden_dates": [],
+    "parties": [
+     "Island Air Charters"
+    ],
+    "party_relation": "to",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Federal Aviation Administration"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "FAA"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Island Air Charters",
+      "role": "recipient"
+     },
+     {
+      "name": "Federal Aviation Administration",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "David J. Culver",
+      "why": "addressee, an officer of the company"
+     },
+     {
+      "name": "Rebecca MacPherson",
+      "why": "Assistant Chief Counsel who signs"
+     },
+     {
+      "name": "Sabrina Jawed",
+      "why": "staff contact"
+     }
+    ],
+    "expected_readiness": "needs_review"
+   }
+  },
+  {
+   "id": "real5-letter-18",
+   "file": "real5-letter-18.pdf",
+   "title": "Climate Change Commission (NZ) response to official information requests for consultants' bills and statements, with the released invoices (PDF, 95 pages, partly scanned)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 95,
+   "categories": [
+    "letter",
+    "born_digital",
+    "foi_response",
+    "attachments",
+    "invoices_attached",
+    "long_document",
+    "addressee_redacted",
+    "many_dates",
+    "competing_dates",
+    "reference_number",
+    "new_zealand",
+    "modern"
+   ],
+   "notes": "Cover letter dated 23 July 2021, 'OIA Ref: 2021-041 & 2021-042', 'Official information request for bills and statements from consultants', addressee withheld for privacy, from the Climate Change Commission (signed 'Kind regards ... Climate Change Commission' with the name withheld). Refers to two requests dated 25 June 2021 and to the Ministry for the Environment's role until 31 March 2020. Pages 2 to 95 are the released tax invoices from consultancies (Concept Consulting Group and others) addressed to the Commission, each with its own date such as 29 Feb 2020. Traps: the request date; the invoices' dates and issuers; the Ministry for the Environment.",
+   "source": {
+    "name": "Climate Change Commission (He Pou a Rangi), OIA releases 2021-041 and 2021-042",
+    "url": "https://www.climatecommission.govt.nz/assets/OIA-releases-for-web/2021/2021-041-042-response-to-request-invoices-from-consultancies.pdf",
+    "page": "https://www.climatecommission.govt.nz/about/official-information-act-requests/",
+    "license": "Crown copyright; the Climate Change Commission's copyright page licenses its material for re-use under Creative Commons Attribution 4.0 International unless indicated otherwise; the attached invoices are third-party material",
+    "size": 8001363,
+    "sha256": "c7a9c99dd9b0fe1da26397d311ac2fa9a96db535aba8e7194d71d3b0babaeb99"
+   },
+   "gold": {
+    "document_type": "Official Information Act Response",
+    "acceptable_types": [
+     "OIA Response",
+     "Response Letter",
+     "Letter",
+     "Official Information Request Response"
+    ],
+    "document_date": "2021-07-23",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2021-06-25",
+      "why": "date of the two requests"
+     },
+     {
+      "date": "2020-03-31",
+      "why": "date the Commission became operationally independent"
+     },
+     {
+      "date": "2020-02-29",
+      "why": "date of an attached invoice"
+     }
+    ],
+    "parties": [
+     "Climate Change Commission"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "He Pou a Rangi Climate Change Commission"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Climate Change Commission",
+      "role": "issuer"
+     },
+     {
+      "name": "(requester, name withheld)",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Concept Consulting Group",
+      "why": "issuer of attached invoices"
+     },
+     {
+      "name": "Ministry for the Environment",
+      "why": "ministry named in the letter"
+     },
+     {
+      "name": "Allen + Clarke",
+      "why": "consultancy named in the request"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-letter-19",
+   "file": "real5-letter-19.pdf",
+   "title": "Ministry for Regulation (NZ) response to an official information request for hospitality and branding invoices, with the released invoices and receipts (PDF, 18 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 18,
+   "categories": [
+    "letter",
+    "born_digital",
+    "foi_response",
+    "attachments",
+    "invoices_attached",
+    "addressee_redacted",
+    "many_dates",
+    "competing_dates",
+    "reference_number",
+    "new_zealand",
+    "modern"
+   ],
+   "notes": "Letter dated 15 November 2024, 'Our ref: R00532', 'Official information request', addressee withheld (s 9(2)(a)), signed Aisling Risdon, Head of Ministerial Services, Ministry for Regulation. The request was received on 25 September 2024 and extended on 23 October 2024 to 29 November 2024. The appendix holds invoices, orders and e-mails from 2024 (for example an order of 25 Jun, 2024 and an e-mail of 9 September 2024) addressed to the Ministry. Traps: the request and extension dates; the appendix's dates and suppliers; the staff named in the invoices.",
+   "source": {
+    "name": "Ministry for Regulation (New Zealand), published OIA response R00532",
+    "url": "https://www.regulation.govt.nz/assets/Publication-Documents/20241115-OIA-Response-Hospitality-spend-R00532.pdf",
+    "page": "https://www.regulation.govt.nz/",
+    "license": "Crown copyright; the Ministry for Regulation's publications are licensed under Creative Commons Attribution 3.0 New Zealand (as stated in its 2024-25 annual report; no site-wide statement found); the attached invoices are third-party material",
+    "size": 3597361,
+    "sha256": "6a5ebaa76fc68fe967d20cfd3e0f3898e3653eba02cc5eadd0566d0b2fe9345f"
+   },
+   "gold": {
+    "document_type": "Official Information Act Response",
+    "acceptable_types": [
+     "OIA Response",
+     "Response Letter",
+     "Letter",
+     "Official Information Request Response"
+    ],
+    "document_date": "2024-11-15",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2024-09-25",
+      "why": "date the request was received"
+     },
+     {
+      "date": "2024-10-23",
+      "why": "date the request was extended"
+     },
+     {
+      "date": "2024-11-29",
+      "why": "extended deadline"
+     },
+     {
+      "date": "2024-06-25",
+      "why": "date of an attached order"
+     }
+    ],
+    "parties": [
+     "Ministry for Regulation"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [],
+    "party_roles": [
+     {
+      "name": "Ministry for Regulation",
+      "role": "issuer"
+     },
+     {
+      "name": "(requester, name withheld)",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Aisling Risdon",
+      "why": "Head of Ministerial Services who signs"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-letter-20",
+   "file": "real5-letter-20.pdf",
+   "title": "New Zealand Ministry of Foreign Affairs and Trade response to OIA request 28231 about payments to Tatou NZ Ltd, requester's details removed (born-digital PDF, 1 page)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "letter",
+    "born_digital",
+    "foi_response",
+    "addressee_redacted",
+    "competing_dates",
+    "reference_number",
+    "new_zealand",
+    "modern"
+   ],
+   "notes": "Letter dated 26 August 2022 on Ministry of Foreign Affairs and Trade (Manatū Aorere) letterhead, 'OIA 28231', personal details removed for proactive release. Refers to the request by e-mail of 9 August 2022 about services of Tatou NZ Ltd and refuses it under section 18(e) because the Ministry never engaged the company. Signed Sarah Corbett for Secretary of Foreign Affairs and Trade. Traps: the request date; Tatou NZ Ltd is the subject; the Ombudsman.",
+   "source": {
+    "name": "Ministry of Foreign Affairs and Trade (New Zealand), proactively released OIA response 28231",
+    "url": "https://www.mfat.govt.nz/assets/OIA/OIA-2021-22/OIA-28231-Payments-to-Tatou-NZ-Ltd-26-August-2022.pdf",
+    "page": "https://www.mfat.govt.nz/en/about-us/contact-us/official-information-act-requests/",
+    "license": "Crown copyright; New Zealand government content is generally licensed under Creative Commons Attribution 4.0 under NZGOAL, but MFAT's own copyright statement was not checked",
+    "size": 247096,
+    "sha256": "32ee123665849100a39d6de5f20914d228c8d70d16ee3d0bb6286f12f23f4332"
+   },
+   "gold": {
+    "document_type": "Official Information Act Response",
+    "acceptable_types": [
+     "OIA Response",
+     "Response Letter",
+     "Letter",
+     "Official Information Act Request Response"
+    ],
+    "document_date": "2022-08-26",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2022-08-09",
+      "why": "date of the request"
+     }
+    ],
+    "parties": [
+     "Ministry of Foreign Affairs and Trade"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "New Zealand Ministry of Foreign Affairs and Trade"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "MFAT"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Ministry of Foreign Affairs and Trade",
+      "role": "issuer"
+     },
+     {
+      "name": "(requester, details removed)",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Tatou NZ Ltd",
+      "why": "company the request is about"
+     },
+     {
+      "name": "Sarah Corbett",
+      "why": "official who signs"
+     },
+     {
+      "name": "Ombudsman",
+      "why": "review body mentioned"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-letter-21",
+   "file": "real5-letter-21.jpg",
+   "title": "Handwritten business letter on Albert E. Schreiber & Co. letterhead, Chicago, to a company secretary in Minneapolis about an order for iron shutters, 1883 (JPEG image)",
+   "kind": "letter",
+   "format": "jpg",
+   "text_layer": "image",
+   "pages": 1,
+   "categories": [
+    "letter",
+    "image",
+    "handwritten",
+    "letterhead",
+    "historic",
+    "letter_from_company",
+    "relative_date_reference"
+   ],
+   "notes": "One page on the printed letterhead of Albert E. Schreiber & Co., Chicago (machinists and manufacturers of corrugated and plain iron doors and shutters; A. E. Schreiber and A. B. Piske named at the top). The handwritten date line reads 'Chicago, Septbr 20 1883'. Addressed to a Mr. A. M. B. (the surname is hard to read), Secretary, Minneapolis, Minn.; acknowledges 'Yours of the 19th' with an order for shutters and asks how to make them. Signed 'A E Schreiber & Co.' Traps: the 19th (the incoming letter's date); the person addressed; the patent name 'Munson's Patent Shutter'.",
+   "source": {
+    "name": "Penn Libraries Digital Collections, item 'Letter; Albert E. Schreiber & Co.; Chicago, Illinois, United States; 1883 September 20' (IIIF image service)",
+    "url": "https://iiif-images.library.upenn.edu/iiif/3/97256a58-5758-4cfd-99f1-27692cf58432/full/max/0/default.jpg",
+    "page": "https://digitalcollections.library.upenn.edu/items/570c8ecf-1f29-46c5-8a7c-e2c259afdb3f",
+    "license": "No Copyright - United States (rightsstatements.org/vocab/NoC-US/1.0/), as stated on the item's record in Penn Libraries' Digital Collections (Arnold and Deanne Kaplan Collection of Early American Judaica, Ms. Coll. 1410)",
+    "size": 1041301,
+    "sha256": "199513f7be8d2a71bb01c396412cfae16e73272afa4a0e7ba5d13c5f4b50d42a"
+   },
+   "gold": {
+    "document_type": "Letter",
+    "acceptable_types": [
+     "Business Letter",
+     "Order Acknowledgement",
+     "Order Acknowledgment"
+    ],
+    "document_date": "1883-09-20",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "1883-09-19",
+      "why": "date of the incoming letter it acknowledges"
+     }
+    ],
+    "parties": [
+     "Albert E. Schreiber & Co."
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "A. E. Schreiber & Co."
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Albert E. Schreiber & Co"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Albert E. Schreiber & Co.",
+      "role": "sender"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "A. B. Piske",
+      "why": "partner named in the letterhead"
+     },
+     {
+      "name": "Munson",
+      "why": "patent name in the letterhead"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-letter-22",
+   "file": "real5-letter-22.pdf",
+   "title": "E-mail from Neath Port Talbot Council to the Welsh Government with a quarterly coal tip safety grant claim and invoices listed as attachments, printed to PDF and released under FOI (PDF, 4 pages, names removed)",
+   "kind": "email",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 4,
+   "categories": [
+    "email",
+    "born_digital",
+    "email_printed_to_pdf",
+    "email_thread",
+    "names_removed",
+    "attachments_listed",
+    "competing_dates",
+    "foi_release",
+    "uk",
+    "wales",
+    "modern"
+   ],
+   "notes": "Outlook message printed to PDF with From, To and Cc removed: 'Subject: CTS Grant Scheme - Quarter 3 claim', 'Date: 19 January 2026 06:16:58', attachments listed (invoices from Kaymac Marine & Civil Engineering Ltd, WSP and others, a claim form and a progress report). The body apologises for the delay and sends the Q3 claim form; the signature block is a Bridges & Highway Structures Manager at Neath Port Talbot Council. Below it the thread quotes the Welsh Government's Finance Lead (Mining Legacy and Reservoir Safety) on 03 December 2025 and 27 November 2025. Released by the Welsh Government as document 09 of ATISN 26783. Traps: the quoted e-mails' dates; the invoice issuers in the attachment list; the grant claim form named in the attachments.",
+   "source": {
+    "name": "Welsh Government, FOI release ATISN 26783 (document 09)",
+    "url": "https://www.llyw.cymru/sites/default/files/publications/2026-04/ATISN%2026783%20Doc%2009_0.pdf",
+    "page": "https://www.gov.wales/atisn26783",
+    "license": "Released and published by the Welsh Government under FOI (gov.wales content is under the Open Government Licence v3.0); this e-mail is Neath Port Talbot Council's and its reuse terms are not stated",
+    "size": 2711478,
+    "sha256": "ae69a0e10afbed1ee7b1adfaea5b23d7a05b44876ecf0c866cb06a83a8492284"
+   },
+   "gold": {
+    "document_type": "Email",
+    "acceptable_types": [
+     "E-mail",
+     "Grant Claim Email",
+     "Grant Claim",
+     "Quarterly Claim",
+     "CTS Grant Scheme Quarter 3 Claim"
+    ],
+    "document_date": "2026-01-19",
+    "acceptable_dates": [],
+    "date_role": "sent",
+    "forbidden_dates": [
+     {
+      "date": "2025-12-03",
+      "why": "date of an earlier e-mail in the thread"
+     },
+     {
+      "date": "2025-11-27",
+      "why": "date of an earlier e-mail in the thread"
+     }
+    ],
+    "parties": [
+     "Neath Port Talbot Council"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Neath Port Talbot Council",
+       "Welsh Government"
+      ],
+      "relation": "between"
+     },
+     {
+      "parties": [
+       "Welsh Government"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "Neath Port Talbot County Borough Council"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Neath Port Talbot Council",
+      "role": "sender"
+     },
+     {
+      "name": "Welsh Government",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Kaymac Marine & Civil Engineering Ltd",
+      "why": "issuer of an attached invoice"
+     },
+     {
+      "name": "WSP",
+      "why": "issuer of attached invoices"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-letter-23",
+   "file": "real5-letter-23.pdf",
+   "title": "Electron Exchange DCM, LLC's request letter to the CFTC Division of Market Oversight for no-action relief on large-trader reporting (PDF, 7 pages)",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 7,
+   "categories": [
+    "letter",
+    "born_digital",
+    "request_letter",
+    "letter_from_company",
+    "sender_at_end",
+    "competing_dates",
+    "named_person_at_org",
+    "modern"
+   ],
+   "notes": "Letter dated August 12, 2026, 'BY ELECTRONIC MAIL (dmoletters@cftc.gov)', to DJ Hennes, Acting Director, Division of Market Oversight, Commodity Futures Trading Commission; 'Re: Request for No-Action Relief Under Parts 16 and 17 of Commission Regulations'. The sender, Electron Exchange DCM, LLC ('ElectronX DCM'), is named in the first paragraph and in the signature block (Chief Regulatory Officer) and footer (Chicago); there is no letterhead. Mentions a new Order of Designation of August 10, 2026 and a 2006 rule. cc: Sam Tegel, CEO. Traps: the order's date; the CFTC as addressee; the persons.",
+   "source": {
+    "name": "Commodity Futures Trading Commission, request letter published with staff letter 26-24",
+    "url": "https://www.cftc.gov/csl/26-24/request_letter/0/download",
+    "page": "https://www.cftc.gov/LawRegulation/CFTCStaffLetters/letters.htm",
+    "license": "Letter written by Electron Exchange DCM, LLC and published by the CFTC with its staff letter 26-24; not a US government work; no licence stated",
+    "size": 223655,
+    "sha256": "831c03cc02bd7b35f82cb5198ff80feda43d0f0b6eed0ed1627d25975752bc25"
+   },
+   "gold": {
+    "document_type": "Request for No-Action Relief",
+    "acceptable_types": [
+     "Request Letter",
+     "Letter",
+     "No-Action Request",
+     "No-Action Relief Request",
+     "Request"
+    ],
+    "document_date": "2026-08-12",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2026-08-10",
+      "why": "date of the exchange's new Order of Designation"
+     },
+     {
+      "date": "2006-07-03",
+      "why": "date of a rule the letter cites"
+     }
+    ],
+    "parties": [
+     "Electron Exchange DCM, LLC"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "ElectronX DCM"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "ElectronX"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Electron Exchange DCM"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Commodity Futures Trading Commission"
+      ],
+      "relation": "to"
+     },
+     {
+      "parties": [
+       "CFTC"
+      ],
+      "relation": "to"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Electron Exchange DCM, LLC",
+      "role": "sender"
+     },
+     {
+      "name": "Commodity Futures Trading Commission",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "DJ Hennes",
+      "why": "addressee, CFTC Acting Director"
+     },
+     {
+      "name": "Sam Tegel",
+      "why": "CEO copied"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-notice-01",
+   "file": "real5-notice-01.pdf",
+   "title": "New Zealand Gazette notice of a liquidator's intention to remove RS2022 Limited from the companies register (PDF, 1 page)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "notice",
+    "born_digital",
+    "public_notice",
+    "gazette",
+    "liquidation",
+    "dated_line_at_end",
+    "deadline_in_body",
+    "publication_timestamp",
+    "new_zealand",
+    "modern"
+   ],
+   "notes": "Gazette notice 2025-ds5566: 'RS2022 LIMITED (in liquidation) Notice of Intention to Remove Company From the Register, Pursuant to Section 320 of the Companies Act 1993'. Given by Hamish Pryde, Licensed Insolvency Practitioner of CS Insolvency, a division of Coombe Smith (PN) Limited, as liquidator. Objections are due by 31 October 2025. 'Dated this 1st day of October 2025.' The footer prints the notice number and '01-10-2025 10:11'. Traps: the objection deadline; the liquidator's name and firm; the Registrar.",
+   "source": {
+    "name": "New Zealand Gazette, notice 2025-ds5566",
+    "url": "https://gazette.govt.nz/notice/id/2025-ds5566/pdf",
+    "page": "https://gazette.govt.nz/notice/id/2025-ds5566",
+    "license": "Crown copyright, Department of Internal Affairs; New Zealand Gazette material is licensed for re-use under Creative Commons Attribution 3.0 New Zealand (gazette.govt.nz copyright page); notices placed by outside parties may carry other rights",
+    "size": 21852,
+    "sha256": "f12602372cd0adb79978f66d96dd0f1994e2519553baaa5d2df447e006fe9214"
+   },
+   "gold": {
+    "document_type": "Notice of Intention to Remove Company From the Register",
+    "acceptable_types": [
+     "Notice of Intention to Remove Company",
+     "Notice of Intention to Remove Company from Register",
+     "Removal Notice",
+     "Notice"
+    ],
+    "document_date": "2025-10-01",
+    "acceptable_dates": [],
+    "date_role": "notice",
+    "forbidden_dates": [
+     {
+      "date": "2025-10-31",
+      "why": "deadline for objections"
+     }
+    ],
+    "parties": [
+     "RS2022 Limited"
+    ],
+    "party_relation": "for",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "RS2022 Limited (in liquidation)"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "CS Insolvency"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Coombe Smith (PN) Limited"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "RS2022 Limited",
+      "role": "subject"
+     },
+     {
+      "name": "CS Insolvency",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Hamish Pryde",
+      "why": "liquidator, a person"
+     },
+     {
+      "name": "Registrar of Companies",
+      "why": "official objections go to"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-notice-02",
+   "file": "real5-notice-02.pdf",
+   "title": "New Zealand Gazette notice by joint liquidators of their intention to remove 25 companies from the companies register (PDF, 1 page)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "notice",
+    "born_digital",
+    "public_notice",
+    "gazette",
+    "liquidation",
+    "many_parties",
+    "dated_line_at_end",
+    "deadline_in_body",
+    "publication_timestamp",
+    "new_zealand",
+    "modern"
+   ],
+   "notes": "Gazette notice 2026-ds2507 listing 25 companies in liquidation (Amazing Spaces NZ Limited, Aroha Management Limited, ... Turnham Agriculture Limited) with their company numbers, 'Notice of Intention to Remove Companies From the Register, Pursuant to Section 320(2) of the Companies Act 1993'. Given by Steven Khov and Kieran Jones, joint liquidators, of Khov Jones Limited, Auckland. Objections to the Registrar of Companies by 29 May 2026. 'Dated this 7th day of May 2026.' Footer '07-05-2026 15:57'. No single company is the subject, so the name is the liquidators' firm's notice. Traps: the deadline; any one of the 25 companies; the liquidators as persons.",
+   "source": {
+    "name": "New Zealand Gazette, notice 2026-ds2507",
+    "url": "https://gazette.govt.nz/notice/id/2026-ds2507/pdf",
+    "page": "https://gazette.govt.nz/notice/id/2026-ds2507",
+    "license": "Crown copyright, Department of Internal Affairs; New Zealand Gazette material is licensed for re-use under Creative Commons Attribution 3.0 New Zealand (gazette.govt.nz copyright page); notices placed by outside parties may carry other rights",
+    "size": 27388,
+    "sha256": "2400594cbbd067295871817ccfad71f70dc2a471e812e0b1b47080ab85bc4c89"
+   },
+   "gold": {
+    "document_type": "Notice of Intention to Remove Companies From the Register",
+    "acceptable_types": [
+     "Notice of Intention to Remove Companies",
+     "Notice of Intention to Remove Companies from Register",
+     "Removal Notice",
+     "Notice"
+    ],
+    "document_date": "2026-05-07",
+    "acceptable_dates": [],
+    "date_role": "notice",
+    "forbidden_dates": [
+     {
+      "date": "2026-05-29",
+      "why": "deadline for objections"
+     }
+    ],
+    "parties": [
+     "Khov Jones Limited"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [],
+      "relation": "none"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Khov Jones Limited",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Steven Khov",
+      "why": "joint liquidator, a person"
+     },
+     {
+      "name": "Kieran Jones",
+      "why": "joint liquidator, a person"
+     },
+     {
+      "name": "Registrar of Companies",
+      "why": "official objections go to"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-notice-03",
+   "file": "real5-notice-03.pdf",
+   "title": "New Zealand Gazette notice of the Environmental Protection Authority's determination that Bacillus paralicheniformis is not a new organism (PDF, 1 page)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "notice",
+    "born_digital",
+    "public_notice",
+    "gazette",
+    "regulator",
+    "determination",
+    "dated_line_at_end",
+    "publication_timestamp",
+    "new_zealand",
+    "modern"
+   ],
+   "notes": "Gazette notice 2026-au6520: 'Determination of a New Organism. Pursuant to section 26 of the Hazardous Substances and New Organisms Act 1996, the Environmental Protection Authority hereby determines that Bacillus paralicheniformis is not a new organism for the purpose of the Act. Dated at Wellington this 3rd day of November 2026.' Signed Lynette Brownfield, Chair, decision-making committee of the Authority. Footer '06-11-2026 15:37', the publication time. Traps: the publication timestamp; the organism's name; the signer.",
+   "source": {
+    "name": "New Zealand Gazette, notice 2026-au6520",
+    "url": "https://gazette.govt.nz/notice/id/2026-au6520/pdf",
+    "page": "https://gazette.govt.nz/notice/id/2026-au6520",
+    "license": "Crown copyright, Department of Internal Affairs; New Zealand Gazette material is licensed for re-use under Creative Commons Attribution 3.0 New Zealand (gazette.govt.nz copyright page); notices placed by outside parties may carry other rights",
+    "size": 71471,
+    "sha256": "3ed3ff0dc4e4cc6985a4e8b6a74f8b712cf5f5597e93b0cce8241f7ed9500a13"
+   },
+   "gold": {
+    "document_type": "Determination of a New Organism",
+    "acceptable_types": [
+     "Determination",
+     "Notice of Determination",
+     "New Organism Determination",
+     "Notice"
+    ],
+    "document_date": "2026-11-03",
+    "acceptable_dates": [],
+    "date_role": "decision",
+    "forbidden_dates": [
+     {
+      "date": "2026-11-06",
+      "why": "publication time printed in the footer"
+     }
+    ],
+    "parties": [
+     "Environmental Protection Authority"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "EPA"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Environmental Protection Authority",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Lynette Brownfield",
+      "why": "committee chair who signs"
+     },
+     {
+      "name": "Bacillus paralicheniformis",
+      "why": "organism the notice is about"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-notice-04",
+   "file": "real5-notice-04.pdf",
+   "title": "New Zealand Gazette advertisement of the Commissioner of Inland Revenue's application to put Rogan Construction Limited into liquidation (PDF, 1 page)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "notice",
+    "born_digital",
+    "public_notice",
+    "gazette",
+    "court_notice",
+    "liquidation",
+    "competing_dates",
+    "dated_line_at_end",
+    "publication_timestamp",
+    "new_zealand",
+    "modern"
+   ],
+   "notes": "Gazette notice 2026-aw6366, 'Advertisement of Application for Putting Company into Liquidation': on Friday, 2 October 2026 an application to put ROGAN CONSTRUCTION LIMITED into liquidation was filed in the High Court at Rotorua (CIV-2026-463-128), to be heard on Tuesday, 1 December 2026. The plaintiff is the Commissioner of Inland Revenue; its solicitor is Charles David Walmsley. 'Dated this 30th day of October 2026.' Footer '06-11-2026 11:01'. Traps: the filing date; the hearing date; the publication time; the court and the solicitor.",
+   "source": {
+    "name": "New Zealand Gazette, notice 2026-aw6366",
+    "url": "https://gazette.govt.nz/notice/id/2026-aw6366/pdf",
+    "page": "https://gazette.govt.nz/notice/id/2026-aw6366",
+    "license": "Crown copyright, Department of Internal Affairs; New Zealand Gazette material is licensed for re-use under Creative Commons Attribution 3.0 New Zealand (gazette.govt.nz copyright page); notices placed by outside parties may carry other rights",
+    "size": 57416,
+    "sha256": "f51e0d8d0f41e61ebfb8147a3501831aa2f6ed30bb6758a31ae365cf6951bb3f"
+   },
+   "gold": {
+    "document_type": "Advertisement of Application for Putting Company into Liquidation",
+    "acceptable_types": [
+     "Advertisement of Application for Liquidation",
+     "Notice of Application for Liquidation",
+     "Liquidation Application Notice",
+     "Application for Putting Company into Liquidation",
+     "Notice"
+    ],
+    "document_date": "2026-10-30",
+    "acceptable_dates": [],
+    "date_role": "notice",
+    "forbidden_dates": [
+     {
+      "date": "2026-10-02",
+      "why": "date the application was filed"
+     },
+     {
+      "date": "2026-12-01",
+      "why": "hearing date"
+     },
+     {
+      "date": "2026-11-06",
+      "why": "publication time printed in the footer"
+     }
+    ],
+    "parties": [
+     "Commissioner of Inland Revenue",
+     "Rogan Construction Limited"
+    ],
+    "party_relation": "between",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Rogan Construction Limited"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "Inland Revenue",
+       "Rogan Construction Limited"
+      ],
+      "relation": "between"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Commissioner of Inland Revenue",
+      "role": "counterparty"
+     },
+     {
+      "name": "Rogan Construction Limited",
+      "role": "subject"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Charles David Walmsley",
+      "why": "the plaintiff's solicitor"
+     },
+     {
+      "name": "High Court at Rotorua",
+      "why": "court where it was filed"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-notice-05",
+   "file": "real5-notice-05.pdf",
+   "title": "U.S. District Court for the Southern District of New York public notice inviting comments on the reappointment of a magistrate judge (born-digital PDF, 1 page)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "notice",
+    "born_digital",
+    "public_notice",
+    "court_notice",
+    "letterhead",
+    "named_officials",
+    "competing_dates",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "One page on the letterhead of the United States District Court, Southern District of New York, Office of the District Court Executive (Chief Judge Laura Taylor Swain, District Court Executive Edward A. Friedland), dated March 3, 2025. 'PUBLIC NOTICE FOR RE-APPOINTMENT OF INCUMBENT MAGISTRATE JUDGE': Magistrate Judge Stewart D. Aaron's term expires on November 30, 2025; comments within 30 days. Traps: the term's expiry date; the judges and the executive as persons.",
+   "source": {
+    "name": "U.S. District Court for the Southern District of New York, public notices",
+    "url": "https://www.nysd.uscourts.gov/sites/default/files/2025-03/Public%20Notice%20for%20Judge%20Aaron%20_0.pdf",
+    "page": "https://www.nysd.uscourts.gov/",
+    "license": "US government work (17 U.S.C. 105), public domain: a notice issued by a United States district court",
+    "size": 134689,
+    "sha256": "608c812c93d796778ced2e83a7bbf76a13cad258876d30967fe9324305f77133"
+   },
+   "gold": {
+    "document_type": "Public Notice",
+    "acceptable_types": [
+     "Public Notice for Re-Appointment of Incumbent Magistrate Judge",
+     "Notice",
+     "Reappointment Notice",
+     "Public Notice for Reappointment of Incumbent Magistrate Judge"
+    ],
+    "document_date": "2025-03-03",
+    "acceptable_dates": [],
+    "date_role": "notice",
+    "forbidden_dates": [
+     {
+      "date": "2025-11-30",
+      "why": "date the magistrate judge's term expires"
+     }
+    ],
+    "parties": [
+     "United States District Court for the Southern District of New York"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "United States District Court, Southern District of New York"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "U.S. District Court for the Southern District of New York"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Southern District of New York"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "United States District Court for the Southern District of New York",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Stewart D. Aaron",
+      "why": "magistrate judge the notice is about"
+     },
+     {
+      "name": "Laura Taylor Swain",
+      "why": "chief judge in the letterhead"
+     },
+     {
+      "name": "Edward A. Friedland",
+      "why": "district court executive"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-notice-06",
+   "file": "real5-notice-06.pdf",
+   "title": "U.S. District Court for the Northern District of Texas public notice on the reappointment of three magistrate judges, dated only at its foot (born-digital PDF, 1 page)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "notice",
+    "born_digital",
+    "public_notice",
+    "court_notice",
+    "date_at_end",
+    "many_dates",
+    "competing_dates",
+    "named_officials",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "'- PUBLIC NOTICE - REAPPOINTMENT OF UNITED STATES MAGISTRATE JUDGE, UNITED STATES DISTRICT COURT, NORTHERN DISTRICT OF TEXAS'. Lists Judges Rebecca Rutherford (term expires January 25, 2026), Jeffrey L. Cureton (May 2, 2026) and Renée Harris Toliver (June 24, 2026). Comments to Karen Mitchell, Clerk of Court, no later than May 31, 2025. The last line is 'Notice Date: April 16, 2025'. Traps: the three expiry dates near the top; the comment deadline; the judges and the clerk.",
+   "source": {
+    "name": "U.S. District Court for the Northern District of Texas, public notices",
+    "url": "https://www.txnd.uscourts.gov/sites/default/files/documents/Reappointment.pdf",
+    "page": "https://www.txnd.uscourts.gov/news/public-notice-reappointment-united-states-magistrate-judges",
+    "license": "US government work (17 U.S.C. 105), public domain: a notice issued by a United States district court",
+    "size": 129957,
+    "sha256": "15662ad6be5b56c6d84a949ea2fb35159634c73bf9b8f7ed69ede72a84098ae3"
+   },
+   "gold": {
+    "document_type": "Public Notice",
+    "acceptable_types": [
+     "Notice",
+     "Reappointment Notice",
+     "Public Notice of Reappointment of United States Magistrate Judge"
+    ],
+    "document_date": "2025-04-16",
+    "acceptable_dates": [],
+    "date_role": "notice",
+    "forbidden_dates": [
+     {
+      "date": "2026-01-25",
+      "why": "a judge's term expiry"
+     },
+     {
+      "date": "2026-05-02",
+      "why": "a judge's term expiry"
+     },
+     {
+      "date": "2026-06-24",
+      "why": "a judge's term expiry"
+     },
+     {
+      "date": "2025-05-31",
+      "why": "comment deadline"
+     }
+    ],
+    "parties": [
+     "United States District Court for the Northern District of Texas"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "U.S. District Court for the Northern District of Texas"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Northern District of Texas"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "United States District Court for the Northern District of Texas",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Rebecca Rutherford",
+      "why": "magistrate judge named"
+     },
+     {
+      "name": "Karen Mitchell",
+      "why": "clerk of court"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-notice-07",
+   "file": "real5-notice-07.pdf",
+   "title": "U.S. District Court for the Western District of Tennessee public notice on the reappointment of its chief magistrate judge, printing no date of its own (born-digital PDF, 1 page)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "notice",
+    "born_digital",
+    "public_notice",
+    "court_notice",
+    "no_document_date",
+    "deadline_in_body",
+    "named_officials",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "'UNITED STATES DISTRICT COURT, WESTERN DISTRICT OF TENNESSEE, PUBLIC NOTICE FOR THE REAPPOINTMENT OF INCUMBENT MAGISTRATE JUDGE'. Chief Magistrate Judge Tu M. Pham's term expires on April 20, 2027; comments are due within thirty days of the notice, 'on or before September 18, 2026'. The notice prints no date of its own (it was presumably issued about 19 August 2026, which a reader can only infer). A careful clerk cannot date it without guessing: review. Traps: the expiry date; the comment deadline.",
+   "source": {
+    "name": "U.S. District Court for the Western District of Tennessee, public notices",
+    "url": "https://www.tnwd.uscourts.gov/sites/tnwd/files/Public_Notice_for_Reappointment_of_Magistrate_Judge.pdf",
+    "page": "https://www.tnwd.uscourts.gov/",
+    "license": "US government work (17 U.S.C. 105), public domain: a notice issued by a United States district court",
+    "size": 260941,
+    "sha256": "3fecf6597790d40238873d57911388e98da7f684b7ec8ff9349f8b86423979a4"
+   },
+   "gold": {
+    "document_type": "Public Notice",
+    "acceptable_types": [
+     "Notice",
+     "Reappointment Notice",
+     "Public Notice for the Reappointment of Incumbent Magistrate Judge"
+    ],
+    "document_date": null,
+    "acceptable_dates": [],
+    "date_role": "notice",
+    "forbidden_dates": [
+     {
+      "date": "2027-04-20",
+      "why": "date the judge's term expires"
+     },
+     {
+      "date": "2026-09-18",
+      "why": "comment deadline"
+     }
+    ],
+    "parties": [
+     "United States District Court for the Western District of Tennessee"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Western District of Tennessee"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "United States District Court for the Western District of Tennessee",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Tu M. Pham",
+      "why": "magistrate judge the notice is about"
+     }
+    ],
+    "expected_readiness": "needs_review"
+   }
+  },
+  {
+   "id": "real5-notice-08",
+   "file": "real5-notice-08.pdf",
+   "title": "U.S. District Court for the District of South Carolina notice of intent to reappoint three magistrate judges, printing no date of its own (PDF, 1 page)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "notice",
+    "born_digital",
+    "public_notice",
+    "court_notice",
+    "no_document_date",
+    "deadline_in_body",
+    "many_dates",
+    "named_officials",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "'UNITED STATES DISTRICT COURT FOR THE DISTRICT OF SOUTH CAROLINA, In Re: Notice of Intent to Reappoint Incumbent United States Magistrate Judges and Invitation for Comments'. Terms of Thomas E. Rogers, III (May 7, 2026), Kevin F. McDonald (May 31, 2026) and Shiva V. Hodges (June 7, 2026); comments to Robin L. Blume, Clerk of Court, by 5:00 p.m., September 2, 2025. No date of issue is printed. Review. Traps: the expiry dates; the comment deadline.",
+   "source": {
+    "name": "U.S. District Court for the District of South Carolina, vacancies and notices",
+    "url": "https://www.scd.uscourts.gov/vacancies/Public_Notice_for_MJ_Reappointment_2025.pdf",
+    "page": "https://www.scd.uscourts.gov/",
+    "license": "US government work (17 U.S.C. 105), public domain: a notice issued by a United States district court",
+    "size": 9019,
+    "sha256": "8d35e49e8631a880d79c494934acd372a7e4c162e158e09a3ee3e28ec475a54b"
+   },
+   "gold": {
+    "document_type": "Notice of Intent to Reappoint Incumbent United States Magistrate Judges",
+    "acceptable_types": [
+     "Notice of Intent to Reappoint",
+     "Public Notice",
+     "Notice",
+     "Reappointment Notice",
+     "Invitation for Comments"
+    ],
+    "document_date": null,
+    "acceptable_dates": [],
+    "date_role": "notice",
+    "forbidden_dates": [
+     {
+      "date": "2025-09-02",
+      "why": "comment deadline"
+     },
+     {
+      "date": "2026-05-07",
+      "why": "a judge's term expiry"
+     },
+     {
+      "date": "2026-05-31",
+      "why": "a judge's term expiry"
+     },
+     {
+      "date": "2026-06-07",
+      "why": "a judge's term expiry"
+     }
+    ],
+    "parties": [
+     "United States District Court for the District of South Carolina"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "District of South Carolina"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "United States District Court for the District of South Carolina",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Robin L. Blume",
+      "why": "clerk of court"
+     },
+     {
+      "name": "Shiva V. Hodges",
+      "why": "magistrate judge named"
+     }
+    ],
+    "expected_readiness": "needs_review"
+   }
+  },
+  {
+   "id": "real5-notice-09",
+   "file": "real5-notice-09.pdf",
+   "title": "OFAC enforcement release on Interactive Brokers LLC's $11.8 million settlement for apparent sanctions violations (born-digital PDF, 9 pages)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 9,
+   "categories": [
+    "notice",
+    "born_digital",
+    "enforcement_release",
+    "regulator",
+    "settlement",
+    "competing_dates",
+    "service_period",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "'U.S. DEPARTMENT OF THE TREASURY, OFFICE OF FOREIGN ASSETS CONTROL, Enforcement Release: July 15, 2025. Interactive Brokers LLC Settles with OFAC for $11,832,136 Related to Apparent Violations of Multiple Sanctions Regulations.' Describes conduct from July 15, 2016 to January 31, 2024 and a review begun in 2018. Traps: the conduct period (whose start shares the month and day); the countries and programmes named.",
+   "source": {
+    "name": "Office of Foreign Assets Control (U.S. Treasury), 2025 enforcement information",
+    "url": "https://ofac.treasury.gov/media/934501/download?inline",
+    "page": "https://ofac.treasury.gov/civil-penalties-and-enforcement-information/2025-enforcement-information",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 240084,
+    "sha256": "5109ac1cf5fa3eba02b8302b01d9764f583ccbe034b0c5c2229118e03934c910"
+   },
+   "gold": {
+    "document_type": "Enforcement Release",
+    "acceptable_types": [
+     "OFAC Enforcement Release",
+     "Settlement Notice",
+     "Settlement Announcement",
+     "Release"
+    ],
+    "document_date": "2025-07-15",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2016-07-15",
+      "why": "start of the conduct described"
+     },
+     {
+      "date": "2024-01-31",
+      "why": "end of the conduct described"
+     }
+    ],
+    "parties": [
+     "Interactive Brokers LLC"
+    ],
+    "party_relation": "for",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Interactive Brokers"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "Office of Foreign Assets Control"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "OFAC"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Interactive Brokers LLC",
+       "Office of Foreign Assets Control"
+      ],
+      "relation": "between"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Interactive Brokers LLC",
+      "role": "subject"
+     },
+     {
+      "name": "Office of Foreign Assets Control",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-notice-10",
+   "file": "real5-notice-10.pdf",
+   "title": "OFAC enforcement release on ShapeShift AG's $750,000 settlement for apparent sanctions violations (born-digital PDF)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 5,
+   "categories": [
+    "notice",
+    "born_digital",
+    "enforcement_release",
+    "regulator",
+    "settlement",
+    "competing_dates",
+    "service_period",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "'U.S. DEPARTMENT OF THE TREASURY, OFFICE OF FOREIGN ASSETS CONTROL, Enforcement Release: September 22, 2025. ShapeShift AG Settles with OFAC for $750,000 Related to Apparent Violations of Multiple Sanctions Programs.' Conduct between December 10, 2016 and October 9, 2018; mentions sanctions changes of October 12, 2017, June 29, 2018 and 2025, and OFAC's framework of May 2, 2019. Traps: the conduct period and the regulatory dates.",
+   "source": {
+    "name": "Office of Foreign Assets Control (U.S. Treasury), 2025 enforcement information",
+    "url": "https://ofac.treasury.gov/media/934641/download?inline",
+    "page": "https://ofac.treasury.gov/civil-penalties-and-enforcement-information/2025-enforcement-information",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 250325,
+    "sha256": "1066718a51aea8e06d26f894186d7bb929534c098521ed5f02bfb8665fd21cd9"
+   },
+   "gold": {
+    "document_type": "Enforcement Release",
+    "acceptable_types": [
+     "OFAC Enforcement Release",
+     "Settlement Notice",
+     "Settlement Announcement",
+     "Release"
+    ],
+    "document_date": "2025-09-22",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2016-12-10",
+      "why": "start of the conduct described"
+     },
+     {
+      "date": "2018-10-09",
+      "why": "end of the conduct described"
+     },
+     {
+      "date": "2019-05-02",
+      "why": "date of OFAC's compliance framework"
+     }
+    ],
+    "parties": [
+     "ShapeShift AG"
+    ],
+    "party_relation": "for",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "ShapeShift"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "Office of Foreign Assets Control"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "OFAC"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "ShapeShift AG",
+       "Office of Foreign Assets Control"
+      ],
+      "relation": "between"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "ShapeShift AG",
+      "role": "subject"
+     },
+     {
+      "name": "Office of Foreign Assets Control",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-notice-11",
+   "file": "real5-notice-11.pdf",
+   "title": "OFAC enforcement release on a $7.1 million penalty imposed on Gracetown, Inc. for Russia-related sanctions and reporting violations (born-digital PDF, 5 pages)",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 5,
+   "categories": [
+    "notice",
+    "born_digital",
+    "enforcement_release",
+    "regulator",
+    "penalty_notice",
+    "competing_dates",
+    "many_dates",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "'U.S. DEPARTMENT OF THE TREASURY, OFFICE OF FOREIGN ASSETS CONTROL, Enforcement Release: December 4, 2025. OFAC Imposes $7,139,305 Penalty on Gracetown, Inc. for Violating Ukraine-/Russia-Related Sanctions and Reporting Obligations.' A New York property management company that kept dealing with entities owned by Oleg Deripaska after his designation on April 6, 2018 and OFAC's notice received April 10, 2018; recounts a loan from Baufinanz from December 19, 2013 and conduct to January 11, 2022. Traps: the many recounted dates; Deripaska and Baufinanz as named persons and entities.",
+   "source": {
+    "name": "Office of Foreign Assets Control (U.S. Treasury), 2025 enforcement information",
+    "url": "https://ofac.treasury.gov/media/934796/download?inline",
+    "page": "https://ofac.treasury.gov/civil-penalties-and-enforcement-information/2025-enforcement-information",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 253977,
+    "sha256": "6afd59648bbf03f444270f72762fec651a60c8f9c4f69ebe9d1f989cecb99ae8"
+   },
+   "gold": {
+    "document_type": "Enforcement Release",
+    "acceptable_types": [
+     "OFAC Enforcement Release",
+     "Penalty Notice",
+     "Release"
+    ],
+    "document_date": "2025-12-04",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2018-04-06",
+      "why": "date Deripaska was designated"
+     },
+     {
+      "date": "2018-04-10",
+      "why": "date Gracetown received OFAC's notice"
+     },
+     {
+      "date": "2013-12-19",
+      "why": "start of a loan recounted"
+     },
+     {
+      "date": "2022-01-11",
+      "why": "date in the recounted conduct"
+     }
+    ],
+    "parties": [
+     "Gracetown, Inc."
+    ],
+    "party_relation": "for",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Gracetown"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "Office of Foreign Assets Control"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "OFAC"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Gracetown, Inc.",
+      "role": "subject"
+     },
+     {
+      "name": "Office of Foreign Assets Control",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Oleg Deripaska",
+      "why": "sanctioned person named"
+     },
+     {
+      "name": "Baufinanz",
+      "why": "lender named"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-invoice-01",
+   "file": "real5-invoice-01.jpg",
+   "title": "Bill on a Sternberg Brothers (New York pantaloon makers) billhead to T. Young's Son, Tarrytown, October 1896, stamped paid (JPEG image)",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "pages": 1,
+   "categories": [
+    "invoice",
+    "image",
+    "billhead",
+    "handwritten",
+    "paid_stamp",
+    "historic",
+    "customer_first",
+    "competing_dates"
+   ],
+   "notes": "Printed billhead 'New York, ... 189_' completed by hand 'October 20th 1896'; 'T. Young's Son, Tarrytown, N.Y.' written above 'Bought of STERNBERG BROTHERS, Manufacturers of Pantaloons, Washington Place, Mercer & West 4th Sts.' Three lines of pants with prices; 'Blue pants will follow tomorrow'; a red 'Paid Oct 31/96' over a purple STERNBERG BROS. stamp. Traps: the paid date; the customer written first; the lot numbers.",
+   "source": {
+    "name": "Penn Libraries Digital Collections, item 'Billhead; Sternberg Brothers; New York, New York, United States; 1896 October 20' (IIIF image service, recto)",
+    "url": "https://iiif-images.library.upenn.edu/iiif/3/78ed629c-ee81-4e26-bf5c-88f0ac2eec76/full/max/0/default.jpg",
+    "page": "https://digitalcollections.library.upenn.edu/items/0ea8aeef-9f02-498e-bb30-bc6a9f97d263",
+    "license": "No Copyright - United States (rightsstatements.org/vocab/NoC-US/1.0/), as stated on the item's record in Penn Libraries' Digital Collections (Arnold and Deanne Kaplan Collection of Early American Judaica, Ms. Coll. 1410)",
+    "size": 943526,
+    "sha256": "066268f868caefa8cd89e9e7d41fe34e147af7ae82ff5ecd0e5b53024ef18bbb"
+   },
+   "gold": {
+    "document_type": "Bill",
+    "acceptable_types": [
+     "Invoice",
+     "Billhead"
+    ],
+    "document_date": "1896-10-20",
+    "acceptable_dates": [],
+    "date_role": "invoice",
+    "forbidden_dates": [
+     {
+      "date": "1896-10-31",
+      "why": "date the bill was paid"
+     }
+    ],
+    "parties": [
+     "Sternberg Brothers"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Sternberg Bros."
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Sternberg Brothers",
+      "role": "issuer"
+     },
+     {
+      "name": "T. Young's Son",
+      "role": "customer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "T. Young's Son",
+      "why": "the customer"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-invoice-02",
+   "file": "real5-invoice-02.jpg",
+   "title": "Bill on an S. F. & A. Rothschild (New York cloak makers) billhead to Chas. P. Tenney, Houlton, Maine, November 1887 (JPEG image)",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "pages": 1,
+   "categories": [
+    "invoice",
+    "image",
+    "billhead",
+    "handwritten",
+    "historic",
+    "customer_first",
+    "partly_printed_year"
+   ],
+   "notes": "Billhead 'New York, ... 188_' with 'Novb 23' and the final '7' of the year written by hand (1887); 'Mr Chas. P. Tenney, Houlton, Me.' above 'Bought of S. F. & A. Rothschild, Importers and Manufacturers of Misses' and Children's Cloaks and Suits, 47 Walker Street'. Terms written '6/10, 1/30'; three lines of 'Newmarkets' totalling $44 less 2.20. Traps: the year split between print and hand; the customer written first.",
+   "source": {
+    "name": "Penn Libraries Digital Collections, item 'Billhead; S. F. & A. Rothschild; Tenney, Charles P.; New York, New York, United States; 1887 November 23' (IIIF image service)",
+    "url": "https://iiif-images.library.upenn.edu/iiif/3/1eb026a9-e061-470d-a204-6a3009186b97/full/max/0/default.jpg",
+    "page": "https://digitalcollections.library.upenn.edu/items/7fbfecb3-358b-4b80-b414-dc697293f104",
+    "license": "No Copyright - United States (rightsstatements.org/vocab/NoC-US/1.0/), as stated on the item's record in Penn Libraries' Digital Collections (Arnold and Deanne Kaplan Collection of Early American Judaica, Ms. Coll. 1410)",
+    "size": 2232755,
+    "sha256": "cc1bac85de1d70d6bfb272849bb0ff56916e25ac2799696f2bc31cda0168ba7e"
+   },
+   "gold": {
+    "document_type": "Bill",
+    "acceptable_types": [
+     "Invoice",
+     "Billhead"
+    ],
+    "document_date": "1887-11-23",
+    "acceptable_dates": [],
+    "date_role": "invoice",
+    "forbidden_dates": [],
+    "parties": [
+     "S. F. & A. Rothschild"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "S.F. & A. Rothschild"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "S. F. & A. Rothschild",
+      "role": "issuer"
+     },
+     {
+      "name": "Chas. P. Tenney",
+      "role": "customer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Chas. P. Tenney",
+      "why": "the customer"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-invoice-03",
+   "file": "real5-invoice-03.jpg",
+   "title": "Bill on a Blun & Co. (New York wholesale clothiers) billhead to J. Brooks, Waterloo, N.Y., May 1885 (JPEG image)",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "pages": 1,
+   "categories": [
+    "invoice",
+    "image",
+    "billhead",
+    "handwritten",
+    "historic",
+    "customer_first",
+    "engraved_letterhead"
+   ],
+   "notes": "Billhead with an engraving of the firm's building; 'New York, May 2 1885' handwritten in the printed date line; 'Mr J. Brooks, Waterloo, N.Y.' above 'Bought of BLUN & CO., Wholesale Clothiers, 75 & 77 Spring Street, Corner Crosby Street'. Three handwritten lines of cloth and sleeve lining totalling 10.39. Traps: the customer written first; the building sign in the engraving.",
+   "source": {
+    "name": "Penn Libraries Digital Collections, item 'Billhead; Blun & Co.; Brooks, J.; New York, New York, United States; Waterloo, New York, United States; 1885 May 2' (IIIF image service)",
+    "url": "https://iiif-images.library.upenn.edu/iiif/3/79923777-a45b-4f75-a615-3b66fefae497/full/max/0/default.jpg",
+    "page": "https://digitalcollections.library.upenn.edu/items/c7d90bec-cd88-4e4d-b93d-0193018a8a17",
+    "license": "No Copyright - United States (rightsstatements.org/vocab/NoC-US/1.0/), as stated on the item's record in Penn Libraries' Digital Collections (Arnold and Deanne Kaplan Collection of Early American Judaica, Ms. Coll. 1410)",
+    "size": 3347075,
+    "sha256": "4c9121f89d69bb5bf57e3273f47289aefb67d99d3ff52a4a034162fa776d8db9"
+   },
+   "gold": {
+    "document_type": "Bill",
+    "acceptable_types": [
+     "Invoice",
+     "Billhead"
+    ],
+    "document_date": "1885-05-02",
+    "acceptable_dates": [],
+    "date_role": "invoice",
+    "forbidden_dates": [],
+    "parties": [
+     "Blun & Co."
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Blun & Co"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Blun & Co.",
+      "role": "issuer"
+     },
+     {
+      "name": "J. Brooks",
+      "role": "customer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "J. Brooks",
+      "why": "the customer"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-invoice-04",
+   "file": "real5-invoice-04.jpg",
+   "title": "Bill on a D. Crehange & Co. (Syracuse wholesale clothiers) billhead, with '& Co.' struck out, to Jos. Brooks, March 1882 (JPEG image)",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "pages": 1,
+   "categories": [
+    "invoice",
+    "image",
+    "billhead",
+    "handwritten",
+    "historic",
+    "customer_first",
+    "struck_through_text"
+   ],
+   "notes": "Billhead 'Syracuse, N.Y., Mch 30th 1882' (month and day handwritten in a large hand), 'Mr Jos. Brooks', 'Bought of D. Crehange & Co.' with '& Co.' struck through in ink, 'Wholesale Clothiers, extra sized garments a specialty, 35 N. Salina and 3 E. Church St.'; partners D. Crehange and John T. Rich in small print. Four lines of boys' suits totalling 102.00, terms '6% 10 days, 5% 30 or 4 mos'. Traps: the struck-out '& Co.'; the customer; the partner's name.",
+   "source": {
+    "name": "Penn Libraries Digital Collections, item 'Billhead; Crehange, D.; Brooks, Joseph; Syracuse, New York, United States; 1882 March 30' (IIIF image service)",
+    "url": "https://iiif-images.library.upenn.edu/iiif/3/1f3f3000-60ea-4b3a-9355-b42c892a82e1/full/max/0/default.jpg",
+    "page": "https://digitalcollections.library.upenn.edu/items/8d38d8ea-9517-44e6-bde5-2f4e6d90f56e",
+    "license": "No Copyright - United States (rightsstatements.org/vocab/NoC-US/1.0/), as stated on the item's record in Penn Libraries' Digital Collections (Arnold and Deanne Kaplan Collection of Early American Judaica, Ms. Coll. 1410)",
+    "size": 3209635,
+    "sha256": "ea9793dab700eaade9d75f1edfaecc6418bc72e4a591ef54380dc66682eb2f0b"
+   },
+   "gold": {
+    "document_type": "Bill",
+    "acceptable_types": [
+     "Invoice",
+     "Billhead"
+    ],
+    "document_date": "1882-03-30",
+    "acceptable_dates": [],
+    "date_role": "invoice",
+    "forbidden_dates": [],
+    "parties": [
+     "D. Crehange"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "D. Crehange & Co."
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "D. Crehange & Co"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "D. Crehange",
+      "role": "issuer"
+     },
+     {
+      "name": "Jos. Brooks",
+      "role": "customer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Jos. Brooks",
+      "why": "the customer"
+     },
+     {
+      "name": "John T. Rich",
+      "why": "partner named in small print"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-invoice-05",
+   "file": "real5-invoice-05.jpg",
+   "title": "Printed receipt form of Rosenthal Bros., New York, completed by hand for $105.43 received from James R. Mercer, July 1891 (JPEG image)",
+   "kind": "receipt",
+   "format": "jpg",
+   "text_layer": "image",
+   "pages": 1,
+   "categories": [
+    "receipt",
+    "image",
+    "handwritten",
+    "printed_form",
+    "historic",
+    "us_date_format",
+    "competing_dates"
+   ],
+   "notes": "Printed receipt with 'ROSENTHAL BROS.' printed vertically at the left and again above the signature line: 'New York, 7/12 1891. Received from Mr James R. Mercer One hundred & five 43/100 Dollars in settlement of 1/14. $105.43 Rosenthal Bros., Per' (initials). Traps: '1/14', the date of the bill being settled; the month-first date; the payer as a person.",
+   "source": {
+    "name": "Penn Libraries Digital Collections, item 'Receipt; Rosenthal Bros.; New York, New York, United States; 1891 July 12' (IIIF image service, recto)",
+    "url": "https://iiif-images.library.upenn.edu/iiif/3/f63dd712-718b-433f-93b4-42a65f285a00/full/max/0/default.jpg",
+    "page": "https://digitalcollections.library.upenn.edu/items/ab3b1ccd-39e9-4757-b081-be1f32b2040e",
+    "license": "No Copyright - United States (rightsstatements.org/vocab/NoC-US/1.0/), as stated on the item's record in Penn Libraries' Digital Collections (Arnold and Deanne Kaplan Collection of Early American Judaica, Ms. Coll. 1410)",
+    "size": 591906,
+    "sha256": "e8949eeab1813aa35b3e5edb91743f3f63a9e6686e20dadeaf4035e7171d2efb"
+   },
+   "gold": {
+    "document_type": "Receipt",
+    "acceptable_types": [],
+    "document_date": "1891-07-12",
+    "acceptable_dates": [],
+    "date_role": "payment",
+    "forbidden_dates": [
+     {
+      "date": "1891-01-14",
+      "why": "date of the bill the payment settles"
+     }
+    ],
+    "parties": [
+     "Rosenthal Bros."
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Rosenthal Brothers"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Rosenthal Bros.",
+      "role": "issuer"
+     },
+     {
+      "name": "James R. Mercer",
+      "role": "payer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "James R. Mercer",
+      "why": "the payer"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-invoice-06",
+   "file": "real5-invoice-06.pdf",
+   "title": "Tax invoice from Ian Davies Plant Limited to Neath Port Talbot Council for drainage works at Cilmaengwyn Tip, released by the Welsh Government under FOI (born-digital PDF, 2 pages)",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "invoice",
+    "born_digital",
+    "tax_invoice",
+    "customer_first",
+    "due_date",
+    "remittance_slip",
+    "vat",
+    "foi_release",
+    "uk",
+    "wales",
+    "modern"
+   ],
+   "notes": "'TAX INVOICE', Invoice Date 9 Sep 2025, Invoice Number INV-8129, Reference Cilmaengwyn Tip, VAT Number 682503730; issuer block 'Ian Davies Plant Limited, Llwynfelish Farm, Neath Road, Crynant'; customer block 'Neath Port Talbot C. B. Council The Quays / Neath Port Talbot County Borough Council', printed first at the left. Drainage works £42,350 and labour £2,400, total £53,700, amount due £53,220 (CIS deduction), Due Date 30 Oct 2025, with a payment advice slip 'To: Ian Davies Plant Limited'. Released as document 12 of the Welsh Government's FOI release ATISN 26783. Traps: the due date; the council printed first; the site name.",
+   "source": {
+    "name": "Welsh Government, FOI release ATISN 26783 (document 12)",
+    "url": "https://www.llyw.cymru/sites/default/files/publications/2026-04/ATISN%2026783%20Doc%2012_0.pdf",
+    "page": "https://www.gov.wales/atisn26783",
+    "license": "Released and published by the Welsh Government under FOI (gov.wales content is under the Open Government Licence v3.0); this invoice is Ian Davies Plant Limited's and its reuse terms are not stated",
+    "size": 110850,
+    "sha256": "1735ae5fa6f203afc6a50b738750fb7faa0e29fcee07c1bce8545bec1dbafdfd"
+   },
+   "gold": {
+    "document_type": "Tax Invoice",
+    "acceptable_types": [
+     "Invoice"
+    ],
+    "document_date": "2025-09-09",
+    "acceptable_dates": [],
+    "date_role": "invoice",
+    "forbidden_dates": [
+     {
+      "date": "2025-10-30",
+      "why": "payment due date"
+     }
+    ],
+    "parties": [
+     "Ian Davies Plant Limited"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Ian Davies Plant Ltd"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Ian Davies Plant Limited",
+      "role": "issuer"
+     },
+     {
+      "name": "Neath Port Talbot County Borough Council",
+      "role": "customer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Neath Port Talbot County Borough Council",
+      "why": "the customer"
+     },
+     {
+      "name": "Cilmaengwyn Tip",
+      "why": "site of the works"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-invoice-07",
+   "file": "real5-invoice-07.pdf",
+   "title": "U.S. Treasury Debt Position and Activity Report as of September 30, 2025, with charts and no issuer printed (born-digital PDF, 2 pages)",
+   "kind": "statement",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 2,
+   "categories": [
+    "statement",
+    "born_digital",
+    "financial_report",
+    "tables",
+    "charts",
+    "no_issuer_printed",
+    "as_of_date",
+    "many_dates",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "Two-page report titled 'Debt Position and Activity Report', every table headed 'as of September 30, 2025' (total public debt outstanding $37,637,553 million; debt subject to limit; issues and redemptions). Footnotes recount debt-limit events (November 2, 2015, March 15, 2017, August 2, 2019, July 31, 2021, December 16, 2021, June 3, 2023, January 1, 2025). No agency name is printed in the text; 'TreasuryDirect' and 'Federal Financing Bank' appear only as holding categories. A name with no party is right. Traps: the footnotes' dates; the holding categories read as issuers.",
+   "source": {
+    "name": "TreasuryDirect (Bureau of the Fiscal Service, U.S. Treasury), public debt reports",
+    "url": "https://treasurydirect.gov/files/government/public-debt-reports/pd/pd_debtposactrpt_202509.pdf",
+    "page": "https://treasurydirect.gov/government/public-debt-reports/",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 208570,
+    "sha256": "576320745a217efb18d37a14e28a4c7bfd5d3a3c19cc7deca663d8e09be1567d"
+   },
+   "gold": {
+    "document_type": "Debt Position and Activity Report",
+    "acceptable_types": [
+     "Debt Position Report",
+     "Public Debt Report",
+     "Report"
+    ],
+    "document_date": "2025-09-30",
+    "acceptable_dates": [],
+    "date_role": "period_end",
+    "forbidden_dates": [
+     {
+      "date": "2021-12-16",
+      "why": "date of a debt-limit change in a footnote"
+     },
+     {
+      "date": "2023-06-03",
+      "why": "date of a debt-limit change in a footnote"
+     },
+     {
+      "date": "2025-01-01",
+      "why": "date in a footnote"
+     }
+    ],
+    "parties": [],
+    "party_relation": null,
+    "acceptable_party_sets": [],
+    "party_roles": [],
+    "forbidden_parties": [
+     {
+      "name": "TreasuryDirect",
+      "why": "a holding category in the table"
+     },
+     {
+      "name": "Federal Financing Bank",
+      "why": "a holding category in the table"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-form-01",
+   "file": "real5-form-01.pdf",
+   "title": "Request for Records Disposition Authority (Standard Form 115) N1-310-90-01 from the Agricultural Research Service, 1990, behind a 2022 status sheet (scanned PDF with an OCR layer, 2 pages)",
+   "kind": "form",
+   "format": "pdf",
+   "text_layer": "scan",
+   "pages": 2,
+   "categories": [
+    "form",
+    "scanned",
+    "ocr_text_layer",
+    "government_form",
+    "handwritten_dates",
+    "cover_sheet",
+    "competing_dates",
+    "metadata_date_trap",
+    "us_federal",
+    "historical"
+   ],
+   "notes": "Page 1 is a typed NARA status sheet: 'INACTIVE - ALL ITEMS SUPERSEDED OR OBSOLETE, Schedule Number: N1-310-90-001 ... Records were destroyed in May 1995. Date Reported: 11/28/2022'. Page 2 is the scanned form 'REQUEST FOR RECORDS DISPOSITION AUTHORITY' to General Services Administration, National Archives and Records Service, from the Agricultural Research Service, job no. N1-310-90-01, date received June 15, 1990; certificate signed by Barbara LaCour, Agency Records Management Officer, dated 6-11-90; approved by the Archivist (a handwritten date in July 1990). One item: Administrator's Central Correspondence File 1980-86, destroy in 1995. The request is dated by its signature; the receipt date is accepted. Traps: the status sheet's 2022 date; 1995; the Archivist's approval date; the officer's name.",
+   "source": {
+    "name": "National Archives and Records Administration, Records Control Schedules (Department of Agriculture, RG 310)",
+    "url": "https://www.archives.gov/files/records-mgmt/rcs/schedules/departments/department-of-agriculture/rg-0310/n1-310-90-001_sf115.pdf",
+    "page": "https://www.archives.gov/records-mgmt/rcs",
+    "license": "US government work (17 U.S.C. 105), public domain: a Standard Form 115 published by the National Archives in its Records Control Schedules repository",
+    "size": 174409,
+    "sha256": "b92ea543afca6e8ff9c184621e6ea73ce4c35135e7bc150f60fb40da683a4881"
+   },
+   "gold": {
+    "document_type": "Request for Records Disposition Authority",
+    "acceptable_types": [
+     "Records Disposition Authority Request",
+     "Records Schedule",
+     "Records Disposition Request",
+     "Standard Form 115",
+     "SF 115"
+    ],
+    "document_date": "1990-06-11",
+    "acceptable_dates": [
+     "1990-06-15"
+    ],
+    "date_role": "signature",
+    "forbidden_dates": [
+     {
+      "date": "2022-11-28",
+      "why": "date the status sheet was reported"
+     },
+     {
+      "date": "1995-05-01",
+      "why": "month the records were destroyed"
+     }
+    ],
+    "parties": [
+     "Agricultural Research Service"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Agricultural Research Service",
+       "National Archives and Records Service"
+      ],
+      "relation": "between"
+     },
+     {
+      "parties": [
+       "Agricultural Research Service"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Agricultural Research Service",
+      "role": "issuer"
+     },
+     {
+      "name": "National Archives and Records Service",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Barbara LaCour",
+      "why": "officer who signs"
+     },
+     {
+      "name": "General Services Administration",
+      "why": "addressee in the form's TO line"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-form-02",
+   "file": "real5-form-02.pdf",
+   "title": "Request for Records Disposition Authority (Standard Form 115) NC1-58-82-4 from the Internal Revenue Service, 1982, behind a 2026 status sheet (scanned PDF with an OCR layer, 2 pages)",
+   "kind": "form",
+   "format": "pdf",
+   "text_layer": "scan",
+   "pages": 2,
+   "categories": [
+    "form",
+    "scanned",
+    "ocr_text_layer",
+    "government_form",
+    "handwritten_dates",
+    "cover_sheet",
+    "competing_dates",
+    "metadata_date_trap",
+    "us_federal",
+    "historical"
+   ],
+   "notes": "Page 1 is a NARA status sheet 'Schedule has been superseded, NC1-058-82-04, Accurate as of 09/08/2026' listing three inactive items. Page 2 is the scanned SF 115 to General Services Administration, National Archives and Records Service, from the U.S. Department of Treasury, Internal Revenue Service, Facilities Management Division; person to confer with Raymond A. O'Brien; date received March 4, 1982; certificate dated 3-2-82 and signed by the Manager, Records Management Program; Archivist's approval 4/23/82. Three items of Records Control Schedule 105 (fiscal inventory reports, audit plans, project files). The request is dated by its signature; the receipt date is accepted. Traps: the 2026 status date; the approval date; the persons.",
+   "source": {
+    "name": "National Archives and Records Administration, Records Control Schedules (Department of the Treasury, RG 58)",
+    "url": "https://www.archives.gov/files/records-mgmt/rcs/schedules/departments/department-of-the-treasury/rg-0058/nc1-058-82-04_sf115.pdf",
+    "page": "https://www.archives.gov/records-mgmt/rcs",
+    "license": "US government work (17 U.S.C. 105), public domain: a Standard Form 115 published by the National Archives in its Records Control Schedules repository",
+    "size": 125513,
+    "sha256": "311feba5ee61dc853d8ccab4018a755284fe6022aa525619ca705cf792e2f66f"
+   },
+   "gold": {
+    "document_type": "Request for Records Disposition Authority",
+    "acceptable_types": [
+     "Records Disposition Authority Request",
+     "Records Schedule",
+     "Records Disposition Request",
+     "Standard Form 115",
+     "SF 115"
+    ],
+    "document_date": "1982-03-02",
+    "acceptable_dates": [
+     "1982-03-04"
+    ],
+    "date_role": "signature",
+    "forbidden_dates": [
+     {
+      "date": "2026-09-08",
+      "why": "date the status sheet is accurate as of"
+     },
+     {
+      "date": "1982-04-23",
+      "why": "date the Archivist approved it"
+     }
+    ],
+    "parties": [
+     "Internal Revenue Service"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "U.S. Department of the Treasury"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Department of the Treasury"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "U.S. Department of Treasury"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Internal Revenue Service"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Internal Revenue Service",
+      "role": "issuer"
+     },
+     {
+      "name": "National Archives and Records Service",
+      "role": "recipient"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Raymond A. O'Brien",
+      "why": "person to confer with"
+     },
+     {
+      "name": "General Services Administration",
+      "why": "addressee in the form's TO line"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-memo-01",
+   "file": "real5-memo-01.pdf",
+   "title": "NLRB General Counsel memorandum GC 25-05 rescinding certain earlier memoranda (born-digital PDF, 3 pages)",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 3,
+   "categories": [
+    "memo",
+    "born_digital",
+    "memorandum",
+    "agency_guidance",
+    "reference_number",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "'OFFICE OF THE GENERAL COUNSEL, MEMORANDUM GC 25-05, February 14, 2025, TO: Regional Directors, Officers-in-Charge, and Resident Officers, FROM: William B. Cowen, Acting General Counsel, SUBJECT: Rescission of Certain General Counsel Memoranda.' Lists rescinded memoranda by number (GC 21-02 to GC 25-04). Traps: the memo numbers carrying years; the Acting General Counsel's name.",
+   "source": {
+    "name": "National Labor Relations Board, General Counsel memos",
+    "url": "https://apps.nlrb.gov/link/document.aspx/09031d4583f3f58c",
+    "page": "https://www.nlrb.gov/guidance/memos-research/general-counsel-memos",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 121810,
+    "sha256": "3faf0558cddc306b05411ee2e10a68ea570a7f73116e002536173291243ca778"
+   },
+   "gold": {
+    "document_type": "Memorandum",
+    "acceptable_types": [
+     "General Counsel Memorandum",
+     "GC Memorandum",
+     "Memo"
+    ],
+    "document_date": "2025-02-14",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [],
+    "parties": [
+     "National Labor Relations Board"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "NLRB"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Office of the General Counsel"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "NLRB Office of the General Counsel"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "National Labor Relations Board",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "William B. Cowen",
+      "why": "Acting General Counsel who signs"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-memo-02",
+   "file": "real5-memo-02.pdf",
+   "title": "NLRB General Counsel memorandum GC 25-06 on seeking remedial relief in settlement agreements (born-digital PDF)",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 4,
+   "categories": [
+    "memo",
+    "born_digital",
+    "memorandum",
+    "agency_guidance",
+    "reference_number",
+    "issuer_not_named",
+    "tables",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "'OFFICE OF THE GENERAL COUNSEL, MEMORANDUM GC 25-06, May 16, 2025, TO: All Regional Directors, Officers-in-Charge, and Resident Officers, FROM: William B. Cowen, Acting General Counsel, SUBJECT: Seeking Remedial Relief in Settlement Agreements.' A table of settlement rates for fiscal years 2019-2024; cites board decisions such as Thryv (Dec. 13, 2022). The agency's full name is not printed in the text (only 'NLRB' in citations). Traps: the citation dates; the fiscal years.",
+   "source": {
+    "name": "National Labor Relations Board, General Counsel memos",
+    "url": "https://apps.nlrb.gov/link/document.aspx/09031d4583ffc1c3",
+    "page": "https://www.nlrb.gov/guidance/memos-research/general-counsel-memos",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 235503,
+    "sha256": "a66d067432b3e02a4eff294c2f637119ad15d5b5af9ac1ee26ccfcbb57f5c92c"
+   },
+   "gold": {
+    "document_type": "Memorandum",
+    "acceptable_types": [
+     "General Counsel Memorandum",
+     "GC Memorandum",
+     "Memo"
+    ],
+    "document_date": "2025-05-16",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2022-12-13",
+      "why": "date of a cited board decision"
+     }
+    ],
+    "parties": [
+     "National Labor Relations Board"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "NLRB"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Office of the General Counsel"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "National Labor Relations Board",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "William B. Cowen",
+      "why": "Acting General Counsel who signs"
+     },
+     {
+      "name": "Thryv, Inc.",
+      "why": "party to a cited decision"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-memo-03",
+   "file": "real5-memo-03.pdf",
+   "title": "OMB memorandum M-25-14 rescinding M-25-13 (born-digital PDF, 1 page)",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 1,
+   "categories": [
+    "memo",
+    "born_digital",
+    "memorandum",
+    "short",
+    "reference_number",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "Executive Office of the President, Office of Management and Budget, 'January 29, 2025, M-25-14, MEMORANDUM FOR HEADS OF EXECUTIVE DEPARTMENTS AND AGENCIES, FROM: Matthew J. Vaeth, Acting Director, Office of Management and Budget, SUBJECT: Rescission of M-25-13.' Two sentences. Traps: the signer; M-25-13 as another memo.",
+   "source": {
+    "name": "Office of Management and Budget, memoranda (whitehouse.gov)",
+    "url": "https://www.whitehouse.gov/wp-content/uploads/2025/03/M-25-14-Rescission-of-M-25-13.pdf",
+    "page": "https://www.whitehouse.gov/omb/information-resources/guidance/memoranda/",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 20527,
+    "sha256": "759eeec5b1951b29a392539e6c02f724c49fca28e9800b8fef3e8c43700490eb"
+   },
+   "gold": {
+    "document_type": "Memorandum",
+    "acceptable_types": [
+     "Memo",
+     "OMB Memorandum",
+     "Rescission Memorandum"
+    ],
+    "document_date": "2025-01-29",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [],
+    "parties": [
+     "Office of Management and Budget"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "OMB"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Office of Management and Budget",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Matthew J. Vaeth",
+      "why": "Acting Director who signs"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-memo-04",
+   "file": "real5-memo-04.pdf",
+   "title": "OMB memorandum M-25-21 on accelerating federal use of AI, signed copy scanned with an OCR layer (PDF, 25 pages)",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "scan",
+   "pages": 25,
+   "categories": [
+    "memo",
+    "scanned",
+    "ocr_text_layer",
+    "memorandum",
+    "long_document",
+    "signature_scan",
+    "competing_dates",
+    "reference_number",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "Scanned signed memorandum (RICOH scanner, Acrobat Paper Capture OCR): Executive Office of the President, Office of Management and Budget, 'April 3, 2025, M-25-21, MEMORANDUM FOR THE HEADS OF EXECUTIVE DEPARTMENTS AND AGENCIES, FROM: Russell T. Vought, Director, SUBJECT: Accelerating Federal Use of AI through Innovation, Governance, and Public Trust.' Refers to Executive Order 14179 signed January 23, 2025 and rescinds M-24-10. An appendix of requirements follows with many deadlines. Traps: the executive order's date; the appendix deadlines; OCR errors in the letterhead ('OFFlCEOFMANAGEMENTANDBUDGET').",
+   "source": {
+    "name": "Office of Management and Budget, memoranda (whitehouse.gov)",
+    "url": "https://www.whitehouse.gov/wp-content/uploads/2025/02/M-25-21-Accelerating-Federal-Use-of-AI-through-Innovation-Governance-and-Public-Trust.pdf",
+    "page": "https://www.whitehouse.gov/omb/information-resources/guidance/memoranda/",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 2629748,
+    "sha256": "0aab0aa4eaeac969ed93894d3940c5dc9d0b7377048171b164a439e8b9e49813"
+   },
+   "gold": {
+    "document_type": "Memorandum",
+    "acceptable_types": [
+     "Memo",
+     "OMB Memorandum"
+    ],
+    "document_date": "2025-04-03",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-01-23",
+      "why": "date Executive Order 14179 was signed"
+     }
+    ],
+    "parties": [
+     "Office of Management and Budget"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "OMB"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Office of Management and Budget",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Russell T. Vought",
+      "why": "Director who signs"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-memo-05",
+   "file": "real5-memo-05.pdf",
+   "title": "HUD/FHA Mortgagee Letter 2025-14 on engagement with borrowers in default and loss mitigation (born-digital PDF, 12 pages)",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 12,
+   "categories": [
+    "memo",
+    "born_digital",
+    "agency_guidance",
+    "circular_letter",
+    "effective_dates",
+    "competing_dates",
+    "reference_number",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "'Date: June 3, 2025, Mortgagee Letter 2025-14, To: All FHA-Approved Mortgagees, All Direct Endorsement Underwriters, ... All Closing Agents, Subject: Updates to Modernization of Engagement with Borrowers in Default and Loss Mitigation.' Attachment 1 must be implemented no later than July 1, 2025 and Attachment 2 on October 1, 2025; background cites ML 2024-24 of December 4, 2024. Signed by the Principal Deputy Assistant Secretary for Housing. Issued by HUD's Federal Housing Administration (the department's name is in the logo; 'HUD' and 'FHA' appear in the text). Traps: the implementation dates; the earlier mortgagee letter's date; the long recipient list.",
+   "source": {
+    "name": "U.S. Department of Housing and Urban Development, Mortgagee Letters",
+    "url": "https://www.hud.gov/sites/dfiles/OCHCO/documents/2025-14hsgml.pdf",
+    "page": "https://www.hud.gov/program_offices/administration/hudclips/letters/mortgagee",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 259100,
+    "sha256": "40c52e035e3b054e81e991951b599e3ddf83ce6ca0557835136aaaaa042caaf0"
+   },
+   "gold": {
+    "document_type": "Mortgagee Letter",
+    "acceptable_types": [
+     "Letter",
+     "FHA Mortgagee Letter",
+     "HUD Mortgagee Letter"
+    ],
+    "document_date": "2025-06-03",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2025-07-01",
+      "why": "deadline to implement Attachment 1"
+     },
+     {
+      "date": "2025-10-01",
+      "why": "date Attachment 2 must be implemented"
+     },
+     {
+      "date": "2024-12-04",
+      "why": "date of Mortgagee Letter 2024-24"
+     }
+    ],
+    "parties": [
+     "U.S. Department of Housing and Urban Development"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "HUD"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Department of Housing and Urban Development"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Federal Housing Administration"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "FHA"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "All FHA-Approved Mortgagees"
+      ],
+      "relation": "to"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "U.S. Department of Housing and Urban Development",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-memo-06",
+   "file": "real5-memo-06.pdf",
+   "title": "HUD/FHA Mortgagee Letter 2025-19 on property inspections and endorsement in presidentially declared disaster areas (born-digital PDF)",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 7,
+   "categories": [
+    "memo",
+    "born_digital",
+    "agency_guidance",
+    "circular_letter",
+    "competing_dates",
+    "reference_number",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "'Date: June 27, 2025, Mortgagee Letter 2025-19, To: All FHA-Approved Mortgagees ... All Closing Agents.' Effective immediately. Supersedes earlier guidance dated 08/19/2024 and refers to a handbook section last revised 1/10/2025. Traps: the superseded guidance's date; the handbook revision date; the recipient list.",
+   "source": {
+    "name": "U.S. Department of Housing and Urban Development, Mortgagee Letters",
+    "url": "https://www.hud.gov/sites/dfiles/OCHCO/documents/2025-19hsgml.pdf",
+    "page": "https://www.hud.gov/program_offices/administration/hudclips/letters/mortgagee",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 414472,
+    "sha256": "f57c585148b86a54f7f45b10f10cc0e577cad4711497fc25ba2f4bc1b99e9e11"
+   },
+   "gold": {
+    "document_type": "Mortgagee Letter",
+    "acceptable_types": [
+     "Letter",
+     "FHA Mortgagee Letter",
+     "HUD Mortgagee Letter"
+    ],
+    "document_date": "2025-06-27",
+    "acceptable_dates": [],
+    "date_role": "issuance",
+    "forbidden_dates": [
+     {
+      "date": "2024-08-19",
+      "why": "date of superseded guidance"
+     },
+     {
+      "date": "2025-01-10",
+      "why": "handbook revision date"
+     }
+    ],
+    "parties": [
+     "U.S. Department of Housing and Urban Development"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "HUD"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Department of Housing and Urban Development"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Federal Housing Administration"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "FHA"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "All FHA-Approved Mortgagees"
+      ],
+      "relation": "to"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "U.S. Department of Housing and Urban Development",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-memo-07",
+   "file": "real5-memo-07.pdf",
+   "title": "Minutes of the Federal Retirement Thrift Investment Board members' meeting of February 25, 2025 (born-digital PDF, 3 pages)",
+   "kind": "minutes",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 3,
+   "categories": [
+    "minutes",
+    "born_digital",
+    "board_minutes",
+    "staff_names",
+    "competing_dates",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "'MINUTES OF THE MEETING OF THE BOARD MEMBERS, February 25, 2025.' Acting Chair Dana K. Bilyeu convened the meeting virtually; attendees listed by name and title. Item 1 approves the minutes of the January 28, 2025 meeting; monthly reports follow. Traps: the January 28 minutes approved; the many staff names.",
+   "source": {
+    "name": "Federal Retirement Thrift Investment Board, meeting minutes",
+    "url": "https://www.frtib.gov/meeting_minutes/2025/2025Feb.pdf",
+    "page": "https://www.frtib.gov/meeting-minutes/",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 1220995,
+    "sha256": "76aaa507f72738342e05e6460b19c17a6b726c77a550fc35a2ccbfd00f215918"
+   },
+   "gold": {
+    "document_type": "Board Meeting Minutes",
+    "acceptable_types": [
+     "Minutes",
+     "Meeting Minutes",
+     "Minutes of the Meeting of the Board Members",
+     "Board Minutes"
+    ],
+    "document_date": "2025-02-25",
+    "acceptable_dates": [],
+    "date_role": "meeting",
+    "forbidden_dates": [
+     {
+      "date": "2025-01-28",
+      "why": "date of the earlier meeting whose minutes were approved"
+     }
+    ],
+    "parties": [
+     "Federal Retirement Thrift Investment Board"
+    ],
+    "party_relation": "for",
+    "acceptable_party_sets": [
+     {
+      "parties": [],
+      "relation": "none"
+     },
+     {
+      "parties": [
+       "Federal Retirement Thrift Investment Board"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "FRTIB"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Federal Retirement Thrift Investment Board",
+      "role": "subject"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Dana K. Bilyeu",
+      "why": "Acting Chair"
+     },
+     {
+      "name": "Ravindra Deo",
+      "why": "Executive Director"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-memo-08",
+   "file": "real5-memo-08.pdf",
+   "title": "Minutes of the joint meeting of the Federal Retirement Thrift Investment Board members and the Employee Thrift Advisory Council, May 29, 2025 (born-digital PDF, 6 pages)",
+   "kind": "minutes",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 6,
+   "categories": [
+    "minutes",
+    "born_digital",
+    "board_minutes",
+    "joint_meeting",
+    "staff_names",
+    "competing_dates",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "Letterhead 'FEDERAL RETIREMENT THRIFT INVESTMENT BOARD, 77 K Street, NE', 'MINUTES OF THE MEETING OF THE BOARD MEMBERS AND THE EMPLOYEE THRIFT ADVISORY COUNCIL, May 29, 2025'. Chair Michael Gerber; Council members from unions and associations (American Federation of Government Employees, Federally Employed Women, ...) listed. Approves the April 22, 2025 minutes. Traps: the approved minutes' date; the Council and the member organisations.",
+   "source": {
+    "name": "Federal Retirement Thrift Investment Board, meeting minutes",
+    "url": "https://www.frtib.gov/meeting_minutes/2025/2025May.pdf",
+    "page": "https://www.frtib.gov/meeting-minutes/",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 242989,
+    "sha256": "dd87d19318eec15063b43a188653af78ea281c28d21bf5dbaad165cdda7c3ed9"
+   },
+   "gold": {
+    "document_type": "Board Meeting Minutes",
+    "acceptable_types": [
+     "Minutes",
+     "Meeting Minutes",
+     "Joint Meeting Minutes",
+     "Board Minutes",
+     "Minutes of the Meeting of the Board Members and the Employee Thrift Advisory Council"
+    ],
+    "document_date": "2025-05-29",
+    "acceptable_dates": [],
+    "date_role": "meeting",
+    "forbidden_dates": [
+     {
+      "date": "2025-04-22",
+      "why": "date of the earlier meeting whose minutes were approved"
+     }
+    ],
+    "parties": [
+     "Federal Retirement Thrift Investment Board"
+    ],
+    "party_relation": "for",
+    "acceptable_party_sets": [
+     {
+      "parties": [],
+      "relation": "none"
+     },
+     {
+      "parties": [
+       "Federal Retirement Thrift Investment Board"
+      ],
+      "relation": "from"
+     },
+     {
+      "parties": [
+       "Federal Retirement Thrift Investment Board",
+       "Employee Thrift Advisory Council"
+      ],
+      "relation": "between"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Federal Retirement Thrift Investment Board",
+      "role": "subject"
+     },
+     {
+      "name": "Employee Thrift Advisory Council",
+      "role": "subject"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Michael Gerber",
+      "why": "Chair"
+     },
+     {
+      "name": "American Federation of Government Employees",
+      "why": "Council member organisation"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-memo-09",
+   "file": "real5-memo-09.pdf",
+   "title": "Minutes of the NIST Visiting Committee on Advanced Technology hybrid meeting of October 29, 2024 (born-digital PDF, 12 pages)",
+   "kind": "minutes",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 12,
+   "categories": [
+    "minutes",
+    "born_digital",
+    "advisory_committee",
+    "attendance_list",
+    "staff_names",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "'VISITING COMMITTEE ON ADVANCED TECHNOLOGY (VCAT or Committee), MINUTES OF THE TUESDAY, OCTOBER 29, 2024, HYBRID MEETING', a three-column attendance list of committee members, NIST leadership, staff and others (with companies such as IBM). Certified at the end by the Designated Federal Officer, Stephanie Shaw, and the Chair, Jason Matusow. Traps: the long attendance list; outside organisations named; no approval date.",
+   "source": {
+    "name": "National Institute of Standards and Technology, VCAT meeting minutes",
+    "url": "https://nist.gov/document/october-2024-minutes",
+    "page": "https://www.nist.gov/director/vcat",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 247677,
+    "sha256": "29357ecba42db1224c7fe33a9ab191ccb023542c6c854b074262becc984841a8"
+   },
+   "gold": {
+    "document_type": "Meeting Minutes",
+    "acceptable_types": [
+     "Minutes",
+     "VCAT Meeting Minutes",
+     "Committee Meeting Minutes"
+    ],
+    "document_date": "2024-10-29",
+    "acceptable_dates": [],
+    "date_role": "meeting",
+    "forbidden_dates": [],
+    "parties": [
+     "Visiting Committee on Advanced Technology"
+    ],
+    "party_relation": "for",
+    "acceptable_party_sets": [
+     {
+      "parties": [],
+      "relation": "none"
+     },
+     {
+      "parties": [
+       "NIST Visiting Committee on Advanced Technology"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "National Institute of Standards and Technology"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "NIST"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Visiting Committee on Advanced Technology",
+      "role": "subject"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Jason Matusow",
+      "why": "VCAT Chair"
+     },
+     {
+      "name": "Stephanie Shaw",
+      "why": "Designated Federal Officer"
+     },
+     {
+      "name": "IBM",
+      "why": "an attendee's company"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-memo-10",
+   "file": "real5-memo-10.pdf",
+   "title": "Minutes of the NIST Visiting Committee on Advanced Technology webinar meeting of February 14, 2024 (born-digital PDF)",
+   "kind": "minutes",
+   "format": "pdf",
+   "text_layer": "native",
+   "pages": 13,
+   "categories": [
+    "minutes",
+    "born_digital",
+    "advisory_committee",
+    "attendance_list",
+    "staff_names",
+    "competing_dates",
+    "us_federal",
+    "modern"
+   ],
+   "notes": "'VISITING COMMITTEE ON ADVANCED TECHNOLOGY (VCAT or Committee), MINUTES OF THE WEDNESDAY, FEBRUARY 14, 2024, WEBINAR MEETING', with an attendance list. Records an election taking effect March 1, 2024, an RFI that closed February 2, 2024 and another that closed December 22, 2023. Traps: those dates; the attendees.",
+   "source": {
+    "name": "National Institute of Standards and Technology, VCAT meeting minutes",
+    "url": "https://nist.gov/document/february-2024-vcat-meeting-minutes",
+    "page": "https://www.nist.gov/director/vcat",
+    "license": "US government work (17 U.S.C. 105), public domain",
+    "size": 265331,
+    "sha256": "85657648436bb0cd2b9b623b1a6e3de066a503c28fb486ecd7a45380af23e9ee"
+   },
+   "gold": {
+    "document_type": "Meeting Minutes",
+    "acceptable_types": [
+     "Minutes",
+     "VCAT Meeting Minutes",
+     "Committee Meeting Minutes"
+    ],
+    "document_date": "2024-02-14",
+    "acceptable_dates": [],
+    "date_role": "meeting",
+    "forbidden_dates": [
+     {
+      "date": "2024-03-01",
+      "why": "date an elected change takes effect"
+     },
+     {
+      "date": "2024-02-02",
+      "why": "date an RFI closed"
+     },
+     {
+      "date": "2023-12-22",
+      "why": "date an RFI closed"
+     }
+    ],
+    "parties": [
+     "Visiting Committee on Advanced Technology"
+    ],
+    "party_relation": "for",
+    "acceptable_party_sets": [
+     {
+      "parties": [],
+      "relation": "none"
+     },
+     {
+      "parties": [
+       "NIST Visiting Committee on Advanced Technology"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "National Institute of Standards and Technology"
+      ],
+      "relation": "for"
+     },
+     {
+      "parties": [
+       "NIST"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Visiting Committee on Advanced Technology",
+      "role": "subject"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Stephanie Shaw",
+      "why": "Designated Federal Officer"
+     }
+    ],
+    "expected_readiness": "ready"
+   }
+  },
+  {
+   "id": "real5-office-01",
+   "file": "real5-office-01.docx",
+   "title": "Summary of the minutes of the first meeting of the Welsh Government's review of digital innovation, 14 June 2018 (DOCX, 5 pages, no body named in the text)",
+   "kind": "minutes",
+   "format": "docx",
+   "text_layer": "office",
+   "pages": 5,
+   "categories": [
+    "minutes",
+    "office",
+    "docx",
+    "attendee_list",
+    "no_issuer_printed",
+    "metadata_date_trap",
+    "uk",
+    "wales"
+   ],
+   "notes": "'MINUTES, THURSDAY 14 JUNE 2018', a list of attendees (Professor Phil Brown, chair, and others) and apologies, then a summary of discussion of 'the review' (digital innovation, the Well-being of Future Generations (Wales) Act). The text never names the body; only the file's metadata says 'Welsh Government'. The publication page calls it the Review of digital innovation meeting. A name with no party is right. Traps: the chair and attendees as parties; the Act's name.",
+   "source": {
+    "name": "Welsh Government, 'Review of digital innovation meeting: 14 June 2018'",
+    "url": "https://www.gov.wales/sites/default/files/publications/2018-11/summary-of-the-minutes-of-the-meeting-held-on-14-june-2018.docx",
+    "page": "https://gov.wales/node/5368",
+    "license": "Crown copyright; Welsh Government content on gov.wales is available under the Open Government Licence v3.0 (gov.wales copyright statement)",
+    "size": 32770,
+    "sha256": "f78e29e56d1adbf94d03b13756d45119e589a3a8725adc94f618d25ad098754a"
+   },
+   "gold": {
+    "document_type": "Minutes",
+    "acceptable_types": [
+     "Meeting Minutes",
+     "Summary of Minutes",
+     "Summary of the Minutes of the Meeting"
+    ],
+    "document_date": "2018-06-14",
+    "acceptable_dates": [],
+    "date_role": "meeting",
+    "forbidden_dates": [],
+    "parties": [],
+    "party_relation": null,
+    "acceptable_party_sets": [],
+    "party_roles": [],
+    "forbidden_parties": [
+     {
+      "name": "Phil Brown",
+      "why": "chair of the review, a person"
+     },
+     {
+      "name": "Sophie Howe",
+      "why": "attendee"
+     }
+    ],
+    "expected_readiness": "either"
+   }
+  },
+  {
+   "id": "real5-office-02",
+   "file": "real5-office-02.docx",
+   "title": "Northern Ireland Department for the Economy Energy Strategy e-bulletin, issue 36, September 2026, accessible version (DOCX, 7 pages, dated by month only)",
+   "kind": "report",
+   "format": "docx",
+   "text_layer": "office",
+   "pages": 7,
+   "categories": [
+    "report",
+    "newsletter",
+    "office",
+    "docx",
+    "month_only_date",
+    "many_dates",
+    "uk",
+    "northern_ireland",
+    "modern"
+   ],
+   "notes": "'ENERGY STRATEGY E-BULLETIN, ISSUE 36: SEPTEMBER 2026', a newsletter of the Department for the Economy's energy strategy (Household Electricity Discount Scheme, the Minister's Energy Forum speech of 9 September 2026, an interconnection policy statement, RHI closure on 7 September 2026). It is dated by month only, so a careful clerk cannot give a day: review. Traps: the event dates inside; the Minister.",
+   "source": {
+    "name": "Department for the Economy (Northern Ireland), Energy Strategy e-bulletin 36",
+    "url": "https://www.economy-ni.gov.uk/sites/default/files/2026-10/Energy%20Strategy%20E-bulletin%2036%20-%20Accessible%20version.DOCX",
+    "page": "https://www.economy-ni.gov.uk/publications/energy-strategy-e-bulletin-issue-36",
+    "license": "Crown copyright; Northern Ireland government department content on nidirect department sites is available under the Open Government Licence v3.0 unless otherwise stated",
+    "size": 27187,
+    "sha256": "0977999452577600f0d8f3fcc39303afe7d18a0aa728e07ef59cbbafa8f39beb"
+   },
+   "gold": {
+    "document_type": "Newsletter",
+    "acceptable_types": [
+     "E-bulletin",
+     "Energy Strategy E-bulletin",
+     "Bulletin",
+     "Energy Strategy Bulletin"
+    ],
+    "document_date": null,
+    "acceptable_dates": [],
+    "date_role": "issue",
+    "forbidden_dates": [
+     {
+      "date": "2026-09-09",
+      "why": "date of the Minister's speech"
+     },
+     {
+      "date": "2026-09-07",
+      "why": "date of an announcement inside"
+     }
+    ],
+    "parties": [
+     "Department for the Economy"
+    ],
+    "party_relation": "from",
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Department for the Economy (Northern Ireland)"
+      ],
+      "relation": "from"
+     }
+    ],
+    "party_roles": [
+     {
+      "name": "Department for the Economy",
+      "role": "issuer"
+     }
+    ],
+    "forbidden_parties": [
+     {
+      "name": "Caoimhe Archibald",
+      "why": "the Economy Minister named in the bulletin"
+     }
+    ],
+    "expected_readiness": "needs_review"
+   }
+  },
+  {
+   "id": "real5-office-03",
+   "file": "real5-office-03.docx",
+   "title": "Blank declaration template (Annex D(i)) for district councils claiming under Northern Ireland's Scheme of Emergency Financial Assistance (DOCX, 1 page)",
+   "kind": "form",
+   "format": "docx",
+   "text_layer": "office",
+   "pages": 1,
+   "categories": [
+    "form",
+    "office",
+    "docx",
+    "blank_template",
+    "placeholders",
+    "no_document_date",
+    "no_issuer_printed",
+    "uk",
+    "northern_ireland",
+    "modern"
+   ],
+   "notes": "One-page template: 'Scheme of Emergency Financial Assistance, [Insert Year of Scheme], Declaration. I can confirm that [insert name of Council] cannot recover any of the expenditure ...', blank lines for total, signature, print name, Chief Financial Officer, District Council and Date, and 'Details of the Scale of the Flooding Event'. No date and no issuer are printed (it is an annex to the Department for Communities' circular LG 17/2026). A careful clerk cannot date it: review.",
+   "source": {
+    "name": "Department for Communities (Northern Ireland), circular LG 17/2026 annex D(i)",
+    "url": "https://www.communities-ni.gov.uk/sites/default/files/2026-10/lg-17-2026-sefa-annex-di-declaration.docx",
+    "page": "https://www.communities-ni.gov.uk/publications/circular-lg-172026-scheme-emergency-financial-assistance-sefa-district-councils-flooding-21-october-2026-until-20-november-2026",
+    "license": "Crown copyright; Northern Ireland government department content on nidirect department sites is available under the Open Government Licence v3.0 unless otherwise stated",
+    "size": 26319,
+    "sha256": "04f0bccb11daf82651fe637644fab6cc376cb41a27b236cc26f9058efa6ffbde"
+   },
+   "gold": {
+    "document_type": "Declaration",
+    "acceptable_types": [
+     "Declaration Form",
+     "Scheme of Emergency Financial Assistance Declaration",
+     "Claim Declaration",
+     "Form"
+    ],
+    "document_date": null,
+    "acceptable_dates": [],
+    "date_role": null,
+    "forbidden_dates": [],
+    "parties": [],
+    "party_relation": null,
+    "acceptable_party_sets": [],
+    "party_roles": [],
+    "forbidden_parties": [],
+    "expected_readiness": "needs_review"
+   }
+  },
+  {
+   "id": "real5-office-04",
+   "file": "real5-office-04.xlsx",
+   "title": "Welsh Government Rural Development Programme 2014-2020 allocation, commitment and spend statistics to 30 September 2023 (XLSX, 3 sheets)",
+   "kind": "statement",
+   "format": "xlsx",
+   "text_layer": "office",
+   "pages": 3,
+   "categories": [
+    "statement",
+    "office",
+    "spreadsheet",
+    "xlsx",
+    "as_of_date",
+    "no_issuer_printed",
+    "type_not_printed",
+    "uk",
+    "wales"
+   ],
+   "notes": "Workbook with sheets 'Commitment & Spend' (table 'Allocation, Spend & Commitment, £ Millions', 'Source: RD&S, 30-09-2023'), 'EOIs' (allocation, commitment and spend by scheme) and 'Performance Indicators'. A footnote cites the last approved programme modification dated 26 January 2022. No issuer is named in the cells and no document type is printed beyond the table headings; the publication page calls it 'Rural Development Plan: money allocated, committed and spent'. A careful clerk would have to compose a type: review. Traps: the modification date; scheme names as parties.",
+   "source": {
+    "name": "Welsh Government, 'Rural Development Plan: money allocated, committed and spent' (September 2023 statistics)",
+    "url": "https://www.gov.wales/sites/default/files/publications/2023-11/rural-development-plan-money-allocated-committed-and-spent-statistics-september-2023.xlsx",
+    "page": "https://gov.wales/node/5199",
+    "license": "Crown copyright; Welsh Government content on gov.wales is available under the Open Government Licence v3.0 (gov.wales copyright statement)",
+    "size": 33698,
+    "sha256": "80cf234f8b4203647e7a2c302d468d2470b34a5c8b953513cfa5761f3fdf6e76"
+   },
+   "gold": {
+    "document_type": "Allocation, Spend and Commitment Statement",
+    "acceptable_types": [
+     "Allocation, Spend & Commitment",
+     "Spend and Commitment Statement",
+     "Rural Development Programme Statistics",
+     "Statistics",
+     "Statement"
+    ],
+    "document_date": "2023-09-30",
+    "acceptable_dates": [],
+    "date_role": "period_end",
+    "forbidden_dates": [
+     {
+      "date": "2022-01-26",
+      "why": "date of the programme modification cited"
+     }
+    ],
+    "parties": [],
+    "party_relation": null,
+    "acceptable_party_sets": [
+     {
+      "parties": [
+       "Wales Rural Development Programme"
+      ],
+      "relation": "for"
+     }
+    ],
+    "party_roles": [],
+    "forbidden_parties": [
+     {
+      "name": "LEADER",
+      "why": "scheme named in the table"
+     }
+    ],
+    "expected_readiness": "needs_review"
+   }
+  }
+ ]
+}

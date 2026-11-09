@@ -9,7 +9,9 @@ OUT_DIR/gold.json, the sample's own gold in InternBench's schema. SAMPLE.json is
 first set, by default; sample-heldout.json, the second; sample-heldout2.json, the third, which
 shares no document with the other two and was gathered after the rules written from them; or
 sample-heldout3.json, the fourth, 58 modern business documents gathered after the rules written
-from all three, for the model qualification of November 2026. A live
+from all three, for the model qualification of November 2026; or sample-heldout4.json, the fifth,
+57 letters, notices, invoices, forms, memoranda and minutes from issuers and collections none of the
+other four used, mostly under open licences, gathered after every rule written so far. A live
 run then records and scores it like any corpus, with InternBench's own filename score:
 
     CORPUS=OUT_DIR/corpus GOLD=OUT_DIR/gold.json MANIFEST= MODEL=... LLAMA_SERVER=... \\
