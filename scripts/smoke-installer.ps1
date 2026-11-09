@@ -1,6 +1,11 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$InstallerPath,
+    # An earlier release's installer to install first, so that InstallerPath
+    # runs as an update over it: silently, with /UPDATE, as the in-app
+    # updater runs it. Everything after is checked as for a fresh install,
+    # the empty folder after the uninstall included.
+    [string]$PreviousInstallerPath,
     [string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA "Intern"),
     [string]$FixtureDirectory = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "fixtures/generated"),
     [string]$EvidencePath,
@@ -16,6 +21,7 @@ Set-StrictMode -Version Latest
 $Installer = (Resolve-Path -LiteralPath $InstallerPath).Path
 if ([System.IO.Path]::GetExtension($Installer) -ne ".exe") { throw "Installer must be an NSIS executable" }
 $InstallerSha256 = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant()
+Write-Host "Installer: $(Split-Path -Leaf $Installer), $((Get-Item -LiteralPath $Installer).Length) bytes, SHA-256 $InstallerSha256"
 if ($EvidencePath -and (@($Commit, $Workflow, $RunId, $RunAttempt) | Where-Object { [string]::IsNullOrWhiteSpace($_) })) {
     throw "Evidence output requires commit, workflow, run id, and run attempt"
 }
@@ -32,7 +38,26 @@ if (Test-Path -LiteralPath $SendToShortcut) { throw "A Send to shortcut already 
 $StartupErrorLog = Join-Path $UserDataDirectory "logs/startup-error.log"
 if (Test-Path -LiteralPath $StartupErrorLog) { Remove-Item -LiteralPath $StartupErrorLog -Force }
 $AppProcess = $null
-$Install = Start-Process -FilePath $Installer -ArgumentList "/S" -Wait -PassThru
+# What releases up to alpha.14 installed at the root for a llama.cpp build of
+# their own (src-tauri/windows/hooks.nsh removes them before an update writes
+# anything): none may be there after this installer has run.
+$OldRootLlamaFiles = @(
+    "llama-server.exe", "llama-server-impl.dll", "llama-common.dll", "llama.dll", "mtmd.dll", "ggml.dll", "ggml-base.dll", "ggml-rpc.dll", "libomp140.x86_64.dll",
+    "ggml-cpu-x64.dll", "ggml-cpu-sse42.dll", "ggml-cpu-ssse3.dll", "ggml-cpu-sandybridge.dll", "ggml-cpu-ivybridge.dll", "ggml-cpu-piledriver.dll", "ggml-cpu-haswell.dll",
+    "ggml-cpu-alderlake.dll", "ggml-cpu-skylakex.dll", "ggml-cpu-cannonlake.dll", "ggml-cpu-cascadelake.dll", "ggml-cpu-cooperlake.dll", "ggml-cpu-icelake.dll", "ggml-cpu-zen4.dll", "ggml-cpu-sapphirerapids.dll")
+$InstallArguments = "/S"
+if ($PreviousInstallerPath) {
+    $Previous = (Resolve-Path -LiteralPath $PreviousInstallerPath).Path
+    $PreviousInstall = Start-Process -FilePath $Previous -ArgumentList "/S" -Wait -PassThru
+    if ($PreviousInstall.ExitCode -ne 0) { throw "The previous release's NSIS installer exited with $($PreviousInstall.ExitCode)" }
+    if (-not (Test-Path -LiteralPath (Join-Path $InstallDirectory "Intern.exe") -PathType Leaf)) { throw "The previous release did not install Intern.exe in $InstallDirectory" }
+    $PreviousRoot = @(Get-ChildItem -LiteralPath $InstallDirectory -File | Sort-Object Name)
+    $PreviousLlama = @($PreviousRoot | Where-Object { $OldRootLlamaFiles -contains $_.Name })
+    Write-Host ("Previous release installed: $($PreviousRoot.Count) files at the root, $($PreviousLlama.Count) of them its root llama.cpp build " +
+        "($(($PreviousLlama | Measure-Object -Property Length -Sum).Sum) bytes); $((Get-ChildItem -LiteralPath $InstallDirectory -Recurse -File | Measure-Object -Property Length -Sum).Sum) bytes in all")
+    $InstallArguments = "/S /UPDATE"
+}
+$Install = Start-Process -FilePath $Installer -ArgumentList $InstallArguments -Wait -PassThru
 if ($Install.ExitCode -ne 0) { throw "NSIS installer exited with $($Install.ExitCode)" }
 
 try {
@@ -67,19 +92,26 @@ try {
         $Digest = (Get-FileHash -LiteralPath $Packaged -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($Digest -ne [string]$Entry.sha256) { throw "Installed SHA-256 mismatch: $Relative" }
     }
-    foreach ($Required in @("intern-worker.exe", "llama-server.exe", "llama-upstream/llama-server.exe", "llama-upstream/libomp.dll", "llama-upstream/ggml-base.dll", "tesseract.exe", "pdfium.dll", "tessdata/eng.traineddata", "tessdata/osd.traineddata", "onnxruntime.dll", "ocr-models/text-detection.onnx", "ocr-models/text-recognition.onnx", "ocr-models/page-orientation.onnx")) {
+    foreach ($Required in @("intern-worker.exe", "llama-upstream/llama-server.exe", "llama-upstream/libomp.dll", "llama-upstream/ggml-base.dll", "tesseract.exe", "pdfium.dll", "tessdata/eng.traineddata", "tessdata/osd.traineddata", "onnxruntime.dll", "ocr-models/text-detection.onnx", "ocr-models/text-recognition.onnx", "ocr-models/page-orientation.onnx")) {
         if (-not $Seen.ContainsKey($Required)) { throw "Installed manifest omits required runtime: $Required" }
     }
-    # Both llama.cpp builds start from where they are installed: the PrismML
-    # fork's, for the fast tier, at the root beside its DLLs, and upstream's,
-    # for the accurate tier, in llama-upstream\ beside its own DLLs and the
-    # OpenMP runtime they import. --version prints the build and exits, but the
-    # process cannot start at all unless every DLL it imports is found, so a
-    # DLL missing from either folder fails here - as -1073741515, which is
-    # STATUS_DLL_NOT_FOUND - rather than on a user's first document. The output
-    # goes to a temporary file, never into the installation, which has to be
-    # empty again after the uninstall below.
-    foreach ($ServerRelative in @("llama-server.exe", "llama-upstream/llama-server.exe")) {
+    # One llama.cpp build, in llama-upstream\: nothing of an older release's
+    # root build is listed, nor left on disk by an update.
+    foreach ($OldRootFile in $OldRootLlamaFiles) {
+        if ($Seen.ContainsKey($OldRootFile)) { throw "Installed manifest lists a llama.cpp file at the root: $OldRootFile" }
+        if (Test-Path -LiteralPath (Join-Path $InstallDirectory $OldRootFile)) { throw "An older release's root llama.cpp file is still installed: $OldRootFile" }
+    }
+    $InstalledRoot = @(Get-ChildItem -LiteralPath $InstallDirectory -File | Sort-Object Name)
+    Write-Host ("Installed: $($InstalledRoot.Count) files at the root, " +
+        "$((Get-ChildItem -LiteralPath $InstallDirectory -Recurse -File | Measure-Object -Property Length -Sum).Sum) bytes in all: $(($InstalledRoot | ForEach-Object Name) -join ', ')")
+    # The llama.cpp build starts from where it is installed, in llama-upstream\
+    # beside its own DLLs and the OpenMP runtime they import. --version prints
+    # the build and exits, but the process cannot start at all unless every DLL
+    # it imports is found, so a DLL missing from the folder fails here - as
+    # -1073741515, which is STATUS_DLL_NOT_FOUND - rather than on a user's first
+    # document. The output goes to a temporary file, never into the
+    # installation, which has to be empty again after the uninstall below.
+    foreach ($ServerRelative in @("llama-upstream/llama-server.exe")) {
         $ServerPath = [IO.Path]::GetFullPath((Join-Path $InstallDirectory $ServerRelative))
         $ServerOutput = Join-Path ([IO.Path]::GetTempPath()) ("intern-smoke-llama-server-" + [guid]::NewGuid().ToString("N") + ".log")
         $ServerProcess = Start-Process -FilePath $ServerPath -ArgumentList "--version" -WorkingDirectory (Split-Path -Parent $ServerPath) -NoNewWindow -PassThru -RedirectStandardOutput $ServerOutput -RedirectStandardError "$ServerOutput.err"
@@ -240,7 +272,8 @@ public static class InternSmokeWindow {
             }
         } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $EvidencePath -Encoding utf8NoBOM
     }
-    Write-Host "Per-user NSIS app launch, clean shutdown, signed runtime, both llama-server builds, worker PDF/OCR, Send to shortcut, and install/uninstall smoke passed."
+    $Kind = if ($PreviousInstallerPath) { "update over $(Split-Path -Leaf $PreviousInstallerPath)" } else { "install" }
+    Write-Host "Per-user NSIS app launch, clean shutdown, signed runtime, llama-server, worker PDF/OCR, Send to shortcut, and $Kind/uninstall smoke passed."
 }
 finally {
     if ($AppProcess -and -not $AppProcess.HasExited) {

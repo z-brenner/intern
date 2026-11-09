@@ -20,9 +20,10 @@ $BinariesDirectory = Join-Path $RepositoryRoot "src-tauri/binaries"
 $ResourcesDirectory = Join-Path $RepositoryRoot "src-tauri/resources"
 $NativeDirectory = Join-Path $ResourcesDirectory "native"
 # Upstream llama.cpp's server and every DLL it loads, in a folder of their
-# own: they share file names with the PrismML fork's at the install root, and
-# Windows, like ggml looking for its CPU backends, looks first beside the
-# executable a process was started from.
+# own: Windows, like ggml looking for its CPU backends, looks first beside the
+# executable a process was started from, and the install root holds other
+# DLLs. The folder keeps the name it had while another llama.cpp build sat at
+# the install root (until alpha.14), so an update replaces its files in place.
 $LlamaUpstreamDirectory = Join-Path $NativeDirectory "llama-upstream"
 $TessdataDirectory = Join-Path $ResourcesDirectory "tessdata"
 $OcrModelsDirectory = Join-Path $ResourcesDirectory "ocr-models"
@@ -195,46 +196,40 @@ try {
     if (Test-Path -LiteralPath $TessdataDirectory) { Remove-Item -LiteralPath $TessdataDirectory -Recurse -Force }
     if (Test-Path -LiteralPath $LicensesDirectory) { Remove-Item -LiteralPath $LicensesDirectory -Recurse -Force }
     if (Test-Path -LiteralPath $OcrModelsDirectory) { Remove-Item -LiteralPath $OcrModelsDirectory -Recurse -Force }
-    # The native wipe above takes llama-upstream with it.
+    # The native wipe above takes llama-upstream with it. binaries/ is not
+    # wiped, since the worker build is copied there beforehand, but the
+    # llama-server sidecar an earlier staging (or a compile placeholder) left
+    # there would be inventoried as a file nothing owns: no llama-server is a
+    # sidecar any more.
+    $StaleLlamaSidecar = Join-Path $BinariesDirectory "llama-server-$TargetTriple.exe"
+    if (Test-Path -LiteralPath $StaleLlamaSidecar) { Remove-Item -LiteralPath $StaleLlamaSidecar -Force }
     New-Item -ItemType Directory -Path $NativeDirectory, $LlamaUpstreamDirectory, $TessdataDirectory, $LicensesDirectory, $OcrModelsDirectory -Force | Out-Null
 
     $Downloads = @{}
     foreach ($Download in $Manifest.downloads) { $Downloads[$Download.id] = Get-PinnedDownload $Download }
 
-    # Two llama.cpp builds ship, each staged as Install-LlamaServer describes,
-    # with the same import closure: llama-server.exe -> llama-server-impl.dll
-    # -> llama-common, mtmd, llama, ggml, ggml-base.
-    #
-    # The PrismML fork serves the fast tier: its PQ2_0 kernels are what the
-    # Bonsai model needs. Its server is the llama-server sidecar at the install
-    # root, and its DLLs install beside it from sidecars/. Its zip also carries
-    # an OpenMP runtime (libomp140.x86_64.dll) that nothing in its CPU build
-    # imports, so that is left behind with the CLI tools.
-    $PrismVersion = [string]($Manifest.downloads | Where-Object id -eq "llama.cpp").version
-    $PrismRequired = @("llama-server-impl.dll", "llama-common.dll", "mtmd.dll", "llama.dll", "ggml.dll", "ggml-base.dll")
-    $PrismServer = Join-Path $BinariesDirectory "llama-server-$TargetTriple.exe"
-    $null = Install-LlamaServer -Archive $Downloads["llama.cpp"] -Version $PrismVersion -Extract (Join-Path $WorkDirectory "llama") -ServerDestination $PrismServer -Folder "sidecars" -Required $PrismRequired
-    # Upstream llama.cpp (ggml-org) serves the accurate tier. Everything of it
-    # installs in llama-upstream\, the server included, so its DLLs are the
-    # ones found beside it and never the fork's.
+    # Upstream llama.cpp (ggml-org) serves both tiers, staged as
+    # Install-LlamaServer describes, with its import closure:
+    # llama-server.exe -> llama-server-impl.dll -> llama-common, mtmd, llama,
+    # ggml, ggml-base. Everything of it installs in llama-upstream\, the server
+    # included, so its DLLs are the ones found beside it.
     $UpstreamVersion = [string]($Manifest.downloads | Where-Object id -eq "llama.cpp-upstream").version
     $UpstreamRequired = @("llama-server-impl.dll", "llama-common.dll", "mtmd.dll", "llama.dll", "ggml.dll", "ggml-base.dll")
     $UpstreamServer = Join-Path $LlamaUpstreamDirectory "llama-server.exe"
     $UpstreamDirectory = Install-LlamaServer -Archive $Downloads["llama.cpp-upstream"] -Version $UpstreamVersion -Extract (Join-Path $WorkDirectory "llama-upstream") -ServerDestination $UpstreamServer -Folder "llama-upstream" -Required $UpstreamRequired
-    # Unlike the fork's, upstream's ggml-base.dll and every one of its CPU
-    # backends import libomp.dll, LLVM's OpenMP runtime, which its zip carries
-    # with its license. Without it beside them the server cannot start at all.
-    # It is LLVM's code, not llama.cpp's, and is owned as such.
+    # Its ggml-base.dll and every one of its CPU backends import libomp.dll,
+    # LLVM's OpenMP runtime, which its zip carries with its license. Without
+    # it beside them the server cannot start at all. It is LLVM's code, not
+    # llama.cpp's, and is owned as such.
     $OpenMpRuntime = Join-Path $UpstreamDirectory "libomp.dll"
     if (-not (Test-Path -LiteralPath $OpenMpRuntime -PathType Leaf)) { throw "The pinned llama.cpp $UpstreamVersion archive has no libomp.dll" }
     Copy-SidecarDll $OpenMpRuntime "llvm-openmp" $UpstreamVersion -Folder "llama-upstream"
     $OpenMpLicense = Join-Path $UpstreamDirectory "LICENSE-LLVM-OpenMP"
     if (-not (Test-Path -LiteralPath $OpenMpLicense -PathType Leaf)) { throw "The pinned llama.cpp $UpstreamVersion archive has no LICENSE-LLVM-OpenMP" }
     Copy-RuntimeFile $OpenMpLicense (Join-Path $LicensesDirectory "llvm-openmp-LICENSE.txt")
-    # Neither build's Windows release ships llama.cpp's own license text inside
-    # its archive, so the fork's MIT license is pinned as its own download from
-    # the fork's tag. Upstream's LICENSE at b11946 is byte for byte the same
-    # file, so this one copy covers both builds.
+    # The Windows release does not ship llama.cpp's own license text inside its
+    # archive, so its MIT LICENSE is pinned as its own download from the same
+    # tag.
     Copy-RuntimeFile $Downloads["llama.cpp-license"] (Join-Path $LicensesDirectory "llama.cpp-LICENSE.txt")
 
     $PdfiumExtract = Join-Path $WorkDirectory "pdfium"

@@ -29,9 +29,8 @@ it('scores the corpus with the exact model the app installs, text-only', async (
 
 // Each tier is scored on the llama.cpp build the app runs it on: upstream
 // llama.cpp from the runtime's llama-upstream folder for both Qwen3.5 models;
-// the release and QA runs score the accurate one. The PrismML fork at the
-// runtime's root runs nothing the manifest pins. Both workflows hand over the
-// runtime root.
+// the release and QA runs score the accurate one. The runtime's root holds no
+// llama-server. Both workflows hand over the runtime root.
 it('scores each tier on the llama-server the app runs it on', async () => {
   const [script, release, qa] = await Promise.all([
     readFile('scripts/run-model-evaluation.ps1', 'utf8'),

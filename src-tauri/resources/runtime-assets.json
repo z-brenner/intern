@@ -3,28 +3,20 @@
   "generated_by": "scripts/fetch-windows-assets.ps1",
   "downloads": [
     {
-      "id": "llama.cpp",
-      "version": "prism-b10826-c9c34bc",
-      "archive": "llama-prism-b10826-c9c34bc-bin-win-cpu-x64.zip",
-      "url": "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10826-c9c34bc/llama-prism-b10826-c9c34bc-bin-win-cpu-x64.zip",
-      "size": 19559127,
-      "sha256": "1e88ab9e858b5c2dbc30cf847947a9f923b53511ba0baf0b265353ebe1f4daa6"
-    },
-    {
-      "id": "llama.cpp-license",
-      "version": "prism-b10826-c9c34bc",
-      "archive": "llama.cpp-LICENSE.txt",
-      "url": "https://raw.githubusercontent.com/PrismML-Eng/llama.cpp/prism-b10826-c9c34bc/LICENSE",
-      "size": 1078,
-      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
-    },
-    {
       "id": "llama.cpp-upstream",
       "version": "b11946",
       "archive": "llama-b11946-bin-win-cpu-x64.zip",
       "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11946/llama-b11946-bin-win-cpu-x64.zip",
       "size": 24376086,
       "sha256": "8a702bb07c873b133c56eb3acd92a48d7c5c9ad339c6435eddc5185e46e1a043"
+    },
+    {
+      "id": "llama.cpp-license",
+      "version": "b11946",
+      "archive": "llama.cpp-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/ggml-org/llama.cpp/b11946/LICENSE",
+      "size": 1078,
+      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
     },
     {
       "id": "pdfium",

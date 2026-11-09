@@ -156,6 +156,32 @@ describe('the Windows builds', () => {
       expect(steps[fetch].indexOf('Remove-Item'), name).toBeLessThan(steps[fetch].indexOf('./scripts/fetch-windows-assets.ps1'));
     }
   });
+
+  // No llama-server is a sidecar any more: a placeholder for one would be left
+  // in binaries\ for the asset fetch to find with no package that owns it.
+  it('stages no llama-server sidecar placeholder anywhere', async () => {
+    for (const name of ['ci.yml', 'release.yml', 'qa.yml']) {
+      expect(await readFile(`.github/workflows/${name}`, 'utf8'), name).not.toMatch(/binaries[\\/]llama-server/);
+    }
+  });
+
+  // The in-app updater installs over the old files; an update over alpha.14,
+  // the last release with a llama.cpp build at the install root, is smoked
+  // when CI is started by hand, from the release's own installer at its
+  // published SHA-256, after the plain install smoke.
+  it('smokes an update over alpha.14 when started by hand', async () => {
+    const steps = stepsOf(jobOf(await ci(), 'windows-release-gates'));
+    const plain = steps.findIndex((step) => step.includes('name: Smoke test per-user installer'));
+    const update = steps.findIndex((step) => step.includes('name: Smoke test an update over v0.1.0-alpha.14'));
+    expect(plain).toBeGreaterThanOrEqual(0);
+    expect(update).toBe(plain + 1);
+    const step = steps[update];
+    expect(step).toContain("if: github.event_name == 'workflow_dispatch'");
+    expect(step).toContain('https://github.com/z-brenner/intern/releases/download/v0.1.0-alpha.14/Intern_0.1.0-alpha.14_x64-setup.exe');
+    expect(step).toContain('"20177531ab3f5f0b428ac79a63f813a83b2d5b460ee695c39f607aeec76f218f"');
+    expect(step).toContain('./scripts/smoke-installer.ps1 -InstallerPath $Installer.FullName -PreviousInstallerPath $Previous');
+    expect(step.indexOf('Get-FileHash')).toBeLessThan(step.indexOf('./scripts/smoke-installer.ps1'));
+  });
 });
 
 describe('the Linux desktop job', () => {

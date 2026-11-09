@@ -121,7 +121,6 @@ jobs:
           cargo build --locked -p intern-worker
           New-Item -ItemType Directory src-tauri\binaries -Force | Out-Null
           Copy-Item target\debug\intern-worker.exe src-tauri\binaries\intern-worker-x86_64-pc-windows-msvc.exe -Force
-          New-Item -ItemType File src-tauri\binaries\llama-server-x86_64-pc-windows-msvc.exe -Force | Out-Null
           New-Item -ItemType File src-tauri\binaries\tesseract-x86_64-pc-windows-msvc.exe -Force | Out-Null
           New-Item -ItemType Directory src-tauri\resources\licenses -Force | Out-Null
           New-Item -ItemType Directory src-tauri\resources\tessdata -Force | Out-Null
