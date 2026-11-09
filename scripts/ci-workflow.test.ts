@@ -113,7 +113,10 @@ describe('the cargo caches in CI', () => {
     }
   });
 
-  it.skipIf(process.platform === 'win32')('prune every build of a workspace package and keep third-party ones', async () => {
+  // The previous release's installer and package too: the bundler names them
+  // after the version, the Windows smoke takes the first installer by name and
+  // the artifacts take every one.
+  it.skipIf(process.platform === 'win32')('prune every build of a workspace package and the bundles, and keep third-party ones', async () => {
     const target = await mkdtemp(join(tmpdir(), 'prune-cargo-'));
     try {
       const files = {
@@ -123,6 +126,10 @@ describe('the cargo caches in CI', () => {
           'release/.fingerprint/intern-engine-0123456789abcdef/lib-intern_engine',
           'debug/build/intern-app-0123456789abcdef/output',
           'debug/deps/intern_bench-0123456789abcdef',
+          'release/bundle/nsis/Intern_0.1.0-alpha.13_x64-setup.exe',
+          'release/bundle/deb/Intern_0.1.0-alpha.13_amd64.deb',
+          'release/bundle/deb/Intern_0.1.0-alpha.13_amd64/control/control',
+          'debug/bundle/deb/Intern_0.1.0-alpha.13_amd64.deb',
         ],
         thirdParty: ['debug/deps/libserde-0123456789abcdef.rlib', 'release/.fingerprint/serde-0123456789abcdef/lib-serde'],
       };
@@ -133,6 +140,7 @@ describe('the cargo caches in CI', () => {
       await exec('bash', ['scripts/prune-cargo-workspace.sh'], { env: { ...process.env, CARGO_TARGET_DIR: target } });
       for (const file of files.workspace) expect(existsSync(join(target, file)), file).toBe(false);
       for (const file of files.thirdParty) expect(existsSync(join(target, file)), file).toBe(true);
+      expect(existsSync(join(target, 'release', 'bundle')), 'release/bundle').toBe(false);
     } finally {
       await rm(target, { recursive: true, force: true });
     }
