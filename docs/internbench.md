@@ -723,7 +723,7 @@ recording made with another model file, digest budget or context.
 
 The four real-document sets are gated in CI the same way, from
 `bench/realdocs/`: the accurate model's runner recordings of the documents
-whose licence allows their extracted text to be committed (106 of the 237),
+whose licence allows their extracted text to be committed (105 of the 237),
 and a baseline per set. The `Corpus replay` job builds each set's gold from
 its committed sample without fetching anything and replays the recording
 against the baseline:

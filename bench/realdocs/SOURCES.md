@@ -32,8 +32,11 @@ the EDRM data set: ZL Technologies licensed its compilation under CC BY 3.0 US, 
 repackaging under CC0, but neither wrote the records). So is a document that encloses or
 reproduces such writing in full: an OIA response with the suppliers' invoices behind its card
 transactions appended, a FOIA response enclosing a company's letters and memos and a travel
-agency's itinerary, a penalty notice that appends the company's representations. A quotation
-within an agency's own reasoning is part of the agency's text.
+agency's itinerary, a penalty notice that appends the company's representations. An
+employee's own writing in an agency's release is someone else's too, unless it was part of their
+official duties (17 U.S.C. 105 covers only that): a FOIA response releasing the forms in which an
+employee applied to hold a board seat in a personal capacity is left out. A quotation within an
+agency's own reasoning is part of the agency's text.
 
 A Public Domain Mark says that a work is free of copyright; it is not a dedication by whoever
 holds the rights. One that a record's holder, not its author, applied is accepted only for a
@@ -277,8 +280,8 @@ Excluded:
 
 ## real4: `scripts/realdocs-eval/sample-heldout3.json`
 
-58 documents: 27 cleared, 27 of them in the recording;
-31 excluded.
+58 documents: 26 cleared, 26 of them in the recording;
+32 excluded.
 
 | Id | Recorded | Title | Source | Licence | Attribution |
 | --- | --- | --- | --- | --- | --- |
@@ -289,7 +292,6 @@ Excluded:
 | `real4-letter-05` | yes | Ministry for Pacific Peoples (NZ) response to an OIA request on staff credit cards, reference DOIA007-2024/25, requester redacted (born-digital PDF, 3 pages) | Ministry for Pacific Peoples (New Zealand), published OIA response DOIA007-2024/25: <https://mpp.govt.nz/assets/OIA-Responses/2024/Response-to-DOIA007-202425.pdf> | CC BY 4.0 | Source: Ministry for Pacific Peoples (New Zealand), published OIA response DOIA007-2024/25, licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). |
 | `real4-letter-07` | yes | MSHA (U.S. Department of Labor) FOIA request acknowledgement letter to Public.Resource.Org, dated by a rubber stamp (scanned PDF with OCR layer, one page) | Mine Safety and Health Administration (U.S. Department of Labor) FOIA correspondence, published by Public.Resource.Org: <https://law.resource.org/pub/us/cfr/regulations.gov.foia/msha.gov.20150427.pdf> | US federal government work (17 U.S.C. 105) | Not required: public domain in the US. |
 | `real4-letter-08` | yes | OSHA (U.S. Department of Labor) FOIA denial letter to Public.Resource.Org on an ANSI chain-saw standard, dated by a stamp (scanned PDF with OCR layer, 2 pages) | Occupational Safety and Health Administration (U.S. Department of Labor) FOIA correspondence, published by Public.Resource.Org: <https://law.resource.org/pub/us/cfr/regulations.gov.foia/osha.dol.gov.20150430.pdf> | US federal government work (17 U.S.C. 105) | Not required: public domain in the US. |
-| `real4-letter-09` | yes | U.S. Air Force 88th Air Base Wing FOIA response letter to Public.Resource.Org with the original request and released records attached (scanned PDF with OCR layer, 13 pages) | U.S. Air Force, 88th Air Base Wing (Wright-Patterson AFB) FOIA correspondence, published by Public.Resource.Org: <https://law.resource.org/pub/us/cfr/regulations.gov.foia/wpafb.af.mil.20150908.pdf> | US federal government work (17 U.S.C. 105) | Not required: public domain in the US. |
 | `real4-letter-10` | yes | Federal Highway Administration FOIA 'no records' response letter to Public.Resource.Org on AASHTO and AWS standards (scanned PDF with OCR layer, 2 pages) | Federal Highway Administration (U.S. Department of Transportation) FOIA correspondence, published by Public.Resource.Org: <https://law.resource.org/pub/us/cfr/regulations.gov.foia/fhwa.dot.gov.20150611.pdf> | US federal government work (17 U.S.C. 105) | Not required: public domain in the US. |
 | `real4-letter-12` | yes | Public.Resource.Org letter to the U.S. CIO, GSA's TTS director and the U.S. Digital Service about the Code of Federal Regulations, DocuSigned, with a dateline whose year is cut off in the text layer (born-digital PDF, 2 pages) | Public.Resource.Org (nonprofit) correspondence to OMB and GSA, published on law.resource.org: <https://law.resource.org/pub/us/cfr/regulations.gov.foia/oira.whitehouse.gov.20210315.pdf> | Public-domain dedication | Not required. |
 | `real4-letter-14` | yes | U.S. Coast Guard FOIA response letter to Public.Resource.Org on an incorporated-by-reference ABS standard, dated only by a faint date stamp (image-only scanned PDF, 2 pages) | United States Coast Guard (Office of Standards Evaluation and Development) FOIA correspondence, published by Public.Resource.Org: <https://law.resource.org/pub/us/cfr/regulations.gov.foia/uscg.dhs.gov.20150715.pdf> | US federal government work (17 U.S.C. 105) | Not required: public domain in the US. |
@@ -313,6 +315,7 @@ Excluded:
 Excluded:
 
 - `real4-letter-06`: encloses or reproduces a third party's writing that the stated licence does not cover: the Ministry's OIA response appends, as its Appendix Two (pages 14 to 113), the suppliers' invoices and receipts behind its card transactions (Zoom, Microsoft, Uber, Milkybyte and others); CC BY 4.0 covers the Ministry's own text, not theirs. Licence statement: "Crown copyright; New Zealand government web content is licensed for re-use under Creative Commons Attribution 4.0 International (NZGOAL) unless stated otherwise".
+- `real4-letter-09`: encloses or reproduces a third party's writing that the stated licence does not cover: the Air Force's FOIA response releases two of an employee's applications for off-duty employment (its pages 3 to 4 and 7 to 8), whose applicant's part she filled in about a board seat she holds in a personal capacity, outside her official duties as the response's own legal memos say, so it is not plainly a federal work (17 U.S.C. 105 covers work done as part of official duties). Licence statement: "US government work (17 U.S.C. 105), public domain".
 - `real4-letter-11`: public record with no licence text. Licence statement: "Kansas state court correspondence, public record".
 - `real4-letter-13`: encloses or reproduces a third party's writing that the stated licence does not cover: Commerce's FOIA response encloses ASTM International's letter and board-meeting memo and a travel agency's itinerary (its pages 12, 24 to 28 and 30 to 33), none of them federal works. Licence statement: "US government work (17 U.S.C. 105), public domain".
 - `real4-letter-15`: public record with no licence text. Licence statement: "Kentucky state legislative agency correspondence, public record".

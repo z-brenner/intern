@@ -121,7 +121,7 @@ the diff of that file, exactly which fixtures changed and in which direction.
 
 The same CI job replays InternBench (`bench/recording.json` against
 `bench/baseline.json`) and the four real-document sets (`bench/realdocs/`:
-the accurate model's runner recordings of 106 real letters, notices, invoices
+the accurate model's runner recordings of 105 real letters, notices, invoices
 and office files, each against its own baseline), all in release builds, in
 seconds. The real sets' gold is built from the committed samples by
 `scripts/realdocs-eval/fetch.py --gold-only`, and no document is fetched. A
