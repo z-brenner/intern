@@ -60,7 +60,9 @@ use crate::evidence::{
     normalize_loosely, numeric_date_order, numeric_dates, read_date_positions, stated_dates,
 };
 use crate::index::{EvidenceIndex, EvidenceUnit, UnitKind};
-use crate::infer::{infer_date_role, reads_as_signature_date, repair_issued_relation};
+use crate::infer::{
+    infer_date_role_as, reads_as_signature_date, reads_as_signature_date_as, repair_issued_relation,
+};
 use crate::phrases::{
     gives_notice, has_a_kind, head_noun, is_form_code, is_placeholder, is_reference,
     label_and_value, names_a_kind, opens_with_party_label, phrase_positions, possessive_side,
@@ -848,9 +850,23 @@ pub fn validate_facts_at(
     {
         let cited = scope.cited_units(&facts.date_evidence);
         let wording = (!cited.is_empty())
-            .then(|| infer_date_role(&scope.view(&cited), &date, document_type.as_deref()))
+            .then(|| {
+                infer_date_role_as(
+                    &scope.view(&cited),
+                    &date,
+                    document_type.as_deref(),
+                    date_positions(read_loosely.as_deref(), &date),
+                )
+            })
             .flatten()
-            .or_else(|| infer_date_role(context, &date, document_type.as_deref()));
+            .or_else(|| {
+                infer_date_role_as(
+                    context,
+                    &date,
+                    document_type.as_deref(),
+                    date_positions(read_loosely.as_deref(), &date),
+                )
+            });
         if wording == Some(DateRole::Execution)
             && let Some((alternate, line)) = single_agreed(
                 effective_alternates(context, &date),
@@ -885,8 +901,16 @@ pub fn validate_facts_at(
             DocumentClass::Agreement | DocumentClass::Amendment
         )
         && let Some(date) = document_date.clone()
-        && only_in_signatures(scope.index, &date)
-        && reads_as_signature_date(document, &date)
+        && only_in_signatures_as(
+            scope.index,
+            &date,
+            date_positions(read_loosely.as_deref(), &date),
+        )
+        && reads_as_signature_date_as(
+            document,
+            &date,
+            date_positions(read_loosely.as_deref(), &date),
+        )
         && let Some((latest, line)) = latest_signature_date(scope, &date, |candidate| {
             reads_as_signature_date(document, candidate)
                 && !deadline_fires(context, candidate)
@@ -924,9 +948,23 @@ pub fn validate_facts_at(
     let date_role = document_date.as_deref().and_then(|date| {
         let cited = scope.cited_units(&facts.date_evidence);
         (!replaced && !cited.is_empty())
-            .then(|| infer_date_role(&scope.view(&cited), date, document_type.as_deref()))
+            .then(|| {
+                infer_date_role_as(
+                    &scope.view(&cited),
+                    date,
+                    document_type.as_deref(),
+                    date_positions(read_loosely.as_deref(), date),
+                )
+            })
             .flatten()
-            .or_else(|| infer_date_role(context, date, document_type.as_deref()))
+            .or_else(|| {
+                infer_date_role_as(
+                    context,
+                    date,
+                    document_type.as_deref(),
+                    date_positions(read_loosely.as_deref(), date),
+                )
+            })
             .or(date_role)
     });
 
@@ -3001,9 +3039,13 @@ fn scope_name(context: bool, document: bool) -> String {
 /// True when every unit that states `date` stands in or just after a
 /// signature block, and one does. Running headers and footers are not read.
 fn only_in_signatures(index: &EvidenceIndex, date: &str) -> bool {
+    only_in_signatures_as(index, date, date_match_positions)
+}
+
+fn only_in_signatures_as(index: &EvidenceIndex, date: &str, positions: DatePositions) -> bool {
     let mut stated = false;
     for unit in index.units() {
-        if unit.running || date_match_positions(date, &unit.normalized).is_empty() {
+        if unit.running || positions(date, &unit.normalized).is_empty() {
             continue;
         }
         if !unit.features.position.signature {
@@ -7880,6 +7922,56 @@ PELLWORTH COUNTY WATER AUTHORITY\nBy:\nName: Barnaby Quist\nTitle: General Manag
         // The last signature's own date stands as it is.
         let outcome = check(
             amendment_facts(&index, "2026-08-21", "August 21"),
+            &whole(&index),
+            &index,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-08-21")
+        );
+    }
+
+    #[test]
+    fn a_loose_signing_date_gives_way_to_the_effective_date() {
+        for signed in ["June 2, 2017", "June 2,2017", "02-Jun-17"] {
+            let text =
+                format!("LEASE AGREEMENT\n\nSigned on {signed}\n\nEffective Date: July 1, 2017");
+            let (outcome, _) = facts_for(&text, |index| ModelFacts {
+                document_type: Some("Lease Agreement".into()),
+                document_date: Some("2017-06-02".into()),
+                date_role: Some(DateRole::Effective),
+                date_evidence: vec![id_of(index, "Signed on")],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.document_date.as_deref(),
+                Some("2017-07-01"),
+                "{signed}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_loose_signing_date_keeps_its_stated_role_and_review() {
+        let (outcome, _) = facts_for("LEASE AGREEMENT\n\nSigned on June 2,2017", |index| {
+            ModelFacts {
+                document_type: Some("Lease Agreement".into()),
+                document_date: Some("2017-06-02".into()),
+                date_role: Some(DateRole::Effective),
+                date_evidence: vec![id_of(index, "Signed on")],
+                ..ModelFacts::default()
+            }
+        });
+        assert_eq!(outcome.proposal.date_role, Some(DateRole::Execution));
+        assert!(outcome.reasons.contains(&ReviewReason::DateUnsupported));
+    }
+
+    #[test]
+    fn a_loose_earlier_signature_gives_way_to_the_last() {
+        let text = SIGNED_AMENDMENT.replace("August 18, 2026", "August 18,2026");
+        let index = index_of(&text);
+        let outcome = check(
+            amendment_facts(&index, "2026-08-18", "August 18"),
             &whole(&index),
             &index,
         );

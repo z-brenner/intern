@@ -206,12 +206,22 @@ pub fn infer_date_role(
     date: &str,
     document_type: Option<&str>,
 ) -> Option<DateRole> {
+    infer_date_role_as(digest, date, document_type, date_match_positions)
+}
+
+/// Infer the role from the same statements that validation read the date from.
+pub(crate) fn infer_date_role_as(
+    digest: &impl Segments,
+    date: &str,
+    document_type: Option<&str>,
+    positions: crate::validate::DatePositions,
+) -> Option<DateRole> {
     let mut found: Vec<DateRole> = Vec::new();
     let mut generic = false;
     for segment in digest.segments() {
         for line in wrapped_lines(segment) {
             let normalized = normalize(&line);
-            for position in date_match_positions(date, &normalized) {
+            for position in positions(date, &normalized) {
                 if crate::validate::reference_introduced(&normalized, position) {
                     continue;
                 }
@@ -567,11 +577,20 @@ pub(crate) fn two_digit_year_dates(
 /// a due date is not a signature's, and neither is a date with no label at
 /// all. False when nothing states the date.
 pub(crate) fn reads_as_signature_date(digest: &impl Segments, date: &str) -> bool {
+    reads_as_signature_date_as(digest, date, date_match_positions)
+}
+
+/// Check signature wording with the selected date-position reader.
+pub(crate) fn reads_as_signature_date_as(
+    digest: &impl Segments,
+    date: &str,
+    positions: crate::validate::DatePositions,
+) -> bool {
     let mut stated = false;
     for segment in digest.segments() {
         for line in wrapped_lines(segment) {
             let normalized = normalize(&line);
-            for position in date_match_positions(date, &normalized) {
+            for position in positions(date, &normalized) {
                 let window = window_before(&normalized, position);
                 match role_from_wording(&window) {
                     Some(DateRole::Execution) => {}
