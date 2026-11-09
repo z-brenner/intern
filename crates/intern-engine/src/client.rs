@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::domain::{
     DateRole, Evidence, KeyFact, ModelFacts, ModelProposal, ModelTimings, PartyFact, PartyRelation,
-    PartyRole, TokenConfidence,
+    PartyRole, TokenConfidence, TokenProbability,
 };
 use crate::error::{EngineError, EngineErrorCode, EngineResult};
 use crate::evidence::is_valid_iso_date;
@@ -194,6 +194,11 @@ pub struct ProposerReply {
     pub proposal: ModelProposal,
     /// See [`Proposer::propose_scored`].
     pub token_confidence: Option<TokenConfidence>,
+    /// Every generated token with its probability, as the server reported
+    /// them; empty when it reported none. Nothing in the engine reads it: a
+    /// recording keeps it, so the gate's reading of it can be compared with
+    /// others offline.
+    pub token_probabilities: Vec<TokenProbability>,
     /// How the server spent the request, when it said: the local server
     /// does, and nothing else is asked.
     pub timings: Option<ModelTimings>,
@@ -222,6 +227,7 @@ pub trait Proposer: Send + Sync {
             .map(|(proposal, token_confidence)| ProposerReply {
                 proposal,
                 token_confidence,
+                token_probabilities: Vec::new(),
                 timings: None,
             })
     }
@@ -446,10 +452,12 @@ impl ModelClient {
         let completion: ChatCompletion = serde_json::from_slice(&bytes)
             .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
         let token_confidence = completion.token_confidence();
+        let token_probabilities = completion.token_probabilities();
         let timings = completion.model_timings();
         decode(completion, request.evidence.as_ref()).map(|proposal| ProposerReply {
             proposal,
             token_confidence,
+            token_probabilities,
             timings,
         })
     }
@@ -998,10 +1006,23 @@ impl ChatCompletion {
     /// token probabilities in a shape this can read. A shape it cannot read
     /// costs the signal, never the reply.
     pub(crate) fn token_confidence(&self) -> Option<TokenConfidence> {
+        token_confidence(&self.token_logprobs()?)
+    }
+
+    /// The first choice's tokens with their probabilities, in the shape a
+    /// recording keeps them; empty when the server reported none or in a
+    /// shape this cannot read.
+    pub(crate) fn token_probabilities(&self) -> Vec<TokenProbability> {
+        self.token_logprobs()
+            .unwrap_or_default()
+            .into_iter()
+            .map(TokenLogprob::into_probability)
+            .collect()
+    }
+
+    fn token_logprobs(&self) -> Option<Vec<TokenLogprob>> {
         let logprobs = self.choices.first()?.logprobs.as_ref()?;
-        let tokens: Vec<TokenLogprob> =
-            serde_json::from_value(logprobs.get("content")?.clone()).ok()?;
-        token_confidence(&tokens)
+        serde_json::from_value(logprobs.get("content")?.clone()).ok()
     }
 
     /// How the server spent the request, when it reported that in
@@ -1056,6 +1077,36 @@ pub(crate) struct TokenLogprob {
     #[serde(default)]
     bytes: Option<Vec<u8>>,
     logprob: f64,
+    /// The alternatives the server listed at this position.
+    #[serde(default)]
+    top_logprobs: Vec<TopLogprob>,
+}
+
+/// One alternative the server listed for a position.
+#[derive(Deserialize)]
+struct TopLogprob {
+    token: String,
+    logprob: f64,
+}
+
+impl TokenLogprob {
+    /// The token as a recording keeps it: its bytes only where its text
+    /// cannot carry them.
+    fn into_probability(self) -> TokenProbability {
+        let bytes = self
+            .bytes
+            .filter(|bytes| bytes.as_slice() != self.token.as_bytes());
+        TokenProbability {
+            token: self.token,
+            logprob: self.logprob as f32,
+            bytes,
+            top: self
+                .top_logprobs
+                .into_iter()
+                .map(|alternative| (alternative.token, alternative.logprob as f32))
+                .collect(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1716,6 +1767,7 @@ mod tests {
                 token: (*text).to_owned(),
                 bytes: Some(text.as_bytes().to_vec()),
                 logprob: probability.ln(),
+                top_logprobs: Vec::new(),
             })
             .collect()
     }
@@ -1793,6 +1845,43 @@ mod tests {
         assert_eq!(confidence.tokens, 5);
         assert!(close(confidence.min, 0.3), "{confidence:?}");
         assert!(close(confidence.mean, 0.66), "{confidence:?}");
+    }
+
+    #[test]
+    fn a_reply_keeps_every_token_with_its_probability_and_alternatives() {
+        let completion: ChatCompletion = serde_json::from_value(json!({
+            "choices": [{
+                "message": {"content": "{}"},
+                "finish_reason": "stop",
+                "logprobs": {"content": [
+                    {"token": "{\"", "bytes": [123, 34], "logprob": -0.5,
+                     "top_logprobs": [{"token": "{\"", "bytes": [123, 34], "logprob": -0.5}]},
+                    {"token": "\u{e9}", "bytes": [195], "logprob": -1.25,
+                     "top_logprobs": [{"token": "x", "logprob": -0.75}]}
+                ]}
+            }]
+        }))
+        .unwrap();
+        let tokens = completion.token_probabilities();
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].token, "{\"");
+        assert_eq!(tokens[0].logprob, -0.5);
+        assert_eq!(
+            tokens[0].bytes, None,
+            "bytes its text carries are not kept twice"
+        );
+        assert_eq!(tokens[0].top, vec![("{\"".to_owned(), -0.5)]);
+        assert_eq!(
+            tokens[1].bytes,
+            Some(vec![195]),
+            "a split character keeps its bytes"
+        );
+        assert_eq!(tokens[1].top, vec![("x".to_owned(), -0.75)]);
+        let without: ChatCompletion = serde_json::from_value(json!({
+            "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}]
+        }))
+        .unwrap();
+        assert!(without.token_probabilities().is_empty());
     }
 
     #[test]

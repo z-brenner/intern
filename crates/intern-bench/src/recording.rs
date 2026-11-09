@@ -48,7 +48,7 @@ use std::{
 
 use intern_engine::{
     DocumentSource, EngineError, EngineErrorCode, EngineResult, ModelProposal, ModelRequest,
-    ModelTimings, PageImage, Proposer, ProposerReply, TokenConfidence,
+    ModelTimings, PageImage, Proposer, ProposerReply, TokenConfidence, TokenProbability,
 };
 use serde::{Deserialize, Serialize};
 
@@ -170,6 +170,12 @@ pub enum RecordedReply {
         proposal: ModelProposal,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         token_confidence: Option<TokenConfidence>,
+        /// Every token of the reply with its probability, as the server
+        /// reported them. Absent from recordings made before they were
+        /// kept; replay never reads it, so the review gate is scored from
+        /// `token_confidence` either way.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        token_probabilities: Vec<TokenProbability>,
     },
     Failed {
         code: EngineErrorCode,
@@ -182,6 +188,7 @@ impl RecordedReply {
             Ok(reply) => Self::Proposed {
                 proposal: reply.proposal.clone(),
                 token_confidence: reply.token_confidence,
+                token_probabilities: reply.token_probabilities.clone(),
             },
             Err(error) => Self::Failed { code: error.code() },
         }
@@ -194,9 +201,11 @@ impl RecordedReply {
             Self::Proposed {
                 proposal,
                 token_confidence,
+                token_probabilities,
             } => Ok(ProposerReply {
                 proposal: proposal.clone(),
                 token_confidence: *token_confidence,
+                token_probabilities: token_probabilities.clone(),
                 timings: None,
             }),
             Self::Failed { code } => Err(EngineError::new(*code, "recorded failure")),

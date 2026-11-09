@@ -71,7 +71,8 @@ use std::{
 use intern_engine::{
     DigestBudget, DocumentExtractor, DocumentSource, Engine, EngineResult, Evidence, ModelClient,
     ModelProposal, ModelRequest, PageImage, PartyRelation, Pipeline, PreparedDigest, Proposer,
-    ProposerReply, SupervisedWorker, TokenConfidence, ValidatedProposal, compose_filename,
+    ProposerReply, SupervisedWorker, TokenConfidence, TokenProbability, ValidatedProposal,
+    compose_filename,
     distill::DocumentDigest,
     domain::{DocumentAnalysis, ProposalStatus},
     error::EngineErrorCode,
@@ -574,6 +575,7 @@ fn replay_digest(
         Some(RecordedReply::Proposed {
             proposal,
             token_confidence,
+            ..
         }) => FixedReply(proposal.clone(), *token_confidence, context),
         Some(RecordedReply::Failed { code }) => {
             return json!({"file": name, "status": "model_failed", "error": code, "readiness": null, "replayed": true, "stale": stale});
@@ -968,6 +970,7 @@ fn replay_evidence(
         Some(RecordedReply::Proposed {
             proposal,
             token_confidence,
+            ..
         }) => FixedReply(proposal.clone(), *token_confidence, context),
         Some(RecordedReply::Failed { code }) => return failed(code, stale),
         None => return failed("UNRECORDED", stale),
@@ -1078,6 +1081,12 @@ enum RecordedReply {
         /// Present only in recordings made with `--token-confidence`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         token_confidence: Option<TokenConfidence>,
+        /// Every token of the reply with its probability, kept with
+        /// `--token-confidence` so other readings of them can be swept
+        /// offline. Replay never reads it: the gate is scored from
+        /// `token_confidence`, as recordings without it are.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        token_probabilities: Vec<TokenProbability>,
     },
     Failed {
         code: String,
@@ -1148,6 +1157,7 @@ impl Proposer for RecordingProposer {
             Ok(reply) => RecordedReply::Proposed {
                 proposal: reply.proposal.clone(),
                 token_confidence: reply.token_confidence,
+                token_probabilities: reply.token_probabilities.clone(),
             },
             Err(error) => RecordedReply::Failed {
                 code: error.code().as_str().to_owned(),
@@ -1940,6 +1950,7 @@ mod tests {
             reply: Some(RecordedReply::Proposed {
                 proposal: ModelProposal::default(),
                 token_confidence: None,
+                token_probabilities: Vec::new(),
             }),
         };
         let fixture = json!({"file": "ledger.txt"});
@@ -2031,6 +2042,7 @@ mod tests {
             reply: Some(RecordedReply::Proposed {
                 proposal: ModelProposal::default(),
                 token_confidence: None,
+                token_probabilities: Vec::new(),
             }),
         }
     }
@@ -2162,6 +2174,7 @@ mod tests {
             reply: Some(RecordedReply::Proposed {
                 proposal: ModelProposal::default(),
                 token_confidence: None,
+                token_probabilities: Vec::new(),
             }),
         };
         let fixture = json!({"file": "ledger.txt"});
@@ -2241,6 +2254,7 @@ mod tests {
                 reply: Some(RecordedReply::Proposed {
                     proposal: invoice_reply(),
                     token_confidence: None,
+                    token_probabilities: Vec::new(),
                 }),
             }],
         }
