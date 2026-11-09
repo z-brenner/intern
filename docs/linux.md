@@ -81,7 +81,7 @@ INTERN_RUNTIME_DIR=/tmp/intern-stage/runtime npm run tauri dev
 | `intern-worker` | This repository | Its digest, in the inventory |
 
 **llama.cpp** is ggml-org's own, `b11946`, and runs both tiers from
-`runtime/llama-upstream/`: it read Qwen3.5 2B's 77 evaluation documents 19%
+`runtime/llama-upstream/`: it read the 77 evaluation documents 19%
 faster than the PrismML fork the package also carried until alpha.14, with no
 loss of accuracy
 ([report](../bench/reports/speed-linux-cpu-2026-10-29/README.md)). The

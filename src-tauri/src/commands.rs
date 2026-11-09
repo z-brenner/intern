@@ -8755,8 +8755,8 @@ mod runtime_tests {
         }
     }
 
-    /// A scratch data folder with the model and both runtimes' server
-    /// binaries installed, removed when the test ends.
+    /// A scratch data folder with the model and the llama-server installed,
+    /// removed when the test ends.
     struct Install {
         root: PathBuf,
     }
@@ -10582,12 +10582,12 @@ mod runtime_tests {
         assert_eq!(rewritten["files"][0]["name"], "model.gguf");
     }
 
-    /// The stamp written by the build that ran both models on one runtime
-    /// recorded one server binary for every file. It vouches for nothing,
-    /// and is replaced by one that records each file's own.
+    /// A stamp of schema 2 recorded one server binary for the whole stamp,
+    /// not one with each file. It vouches for nothing, and is replaced by one
+    /// that records each file's own.
     #[test]
-    fn a_stamp_from_the_one_runtime_build_vouches_for_nothing() {
-        let install = Install::new("one-runtime-stamp");
+    fn a_schema_2_stamp_vouches_for_nothing() {
+        let install = Install::new("schema-2-stamp");
         verified(&install.runtime(&Rig::new(), "1.0.0"));
         let mut stamp: serde_json::Value =
             serde_json::from_slice(&std::fs::read(install.stamp()).unwrap()).unwrap();

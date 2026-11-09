@@ -158,10 +158,10 @@ The engine and the worker are portable; only the packaged runtime is not. The
 committed recordings were made on Linux with the pinned accurate model and an
 upstream llama.cpp CPU build. The 77-document evaluation
 (`bench/reports/bonsai-linux-cpu-2026-10-27`) found the llama.cpp fork the
-package then carried read Qwen3.5 2B the same way as a build from source,
-within run-to-run noise, and the same run on upstream `b11946` - the one build
-the package carries now, which both pinned models run on - read it no less
-accurately
+package then carried read the model it measured the same way as a build from
+source, within run-to-run noise, and the same run on upstream `b11946` - the
+one build the package carries now, which both pinned models run on - read it
+no less accurately
 (`bench/reports/speed-linux-cpu-2026-10-29`); the digest pipeline's with PDFium
 `chromium/7881` for Linux, the same pinned `tessdata_fast` files, and the
 distribution's Tesseract 5.3.4 rather than the vcpkg 5.5.2 the installer

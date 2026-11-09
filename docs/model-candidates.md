@@ -84,8 +84,8 @@ cases could calibrate it. InternBench is that corpus.
 ### Calibrated on InternBench (October 2026)
 
 InternBench's 77 documents have many more ready-but-wrong readings than the
-fixture corpus. Below are two recorded Qwen3.5 2B runs on the runtime packaged then (the
-PrismML fork's b10826, 4 threads, Linux). Run A was recorded on October 27, run B on October 29. Both are re-scored with the party and
+fixture corpus. Below are two recorded Qwen3.5 2B runs on the packaged runtime (Prism b10826, 4
+threads, Linux; packaged until alpha.14). Run A was recorded on October 27, run B on October 29. Both are re-scored with the party and
 issuer rules of October 2026, with `--min-token-confidence` applied to their
 recorded probabilities. "Unsafe" counts wrong names marked ready; "lost" counts
 right names the gate sends to review.

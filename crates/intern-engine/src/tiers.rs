@@ -188,8 +188,8 @@ pub fn server_options(tier: ModelTier) -> ServerOptions {
 /// The folder, inside the sidecar folder, that holds the llama.cpp runtime
 /// both tiers' server is started from: ggml-org's llama.cpp `b11946`, its
 /// llama-server beside every library it loads and one CPU backend per x86-64
-/// generation. It read Qwen3.5 2B 19% faster than the llama.cpp fork Intern
-/// also shipped until alpha.14, at the same accuracy
+/// generation. It read the 77-document evaluation 19% faster than the
+/// llama.cpp fork Intern also shipped until alpha.14, at the same accuracy
 /// (`bench/reports/speed-linux-cpu-2026-10-29`), and 25% faster on Windows.
 /// The folder keeps the name it had beside that fork, so an update replaces
 /// its files in place.
