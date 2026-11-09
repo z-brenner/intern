@@ -12,10 +12,14 @@ import { INVENTORY, stageInventory, verifyInventory, writeInventory } from './li
  */
 const POSIX = process.platform !== 'win32';
 
-/** Prism's build, flat in runtime/, and upstream's, in runtime/llama-upstream/. */
-const prism = { path: '.', repository: 'https://example.invalid/prism/llama.cpp', release: 'prism-test', archive: 'llama-prism-test-bin-ubuntu-x64.tar.gz', url: 'https://example.invalid/llama-prism-test-bin-ubuntu-x64.tar.gz', size: 1, sha256: '0'.repeat(64) };
+/**
+ * Two builds, to test that each keeps to its folder: one flat in runtime/, as
+ * packages up to alpha.14 carried a second build, and upstream's, in
+ * runtime/llama-upstream/, the one build the package carries now.
+ */
+const flat = { path: '.', repository: 'https://example.invalid/fork/llama.cpp', release: 'f-test', archive: 'llama-f-test-bin-ubuntu-x64.tar.gz', url: 'https://example.invalid/llama-f-test-bin-ubuntu-x64.tar.gz', size: 1, sha256: '0'.repeat(64) };
 const upstream = { path: 'llama-upstream', repository: 'https://example.invalid/ggml-org/llama.cpp', release: 'b-test', archive: 'llama-b-test-bin-ubuntu-x64.tar.gz', url: 'https://example.invalid/llama-b-test-bin-ubuntu-x64.tar.gz', size: 2, sha256: '1'.repeat(64) };
-const llamaCpp = [prism, upstream];
+const llamaCpp = [flat, upstream];
 
 /**
  * A staged package: each build's server and a library of the same name, a
@@ -35,8 +39,8 @@ async function staged() {
   await writeFile(join(root, 'runtime/ocr-models/text-detection.onnx'), 'model');
   await writeFile(join(root, 'licenses/llama.cpp-LICENSE.txt'), 'MIT');
   const packages = new Map([
-    ['runtime/llama-server', [{ name: 'llama.cpp', version: 'prism-test' }]],
-    ['runtime/libllama.so.0', [{ name: 'llama.cpp', version: 'prism-test' }]],
+    ['runtime/llama-server', [{ name: 'llama.cpp', version: 'f-test' }]],
+    ['runtime/libllama.so.0', [{ name: 'llama.cpp', version: 'f-test' }]],
     ['runtime/llama-upstream/llama-server', [{ name: 'llama.cpp', version: 'b-test' }]],
     ['runtime/llama-upstream/libllama.so.0', [{ name: 'llama.cpp', version: 'b-test' }]],
     ['runtime/ocr-models/text-detection.onnx', [{ name: 'PaddlePaddle/PP-OCRv5_mobile_det_onnx', version: 'abc' }]],
@@ -54,7 +58,7 @@ describe('the Linux runtime inventory', () => {
       'runtime/ocr-models/text-detection.onnx',
     ]);
     expect(inventory.bundled_files.find((file: { path: string }) => file.path === 'runtime/llama-server'))
-      .toMatchObject({ executable: POSIX, size: 6, packages: [{ name: 'llama.cpp', version: 'prism-test' }] });
+      .toMatchObject({ executable: POSIX, size: 6, packages: [{ name: 'llama.cpp', version: 'f-test' }] });
     expect(inventory.bundled_files.find((file: { path: string }) => file.path === 'runtime/llama-upstream/llama-server'))
       .toMatchObject({ executable: POSIX, size: 15, packages: [{ name: 'llama.cpp', version: 'b-test' }] });
     expect(inventory.license_files).toEqual([expect.objectContaining({ path: 'licenses/llama.cpp-LICENSE.txt', size: 3 })]);
@@ -68,7 +72,7 @@ describe('the Linux runtime inventory', () => {
     const { root, packages } = await staged();
     await writeInventory(root, { packages, llamaCpp });
     const recorded = JSON.parse(await readFile(join(root, INVENTORY), 'utf8')).llama_cpp;
-    expect(recorded).toEqual([prism, upstream]);
+    expect(recorded).toEqual([flat, upstream]);
     expect(recorded.map((build: { path: string }) => build.path)).toEqual(['.', 'llama-upstream']);
   });
 
@@ -78,9 +82,9 @@ describe('the Linux runtime inventory', () => {
     const { root, packages } = await staged();
     for (const path of [...packages.keys()].filter((path) => path.startsWith('runtime/llama-upstream/'))) packages.delete(path);
     await rm(join(root, 'runtime/llama-upstream'), { recursive: true });
-    const { path: _path, ...single } = prism;
+    const { path: _path, ...single } = flat;
     const inventory = await writeInventory(root, { packages, llamaCpp: single });
-    expect(inventory.llama_cpp).toEqual([prism]);
+    expect(inventory.llama_cpp).toEqual([flat]);
   });
 
   it('refuses to record a file nobody owns, or an owner of a file that is not there', async () => {
@@ -91,7 +95,7 @@ describe('the Linux runtime inventory', () => {
     const unownedUpstream = new Map(packages);
     unownedUpstream.delete('runtime/llama-upstream/libllama.so.0');
     await expect(writeInventory(root, { packages: unownedUpstream, llamaCpp })).rejects.toThrow('no package identity for staged runtime file runtime/llama-upstream/libllama.so.0');
-    const phantom = new Map(packages).set('runtime/libggml.so.0', [{ name: 'llama.cpp', version: 'prism-test' }]);
+    const phantom = new Map(packages).set('runtime/libggml.so.0', [{ name: 'llama.cpp', version: 'f-test' }]);
     await expect(writeInventory(root, { packages: phantom, llamaCpp })).rejects.toThrow('runtime/libggml.so.0, which is not staged');
   });
 
@@ -100,20 +104,20 @@ describe('the Linux runtime inventory', () => {
   // the wrong build.
   it('refuses a llama.cpp file outside its own build\'s folder', async () => {
     const { root, packages } = await staged();
-    const crossed = new Map(packages).set('runtime/llama-upstream/libllama.so.0', [{ name: 'llama.cpp', version: 'prism-test' }]);
+    const crossed = new Map(packages).set('runtime/llama-upstream/libllama.so.0', [{ name: 'llama.cpp', version: 'f-test' }]);
     await expect(writeInventory(root, { packages: crossed, llamaCpp }))
-      .rejects.toThrow('runtime/llama-upstream/libllama.so.0 belongs to llama.cpp prism-test, but its folder holds llama.cpp b-test');
+      .rejects.toThrow('runtime/llama-upstream/libllama.so.0 belongs to llama.cpp f-test, but its folder holds llama.cpp b-test');
     const stray = new Map(packages).set('runtime/ocr-models/text-detection.onnx', [{ name: 'llama.cpp', version: 'b-test' }]);
     await expect(writeInventory(root, { packages: stray, llamaCpp }))
       .rejects.toThrow('runtime/ocr-models/text-detection.onnx belongs to llama.cpp b-test, but no llama.cpp build is recorded in its folder');
   });
 
   it.each([
-    ['a build with no server of its own', [prism, upstream, { ...upstream, release: 'b-other', path: 'llama-other' }], 'llama.cpp b-other has no llama-server of its own at runtime/llama-other/llama-server'],
-    ['two builds in one folder', [prism, { ...upstream, path: '.' }], 'two llama.cpp builds are recorded in runtime/.'],
-    ['a build with no folder', [prism, { ...upstream, path: undefined }], 'llama.cpp b-test names no folder under runtime/'],
-    ['a build folder that leaves runtime/', [prism, { ...upstream, path: '../llama-upstream' }], 'unsafe llama.cpp b-test folder'],
-    ['a build with no archive pin', [prism, { ...upstream, sha256: 'unpinned' }], 'llama.cpp b-test has an invalid archive SHA-256'],
+    ['a build with no server of its own', [flat, upstream, { ...upstream, release: 'b-other', path: 'llama-other' }], 'llama.cpp b-other has no llama-server of its own at runtime/llama-other/llama-server'],
+    ['two builds in one folder', [flat, { ...upstream, path: '.' }], 'two llama.cpp builds are recorded in runtime/.'],
+    ['a build with no folder', [flat, { ...upstream, path: undefined }], 'llama.cpp b-test names no folder under runtime/'],
+    ['a build folder that leaves runtime/', [flat, { ...upstream, path: '../llama-upstream' }], 'unsafe llama.cpp b-test folder'],
+    ['a build with no archive pin', [flat, { ...upstream, sha256: 'unpinned' }], 'llama.cpp b-test has an invalid archive SHA-256'],
     ['no build at all', [], 'no llama.cpp build is recorded'],
   ])('refuses %s', async (_label, builds, message) => {
     const { root, packages } = await staged();
