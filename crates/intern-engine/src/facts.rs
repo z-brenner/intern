@@ -3525,10 +3525,12 @@ struct LetterLayout {
     /// Where the salutation stands: the first page's first line that opens
     /// "Dear ...", as its unit's ordinal and the line's place in the unit.
     salutation: Option<(u32, usize)>,
-    /// Where a court document's caption ends: the last of the first page's
-    /// first units that sets its sides against each other ("v.",
-    /// "-against-") or labels one ("Plaintiff,"), under a court's heading.
-    caption: Option<u32>,
+    /// Where a court document's caption stands, as the ordinals of its
+    /// first and last units: from the first of the first page's first units
+    /// that names a court, a tribunal or an arbitration down to the last
+    /// one that sets the case's sides against each other ("v.",
+    /// "-against-") or labels one ("Plaintiff,").
+    caption: Option<(u32, u32)>,
 }
 
 impl LetterLayout {
@@ -3552,28 +3554,48 @@ impl LetterLayout {
             .map(|unit| unit.ordinal)
             .filter(|_| salutation.is_some());
         let head = page().take(12).collect::<Vec<_>>();
-        let has_word = |unit: &EvidenceUnit, wanted: &[&str]| {
-            normalize_loosely(&unit.text.replace(['|', '-'], " "))
+        let has_word = |text: &str, wanted: &[&str]| {
+            normalize_loosely(&text.replace(['|', '-'], " "))
                 .split_whitespace()
                 .any(|word| {
                     wanted.contains(&word)
                         || wanted.contains(&word.trim_end_matches(['s', ':', ';']))
                 })
         };
+        // A caption opens at the forum's heading: a letter to a court names
+        // the court in its inside address, under the sender's letterhead,
+        // and that letterhead is no part of a caption. A "Re:" line sets
+        // out the case a letter is about ("Re: Nike, Inc. v. StockX LLC"),
+        // and a side's word below a greeting is the letter's body: neither
+        // marks a caption's side.
+        let sets_out_sides = |unit: &EvidenceUnit| {
+            if salutation.is_some_and(|(at, _)| unit.ordinal > at) {
+                return false;
+            }
+            let lines = unit.text.lines().collect::<Vec<_>>();
+            let above = match salutation {
+                Some((at, line)) if at == unit.ordinal => &lines[..line.min(lines.len())],
+                _ => &lines[..],
+            };
+            above
+                .iter()
+                .take_while(|line| !names_a_matter(line.trim().trim_matches('*')))
+                .any(|line| {
+                    has_word(line, VERSUS_WORDS)
+                        || has_word(line, BRINGING_SIDE)
+                        || has_word(line, ANSWERING_SIDE)
+                })
+        };
         let caption = head
             .iter()
-            .any(|unit| has_word(unit, FORUM_WORDS))
-            .then(|| {
+            .find(|unit| has_word(&unit.text, FORUM_WORDS))
+            .and_then(|forum| {
                 head.iter()
-                    .filter(|unit| {
-                        has_word(unit, VERSUS_WORDS)
-                            || has_word(unit, BRINGING_SIDE)
-                            || has_word(unit, ANSWERING_SIDE)
-                    })
+                    .filter(|unit| unit.ordinal >= forum.ordinal && sets_out_sides(unit))
                     .map(|unit| unit.ordinal)
                     .max()
-            })
-            .flatten();
+                    .map(|end| (forum.ordinal, end))
+            });
         Self {
             dateline,
             salutation,
@@ -3581,11 +3603,13 @@ impl LetterLayout {
         }
     }
 
-    /// Whether a unit is part of a court document's caption: at its head,
-    /// down to the last line that sets out or labels its sides. A caption
-    /// names the sides of a case, never a letterhead's sender.
+    /// Whether a unit is part of a court document's caption: from the
+    /// forum's heading down to the last line that sets out or labels its
+    /// sides. A caption names the sides of a case, never a letterhead's
+    /// sender.
     fn in_caption(self, unit: &EvidenceUnit) -> bool {
-        self.caption.is_some_and(|end| unit.ordinal <= end)
+        self.caption
+            .is_some_and(|(start, end)| (start..=end).contains(&unit.ordinal))
     }
 
     /// Whether the document is laid out as a letter: its first page greets
@@ -12431,6 +12455,37 @@ Rickmansworth,
             "{:?}",
             facts.parties
         );
+        // A law firm's letter to a court names the court in its inside
+        // address and the case on its "Re:" line: its letterhead, above
+        // both, is still its sender's.
+        let (outcome, _) = facts_for(
+            "DLA Piper LLP (US)\n1251 Avenue of the Americas\nNew York, New York 10020\n\n\
+             October 7, 2024\n\nThe Honorable Valerie Caproni\nUnited States District Court\n\
+             40 Foley Square\nRe: Nike, Inc. v. StockX LLC, No. 22 CV 00983\n\nDear Judge \
+             Caproni:\n\nWe represent Nike in connection with the above-referenced matter and \
+             write to request a conference against the defendant's objection.\n\n\
+             Respectfully submitted,\n\nJane Roe",
+            |index| ModelFacts {
+                document_type: Some("letter".into()),
+                type_evidence: vec![id_of(index, "Dear Judge")],
+                document_date: Some("2024-10-07".into()),
+                date_evidence: vec![id_of(index, "October 7, 2024")],
+                parties: vec![party(
+                    "DLA Piper LLP (US)",
+                    Some(PartyRole::Sender),
+                    &[id_of(index, "DLA Piper")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        let facts = outcome.facts.expect("facts");
+        assert_eq!(facts.parties[0].role, Some(PartyRole::Sender));
+        assert_eq!(facts.parties[0].role_support, Support::Cited);
     }
 
     /// A reply that copied a title line with the side filing it, or with
