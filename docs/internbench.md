@@ -258,7 +258,9 @@ document of a server lifetime - what a person waits on after sign-in and
 after every idle unload - is not in its numbers. `cold_start` adds that
 measurement before the battery, on fresh servers with the app's flags, an
 API key and a slot folder (`scripts/bonsai-eval/cold-start.py`): one server
-reads a recorded request unwarmed and its slot is saved; then, twice over,
+reads a recorded request unwarmed - one long enough to process the
+instructions in one piece, as the app requires before it saves (`0016`) -
+then the app's instructions-only request, and its slot is saved; then, twice over,
 a fresh server reads another request unwarmed, and a fresh server restores
 the saved slot and reads the same request; in the first round the
 unrestored server then reads a third request and the measured one again,
