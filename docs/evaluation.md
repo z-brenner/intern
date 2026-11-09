@@ -117,6 +117,57 @@ different trade - run replay with `--write-baseline fixtures/corpus-baseline.jso
 and commit the result with the change that earned it. Reviewers can see, in
 the diff of that file, exactly which fixtures changed and in which direction.
 
+## Real documents and InternBench in the same gate
+
+The same CI job replays InternBench (`bench/recording.json` against
+`bench/baseline.json`) and the four real-document sets (`bench/realdocs/`:
+the accurate model's runner recordings of 119 real letters, notices, invoices
+and office files, each against its own baseline), all in release builds, in
+seconds. The real sets' gold is built from the committed samples by
+`scripts/realdocs-eval/fetch.py --gold-only`, and no document is fetched. A
+document named right that is now named wrong, a wrong name now filed ready,
+or a status that changed fails the job, as a fixture's does here.
+
+These replays also hold each document's evidence recalls: whether the gold's
+date form and parties reach the prompt the engine builds (`prompt_recall`)
+and the context retrieval builds (`context_*_recall`). Replay builds both
+from the recorded text with today's code, so a change to indexing,
+retrieval or extraction that drops a reviewed date or a party from what the
+model reads fails CI even while the recorded reply still names the document.
+On the four whole real sets, 44 of 225 recorded documents never get the gold
+date or a party into the prompt, and 40 of them are named wrong: a third of
+all their wrong names (see [internbench.md](internbench.md#gates)).
+
+Accepting a new state is the same as here: run the CI command with
+`--write-baseline` and commit the baseline with the change, its diff the
+review (`bench/realdocs/README.md` has the commands for the real sets).
+
+**Which documents can be committed.** A recording holds the text extracted
+from each document. For the real sets it is committed only where the
+source's licence plainly permits redistribution: a US federal work (17
+U.S.C. 105), CC0, a Public Domain Mark or dedication, the UK Open Government
+Licence v3.0, or a Creative Commons Attribution licence. Public records with
+no licence text, site terms, other licences, documents a third party wrote,
+and anything unclear stay out; `bench/realdocs/SOURCES.md` gives each
+document's licence and attribution, or why it was left out. The documents
+themselves are never committed.
+
+**A prompt change carries its re-recordings.** A change to `prompt.rs`,
+`index.rs`, `retrieve.rs`, the grammar or the worker's text makes the
+recorded replies stale, for the fixtures, InternBench and the real sets
+alike, and CI fails on them by design: it never passes `--allow-stale`. The
+pull request that makes such a change carries the new recordings and
+baselines: the fixtures recorded as below, InternBench and the real sets
+recorded on runners by the candidate benchmark workflow (dispatched on the
+branch; with no candidates it runs the manifest's accurate model), each
+real-set recording cut to its cleared documents by
+`scripts/realdocs-eval/commit-recording.py`. A scheduled run of that
+workflow on main, weekly, keeps fresh recordings of main to compare with.
+Locally, `--allow-stale` still scores the stale documents from their
+recorded replies while the evidence recalls are measured on the prompts the
+engine builds now, which checks a retrieval change for lost dates and
+parties before anything is recorded.
+
 ## Recording on Windows
 
 The shipped runtime is Windows-only (PDFium, Tesseract, and llama.cpp are

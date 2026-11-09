@@ -214,16 +214,21 @@ digest recording with `--pipeline digest`.
 
 `.github/workflows/candidate-bench.yml` runs the live benchmark above for
 one or more candidate GGUF files on Ubuntu runners, one job per candidate
-and set, in parallel. It is laboratory tooling: run only by hand (Actions >
-Candidate model benchmark on Linux > Run workflow), it gates nothing and
-publishes nothing. Each job builds the worker and `intern-bench` as CI
+and set, in parallel. It is laboratory tooling: it gates nothing and
+publishes nothing. It runs by hand (Actions > Candidate model benchmark on
+Linux > Run workflow), and once a week on main (Sunday 03:23 UTC) with the
+manifest's accurate model on InternBench and all four real sets, so a change
+merged to main is measured live within a week and the real sets' recordings
+are made again, ready for a prompt change's re-recording
+([the real-document gate](#the-real-document-sets)). Each job builds the worker and `intern-bench` as CI
 does, stages the Linux runtime with `scripts/stage-linux-runtime.sh`,
 fetches the candidate and refuses it unless its SHA-256 matches, and runs
 `scripts/run-internbench.sh OUT -- --min-token-confidence 0.5`. The job
 summary gives the headline lines (`filename`, `unsafe ready`, `total per
 document`), the server's peak RSS, the wall time, the runner's CPU and the
 `ggml-cpu-*` backend `llama-server` loaded; the report, recording and logs
-are an artifact named `candidate-<label>-<set>-<run id>`, kept 14 days.
+are an artifact named `candidate-<label>-<set>-<run id>`, kept 90 days (the
+most a public repository allows).
 Runners differ, so compare jobs that the summary puts on the same CPU.
 
 ### Server settings on GitHub runners
@@ -255,7 +260,9 @@ runner); `every` (default 2: every second recorded request, 13 of 26);
 
 Inputs:
 
-* `candidates` (required): a JSON array, one object per model, each with a
+* `candidates` (default empty: the accurate model
+  `src-tauri/resources/model-manifest.json` pins, labelled by its
+  `model_id`): a JSON array, one object per model, each with a
   `label` (`[a-z0-9._-]+`, it names the job and the artifact), the GGUF's
   https `url` (pin a commit on Hugging Face, as the manifest does) and its
   `sha256`:
@@ -271,7 +278,9 @@ Inputs:
   (`sample-heldout.json`), `real3` (`sample-heldout2.json`) and `real4`
   (`sample-heldout3.json`), the real
   documents fetched by `scripts/realdocs-eval/fetch.py` from their public
-  sources; a source that is down costs its document, not the run.
+  sources; a source that answers 429 or a 5xx is asked again (three tries,
+  20 s apart), and one that is still down costs its document, not the run.
+  A scheduled run takes all five.
 * `threads` (default `4`): the server's model threads.
 * `extra_server_args` (default empty): flags appended after the app's own,
   to try a KV-cache or speculative flag. The script takes them as
@@ -698,6 +707,52 @@ intern-bench merge-recordings --base bench/recording.json \
 
 Every other document keeps its recorded reply. The merge refuses a
 recording made with another model file, digest budget or context.
+
+### The real-document sets
+
+The four real-document sets are gated in CI the same way, from
+`bench/realdocs/`: the accurate model's runner recordings of the documents
+whose licence allows their extracted text to be committed (119 of the 237),
+and a baseline per set. The `Corpus replay` job builds each set's gold from
+its committed sample without fetching anything and replays the recording
+against the baseline:
+
+```sh
+python3 -I scripts/realdocs-eval/fetch.py --gold-only \
+  --recording bench/realdocs/recordings/real1-qwen35-9b.json "$TMP/real1" sample.json
+cargo run --release --locked -p intern-bench -- run --corpus "$TMP/real1/corpus" \
+  --gold "$TMP/real1/gold.json" --replay bench/realdocs/recordings/real1-qwen35-9b.json \
+  --baseline bench/realdocs/baseline-real1.json --min-token-confidence 0.7 \
+  --output real1.json --markdown real1.md
+```
+
+(`sample-heldout.json`, `sample-heldout2.json` and `sample-heldout3.json`
+for real2 to real4.) `--recording` keeps the gold to the documents the
+recording holds, so the run scores all of them, and a baseline document the
+recording lost fails as missing. The corpus directory does not exist; a
+replay needs only the recorded text. Each set replays in 2 to 4 s in a
+release build. What a document gets wrong or right, and its evidence
+recalls, are held as InternBench's are ([Gates](#gates)); add
+`--write-baseline bench/realdocs/baseline-real1.json` to accept a new state,
+and the baseline diff is the review.
+
+Only documents whose source licence plainly permits redistribution are
+committed: a US federal work (17 U.S.C. 105), CC0, a Public Domain Mark or
+dedication, the UK Open Government Licence v3.0, or a Creative Commons
+Attribution licence. Public records with no licence text, site terms, other
+licences, library rights statements, documents a third party wrote and
+anything unclear are left out. `bench/realdocs/SOURCES.md` lists every
+document of the four samples with its licence and attribution or the reason
+it was left out, and `scripts/realdocs-gate.test.ts` holds the recordings,
+`SOURCES.md` and the baselines to each other.
+
+A change to the prompt, indexing, retrieval, the grammar or the worker's
+text makes the real sets `stale_prompt`, and the CI steps fail; they never
+pass `--allow-stale`. Such a change carries re-recorded real sets and new
+baselines: dispatch the candidate benchmark on the branch with `sets`
+`real1,real2,real3,real4` and no candidates, keep each recording's cleared
+documents with `scripts/realdocs-eval/commit-recording.py`, and write the
+baselines. `bench/realdocs/README.md` has the steps.
 
 [`pipeline-bottlenecks.md`](pipeline-bottlenecks.md) quotes its measured
 figures from a live run's report and says which.

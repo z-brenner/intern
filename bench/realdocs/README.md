@@ -41,8 +41,8 @@ For each set, in the `corpus-replay` job of `.github/workflows/ci.yml`:
 ```bash
 python3 -I scripts/realdocs-eval/fetch.py --gold-only \
   --recording bench/realdocs/recordings/real1-qwen35-9b.json "$RUNNER_TEMP/realdocs/real1" sample.json
-target/release/intern-bench run --corpus "$RUNNER_TEMP/realdocs/real1/corpus" \
-  --gold "$RUNNER_TEMP/realdocs/real1/gold.json" \
+cargo run --release --locked -p intern-bench -- \
+  run --corpus "$RUNNER_TEMP/realdocs/real1/corpus" --gold "$RUNNER_TEMP/realdocs/real1/gold.json" \
   --replay bench/realdocs/recordings/real1-qwen35-9b.json \
   --baseline bench/realdocs/baseline-real1.json --min-token-confidence 0.7 \
   --output realdocs-real1-report.json --markdown realdocs-real1-report.md
