@@ -596,6 +596,23 @@ refusal exits 2.
   change of status is a regression too, except a document that failed in
   the baseline and completes now: that is an improvement, and its scores
   are still held to the baseline's.
+* **Replay also holds each document's evidence recalls**, with no
+  tolerance: `prompt_recall` (the gold's date form and parties in the
+  prompt the engine builds) and the six `context_*` recalls (the gold's
+  type, date, parties, their mean, facts and subject terms in the context
+  retrieval builds). A replay baseline keeps them per document (`values`),
+  and a document whose recall falls fails the run, even while its recorded
+  reply still names it right: replay builds the context and the prompt
+  from the recorded text with the code as it is now, so a change to
+  extraction, indexing or retrieval that takes a reviewed date or a party
+  out of what the model reads is caught in seconds, without a model. On
+  the real-document sets a fifth of the documents never get the gold date
+  or a party into the prompt, and nearly all of those are named wrong
+  (`bench/realdocs/README.md`). What the model quoted (`evidence_recall`)
+  is the recording's, not the code's, and is reported, never gated. A live
+  run against a baseline that holds them reports a fall and gates nothing
+  on it, like any other flip. A baseline written before the recalls were
+  kept holds none of them.
 * **A full run that drops a baseline document fails**, live or replay: a
   gold entry deleted by accident would otherwise take its coverage with it.
   So does a baseline document whose gold entry says `"recording":

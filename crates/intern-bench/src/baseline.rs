@@ -9,7 +9,12 @@
 //!   is now bad, or a status that changed, fails the run (exit 2). A trap
 //!   score (`date_forbidden`, `party_forbidden`, `unsafe_ready`,
 //!   `needless_review`) is good when false. `ready` alone is not compared:
-//!   it is a routing decision, and `readiness_match` judges it.
+//!   it is a routing decision, and `readiness_match` judges it. A replay
+//!   baseline also keeps each document's evidence recalls
+//!   ([`REPLAY_VALUES`]: whether the gold's type, date and parties reach
+//!   the evidence context and the prompt the engine builds), and any fall
+//!   in one fails the run: replay builds both from the recorded text with
+//!   the code as it is now, so they are as deterministic as a name.
 //! * **Live** inference moves a document now and then for reasons no change
 //!   made, so per-document score flips are reported but only the aggregate
 //!   fails the run: a rate may not fall by more than one document's worth
@@ -60,6 +65,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    context::CONTEXT_SCORES,
     extract::EXTRACTION_SCORES,
     record::{COMPLETED, DocumentRecord, EXTRACTION_FAILED, MODEL_FAILED, PENDING, is_unscorable},
     report::{EXTRACT, Report},
@@ -97,16 +103,40 @@ pub struct BaselineDocument {
     /// a baseline written before it was kept.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub timings: BTreeMap<String, f64>,
-    /// An extract-only baseline's gated values (see [`extract_values`]),
-    /// each held to within [`value_tolerance`]. Empty in a live or replay
-    /// baseline.
+    /// The gated values: an extract-only baseline's (see
+    /// [`extract_values`]) or a replay or live baseline's evidence recalls
+    /// (see [`replay_values`]), each held to within [`value_tolerance`].
+    /// Empty in a baseline written before the recalls were kept, which then
+    /// holds none of them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub values: BTreeMap<String, f64>,
 }
 
-/// How far an extract-only value may move the wrong way before the
-/// document regresses, or `None` for one that is not gated (one extraction
-/// does not decide it, an OCR error rate, or OCR's mean confidence).
+/// The fractional scores a replay (or live) baseline keeps, and a replay
+/// is held to with no tolerance: whether the gold's date form and parties reach the prompt
+/// the engine builds (`prompt_recall`), and whether the gold's items reach
+/// the evidence context retrieval builds ([`CONTEXT_SCORES`]). Replay
+/// builds both from the recorded text with the code as it is now, so a
+/// change to extraction, indexing or retrieval that takes a reviewed date
+/// or a party out of what the model reads fails the run, even while the
+/// recorded reply still names the document. What the model quoted
+/// (`evidence_recall`) is the recording's, not the code's, and is not
+/// kept.
+pub const REPLAY_VALUES: [&str; 7] = [
+    "prompt_recall",
+    CONTEXT_SCORES[0],
+    CONTEXT_SCORES[1],
+    CONTEXT_SCORES[2],
+    CONTEXT_SCORES[3],
+    CONTEXT_SCORES[4],
+    CONTEXT_SCORES[5],
+];
+
+/// How far a gated value may move the wrong way before the document
+/// regresses, or `None` for one that is not gated (one extraction does not
+/// decide it, an OCR error rate, or OCR's mean confidence). A replay
+/// baseline's recalls ([`REPLAY_VALUES`]) count whole items, as the
+/// extraction scores do, so any fall is a loss: no tolerance.
 ///
 /// Extraction is deterministic for one worker build on one machine, so the
 /// tolerance is not for noise. A score that counts whole items - a snippet,
@@ -131,8 +161,36 @@ pub fn value_tolerance(key: &str) -> Option<f64> {
         "ocr_char_distance" | "ocr_char_distance_ci" => Some(3.0),
         "ocr_word_distance" => Some(1.0),
         "ocr_mean_confidence" | "ocr_cer" | "ocr_cer_ci" | "ocr_wer" => None,
-        key if EXTRACTION_SCORES.contains(&key) => Some(0.0),
+        key if EXTRACTION_SCORES.contains(&key) || REPLAY_VALUES.contains(&key) => Some(0.0),
         _ => None,
+    }
+}
+
+/// Every value the replay gate holds for a document: each recall of
+/// [`REPLAY_VALUES`] it was scored on. A document the gold gives no date
+/// or no party has no such recall, and nothing is held for it.
+pub fn replay_values(record: &DocumentRecord) -> BTreeMap<String, f64> {
+    REPLAY_VALUES
+        .iter()
+        .filter_map(|key| {
+            record
+                .scores
+                .get(*key)
+                .and_then(Value::as_f64)
+                .map(|value| ((*key).to_owned(), value))
+        })
+        .collect()
+}
+
+/// The values a run of this mode is compared on, document by document: an
+/// extract-only run's extraction scores and OCR counts, a replay's or a
+/// live run's evidence recalls. A replay is held to them; a live run only
+/// reports a fall, as it reports any other score that flips.
+fn gated_values(record: &DocumentRecord, mode: &str) -> BTreeMap<String, f64> {
+    if mode == EXTRACT {
+        extract_values(record)
+    } else {
+        replay_values(record)
     }
 }
 
@@ -208,11 +266,7 @@ impl Baseline {
                         status: record.status.clone(),
                         scores: bool_scores(record),
                         timings: stage_times(record),
-                        values: if extract {
-                            extract_values(record)
-                        } else {
-                            BTreeMap::new()
-                        },
+                        values: gated_values(record, &report.mode),
                     },
                 )
             })
@@ -451,7 +505,7 @@ pub fn compare(
                 comparison.document_improvements.push(line);
             }
         }
-        let current = extract_values(record);
+        let current = gated_values(record, &report.mode);
         for (key, was) in &expected.values {
             let Some(tolerance) = value_tolerance(key) else {
                 continue;
@@ -1377,7 +1431,8 @@ mod tests {
             0.5
         );
 
-        // A replay baseline is written exactly as before: no values.
+        // A replay baseline keeps no extraction score: its records' only
+        // values are the evidence recalls, and these have none.
         let replay = before();
         assert!(
             replay
@@ -1386,6 +1441,103 @@ mod tests {
                 .all(|document| document.values.is_empty())
         );
         assert!(!replay.to_json().contains("\"values\""));
+    }
+
+    /// A replayed record with every fractional score a replay reports: the
+    /// evidence recalls and, beside them, what the model quoted and what
+    /// the digest carried.
+    fn recalled(id: &str, prompt: f64, date: f64) -> DocumentRecord {
+        record(
+            id,
+            COMPLETED,
+            json!({
+                "filename_correct": true,
+                "prompt_recall": prompt,
+                "context_type_recall": 1.0,
+                "context_date_recall": date,
+                "context_party_recall": 0.5,
+                "context_recall": (1.0 + date + 0.5) / 3.0,
+                "context_fact_recall": 0.75,
+                "context_subject_recall": 1.0,
+                "evidence_recall": 1.0,
+                "digest_recall": 1.0,
+                "description_completeness": 0.5,
+                "description_claims": 4
+            }),
+            1_000.0,
+        )
+    }
+
+    #[test]
+    fn a_replay_baseline_keeps_and_gates_the_evidence_recalls() {
+        let baseline = Baseline::from_report(&report(
+            "replay",
+            vec![recalled("letter", 1.0, 1.0), recalled("notice", 0.5, 0.0)],
+        ));
+        let letter = &baseline.documents["letter"];
+        assert_eq!(
+            letter.values.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec![
+                "context_date_recall",
+                "context_fact_recall",
+                "context_party_recall",
+                "context_recall",
+                "context_subject_recall",
+                "context_type_recall",
+                "prompt_recall",
+            ],
+            "the recalls, never what the model quoted, the digest or a count"
+        );
+        assert_eq!(letter.values["prompt_recall"], 1.0);
+        assert_eq!(
+            baseline.documents["notice"].values["context_date_recall"],
+            0.0
+        );
+        assert!(letter.scores["filename_correct"]);
+        let reparsed = Baseline::parse(baseline.to_json().as_bytes()).unwrap();
+        assert_eq!(reparsed.documents["notice"].values["prompt_recall"], 0.5);
+
+        // The letter's date stops reaching the prompt and the context while
+        // its recorded reply still names it; the notice's date starts
+        // reaching the context. What the model quoted fell too, ungated.
+        let mut lost = recalled("letter", 0.5, 0.0);
+        lost.scores.insert("evidence_recall".into(), json!(0.0));
+        let run = report("replay", vec![lost, recalled("notice", 0.5, 1.0)]);
+        let comparison = compare(&run, &baseline, None);
+        assert!(!comparison.passed);
+        assert_eq!(
+            comparison.failures,
+            vec![
+                "letter: context_date_recall was 1, now 0",
+                "letter: context_recall was 0.8333333333333334, now 0.5",
+                "letter: prompt_recall was 1, now 0.5",
+            ]
+        );
+        assert_eq!(
+            comparison.document_improvements,
+            vec![
+                "notice: context_date_recall was 0, now 1",
+                "notice: context_recall was 0.5, now 0.8333333333333334",
+            ]
+        );
+
+        // Live, the same fall is reported and gates nothing on its own.
+        let mut live = run.clone();
+        live.mode = "live".into();
+        let comparison = compare(&live, &baseline, None);
+        assert!(comparison.passed, "{:?}", comparison.failures);
+        assert!(
+            comparison
+                .ungated_regressions()
+                .any(|line| line == "letter: prompt_recall was 1, now 0.5")
+        );
+
+        // A baseline written before the recalls were kept holds none of them.
+        let mut old = baseline.clone();
+        for document in old.documents.values_mut() {
+            document.values.clear();
+        }
+        assert!(compare(&run, &old, None).passed);
     }
 
     #[test]

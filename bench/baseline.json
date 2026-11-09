@@ -71,6 +71,15 @@
         "worker_snapshot_ms": 0.237,
         "worker_total_ms": 4.965,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "agreement-two-column-footnotes": {
@@ -120,6 +129,15 @@
         "worker_snapshot_ms": 0.161,
         "worker_total_ms": 3.195,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "aircraft-maintenance-log": {
@@ -167,6 +185,15 @@
         "worker_snapshot_ms": 0.243,
         "worker_total_ms": 4.253,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "annual-report-100p": {
@@ -216,6 +243,15 @@
         "worker_snapshot_ms": 0.332,
         "worker_total_ms": 104.234,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "annual-report-excerpt-8p": {
@@ -265,6 +301,15 @@
         "worker_snapshot_ms": 0.262,
         "worker_total_ms": 8.426,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "ap-aging-report": {
@@ -314,6 +359,15 @@
         "worker_snapshot_ms": 0.18,
         "worker_total_ms": 0.674,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "asset-purchase-agreement-25p": {
@@ -363,6 +417,15 @@
         "worker_snapshot_ms": 0.216,
         "worker_total_ms": 28.935,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 0.75,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "assignment-assumption": {
@@ -412,6 +475,15 @@
         "worker_snapshot_ms": 0.24,
         "worker_total_ms": 4.312,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "benefits-change-checkbox-form": {
@@ -461,6 +533,15 @@
         "worker_snapshot_ms": 0.211,
         "worker_total_ms": 2.627,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "board-minutes": {
@@ -510,6 +591,15 @@
         "worker_snapshot_ms": 0.27,
         "worker_total_ms": 4.145,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "board-resolution": {
@@ -559,6 +649,15 @@
         "worker_snapshot_ms": 0.228,
         "worker_total_ms": 1.38,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "capital-call-notice": {
@@ -608,6 +707,15 @@
         "worker_snapshot_ms": 0.217,
         "worker_total_ms": 4.348,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "change-order-form": {
@@ -657,6 +765,15 @@
         "worker_snapshot_ms": 0.261,
         "worker_total_ms": 4.098,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "court-hearing-notice": {
@@ -706,6 +823,15 @@
         "worker_snapshot_ms": 0.193,
         "worker_total_ms": 0.362,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "credit-agreement-50p": {
@@ -755,6 +881,15 @@
         "worker_snapshot_ms": 0.23,
         "worker_total_ms": 52.282,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 0.75,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "data-processing-agreement-10p": {
@@ -804,6 +939,15 @@
         "worker_snapshot_ms": 0.248,
         "worker_total_ms": 17.211,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 0.6667,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 0.5,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "declarations-interleaved": {
@@ -852,6 +996,15 @@
         "worker_snapshot_ms": 0.243,
         "worker_total_ms": 3.984,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "demand-letter": {
@@ -901,6 +1054,15 @@
         "worker_snapshot_ms": 0.172,
         "worker_total_ms": 0.952,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "email-approval-thread": {
@@ -950,6 +1112,15 @@
         "worker_snapshot_ms": 0.219,
         "worker_total_ms": 0.561,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "engagement-letter": {
@@ -999,6 +1170,15 @@
         "worker_snapshot_ms": 0.219,
         "worker_total_ms": 4.148,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "explanation-of-benefits": {
@@ -1048,6 +1228,15 @@
         "worker_snapshot_ms": 0.171,
         "worker_total_ms": 3.307,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "field-condition-report": {
@@ -1095,6 +1284,15 @@
         "worker_snapshot_ms": 0.177,
         "worker_total_ms": 3.25,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "harvest-log": {
@@ -1142,6 +1340,15 @@
         "worker_snapshot_ms": 0.22,
         "worker_total_ms": 1.205,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "industrial-lease-dated-in-schedule-25p": {
@@ -1190,6 +1397,15 @@
         "worker_snapshot_ms": 0.232,
         "worker_total_ms": 46.349,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 0.3333,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "inspection-log-ruled-2p": {
@@ -1239,6 +1455,15 @@
         "worker_snapshot_ms": 0.211,
         "worker_total_ms": 4.902,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 0.6667,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "invoice-boxed-grid": {
@@ -1288,6 +1513,15 @@
         "worker_snapshot_ms": 0.201,
         "worker_total_ms": 2.817,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "invoice-date-in-table": {
@@ -1337,6 +1571,15 @@
         "worker_snapshot_ms": 0.183,
         "worker_total_ms": 2.685,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "invoice-label-above": {
@@ -1386,6 +1629,15 @@
         "worker_snapshot_ms": 0.236,
         "worker_total_ms": 2.875,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "invoice-layout-only": {
@@ -1435,6 +1687,15 @@
         "worker_snapshot_ms": 0.212,
         "worker_total_ms": 2.566,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "invoice-right-aligned": {
@@ -1484,6 +1745,15 @@
         "worker_snapshot_ms": 0.196,
         "worker_total_ms": 2.112,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "lease-two-column": {
@@ -1533,6 +1803,15 @@
         "worker_snapshot_ms": 0.196,
         "worker_total_ms": 6.339,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "letterhead-letter": {
@@ -1582,6 +1861,15 @@
         "worker_snapshot_ms": 0.227,
         "worker_total_ms": 3.509,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "loss-notice-boxed-fields": {
@@ -1631,6 +1919,15 @@
         "worker_snapshot_ms": 0.207,
         "worker_total_ms": 2.301,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "meeting-notice-columns": {
@@ -1680,6 +1977,15 @@
         "worker_snapshot_ms": 0.229,
         "worker_total_ms": 3.002,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "meeting-notice-interleaved": {
@@ -1729,6 +2035,15 @@
         "worker_snapshot_ms": 0.275,
         "worker_total_ms": 3.635,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "meeting-notice-reversed": {
@@ -1778,6 +2093,15 @@
         "worker_snapshot_ms": 0.202,
         "worker_total_ms": 3.464,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "mixed-signature-region": {
@@ -1825,6 +2149,15 @@
         "worker_snapshot_ms": 0.373,
         "worker_total_ms": 831.865,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "msa-effective-date-in-definitions-12p": {
@@ -1874,6 +2207,15 @@
         "worker_snapshot_ms": 0.278,
         "worker_total_ms": 21.741,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "newsletter-three-column": {
@@ -1921,6 +2263,15 @@
         "worker_snapshot_ms": 0.232,
         "worker_total_ms": 3.734,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "notice-of-default": {
@@ -1970,6 +2321,15 @@
         "worker_snapshot_ms": 0.233,
         "worker_total_ms": 4.629,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "notice-rent-increase": {
@@ -2019,6 +2379,15 @@
         "worker_snapshot_ms": 0.22,
         "worker_total_ms": 550.124,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "ocr-corrupted-invoice": {
@@ -2066,6 +2435,15 @@
         "worker_snapshot_ms": 0.226,
         "worker_total_ms": 1814.514,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "offer-letter": {
@@ -2115,6 +2493,15 @@
         "worker_snapshot_ms": 0.19,
         "worker_total_ms": 3.527,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "payroll-register": {
@@ -2164,6 +2551,15 @@
         "worker_snapshot_ms": 0.235,
         "worker_total_ms": 2.023,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "price-list-unruled": {
@@ -2213,6 +2609,15 @@
         "worker_snapshot_ms": 0.245,
         "worker_total_ms": 3.111,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "prior-authorization": {
@@ -2262,6 +2667,15 @@
         "worker_snapshot_ms": 0.228,
         "worker_total_ms": 4.106,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "product-launch-plan": {
@@ -2311,6 +2725,15 @@
         "worker_snapshot_ms": 0.244,
         "worker_total_ms": 1.639,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "promissory-note": {
@@ -2360,6 +2783,15 @@
         "worker_snapshot_ms": 0.209,
         "worker_total_ms": 4.974,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "property-policy-declarations-mid-60p": {
@@ -2408,6 +2840,15 @@
         "worker_snapshot_ms": 0.367,
         "worker_total_ms": 131.454,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 0.5,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 0.6667,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "purchase-order": {
@@ -2457,6 +2898,15 @@
         "worker_snapshot_ms": 0.166,
         "worker_total_ms": 3.082,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "quarterly-business-review": {
@@ -2506,6 +2956,15 @@
         "worker_snapshot_ms": 0.269,
         "worker_total_ms": 2.119,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "rate-confirmation-rotated": {
@@ -2555,6 +3014,15 @@
         "worker_snapshot_ms": 0.234,
         "worker_total_ms": 3.092,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-agreement-10p": {
@@ -2602,6 +3070,15 @@
         "worker_snapshot_ms": 0.329,
         "worker_total_ms": 23412.741,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-bill-of-lading": {
@@ -2649,6 +3126,15 @@
         "worker_snapshot_ms": 0.263,
         "worker_total_ms": 2506.691,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-cancellation-notice-150dpi": {
@@ -2696,6 +3182,15 @@
         "worker_snapshot_ms": 0.284,
         "worker_total_ms": 2097.9,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-certificate-of-insurance": {
@@ -2743,6 +3238,15 @@
         "worker_snapshot_ms": 0.217,
         "worker_total_ms": 2920.107,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-clean-lease-2p": {
@@ -2790,6 +3294,15 @@
         "worker_snapshot_ms": 0.292,
         "worker_total_ms": 4122.785,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-faint-letter": {
@@ -2837,6 +3350,15 @@
         "worker_snapshot_ms": 0.262,
         "worker_total_ms": 1792.685,
         "worker_vision_ms": 5.871
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-fax-two-frames": {
@@ -2885,6 +3407,15 @@
         "worker_snapshot_ms": 0.228,
         "worker_total_ms": 2751.977,
         "worker_vision_ms": 5.88
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-lease-25p": {
@@ -2932,6 +3463,15 @@
         "worker_snapshot_ms": 0.418,
         "worker_total_ms": 51179.585,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 0.75,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-low-res-receipt": {
@@ -2980,6 +3520,15 @@
         "worker_snapshot_ms": 0.214,
         "worker_total_ms": 994.671,
         "worker_vision_ms": 0.94
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-mixed-amendment": {
@@ -3027,6 +3576,15 @@
         "worker_snapshot_ms": 0.254,
         "worker_total_ms": 1405.747,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-mixed-middle-page": {
@@ -3074,6 +3632,15 @@
         "worker_snapshot_ms": 0.257,
         "worker_total_ms": 1325.291,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-noisy-statement": {
@@ -3122,6 +3689,15 @@
         "worker_snapshot_ms": 0.985,
         "worker_total_ms": 1782.599,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-patient-intake-form": {
@@ -3169,6 +3745,15 @@
         "worker_snapshot_ms": 0.234,
         "worker_total_ms": 2167.891,
         "worker_vision_ms": 11.887
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-remittance-advice-120dpi": {
@@ -3217,6 +3802,15 @@
         "worker_snapshot_ms": 0.407,
         "worker_total_ms": 2122.225,
         "worker_vision_ms": 2.96
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-rotated-90-invoice": {
@@ -3264,6 +3858,15 @@
         "worker_snapshot_ms": 0.22,
         "worker_total_ms": 1434.631,
         "worker_vision_ms": 11.831
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-rotated-page-in-pdf": {
@@ -3311,6 +3914,15 @@
         "worker_snapshot_ms": 0.267,
         "worker_total_ms": 3074.226,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-skewed-notice": {
@@ -3358,6 +3970,15 @@
         "worker_snapshot_ms": 1.255,
         "worker_total_ms": 2031.507,
         "worker_vision_ms": 12.047
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "scan-upside-down-po": {
@@ -3405,6 +4026,15 @@
         "worker_snapshot_ms": 0.264,
         "worker_total_ms": 2003.108,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "second-amendment": {
@@ -3454,6 +4084,15 @@
         "worker_snapshot_ms": 0.273,
         "worker_total_ms": 4.519,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "separation-agreement": {
@@ -3503,6 +4142,15 @@
         "worker_snapshot_ms": 0.26,
         "worker_total_ms": 2.639,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "services-agreement": {
@@ -3552,6 +4200,15 @@
         "worker_snapshot_ms": 0.216,
         "worker_total_ms": 12.246,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 0.75,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "sow-under-msa-5p": {
@@ -3600,6 +4257,15 @@
         "worker_snapshot_ms": 0.249,
         "worker_total_ms": 10.935,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "term-loan-parties-apart-40p": {
@@ -3649,6 +4315,15 @@
         "worker_snapshot_ms": 0.245,
         "worker_total_ms": 87.786,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "vendor-registration-form": {
@@ -3698,6 +4373,15 @@
         "worker_snapshot_ms": 0.242,
         "worker_total_ms": 3.925,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     },
     "watershed-monitoring-report-100p": {
@@ -3747,6 +4431,15 @@
         "worker_snapshot_ms": 0.278,
         "worker_total_ms": 193.847,
         "worker_vision_ms": 0.0
+      },
+      "values": {
+        "context_date_recall": 1.0,
+        "context_fact_recall": 1.0,
+        "context_party_recall": 1.0,
+        "context_recall": 1.0,
+        "context_subject_recall": 1.0,
+        "context_type_recall": 1.0,
+        "prompt_recall": 1.0
       }
     }
   },
