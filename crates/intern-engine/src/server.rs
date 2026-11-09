@@ -27,11 +27,27 @@ const MAX_SPAWN_ATTEMPTS: usize = 3;
 /// The server's standard error, under the log directory when one is set.
 const SERVER_LOG: &str = "llama-server.log";
 
-/// The micro-batch `-ub` sets, in tokens. llama-server breaks a prompt it
-/// processes from nothing at 4 + this many tokens before its end, which
-/// decides whether the instructions are processed in one piece
+/// llama.cpp's micro-batch when nothing sets one (`n_ubatch`).
+const DEFAULT_MICRO_BATCH_TOKENS: u64 = 512;
+/// How long a server is given to read its arguments and print its version
+/// ([`LlamaServer::accepts_slot_directory`]): it takes milliseconds, and a
+/// virus scanner looking at a new executable can take seconds.
+const ARGUMENT_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The micro-batch a server launched with `arguments` uses, in tokens: the
+/// last `-ub` or `--ubatch-size` among them, as llama-server reads a
+/// repeated flag, and llama.cpp's default without one. llama-server breaks a
+/// prompt it processes from nothing at 4 + this many tokens before its end,
+/// which decides whether the instructions are processed in one piece
 /// ([`crate::slots::SlotKeeper::save_once`]).
-pub const MICRO_BATCH_TOKENS: u64 = 256;
+pub fn micro_batch_tokens(arguments: &[String]) -> u64 {
+    arguments
+        .windows(2)
+        .rev()
+        .find(|pair| pair[0] == "-ub" || pair[0] == "--ubatch-size")
+        .and_then(|pair| pair[1].parse().ok())
+        .unwrap_or(DEFAULT_MICRO_BATCH_TOKENS)
+}
 
 /// Flags every local model is launched with, each measured end to end on
 /// Intern's own requests in the 77-document evaluation
@@ -298,6 +314,45 @@ impl LlamaServer {
         }
         arguments.extend(options.extra_arguments.iter().cloned());
         arguments
+    }
+
+    /// Whether the server at `executable` takes `directory` as its slot
+    /// folder (`--slot-save-path`), asked without loading a model:
+    /// llama-server checks the folder while it reads its arguments, before a
+    /// `--version` after it prints the build and exits, so the folder is
+    /// checked exactly as a launch would check it, in milliseconds. A server
+    /// that refuses it, or does not answer, is launched without one.
+    pub fn accepts_slot_directory(executable: &Path, directory: &Path) -> bool {
+        let Ok(mut command) = command_in_own_folder(executable) else {
+            return false;
+        };
+        command
+            .arg("--slot-save-path")
+            .arg(directory)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(crate::process::sidecar_creation_flags());
+        }
+        let Ok(mut child) = crate::process::spawn_tied(command) else {
+            return false;
+        };
+        let deadline = Instant::now() + ARGUMENT_CHECK_TIMEOUT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return status.success(),
+                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+            }
+        }
     }
 
     pub fn endpoint(&self) -> &str {
@@ -586,7 +641,6 @@ mod tests {
         };
         assert_eq!(value("--cache-ram"), Some("0"));
         assert_eq!(value("-ub"), Some("256"));
-        assert_eq!(value("-ub"), Some(MICRO_BATCH_TOKENS.to_string().as_str()));
         assert_eq!(value("--prio"), Some("-1"));
         assert_eq!(value("--poll"), Some("0"));
         assert_eq!(value("--threads"), Some("6"));
@@ -625,6 +679,69 @@ mod tests {
             .unwrap();
         assert_eq!(with[at + 1], folder.to_string_lossy());
         assert_eq!(&with[with.len() - 2..], ["--flash-attn", "on"]);
+    }
+
+    /// The micro-batch is read from the launch's own arguments, the last
+    /// of a repeated flag winning as it does in llama-server, so a tier
+    /// flag that changes it changes it here too.
+    #[test]
+    fn the_micro_batch_is_the_one_the_server_is_launched_with() {
+        let arguments = |extra: &[&str]| {
+            LlamaServer::arguments_for(
+                Path::new("m.gguf"),
+                None,
+                51_000,
+                "key",
+                &ServerOptions {
+                    extra_arguments: extra.iter().map(|flag| (*flag).to_owned()).collect(),
+                    ..options()
+                },
+            )
+        };
+        assert_eq!(micro_batch_tokens(&arguments(&[])), 256);
+        assert_eq!(micro_batch_tokens(&arguments(&["-ub", "512"])), 512);
+        assert_eq!(
+            micro_batch_tokens(&arguments(&["--ubatch-size", "128"])),
+            128
+        );
+        assert_eq!(
+            micro_batch_tokens(&["--threads".to_owned(), "4".to_owned()]),
+            DEFAULT_MICRO_BATCH_TOKENS
+        );
+    }
+
+    /// The slot folder is checked by the server itself, without a model: a
+    /// server that exits cleanly after reading it takes it, one that exits
+    /// with an error or cannot be started does not.
+    #[cfg(unix)]
+    #[test]
+    fn a_slot_folder_is_used_only_when_the_server_takes_it() {
+        let directory = tempfile::tempdir().unwrap();
+        // Programs under the server's name: nothing is written and then run.
+        let accepts = directory.path().join("accepts");
+        let refuses = directory.path().join("refuses");
+        for (folder, program) in [(&accepts, "true"), (&refuses, "false")] {
+            std::fs::create_dir_all(folder).unwrap();
+            let target = ["/bin", "/usr/bin"]
+                .iter()
+                .map(|bin| Path::new(bin).join(program))
+                .find(|path| path.is_file())
+                .unwrap();
+            std::os::unix::fs::symlink(target, folder.join("llama-server")).unwrap();
+        }
+        let slots = directory.path();
+        assert!(LlamaServer::accepts_slot_directory(
+            &accepts.join("llama-server"),
+            slots
+        ));
+        assert!(!LlamaServer::accepts_slot_directory(
+            &refuses.join("llama-server"),
+            slots
+        ));
+        assert!(!LlamaServer::accepts_slot_directory(
+            &directory.path().join("missing").join("llama-server"),
+            slots
+        ));
     }
 
     #[test]

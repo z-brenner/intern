@@ -425,6 +425,9 @@ struct LlamaLauncher {
     /// Where each tier's server keeps its system turn's state between
     /// launches ([`intern_engine::slots`]); `None` keeps nothing.
     slot_directory: Option<PathBuf>,
+    /// The instructions' length for each configuration, once a launch has
+    /// found it, shared by every launch of the session.
+    known_instructions: Arc<intern_engine::slots::KnownInstructions>,
 }
 
 impl RuntimeLauncher for LlamaLauncher {
@@ -447,40 +450,32 @@ impl RuntimeLauncher for LlamaLauncher {
         let executable = self.servers.for_tier(tier);
         let model_path = self.model_directory.join(&model.name);
         let options = tiers::server_options(tier);
+        // The folder is only a speed-up: one the server would refuse is never
+        // passed to it, so a server that will not start fails exactly as it
+        // would without one, on its first three tries.
         let slot_directory = self.slot_directory.as_deref().filter(|directory| {
-            intern_engine::slots::usable_directory(directory)
-                && std::fs::create_dir_all(directory).is_ok()
-        });
-        let (server, slot_directory) = match slot_directory {
-            Some(directory) => {
-                let with_slots = intern_engine::ServerOptions {
-                    slot_directory: Some(directory.to_path_buf()),
-                    ..options.clone()
-                };
-                match LlamaServer::start(executable, &model_path, None, &with_slots) {
-                    Ok(server) => (server, Some(directory)),
-                    // The folder is only a speed-up: a server that will not
-                    // start with it is started without it.
-                    Err(error) if error.code() == EngineErrorCode::ModelServerStartFailed => {
-                        eprintln!(
-                            "intern: the {} local model would not start with a slot folder; starting it without one",
-                            tier.as_str()
-                        );
-                        (
-                            LlamaServer::start(executable, &model_path, None, &options)?,
-                            None,
-                        )
-                    }
-                    Err(error) => return Err(error.into()),
-                }
+            let usable = intern_engine::slots::usable_directory(directory)
+                && std::fs::create_dir_all(directory).is_ok();
+            let accepted = usable && LlamaServer::accepts_slot_directory(executable, directory);
+            if usable && !accepted {
+                eprintln!(
+                    "intern: the {} local model's server would not take the slot folder; it runs without one",
+                    tier.as_str()
+                );
             }
-            None => (
-                LlamaServer::start(executable, &model_path, None, &options)?,
-                None,
-            ),
-        };
+            accepted
+        });
+        let server = LlamaServer::start(
+            executable,
+            &model_path,
+            None,
+            &intern_engine::ServerOptions {
+                slot_directory: slot_directory.map(Path::to_path_buf),
+                ..options.clone()
+            },
+        )?;
         let after_read = slot_directory.and_then(|directory| {
-            Self::keep_system_turn(
+            self.keep_system_turn(
                 &server,
                 directory,
                 tier,
@@ -518,7 +513,9 @@ impl LlamaLauncher {
     /// the first document finds the instructions cached, as every later one
     /// does. Every failure here only costs that: the server processes the
     /// instructions itself, as it did before slot files.
+    #[allow(clippy::too_many_arguments)]
     fn keep_system_turn(
+        &self,
         server: &LlamaServer,
         directory: &Path,
         tier: ModelTier,
@@ -551,7 +548,8 @@ impl LlamaLauncher {
             directory,
             &identity,
             instructions_only,
-            intern_engine::server::MICRO_BATCH_TOKENS,
+            intern_engine::server::micro_batch_tokens(&arguments),
+            Arc::clone(&self.known_instructions),
         )
         .ok()?;
         keeper.prune();
@@ -597,6 +595,13 @@ fn log_save(tier: ModelTier, save: intern_engine::slots::Save) {
         ),
         Save::Failed => eprintln!(
             "intern: the {} local model's instructions could not be saved for its next launch",
+            tier.as_str()
+        ),
+        Save::HeldMore {
+            tokens,
+            request_tokens,
+        } => eprintln!(
+            "intern: the {} local model's server saved {tokens} tokens where the instructions are {request_tokens}; the file was deleted",
             tier.as_str()
         ),
         Save::Uneven | Save::NoRoom | Save::NotNeeded => {}
@@ -839,6 +844,7 @@ impl RuntimeModel {
             servers: servers.clone(),
             model_directory: model_directory.clone(),
             slot_directory,
+            known_instructions: Arc::default(),
         });
         Self::with_parts(
             servers,
@@ -10913,6 +10919,7 @@ mod runtime_tests {
             servers: servers.clone(),
             model_directory: install.root.join("models"),
             slot_directory: None,
+            known_instructions: Arc::default(),
         };
         let Err(upstream_missing) = launcher().launch(&manifest(), ModelTier::Accurate) else {
             panic!("a missing upstream server started");
@@ -10991,6 +10998,7 @@ mod runtime_tests {
             servers: servers.clone(),
             model_directory: install.root.join("models"),
             slot_directory: None,
+            known_instructions: Arc::default(),
         };
         let root = install.root.canonicalize().unwrap();
 
@@ -11013,6 +11021,71 @@ mod runtime_tests {
             [root.join("llama-upstream")]
         );
         assert_eq!(stand_in_ran_in(&servers.prism), Vec::<PathBuf>::new());
+    }
+
+    /// A slot folder is passed only when the server takes it, asked once
+    /// before the launch. A server that then will not start fails on its
+    /// three tries as it would without a folder, with no second round; one
+    /// that refuses the folder is started without it.
+    #[cfg(unix)]
+    #[test]
+    fn a_slot_folder_is_passed_only_when_the_server_takes_it() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let install = Install::new("launch-slot-folder");
+        install.install_accurate();
+        let servers = install.servers();
+        let slots = install.root.join("slots");
+        let record = PathBuf::from(format!("{}.args", servers.upstream.display()));
+        let invocations = |refuse_the_folder: bool| {
+            let refusal = if refuse_the_folder {
+                "case \" $* \" in *' --version '*) exit 1 ;; esac\n"
+            } else {
+                ""
+            };
+            std::fs::write(
+                &servers.upstream,
+                format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$0.args\"\n{refusal}"),
+            )
+            .unwrap();
+            std::fs::set_permissions(&servers.upstream, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+            let _ = std::fs::remove_file(&record);
+            let launcher = LlamaLauncher {
+                servers: servers.clone(),
+                model_directory: install.root.join("models"),
+                slot_directory: Some(slots.clone()),
+                known_instructions: Arc::default(),
+            };
+            let Err(error) = launcher.launch(&manifest(), ModelTier::Accurate) else {
+                panic!("the stand-in server exits");
+            };
+            assert_eq!(error.code, "MODEL_SERVER_START_FAILED");
+            std::fs::read_to_string(&record)
+                .unwrap()
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let asked = format!("--slot-save-path {} --version", slots.display());
+        let named = format!("--slot-save-path {}", slots.display());
+
+        let taken = invocations(false);
+        assert_eq!(taken.len(), 1 + 3, "{taken:#?}");
+        assert_eq!(taken[0], asked);
+        for start in &taken[1..] {
+            assert!(
+                start.contains(&named) && !start.contains("--version"),
+                "{start}"
+            );
+        }
+
+        let refused = invocations(true);
+        assert_eq!(refused.len(), 1 + 3, "{refused:#?}");
+        assert_eq!(refused[0], asked);
+        for start in &refused[1..] {
+            assert!(!start.contains("--slot-save-path"), "{start}");
+        }
     }
 
     /// The real llama-server through a whole lifecycle: start and verify,
@@ -11261,6 +11334,10 @@ mod runtime_tests {
             timings(&restored).cached_tokens,
             timings(&steady).cached_tokens
         );
+        // The file holds the instructions and none of the agreement saved
+        // after it: read again first, the agreement finds no more of itself
+        // cached than the instructions, as after a different document.
+        assert!(timings(&restored).cached_tokens + 256 < timings(&cold).prompt_tokens);
         for reading in [&cold, &steady] {
             assert_eq!(restored.model_proposal, reading.model_proposal);
             assert_eq!(

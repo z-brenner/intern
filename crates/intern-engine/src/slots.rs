@@ -19,10 +19,14 @@
 //! the file is removed so the next document saves a good one.
 
 use std::{
+    collections::HashMap,
     ffi::OsStr,
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -41,9 +45,9 @@ const SLOT_EXTENSION: &str = "bin";
 /// so a server stopped in the middle of one never leaves a file that looks
 /// whole.
 const PARTIAL_EXTENSION: &str = "part";
-/// A save leaves at least this much of the disk free, or is not made: the
-/// 9B's file is about a quarter of a gigabyte, and the speed-up is not worth
-/// a full disk.
+/// A save leaves at least this much of the disk free, or is not made: a
+/// file is 174 MB for either model (the instructions' 492 tokens), and the
+/// speed-up is not worth a full disk.
 const MIN_FREE_AFTER_SAVE: u64 = 2 * 1024 * 1024 * 1024;
 /// Saving or restoring moves a few hundred megabytes; a cold disk on a busy
 /// laptop is given far longer than that takes.
@@ -200,7 +204,44 @@ pub enum Save {
     Uneven,
     /// Too little room on the disk.
     NoRoom,
+    /// The server saved more than the instructions-only request left in
+    /// its slot - `tokens` against that request's `request_tokens` - so the
+    /// file may hold part of the document read before it. It was deleted.
+    HeldMore {
+        tokens: u64,
+        request_tokens: u64,
+    },
     Failed,
+}
+
+/// The instructions' length in tokens for each configuration, by slot file
+/// name, once a lifetime of it has sent the instructions-only request in
+/// this session: a later lifetime whose first document is too short to save
+/// from then knows it without sending the request again.
+#[derive(Debug, Default)]
+pub struct KnownInstructions(Mutex<HashMap<String, u64>>);
+
+impl KnownInstructions {
+    fn get(&self, file_name: &str) -> Option<u64> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(file_name)
+            .copied()
+    }
+
+    fn record(&self, file_name: &str, tokens: u64) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(file_name.to_owned(), tokens);
+    }
+}
+
+/// What the instructions-only request found cached, and what it processed.
+struct InstructionsOnly {
+    cached: u64,
+    processed: u64,
 }
 
 /// One server lifetime's slot file: restored at launch, saved once after the
@@ -225,6 +266,7 @@ pub struct SlotKeeper {
     /// The server's micro-batch (`-ub`), which decides where it breaks a
     /// prompt it processes from nothing.
     micro_batch: u64,
+    known: Arc<KnownInstructions>,
 }
 
 impl SlotKeeper {
@@ -232,7 +274,7 @@ impl SlotKeeper {
     /// its `--slot-save-path` and `micro_batch` as its `-ub`.
     /// `instructions_only` is the chat completion sent just before a save,
     /// so the file holds the instructions and none of the document read
-    /// before it.
+    /// before it; `known` is shared by every lifetime of the session.
     pub fn new(
         endpoint: &str,
         api_key: &str,
@@ -240,6 +282,7 @@ impl SlotKeeper {
         identity: &SlotIdentity<'_>,
         instructions_only: Value,
         micro_batch: u64,
+        known: Arc<KnownInstructions>,
     ) -> EngineResult<Self> {
         Ok(Self {
             http: http(TRANSFER_TIMEOUT)?,
@@ -252,6 +295,7 @@ impl SlotKeeper {
             min_free: MIN_FREE_AFTER_SAVE,
             instructions_only,
             micro_batch,
+            known,
         })
     }
 
@@ -345,7 +389,17 @@ impl SlotKeeper {
     /// request goes first: it reuses the instructions' state the document
     /// left, and replaces the document's tokens with two fixed words. What
     /// is saved is the instructions, and the next document reuses them
-    /// exactly as it would have reused them after the document.
+    /// exactly as it would have reused them after the document. The server
+    /// says how many tokens it saved; a file with more than that request's
+    /// prompt and the one token it generated is deleted at once
+    /// ([`Save::HeldMore`]), so a runtime that kept more of the slot than
+    /// this one would leave nothing of a document on disk.
+    ///
+    /// The instructions' length is what that request finds cached. Until a
+    /// lifetime of this configuration has sent it, a short first document
+    /// costs the request (one generated token: 1.1-1.5 s on the runners)
+    /// before it is found too short; after that the length is known for the
+    /// rest of the session ([`KnownInstructions`]).
     pub fn save_once(&self, first_request_tokens: Option<u64>) -> Save {
         if !self.unsaved.swap(false, Ordering::SeqCst) || self.path().is_file() {
             return Save::NotNeeded;
@@ -353,22 +407,28 @@ impl SlotKeeper {
         let Some(first_request_tokens) = first_request_tokens else {
             return Save::Uneven;
         };
+        if self
+            .known
+            .get(&self.file_name)
+            .is_some_and(|instructions| !self.even(first_request_tokens, instructions))
+        {
+            return Save::Uneven;
+        }
         let room = fs4::available_space(&self.directory).unwrap_or(0);
         if room < self.min_free {
             return Save::NoRoom;
         }
         let partial_name = format!("{}.{PARTIAL_EXTENSION}", self.file_name);
         let partial = self.directory.join(&partial_name);
-        // The instructions' length is what the instructions-only request
-        // finds cached: everything before its own turn.
-        let instructions = match self.forget_the_document() {
-            Ok(cached) if cached > 0 => cached,
+        let request = match self.forget_the_document() {
+            Ok(request) if request.cached > 0 => request,
             _ => {
                 let _ = fs::remove_file(&partial);
                 return Save::Failed;
             }
         };
-        if first_request_tokens < instructions + 4 + self.micro_batch {
+        self.known.record(&self.file_name, request.cached);
+        if !self.even(first_request_tokens, request.cached) {
             return Save::Uneven;
         }
         #[derive(Deserialize)]
@@ -381,26 +441,38 @@ impl SlotKeeper {
         struct SaveTimings {
             save_ms: f64,
         }
-        let saved = self
-            .slot_action::<Saved>("save", &partial_name)
-            .ok()
-            .filter(|_| partial.is_file() && fs::rename(&partial, self.path()).is_ok());
-        match saved {
-            Some(saved) => Save::Saved {
+        let Ok(saved) = self.slot_action::<Saved>("save", &partial_name) else {
+            let _ = fs::remove_file(&partial);
+            return Save::Failed;
+        };
+        let request_tokens = request.cached + request.processed;
+        if saved.n_saved > request_tokens + 1 {
+            let _ = fs::remove_file(&partial);
+            return Save::HeldMore {
                 tokens: saved.n_saved,
-                bytes: saved.n_written,
-                millis: saved.timings.save_ms,
-            },
-            None => {
-                let _ = fs::remove_file(&partial);
-                Save::Failed
-            }
+                request_tokens,
+            };
+        }
+        if !(partial.is_file() && fs::rename(&partial, self.path()).is_ok()) {
+            let _ = fs::remove_file(&partial);
+            return Save::Failed;
+        }
+        Save::Saved {
+            tokens: saved.n_saved,
+            bytes: saved.n_written,
+            millis: saved.timings.save_ms,
         }
     }
 
+    /// Whether a lifetime whose first request was `first_request_tokens`
+    /// long processed `instructions` tokens of instructions in one piece.
+    fn even(&self, first_request_tokens: u64, instructions: u64) -> bool {
+        first_request_tokens >= instructions + 4 + self.micro_batch
+    }
+
     /// Sends the instructions-only request, and says how many of its
-    /// tokens the server found cached.
-    fn forget_the_document(&self) -> EngineResult<u64> {
+    /// tokens the server found cached and how many it processed.
+    fn forget_the_document(&self) -> EngineResult<InstructionsOnly> {
         #[derive(Deserialize)]
         struct Completion {
             timings: CompletionTimings,
@@ -408,6 +480,7 @@ impl SlotKeeper {
         #[derive(Deserialize)]
         struct CompletionTimings {
             cache_n: u64,
+            prompt_n: u64,
         }
         let response = self
             .http
@@ -420,7 +493,10 @@ impl SlotKeeper {
             return Err(unavailable());
         }
         let completion: Completion = response.json().map_err(|_| unavailable())?;
-        Ok(completion.timings.cache_n)
+        Ok(InstructionsOnly {
+            cached: completion.timings.cache_n,
+            processed: completion.timings.prompt_n,
+        })
     }
 
     fn slot_action<T: serde::de::DeserializeOwned>(
@@ -482,12 +558,26 @@ mod tests {
         }
     }
 
+    /// What the fake server's instructions-only request finds: 477 tokens
+    /// cached and 11 processed, as the real one finds 477 and 15.
+    const REQUEST_TOKENS: u64 = 477 + 11;
+
     /// A fake llama-server's slot endpoints over `directory`: a save writes
     /// the named file there as the real one does, a restore reads it.
     fn fake_llama(
         directory: &Path,
         key: &'static str,
         restore_fails: bool,
+    ) -> crate::test_support::RoutedServer {
+        fake_llama_saving(directory, key, restore_fails, REQUEST_TOKENS)
+    }
+
+    /// The same, saving `saved_tokens` of slot.
+    fn fake_llama_saving(
+        directory: &Path,
+        key: &'static str,
+        restore_fails: bool,
+        saved_tokens: u64,
     ) -> crate::test_support::RoutedServer {
         let directory = directory.to_path_buf();
         routed_server(move |request: &RoutedRequest| {
@@ -508,7 +598,7 @@ mod tests {
                     fs::write(directory.join(&name), b"state").unwrap();
                     (
                         200,
-                        json!({"id_slot":0,"filename":name,"n_saved":1104,"n_written":5,"timings":{"save_ms":640.5}})
+                        json!({"id_slot":0,"filename":name,"n_saved":saved_tokens,"n_written":5,"timings":{"save_ms":640.5}})
                             .to_string(),
                     )
                 }
@@ -518,7 +608,7 @@ mod tests {
                     }
                     (
                         200,
-                        json!({"id_slot":0,"filename":name,"n_restored":1104,"n_read":5,"timings":{"restore_ms":183.4}})
+                        json!({"id_slot":0,"filename":name,"n_restored":REQUEST_TOKENS,"n_read":5,"timings":{"restore_ms":183.4}})
                             .to_string(),
                     )
                 }
@@ -528,13 +618,25 @@ mod tests {
     }
 
     fn keeper(server: &crate::test_support::RoutedServer, directory: &Path) -> SlotKeeper {
+        keeper_knowing(server, directory, "4", Arc::default())
+    }
+
+    /// A keeper for a server launched with `threads`, sharing `known` with
+    /// the session's other lifetimes.
+    fn keeper_knowing(
+        server: &crate::test_support::RoutedServer,
+        directory: &Path,
+        threads: &str,
+        known: Arc<KnownInstructions>,
+    ) -> SlotKeeper {
         let mut keeper = SlotKeeper::new(
             &format!("http://{}", server.address),
             "secret",
             directory,
-            &identity(&["--threads".to_owned(), "4".to_owned()]),
+            &identity(&["--threads".to_owned(), threads.to_owned()]),
             crate::client::instructions_only_request("intern-local", None),
             256,
+            known,
         )
         .unwrap();
         keeper.min_free = 0;
@@ -600,7 +702,7 @@ mod tests {
         assert_eq!(
             first.save_once(LONG_FIRST_REQUEST),
             Save::Saved {
-                tokens: 1104,
+                tokens: REQUEST_TOKENS,
                 bytes: 5,
                 millis: 640.5
             }
@@ -632,7 +734,7 @@ mod tests {
         assert_eq!(
             second.restore(),
             Restore::Restored {
-                tokens: 1104,
+                tokens: REQUEST_TOKENS,
                 bytes: 5,
                 millis: 183.4
             }
@@ -701,6 +803,70 @@ mod tests {
                 assert_eq!(keeper.save_once(Some(2_000)), Save::NotNeeded);
             }
         }
+    }
+
+    /// A lifetime whose first document was too short sends the
+    /// instructions-only request once in a session; every later lifetime of
+    /// that configuration knows the instructions' length and sends nothing
+    /// for a first document as short. A long one still saves, and another
+    /// configuration's length is not taken for this one's.
+    #[test]
+    fn a_short_first_document_asks_the_server_once_a_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let server = fake_llama(directory.path(), "secret", false);
+        let known = Arc::new(KnownInstructions::default());
+        let completions = || {
+            server
+                .requests()
+                .iter()
+                .filter(|request| request.path == "/v1/chat/completions")
+                .count()
+        };
+
+        let first = keeper_knowing(&server, directory.path(), "4", Arc::clone(&known));
+        assert_eq!(first.save_once(Some(600)), Save::Uneven);
+        assert_eq!(completions(), 1);
+
+        let second = keeper_knowing(&server, directory.path(), "4", Arc::clone(&known));
+        assert_eq!(second.save_once(Some(736)), Save::Uneven);
+        assert_eq!(completions(), 1, "the length was known");
+
+        let other = keeper_knowing(&server, directory.path(), "8", Arc::clone(&known));
+        assert_eq!(other.save_once(Some(600)), Save::Uneven);
+        assert_eq!(completions(), 2, "another configuration asks for its own");
+
+        let third = keeper_knowing(&server, directory.path(), "4", known);
+        assert!(matches!(third.save_once(Some(737)), Save::Saved { .. }));
+        assert_eq!(completions(), 3);
+        assert!(third.path().is_file());
+    }
+
+    /// A server that saves more of its slot than the instructions-only
+    /// request left there - a runtime that kept part of the document read
+    /// before it - leaves no file: neither the saved one nor its partial.
+    #[test]
+    fn a_slot_holding_more_than_the_instructions_is_not_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let server = fake_llama_saving(directory.path(), "secret", false, 1_104);
+        let holding_more = keeper(&server, directory.path());
+        assert_eq!(
+            holding_more.save_once(LONG_FIRST_REQUEST),
+            Save::HeldMore {
+                tokens: 1_104,
+                request_tokens: REQUEST_TOKENS
+            }
+        );
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+        assert_eq!(holding_more.save_once(LONG_FIRST_REQUEST), Save::NotNeeded);
+
+        // The one token the request generated may be kept with it.
+        let directory = tempfile::tempdir().unwrap();
+        let server = fake_llama_saving(directory.path(), "secret", false, REQUEST_TOKENS + 1);
+        let with_reply = keeper(&server, directory.path());
+        assert!(matches!(
+            with_reply.save_once(LONG_FIRST_REQUEST),
+            Save::Saved { .. }
+        ));
     }
 
     /// No save on a disk without room for it, and none tried later in the

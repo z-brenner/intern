@@ -81,12 +81,12 @@ const MIB: u64 = 1024 * 1024;
 /// scan through PP-OCR, the most any InternBench document needed. It runs
 /// beside the model, so a model is judged to fit only with room for it too.
 ///
-/// One page at a time. From four logical processors the worker reads two
-/// pages at once, and over all of InternBench its peak was 1.4 GB against
-/// 0.79 GB one page at a time (docs/ocr.md, measured on Linux). That second
-/// set of sessions lives only while a document is extracted, when the model
-/// is loaded but idle, and is dropped with the document; it is not counted
-/// here, which would raise the accurate model's floor by about 0.6 GiB.
+/// One page at a time. Two pages at once took the worker's peak to 1.4 GB
+/// over all of InternBench (docs/ocr.md), so the worker reads a second page
+/// at once only when 5 GiB are available as a document's pages start to be
+/// read (`intern_worker::paddle::pages_at_once`): the two-page peak, the
+/// weights a loaded accurate model keeps reading, and [`HEADROOM`]. Near a
+/// floor it reads one page at a time, which is what this counts.
 pub const WORKER_PEAK: u64 = 680 * MIB;
 
 /// What is left for the person's own work once a model and the worker are
