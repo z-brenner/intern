@@ -809,9 +809,37 @@ file being the original of what was repacked and reclaimable at no cost), the
 parser worker's 0.71 GB OCR peak, and 1 GiB left for the person's own work -
 6.5 GiB for the quick model, 8 GiB for the accurate one. A 16 GB laptop has
 the latter with a browser open, and not with a browser and an office suite at
-work, which is what the quick model is for. What unloading the loaded model would free counts as
-available too - its context and buffers, not its mapped weights, which the
-machine already reports as reclaimable. When the accurate model is wanted - by
+work, which is what the quick model is for. What unloading the loaded model
+would free counts as available too, so the plan judges the machine as it would
+be once that model is unloaded, whichever model is loaded. That is read from
+the live server (`tiers::memory_released_by`): on Linux its anonymous memory
+(`RssAnon`), since `MemAvailable` already counts its mapped weights as page
+cache; on Windows its working set, since the available physical memory counts
+only the free, zero and standby lists, and the weights the server has touched
+stay in its working set until it exits or the system trims them. When the
+server cannot be read, an estimate stands in: the resident high-water mark
+less the model file (`tiers::unload_gives_back`), about right on Linux. On
+Windows that estimate is far short. On a 16 GiB runner the 9B's working set
+right after a document was 8,110 MiB where the estimate credits 2,883 MiB. By
+`plan()`'s arithmetic on the probe's numbers, with 2 GiB held by another
+process, as a browser holds it, the estimate would have stood the loaded 9B
+down for the 4B before the next document and the loaded 4B down for the 9B
+before the one after: a swap before every document for a machine with about
+10,000 to 13,200 MiB available before any model is loaded. Credited the
+working set, the plan sees what the machine has once the server exits: at the
+probe's six exits the two differed by 83 MiB at most
+([`bench/reports/windows-memory-2026-11-09`](../bench/reports/windows-memory-2026-11-09/README.md)).
+That figure is not quite alike for the two models: with 2 GiB held it came out
+404 MiB higher with the 4B loaded than with the 9B right after a document, and
+917 MiB higher with the 4B a minute idle, so by the same arithmetic a machine a
+few hundred MiB short of the floor with nothing loaded would still swap them,
+before every document or at every pause. A loaded 4B is therefore asked for
+1,024 MiB more than the floor before it makes way for the 9B
+(`tiers::UPGRADE_MARGIN`, in `tiers::memory_for_plan`); a loaded 9B is still
+stood down at the floor itself, so the margin keeps the smaller model longer,
+never the larger, and a machine whose memory drifts around the floor is not
+swapped back and forth either.
+When the accurate model is wanted - by
 Automatic or by name - but is not installed yet or does not fit, the quick
 model reads instead, provisionally; its readings are sent back to the accurate
 model only on evidence that it can read - it was just verified, or it just read

@@ -1,0 +1,370 @@
+{
+  "threads": 4,
+  "logical": 4,
+  "request": "0001",
+  "idle_seconds": 60,
+  "balloon_mib": 0,
+  "floor_mib": 8192,
+  "resident_mib": {
+    "accurate": 8300,
+    "fast": 4700
+  },
+  "file_mib": {
+    "accurate": 5417.4,
+    "fast": 2614.0
+  },
+  "samples": [
+    {
+      "tier": "none",
+      "stage": "start",
+      "at": "2026-11-09T06:41:04.4357445Z",
+      "avail_phys_mib": 12881.7,
+      "total_phys_mib": 16378.7,
+      "memory_load_pct": 21,
+      "avail_pagefile_mib": 16793.7,
+      "lists": {
+        "free_and_zero_mib": 3123.7,
+        "standby_mib": 9749.3,
+        "modified_mib": 814.0,
+        "committed_mib": 2611.6
+      }
+    },
+    {
+      "tier": "accurate",
+      "stage": "before-load",
+      "at": "2026-11-09T06:41:06.5152491Z",
+      "avail_phys_mib": 12872.9,
+      "total_phys_mib": 16378.7,
+      "memory_load_pct": 21,
+      "avail_pagefile_mib": 16710.2,
+      "lists": {
+        "free_and_zero_mib": 3124.1,
+        "standby_mib": 9749.4,
+        "modified_mib": 813.8,
+        "committed_mib": 2612.5
+      }
+    },
+    {
+      "tier": "accurate",
+      "stage": "after-health",
+      "at": "2026-11-09T06:41:11.8729113Z",
+      "avail_phys_mib": 5154.3,
+      "total_phys_mib": 16378.7,
+      "memory_load_pct": 68,
+      "avail_pagefile_mib": 13332.8,
+      "lists": {
+        "free_and_zero_mib": 86.2,
+        "standby_mib": 5066.7,
+        "modified_mib": 650.2,
+        "committed_mib": 5990.7
+      },
+      "working_set_mib": 7895.8,
+      "peak_working_set_mib": 7895.8,
+      "private_bytes_mib": 3374.5,
+      "page_faults": 2068716,
+      "ps_working_set64_mib": 7895.8,
+      "ps_private_memory_size64_mib": 3374.5,
+      "ps_peak_working_set64_mib": 7895.8,
+      "private_working_set_mib": 3020.6
+    },
+    {
+      "tier": "accurate",
+      "stage": "after-request",
+      "at": "2026-11-09T06:42:45.4505798Z",
+      "avail_phys_mib": 5569.8,
+      "total_phys_mib": 16378.7,
+      "memory_load_pct": 65,
+      "avail_pagefile_mib": 13220.1,
+      "lists": {
+        "free_and_zero_mib": 29.1,
+        "standby_mib": 5541.5,
+        "modified_mib": 91.1,
+        "committed_mib": 6103.7
+      },
+      "working_set_mib": 8108.8,
+      "peak_working_set_mib": 8142.3,
+      "private_bytes_mib": 3540.0,
+      "page_faults": 2211669,
+      "ps_working_set64_mib": 8108.8,
+      "ps_private_memory_size64_mib": 3540.0,
+      "ps_peak_working_set64_mib": 8142.3,
+      "private_working_set_mib": 3230.2
+    },
+    {
+      "tier": "accurate",
+      "stage": "after-idle",
+      "at": "2026-11-09T06:43:45.5307343Z",
+      "avail_phys_mib": 6923.6,
+      "total_phys_mib": 16378.7,
+      "memory_load_pct": 57,
+      "avail_pagefile_mib": 13208.2,
+      "lists": {
+        "free_and_zero_mib": 11.4,
+        "standby_mib": 6914.0,
+        "modified_mib": 189.9,
+        "committed_mib": 6116.3
+      },
+      "working_set_mib": 6685.0,
+      "peak_working_set_mib": 8142.3,
+      "private_bytes_mib": 3540.0,
+      "page_faults": 2211669,
+      "ps_working_set64_mib": 6685.0,
+      "ps_private_memory_size64_mib": 3540.0,
+      "ps_peak_working_set64_mib": 8142.3,
+      "private_working_set_mib": 3175.9
+    },
+    {
+      "tier": "accurate",
+      "stage": "exit+3s",
+      "at": "2026-11-09T06:43:49.1227592Z",
+      "avail_phys_mib": 13663.7,
+      "total_phys_mib": 16378.7,
+      "memory_load_pct": 16,
+      "avail_pagefile_mib": 16743.1,
+      "lists": {
+        "free_and_zero_mib": 3248.0,
+        "standby_mib": 10416.1,
+        "modified_mib": 136.8,
+        "committed_mib": 2580.7
+      }
+    },
+    {
+      "tier": "accurate",
+      "stage": "exit+15s",
+      "at": "2026-11-09T06:44:01.1504697Z",
+      "avail_phys_mib": 13666.8,
+      "total_phys_mib": 16378.7,
+      "memory_load_pct": 16,
+      "avail_pagefile_mib": 16744.8,
+      "lists": {
+        "free_and_zero_mib": 3251.1,
+        "standby_mib": 10416.2,
+        "modified_mib": 142.8,
+        "committed_mib": 2579.0
+      }
+    },
+    {
+      "tier": "fast",
+      "stage": "before-load",
+      "at": "2026-11-09T06:44:01.1695401Z",
+      "avail_phys_mib": 13667.5,
+      "total_phys_mib": 16378.7,
+      "memory_load_pct": 16,
+      "avail_pagefile_mib": 16743.8,
+      "lists": {
+        "free_and_zero_mib": 3251.6,
+        "standby_mib": 10416.2,
+        "modified_mib": 142.7,
+        "committed_mib": 2579.0
+      }
+    },
+    {
+      "tier": "fast",
+      "stage": "after-health",
+      "at": "2026-11-09T06:44:04.5115415Z",
+      "avail_phys_mib": 9345.1,
+      "total_phys_mib": 16378.7,
+      "memory_load_pct": 42,
+      "avail_pagefile_mib": 14710.3,
+      "lists": {
+        "free_and_zero_mib": 1538.9,
+        "standby_mib": 7806.6,
+        "modified_mib": 144.5,
+        "committed_mib": 4613.0
+      },
+      "working_set_mib": 4318.1,
+      "peak_working_set_mib": 4318.1,
+      "private_bytes_mib": 2030.2,
+      "page_faults": 1150737,
+      "ps_working_set64_mib": 4318.1,
+      "ps_private_memory_size64_mib": 2030.2,
+      "ps_peak_working_set64_mib": 4318.1,
+      "private_working_set_mib": 1701.5
+    },
+    {
+      "tier": "fast",
+      "stage": "after-request",
+      "at": "2026-11-09T06:45:00.5561329Z",
+      "avail_phys_mib": 9044.3,
+      "total_phys_mib": 16378.7,
+      "memory_load_pct": 44,
+      "avail_pagefile_mib": 14500.3,
+      "lists": {
+        "free_and_zero_mib": 986.2,
+        "standby_mib": 8058.4,
+        "modified_mib": 162.3,
+        "committed_mib": 4823.1
+      },
+      "working_set_mib": 4512.8,
+      "peak_working_set_mib": 4515.5,
+      "private_bytes_mib": 2192.0,
+      "page_faults": 1265659,
+      "ps_working_set64_mib": 4512.8,
+      "ps_private_memory_size64_mib": 2192.0,
+      "ps_peak_working_set64_mib": 4515.5,
+      "private_working_set_mib": 1895.5
+    },
+    {
+      "tier": "fast",
+      "stage": "after-idle",
+      "at": "2026-11-09T06:46:00.6277234Z",
+      "avail_phys_mib": 9085.4,
+      "total_phys_mib": 16378.7,
+      "memory_load_pct": 44,
+      "avail_pagefile_mib": 14520.3,
+      "lists": {
+        "free_and_zero_mib": 1004.2,
+        "standby_mib": 8083.8,
+        "modified_mib": 166.3,
+        "committed_mib": 4801.3
+      },
+      "working_set_mib": 4512.8,
+      "peak_working_set_mib": 4515.5,
+      "private_bytes_mib": 2191.9,
+      "page_faults": 1265659,
+      "ps_working_set64_mib": 4512.8,
+      "ps_private_memory_size64_mib": 2191.9,
+      "ps_peak_working_set64_mib": 4515.5,
+      "private_working_set_mib": 1895.4
+    },
+    {
+      "tier": "fast",
+      "stage": "exit+3s",
+      "at": "2026-11-09T06:46:04.0483633Z",
+      "avail_phys_mib": 13597.1,
+      "total_phys_mib": 16378.7,
+      "memory_load_pct": 16,
+      "avail_pagefile_mib": 16710.7,
+      "lists": {
+        "free_and_zero_mib": 2903.5,
+        "standby_mib": 10694.2,
+        "modified_mib": 166.1,
+        "committed_mib": 2612.1
+      }
+    },
+    {
+      "tier": "fast",
+      "stage": "exit+15s",
+      "at": "2026-11-09T06:46:16.0702234Z",
+      "avail_phys_mib": 13598.8,
+      "total_phys_mib": 16378.7,
+      "memory_load_pct": 16,
+      "avail_pagefile_mib": 16709.0,
+      "lists": {
+        "free_and_zero_mib": 2904.9,
+        "standby_mib": 10694.5,
+        "modified_mib": 172.7,
+        "committed_mib": 2613.8
+      }
+    }
+  ],
+  "replies": [
+    {
+      "tier": "accurate",
+      "request": "0001",
+      "wall_s": 93.5,
+      "prompt_n": 1295,
+      "prompt_ms": 77443.859,
+      "predicted_n": 85,
+      "predicted_ms": 15987.009
+    },
+    {
+      "tier": "fast",
+      "request": "0001",
+      "wall_s": 56.0,
+      "prompt_n": 1295,
+      "prompt_ms": 46011.413,
+      "predicted_n": 89,
+      "predicted_ms": 9969.517
+    }
+  ],
+  "verdicts": [
+    {
+      "tier": "accurate",
+      "stage": "after-health",
+      "avail_phys_mib": 5154.3,
+      "working_set_mib": 7895.8,
+      "shipped_credit_mib": 2883,
+      "plan_sees_mib": 8037.3,
+      "accurate_fits": false,
+      "measured_credit_mib": 7895.8,
+      "plan_sees_measured": 13050.1,
+      "accurate_fits_measured": true
+    },
+    {
+      "tier": "accurate",
+      "stage": "after-request",
+      "avail_phys_mib": 5569.8,
+      "working_set_mib": 8108.8,
+      "shipped_credit_mib": 2883,
+      "plan_sees_mib": 8452.8,
+      "accurate_fits": true,
+      "measured_credit_mib": 8108.8,
+      "plan_sees_measured": 13678.6,
+      "accurate_fits_measured": true
+    },
+    {
+      "tier": "accurate",
+      "stage": "after-idle",
+      "avail_phys_mib": 6923.6,
+      "working_set_mib": 6685.0,
+      "shipped_credit_mib": 2883,
+      "plan_sees_mib": 9806.6,
+      "accurate_fits": true,
+      "measured_credit_mib": 6685.0,
+      "plan_sees_measured": 13608.6,
+      "accurate_fits_measured": true
+    },
+    {
+      "tier": "fast",
+      "stage": "after-health",
+      "avail_phys_mib": 9345.1,
+      "working_set_mib": 4318.1,
+      "shipped_credit_mib": 2086,
+      "plan_sees_mib": 11431.1,
+      "accurate_fits": true,
+      "measured_credit_mib": 4318.1,
+      "plan_sees_measured": 13663.2,
+      "accurate_fits_measured": true
+    },
+    {
+      "tier": "fast",
+      "stage": "after-request",
+      "avail_phys_mib": 9044.3,
+      "working_set_mib": 4512.8,
+      "shipped_credit_mib": 2086,
+      "plan_sees_mib": 11130.3,
+      "accurate_fits": true,
+      "measured_credit_mib": 4512.8,
+      "plan_sees_measured": 13557.099999999999,
+      "accurate_fits_measured": true
+    },
+    {
+      "tier": "fast",
+      "stage": "after-idle",
+      "avail_phys_mib": 9085.4,
+      "working_set_mib": 4512.8,
+      "shipped_credit_mib": 2086,
+      "plan_sees_mib": 11171.4,
+      "accurate_fits": true,
+      "measured_credit_mib": 4512.8,
+      "plan_sees_measured": 13598.2,
+      "accurate_fits_measured": true
+    }
+  ],
+  "bands": {
+    "accurate": {
+      "taken_mib": 7303.1,
+      "given_back_mib": 6740.1,
+      "shipped_credit_mib": 2883
+    },
+    "fast": {
+      "taken_mib": 4623.2,
+      "given_back_mib": 4511.7,
+      "shipped_credit_mib": 2086
+    }
+  },
+  "stands_down_below_mib": 12612.1,
+  "comes_back_from_mib": 10729.2,
+  "runner_available_before_mib": 12872.9
+}
