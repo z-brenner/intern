@@ -1,11 +1,13 @@
 # Real-document regression gate
 
 The four real-document sets (`scripts/realdocs-eval/sample*.json`: letters, notices, invoices
-and office files from public sources) are replayed in CI on every push, from what the accurate
-model read and replied on a runner, and held to a baseline document by document, as InternBench
-is. A change to validation, evidence, inference, naming or retrieval that turns a right name
-wrong, files a wrong name as ready, or takes the gold's date or a party out of the prompt fails
-the `Corpus replay` job in seconds, with no model and no document fetched.
+and office files from public sources) are replayed in CI on every pull request and every push to
+main, from what the accurate model read and replied on a runner, and held to a baseline document
+by document, as InternBench is. A change to validation, evidence, inference or naming that turns a
+right name wrong or files a wrong name as ready fails the `Corpus replay` job in seconds, with no
+model and no document fetched. A change to the prompt, indexing or retrieval fails it too, as
+`stale_prompt`, until the sets are recorded again
+([When the prompt changes](#when-the-prompt-changes)).
 
 | File | What it is |
 | --- | --- |
@@ -72,9 +74,12 @@ document on its own, so the outcomes stand:
   (`real-letter-05`, `real3-office-03`, `real4-letter-02`) and two more relations
   (`real-letter-07`, `real3-letter-10`).
 - Retrieval's date and party budgets cut to 60 tokens: every replay but the digest fixtures fails,
-  each changed prompt `stale_prompt`, as a prompt change should. With `--allow-stale` the recall
-  gate still fails them: `prompt_recall` falls on 6 real documents and 3 InternBench ones, and
-  InternBench's `data-processing-agreement-10p` fails on `context_subject_recall` alone.
+  each changed prompt `stale_prompt`, as a prompt change should (2 fixtures, 19 InternBench
+  documents and 10, 12, 8 and 10 real ones; 9 in real1 now). That is all CI shows of it: a strict
+  replay does not compare a stale document's recalls. With `--allow-stale`, run locally, the
+  recall gate fails them instead: `prompt_recall` falls on 6 real documents and 3 InternBench
+  ones, and InternBench's `data-processing-agreement-10p` fails on `context_subject_recall`
+  alone.
 
 ## Changing the baselines
 
@@ -86,10 +91,11 @@ the review: every flipped score and every recall is a line.
 
 ## When the prompt changes
 
-A change to `prompt.rs`, `index.rs`, `retrieve.rs`, the grammar or what the worker extracts makes
-the recorded replies answer prompts the engine no longer builds: the documents replay as
-`stale_prompt` and the step fails, as InternBench's does. CI never passes `--allow-stale`. Such a
-change carries re-recorded real sets and new baselines in the same pull request:
+A change to `prompt.rs`, `index.rs`, `retrieve.rs` or the grammar makes the recorded replies
+answer prompts the engine no longer builds: the documents replay as `stale_prompt` and the step
+fails, as InternBench's does. CI never passes `--allow-stale`. A change to what the worker extracts
+is not seen at all, since a replay reads the recorded text; only a new recording measures it. Such
+a change carries re-recorded real sets and new baselines in the same pull request:
 
 1. Push the branch and dispatch `candidate-bench.yml` on it with the manifest's accurate model
    (its default) and `sets` `real1,real2,real3,real4`.
@@ -100,4 +106,6 @@ change carries re-recorded real sets and new baselines in the same pull request:
 
 Until then, `--allow-stale` on a local replay scores the stale documents from their recorded
 replies, and the evidence recalls are still measured on the prompts the engine builds now, so a
-retrieval change can be checked for lost dates and parties before the live run.
+retrieval change can be checked for lost dates and parties before the live run. Run it against
+the committed baselines before writing new ones: once the new baselines are written, a recall the
+change lost is no longer a failure, only a line of their diff.

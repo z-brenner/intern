@@ -610,13 +610,22 @@ refusal exits 2.
   prompt the engine builds) and the six `context_*` recalls (the gold's
   type, date, parties, their mean, facts and subject terms in the context
   retrieval builds). A replay baseline keeps them per document (`values`),
-  and a document whose recall falls fails the run, even while its recorded
-  reply still names it right: replay builds the context and the prompt
-  from the recorded text with the code as it is now, so a change to
-  extraction, indexing or retrieval that takes a reviewed date or a party
-  out of what the model reads is caught in seconds, without a model. On
-  the real-document sets a fifth of the documents never get the gold date
-  or a party into the prompt, and nearly all of those are named wrong
+  and a document whose recall falls fails the run. Replay builds the
+  context and the prompt from the recorded text with the code as it is
+  now, so the recalls measure the code, not the recording. A change to
+  indexing or retrieval that takes a reviewed date or a party out of what
+  the model reads changes the prompt as well, though, so a strict replay,
+  which is what CI runs, fails that document as `stale_prompt` first and
+  does not compare its recalls. In CI they fail a run only when something
+  other than the prompt moves them: the gold, or how they are scored.
+  For a retrieval change they are measured locally: a replay with
+  `--allow-stale` scores the stale documents from their recorded replies
+  and fails a document whose recall fell, even while its reply still names
+  it right, in seconds and without a model. The pull request that then
+  carries the re-recordings rewrites the baselines, and a fallen recall is
+  a line of that diff to review, not a failure. On the real-document sets
+  a fifth of the documents never get the gold date or a party into the
+  prompt, and nearly all of those are named wrong
   (`bench/realdocs/README.md`). What the model quoted (`evidence_recall`)
   is the recording's, not the code's, and is reported, never gated. A live
   run against a baseline that holds them reports a fall and gates nothing
@@ -730,11 +739,12 @@ cargo run --release --locked -p intern-bench -- run --corpus "$TMP/real1/corpus"
 for real2 to real4.) `--recording` keeps the gold to the documents the
 recording holds, so the run scores all of them, and a baseline document the
 recording lost fails as missing. The corpus directory does not exist; a
-replay needs only the recorded text. Each set replays in 2 to 4 s in a
-release build. What a document gets wrong or right, and its evidence
-recalls, are held as InternBench's are ([Gates](#gates)); add
-`--write-baseline bench/realdocs/baseline-real1.json` to accept a new state,
-and the baseline diff is the review.
+replay needs only the recorded text. Each set replays in under 5 s in a
+release build, 0.7 to 1.7 s on a GitHub runner. What a document gets wrong
+or right, and its evidence recalls, are held as InternBench's are
+([Gates](#gates)); add
+`--write-baseline bench/realdocs/baseline-real1.json` to accept a new
+state, and the baseline diff is the review.
 
 Only documents whose source licence plainly permits redistribution are
 committed: a US federal work (17 U.S.C. 105), CC0, a Public Domain Mark or
@@ -746,10 +756,12 @@ document of the four samples with its licence and attribution or the reason
 it was left out, and `scripts/realdocs-gate.test.ts` holds the recordings,
 `SOURCES.md` and the baselines to each other.
 
-A change to the prompt, indexing, retrieval, the grammar or the worker's
-text makes the real sets `stale_prompt`, and the CI steps fail; they never
-pass `--allow-stale`. Such a change carries re-recorded real sets and new
-baselines: dispatch the candidate benchmark on the branch with `sets`
+A change to the prompt, indexing, retrieval or the grammar makes the real
+sets `stale_prompt`, and the CI steps fail; they never pass
+`--allow-stale`. A change to what the worker extracts is not seen at all,
+since a replay reads the recorded text, and is measured only by recording
+again. Either change carries re-recorded real sets and new baselines:
+dispatch the candidate benchmark on the branch with `sets`
 `real1,real2,real3,real4` and no candidates, keep each recording's cleared
 documents with `scripts/realdocs-eval/commit-recording.py`, and write the
 baselines. `bench/realdocs/README.md` has the steps.

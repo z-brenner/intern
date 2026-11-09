@@ -14,7 +14,11 @@
 //!   ([`REPLAY_VALUES`]: whether the gold's type, date and parties reach
 //!   the evidence context and the prompt the engine builds), and any fall
 //!   in one fails the run: replay builds both from the recorded text with
-//!   the code as it is now, so they are as deterministic as a name.
+//!   the code as it is now, so they are as deterministic as a name. A
+//!   document whose status changed fails on that alone and its recalls
+//!   are not compared, so a change that moves what reaches the prompt
+//!   fails a strict replay as `stale_prompt` first; its recalls are
+//!   compared only with `--allow-stale`.
 //! * **Live** inference moves a document now and then for reasons no change
 //!   made, so per-document score flips are reported but only the aggregate
 //!   fails the run: a rate may not fall by more than one document's worth
@@ -116,12 +120,15 @@ pub struct BaselineDocument {
 /// is held to with no tolerance: whether the gold's date form and parties reach the prompt
 /// the engine builds (`prompt_recall`), and whether the gold's items reach
 /// the evidence context retrieval builds ([`CONTEXT_SCORES`]). Replay
-/// builds both from the recorded text with the code as it is now, so a
-/// change to extraction, indexing or retrieval that takes a reviewed date
-/// or a party out of what the model reads fails the run, even while the
-/// recorded reply still names the document. What the model quoted
-/// (`evidence_recall`) is the recording's, not the code's, and is not
-/// kept.
+/// builds both from the recorded text with the code as it is now. A change
+/// to indexing or retrieval that takes a reviewed date or a party out of
+/// what the model reads changes the prompt too, so a strict replay fails
+/// the document as `stale_prompt` before comparing these; a replay with
+/// `--allow-stale` scores it from the recorded reply and fails it on the
+/// fallen recall, even while that reply still names the document. Strictly,
+/// they fail a run when something other than the prompt moves them: the
+/// gold, or how they are scored. What the model quoted (`evidence_recall`)
+/// is the recording's, not the code's, and is not kept.
 pub const REPLAY_VALUES: [&str; 7] = [
     "prompt_recall",
     CONTEXT_SCORES[0],
@@ -840,6 +847,7 @@ mod tests {
     use super::*;
     use crate::{
         ocr::OcrMeasure,
+        record::STALE_PROMPT,
         report::{EXTRACT, RunInfo, build},
         timing,
     };
@@ -1530,6 +1538,23 @@ mod tests {
             comparison
                 .ungated_regressions()
                 .any(|line| line == "letter: prompt_recall was 1, now 0.5")
+        );
+
+        // Replayed strictly, the change that moved what reaches the prompt
+        // makes the document stale_prompt before any recall is measured: it
+        // fails on its status alone, as CI sees it, and the falls above are
+        // what a replay with --allow-stale shows.
+        let strict = report(
+            "replay",
+            vec![
+                record("letter", STALE_PROMPT, json!({}), 0.0),
+                recalled("notice", 0.5, 0.0),
+            ],
+        );
+        let comparison = compare(&strict, &baseline, None);
+        assert_eq!(
+            comparison.failures,
+            vec!["letter: was completed, now stale_prompt"]
         );
 
         // A baseline written before the recalls were kept holds none of them.

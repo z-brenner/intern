@@ -131,9 +131,14 @@ or a status that changed fails the job, as a fixture's does here.
 These replays also hold each document's evidence recalls: whether the gold's
 date form and parties reach the prompt the engine builds (`prompt_recall`)
 and the context retrieval builds (`context_*_recall`). Replay builds both
-from the recorded text with today's code, so a change to indexing,
-retrieval or extraction that drops a reviewed date or a party from what the
-model reads fails CI even while the recorded reply still names the document.
+from the recorded text with today's code. A change to indexing or retrieval
+that drops a reviewed date or a party from what the model reads changes the
+prompt too, so in CI the document fails as `stale_prompt` before its recalls
+are compared; there the recalls fail a run only when the gold or their
+scoring moves them. Locally, a replay with `--allow-stale` compares them for
+such a change and fails a document whose recall fell even while its recorded
+reply still names it, and after the re-recording a fallen recall is a line
+of the new baseline's diff, for the review to weigh.
 On the four whole real sets, 44 of 225 recorded documents never get the gold
 date or a party into the prompt, and 40 of them are named wrong: a third of
 all their wrong names (see [internbench.md](internbench.md#gates)).
@@ -153,9 +158,11 @@ document's licence and attribution, or why it was left out. The documents
 themselves are never committed.
 
 **A prompt change carries its re-recordings.** A change to `prompt.rs`,
-`index.rs`, `retrieve.rs`, the grammar or the worker's text makes the
-recorded replies stale, for the fixtures, InternBench and the real sets
-alike, and CI fails on them by design: it never passes `--allow-stale`. The
+`index.rs`, `retrieve.rs` or the grammar makes the recorded replies stale,
+for the fixtures, InternBench and the real sets alike, and CI fails on them
+by design: it never passes `--allow-stale`. A change to what the worker
+extracts is not seen by a replay at all, since it reads the recorded text,
+and needs the same re-recording to be measured on these sets. The
 pull request that makes such a change carries the new recordings and
 baselines: the fixtures recorded as below, InternBench and the real sets
 recorded on runners by the candidate benchmark workflow (dispatched on the
