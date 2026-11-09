@@ -37,12 +37,17 @@ const SOMEONE_ELSE = /written by|authored by|third.party|uploader|produced by|re
 /**
  * A Public Domain Mark says a work is free of copyright; the marks here were
  * applied by the records' holders, not their authors, so one is accepted only
- * for a record made before this year, which no US term can still cover: an
- * unpublished work made for hire or of unknown author is protected for at most
- * 120 years from its making (SOURCES.md, "The rule"). Each such row's title
- * gives the record's year.
+ * on a firm's bill or a public body's notice made before this year (SOURCES.md,
+ * "The rule"). In the US such a record, unpublished, is a work made for hire or
+ * one that names no person as its author, protected for at most 120 years from
+ * its making. A work a named person wrote is protected for that person's life
+ * and 70 years however old it is, so a holder's mark never clears a letter or
+ * a person's papers. Each such row's title gives the record's year.
  */
 const MARKED_BEFORE = 1906;
+
+/** The records a holder's mark may clear: a firm's bill or a public body's notice, by id. */
+const MARKED_KINDS = /^real\d?-(invoice|notice)-\d+$/;
 
 interface Cleared {
   id: string;
@@ -106,6 +111,7 @@ describe('the committed real-document recordings', () => {
         expect(row.licence, row.id).toMatch(ADMITTED);
         expect(document.source.license, row.id).not.toMatch(SOMEONE_ELSE);
         if (row.licence === 'Public Domain Mark 1.0') {
+          expect(row.id, row.id).toMatch(MARKED_KINDS);
           const years = [...row.title.matchAll(/\b(1[5-9]\d\d|20\d\d)\b/g)].map((match) => Number(match[1]));
           expect(years.length, row.id).toBeGreaterThan(0);
           expect(Math.max(...years), row.id).toBeLessThan(MARKED_BEFORE);
