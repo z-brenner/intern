@@ -905,6 +905,7 @@ pub fn validate_facts_at(
         };
         let trimmed = without_trading_name(&trim_name(written));
         let trimmed = completed_name(scope, &trimmed).unwrap_or(trimmed);
+        let trimmed = without_courtesy_title(&trimmed);
         let name = trimmed.as_str();
         // A first name on its own is never a party: one word, not an
         // initialism, with nothing that makes it an organization.
@@ -4542,6 +4543,60 @@ fn field_subject(scope: &ValidationScope<'_>) -> Option<String> {
             .join(" ");
         (!value.is_empty()).then_some(value)
     })
+}
+
+/// Courtesy titles a person's name is written after, never part of the
+/// name a file is known by: "Prof. A. G. Bell" is A. G. Bell. A title of
+/// rank ("Sir", "Lord") is part of the name and stays.
+const COURTESY_TITLES: &[&[&str]] = &[
+    &["the", "rt", "hon"],
+    &["the", "right", "honourable"],
+    &["the", "honourable"],
+    &["the", "honorable"],
+    &["the", "hon"],
+    &["rt", "hon"],
+    &["hon"],
+    &["mr"],
+    &["mrs"],
+    &["ms"],
+    &["miss"],
+    &["mx"],
+    &["dr"],
+    &["prof"],
+    &["professor"],
+];
+
+/// A person's name without the courtesy title written before it, when
+/// what follows is a person's whole name: two or three words, none of
+/// them an organization's or a figure ("Dr. Ing. h.c. F. Porsche AG" keeps
+/// its "Dr.", and "Dr. Smith" its title, a surname alone being no name).
+fn without_courtesy_title(name: &str) -> String {
+    let tokens = name.split_whitespace().collect::<Vec<_>>();
+    let token_words = tokens.iter().map(|token| words(token)).collect::<Vec<_>>();
+    for title in COURTESY_TITLES {
+        if tokens.len() <= title.len()
+            || !token_words[..title.len()]
+                .iter()
+                .zip(title.iter())
+                .all(|(word, wanted)| word.len() == 1 && word[0] == *wanted)
+        {
+            continue;
+        }
+        let rest = &tokens[title.len()..];
+        let rest_name = rest.join(" ");
+        if (2..=3).contains(&rest.len())
+            && !is_organization_name(&rest_name)
+            && !rest_name.chars().any(|c| c.is_ascii_digit())
+            && !words(&rest_name).iter().any(|word| {
+                ORGANIZATION_WORDS.contains(&word.as_str())
+                    || crate::cues::ORGANIZATION_ENDINGS.contains(&word.as_str())
+            })
+        {
+            return rest_name;
+        }
+        break;
+    }
+    name.to_owned()
 }
 
 /// Whether a name is an organization's: it ends on a legal form or an
@@ -12312,5 +12367,27 @@ Rickmansworth,
                 .as_deref(),
             Some("notice of voluntary dismissal")
         );
+    }
+
+    /// A courtesy title is no part of a person's name in a filename; a
+    /// title of rank, an organization's "Dr." and a long name keep theirs.
+    #[test]
+    fn a_courtesy_title_is_no_part_of_a_name() {
+        for (written, name) in [
+            ("Prof. A. G. Bell", "A. G. Bell"),
+            ("MR. William Dew", "William Dew"),
+            ("The Rt Hon Kemi Badenoch", "Kemi Badenoch"),
+            ("Dr Jane Okafor", "Jane Okafor"),
+            ("Sir Gus O'Donnell", "Sir Gus O'Donnell"),
+            (
+                "DR ING. H.C.F. PORSCHE AKTIEGESELLSCHAFT",
+                "DR ING. H.C.F. PORSCHE AKTIEGESELLSCHAFT",
+            ),
+            ("Dr. Smith Dental Group", "Dr. Smith Dental Group"),
+            ("Mr.", "Mr."),
+            ("Dr. Smith", "Dr. Smith"),
+        ] {
+            assert_eq!(without_courtesy_title(written), name, "{written}");
+        }
     }
 }
