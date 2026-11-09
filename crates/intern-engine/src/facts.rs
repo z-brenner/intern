@@ -6027,7 +6027,9 @@ fn organization_before_kind(line: &str) -> Option<String> {
 }
 
 /// The words of a unit that read, loosely, as `loose`: the document's own
-/// spelling of a name the index found.
+/// spelling of a name the index found. A "The" that opens the name's line
+/// is the name's own ("THE MCGRAW-HILL COMPANIES, INC.,"), as a caption, a
+/// letterhead or an address writes it.
 fn written_span(unit: &EvidenceUnit, loose: &str) -> Option<String> {
     unit.text.lines().find_map(|line| {
         let tokens = line.split_whitespace().collect::<Vec<_>>();
@@ -6035,8 +6037,17 @@ fn written_span(unit: &EvidenceUnit, loose: &str) -> Option<String> {
             (start + 1..=tokens.len().min(start + 10)).find_map(|end| {
                 let span = tokens[start..end].join(" ");
                 (normalize_loosely(&span) == loose).then(|| {
-                    span.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '"'))
-                        .to_owned()
+                    let span = span.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '"'));
+                    let opens_line = |at: usize| at == 0 || tokens[at - 1] == "|";
+                    match start.checked_sub(1) {
+                        Some(article)
+                            if tokens[article].eq_ignore_ascii_case("the")
+                                && opens_line(article) =>
+                        {
+                            format!("{} {span}", tokens[article])
+                        }
+                        _ => span.to_owned(),
+                    }
                 })
             })
         })
@@ -12542,5 +12553,30 @@ Rickmansworth,
         ] {
             assert!(outcome.reasons.contains(&reason), "{:?}", outcome.reasons);
         }
+    }
+
+    /// A "The" that opens a name's line is the name's own; one in a sentence
+    /// is not.
+    #[test]
+    fn a_line_opening_the_is_part_of_the_name() {
+        let index = index_of(
+            "UNITED STATES DISTRICT COURT\n\nTHE MCGRAW-HILL COMPANIES, INC.,\nPlaintiffs,\n\n\
+             The parties met with the Acme Widget Company today.",
+        );
+        let unit = |needle: &str| {
+            index
+                .units()
+                .iter()
+                .find(|unit| unit.text.contains(needle))
+                .expect("unit")
+        };
+        assert_eq!(
+            written_span(unit("MCGRAW"), "mcgraw-hill companies inc").as_deref(),
+            Some("THE MCGRAW-HILL COMPANIES, INC.")
+        );
+        assert_eq!(
+            written_span(unit("Acme"), "acme widget company").as_deref(),
+            Some("Acme Widget Company")
+        );
     }
 }
