@@ -180,28 +180,46 @@ flags, `--token-confidence`, the baseline at the 0.7 gate, with `MODEL`,
 `LLAMA_SERVER` and `INTERN_RUNTIME_DIR` from the environment, and the outputs
 in a directory of its own (`corpus-recording.json`, `corpus-baseline.json`,
 `report.json`) for a person to read before copying them over the committed
-ones. `candidate-bench.yml` runs it on an Ubuntu runner as the set
+ones. Like `record-corpus.ps1` it refuses a model whose SHA-256
+`src-tauri/resources/model-manifest.json` does not pin, unless
+`ALLOW_UNPINNED=1`, and the recording's note then says the model is not the
+shipped one. `candidate-bench.yml` runs it on an Ubuntu runner as the set
 `fixtures`, beside InternBench and the real sets, with the worker, PDFium and
 PP-OCR the Linux package stages: a recording made on the branch that changed
 the prompt, on the same machine class as that branch's InternBench run.
 Its first run (42576431342, on `zack/evidence-recall`, whose retrieval
 changes reach no fixture) built all 21 prompts exactly as the committed
-recording holds them, and 11 replies came back different from the ones
-recorded on the 4-core Xeon: `scanned-lease.pdf` lost its name ("Lease
-Agreement Effective September 1 2024 between ...") and two fixtures were
-routed as the gold wants where they were not. That is drift between
+recording holds them, and 10 proposals came back different from the ones
+recorded on the 4-core Xeon (19 replies, counting their token
+probabilities). Against the committed baseline that is one regression,
+`scanned-lease.pdf` losing its name ("Lease Agreement Effective September
+1 2024 between ..."), and two improvements, `termination-notice.pdf` and
+`order-form.docx` filed ready, as the gold wants, where the committed
+recording sent them to review. A second run (42606022281, at `ad042d3`,
+on an AMD EPYC 7763 where the first had an EPYC 9V45) again built all 21
+prompts as committed; 4 proposals differed from the committed recording,
+and against the baseline `scanned-lease.pdf` lost its name the same way,
+with `rotated-low-resolution-scan.png`'s date role and
+`termination-notice.pdf`'s readiness improving. That is drift between
 machines, not a change to measure, so the committed recording stays, as
 "Re-recording only some fixtures" below asks: splice in what a change
-touched, nothing else.
+touched, nothing else. Its token probabilities (two alternatives a token)
+are in that run's artifact, not in `fixtures/corpus-recording.json`.
 
 A recording made with `--token-confidence` keeps, beside the gate's
 `token_confidence` (`min`, `mean`, `tokens`), every token of the reply as the
 server reported it (`token_probabilities`: the token, its log-probability,
-the `top_logprobs` alternatives, and its bytes where its text cannot carry
-them). Nothing replays from it - the gate is scored from `token_confidence`,
-exactly as for a recording made before the list was kept - but another
-reading of the same reply (the first token, the margin to the runner-up, the
-type's tokens) can be swept offline over it.
+the two most probable tokens at that position with theirs, and its bytes
+where its text cannot carry them). Nothing replays from it - the gate is
+scored from `token_confidence`, exactly as for a recording made before the
+list was kept - but another reading of the same reply (the first token, the
+margin between the model's first and second choice, the type's tokens) can
+be swept offline over it. The probabilities are the model's before the
+grammar's mask, so the second choice may be a token the grammar would not
+have let it write. Recordings made before the client asked for two
+alternatives list one, the model's first choice: that is the model's own
+token except where the grammar forced another (245 of the 6,956 tokens of
+the InternBench recording from run 42576431342).
 
 ## Re-recording only some fixtures
 

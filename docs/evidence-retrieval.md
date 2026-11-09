@@ -72,8 +72,11 @@ Features are read once per unit:
   first ("Royal Borough of Greenwich", "City of Stanfield", "U.S.
   Department of Justice": a borough, city, council, department, ministry,
   office, parish, province, town or the like, "of", and the capitalized
-  words after it; not "State of", "County of" or "District of", which a
-  governing-law clause, a notary or a court caption names), **likely
+  words after it, "and" and "of" joining them in any case, up to "the",
+  punctuation, a lower-case word, or a kind of document followed by "of"
+  where a heading runs on into its title; not "State of", "County of" or
+  "District of", which a governing-law clause, a notary or a court caption
+  names), **likely
   people** (after a courtesy title, "Dear", a party label, `/s/`),
   **identifiers** (letters and figures, or figures a number label
   introduces). Public bodies are kept apart from organizations, which
@@ -505,10 +508,11 @@ model's recording and falls on no document (real3 0.7685 to 0.7778, real4
 0.8994 to 0.9253; real4's documents below 1 from 11 to 8). InternBench and
 the fixture corpus build exactly the prompts they did, and every document
 whose prompt did not change replays identically to main. 26 real-set
-contexts change per model (3, 6, 4 and 13 on real1 to real4); the
-context's estimated tokens summed per set move -0.26 to +0.30 percent,
-the medians do not move (real4 864 to 855), p95 stays or falls, and the
-largest context grows on real4 only (1,796 to 1,902 tokens).
+contexts change per model (3, 6, 4 and 13 on real1 to real4; 10 grow
+and 16 shrink); the context's estimated tokens summed per set move -0.26
+to +0.30 percent, the median moves on real4 only (864 to 855), p95 stays
+or falls, and the set's largest context grows on real4 only (1,877 to
+1,902 tokens: `real4-letter-13`, 1,796 before, becomes the largest).
 
 Live, the shipped 9B on the branch (candidate-bench runs 42576431342 for
 InternBench and real1 to real3, 42586129345 for real4) against main's
@@ -524,17 +528,23 @@ main, all at the 0.7 gate, on the documents all three runs fetched:
 | real4 (48) | 24 / 22 / 22 | 0 / 0 / 0 | 10: 5 / 3 / 3 |
 | total (283) | 162 / 155 / 159 | 3 / 6 / 3 | 23: 8 / 5 / 5 |
 
-The runners' CPUs differ, so replies drift at temperature 0: on the 265
+The runners' CPUs differ, so replies drift at temperature 0: on the 260
 documents whose prompt did not change, main's run today differs from
 alpha.14 on 8 names and 20 readiness decisions, the branch's runs on no
-name and one readiness decision. Judged on the 23 documents whose prompt changed, the branch
-names three more right - `real3-office-10`, `real4-invoice-10` and
-`real4-invoice-14`, the documents the fixes brought the gold line to - and
-files no wrong name. Prompt tokens as the server counted them, on the
+name and one readiness decision. Judged on the 23 documents whose prompt
+changed, the branch names three more right - `real3-office-10`,
+`real4-invoice-10` and `real4-invoice-14`, the documents the fixes brought
+the gold line to - and files no wrong name at the shipped gate. Two of them
+show how thin that is. Against main's run today one changed document lost
+its name (`real2-letter-07`, "NDA from U.S. Food and Drug Administration"
+where main named the letter right; alpha.14 had it wrong as well, so this
+is drift as much as the change). And `real4-notice-13` (wrong name on every
+side) was filed ready at the run's own 0.5 gate, with a lowest token
+probability of 0.55; at the app's 0.7 it goes to review. Prompt tokens as the server counted them, on the
 documents both live runs recorded: real1 +0.3 percent, real2 -0.2, real3
 0.0, real4 0.0 (its 11 changed prompts sum to 15,192 tokens on both sides,
-+66 on each WTTG invoice, -97 on one DEQ notice), InternBench 0.0; every
-median unchanged, real4's p95 1,951 to 1,879. At the runners' 14 to 20
++66 on each WTTG invoice, -97 on one DEQ notice), InternBench 0.0; the
+medians unchanged but real2's (770 to 774), real4's p95 1,951 to 1,879. At the runners' 14 to 20
 prompt tokens a second that is at most about 5 s of prefill on one
 document and nothing in aggregate.
 

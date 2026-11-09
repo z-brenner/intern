@@ -227,7 +227,9 @@ are an artifact named `candidate-<label>-<set>-<run id>`, kept 14 days.
 Runners differ, so compare jobs that the summary puts on the same CPU. The
 set `fixtures` records the fixture corpus instead, with
 `scripts/record-corpus.sh` (docs/evaluation.md); its artifact carries
-`corpus-recording.json` and `corpus-baseline.json`.
+`corpus-recording.json` and `corpus-baseline.json`, and its summary reads
+the same three lines from `intern-evaluate`'s report (names right, fixtures
+filed ready under a wrong name, the median time per fixture).
 
 ### Server settings on GitHub runners
 

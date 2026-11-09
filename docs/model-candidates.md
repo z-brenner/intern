@@ -25,7 +25,8 @@ carry over:
 ## 1. Token confidence (on for the accurate model since October 2026)
 
 **What it is.** `ModelClient::with_token_confidence(true)` adds `"logprobs": true,
-"top_logprobs": 1` to the request. `client::token_confidence` reads the reported
+"top_logprobs": 2` to the request (1 until November 2026; the second alternative
+is kept for recordings, see below). `client::token_confidence` reads the reported
 probability of every generated token and keeps only the tokens that overlap the
 characters of the `document_date` value and the `parties` values: the inside of
 each string, or a bare `null` / `[]`. The analysis then carries
@@ -42,8 +43,12 @@ written is the signal.
   grammar, sampling settings, and the new fields are transport, so the committed
   `fixtures/corpus-recording.json` still replays with 0 regressions and no
   `stale_prompt`. Since November 2026 a recording also keeps the reply's whole
-  per-token list (`token_probabilities`), so other aggregations than the
-  minimum can be compared offline; replay reads only `token_confidence`.
+  per-token list (`token_probabilities`) with the server's two most probable
+  tokens at each position, so other aggregations than the minimum, and the
+  margin between the model's first and second choice, can be compared
+  offline; replay reads only `token_confidence`. Asking for two alternatives
+  rather than one changes no generated token: the server sorts the same
+  logits either way and samples before it reads them.
 * **The reply.** Decoding is greedy. Two live runs on a freshly started server,
   one without logprobs and one with, gave byte-identical proposals for all 21
   fixtures.
