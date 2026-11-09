@@ -171,7 +171,9 @@ context size.
    ("Decenber"), a comma that lost its space, an invoice's two-figure year
    after a month in words. A date read that way keeps `DATE_UNSUPPORTED`,
    so the name waits for a person, and the index and the prompt read dates
-   as before. Joining a stamp's figures trusts what OCR read: a stamp's
+   as before. It meets the same deadline and other-document guards as a
+   date written out, and a receipt's stamp ("RECEIVED SEP 1 8 2015") is not
+   read at all. Joining a stamp's figures trusts what OCR read: a stamp's
    "DEC 20 1974" read as "DEC 2 8 1974" gives the 28th.
 5. **Tables and layout.** A date in a table cell and parties identified only
    by layout (letterhead, "Bill To" blocks, form boxes) depend on how the
