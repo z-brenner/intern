@@ -74,6 +74,12 @@ const CONNECTORS: &[&str] = &["of", "to", "for", "and", "on", "under"];
 /// Words after which a title stops to its right: a sentence has begun.
 const RIGHT_STOPS: &[&str] = &["is", "are", "was", "were", "hereby", "will", "shall"];
 
+/// Whether a word opens a sentence after a title: "NOTICE *IS* HEREBY
+/// GIVEN".
+pub(crate) fn opens_a_sentence(word: &str) -> bool {
+    RIGHT_STOPS.contains(&word)
+}
+
 /// Whether a token is the possessive of a side of a case - "Plaintiff's",
 /// "Defendants'", "PETITIONER'S" - which names who files a notice, not
 /// the notice.
@@ -145,14 +151,16 @@ pub(crate) fn names_a_kind(word: &str) -> bool {
 /// The noun a type phrase is a kind of: its first word that names a kind
 /// of document and ends the phrase or a part of it - "*Notice* of
 /// Default", "First *Amendment* to Lease", "Seed Production and Supply
-/// *Agreement*", "Order *Form*" - or, when no word names a kind, the word
-/// before its first connector, else its last word.
+/// *Agreement*", "Order *Form*", "*NOTICE* IS HEREBY GIVEN" - or, when no
+/// word names a kind, the word before its first connector, else its last
+/// word.
 pub(crate) fn head_noun(words: &[String]) -> Option<&str> {
     let by_kind = words.iter().enumerate().find(|(at, word)| {
         names_a_kind(word)
             && words.get(at + 1).is_none_or(|next| {
                 CONNECTORS.contains(&next.as_str())
                     || TITLE_STOPS.contains(&next.as_str())
+                    || RIGHT_STOPS.contains(&next.as_str())
                     || next.chars().any(|character| character.is_ascii_digit())
             })
     });

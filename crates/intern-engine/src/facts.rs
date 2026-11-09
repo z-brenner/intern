@@ -63,8 +63,8 @@ use crate::index::{EvidenceIndex, EvidenceUnit, UnitKind};
 use crate::infer::{infer_date_role, reads_as_signature_date, repair_issued_relation};
 use crate::phrases::{
     has_a_kind, head_noun, is_form_code, is_placeholder, is_reference, label_and_value,
-    names_a_kind, opens_with_party_label, phrase_positions, same_word, subject_value, tidy_case,
-    title_phrase, trim_name, without_identifier, words,
+    names_a_kind, opens_a_sentence, opens_with_party_label, phrase_positions, possessive_side,
+    same_word, subject_value, tidy_case, title_phrase, trim_name, without_identifier, words,
 };
 use crate::retrieve::EvidenceContext;
 use crate::validate::{
@@ -2229,7 +2229,7 @@ fn read_type_words<'a>(
                 continue;
             };
             let holds_reply = !phrase_positions(&words(&phrase), &value_words).is_empty();
-            if holds_reply || !stated_on(&line) {
+            if holds_reply || !stated_on(&line) || reads_past_title(value, &value_words, &phrase) {
                 return TypeReading::Title {
                     phrase,
                     found: found_in(unit, &line, Support::Cited),
@@ -2327,6 +2327,29 @@ fn read_type_words<'a>(
         }
     }
     TypeReading::Unsupported
+}
+
+/// Whether a reply's type is a title phrase with only what a title stops
+/// at around it: a side's possessive before it ("PLAINTIFF'S Notice of
+/// Voluntary Dismissal"), or the sentence it opens after it ("NOTICE is
+/// hereby given"). The title phrase is then the type.
+fn reads_past_title(value: &str, value_words: &[String], phrase: &str) -> bool {
+    let phrase_words = words(phrase);
+    let Some(at) = phrase_positions(value_words, &phrase_words)
+        .first()
+        .copied()
+    else {
+        return false;
+    };
+    let before = &value_words[..at];
+    let after = &value_words[at + phrase_words.len()..];
+    let possessive = value
+        .split_whitespace()
+        .next()
+        .is_some_and(|token| possessive_side(token) && words(token) == before);
+    (before.is_empty() || possessive)
+        && after.first().is_none_or(|word| opens_a_sentence(word))
+        && !(before.is_empty() && after.is_empty())
 }
 
 /// The head of a reply's type that `line` holds when the reply ran on
@@ -12225,6 +12248,69 @@ Rickmansworth,
             Some(PartyRole::Issuer),
             "{:?}",
             facts.parties
+        );
+    }
+
+    /// A reply that copied a title line with the side filing it, or with
+    /// the sentence the title opens, is typed by the title alone.
+    #[test]
+    fn a_reply_past_its_title_is_typed_by_the_title() {
+        assert!(reads_past_title(
+            "PLAINTIFF'S NOTICE OF VOLUNTARY DISMISSAL",
+            &words("PLAINTIFF'S NOTICE OF VOLUNTARY DISMISSAL"),
+            "NOTICE OF VOLUNTARY DISMISSAL"
+        ));
+        assert!(reads_past_title(
+            "NOTICE IS HEREBY GIVEN",
+            &words("NOTICE IS HEREBY GIVEN"),
+            "NOTICE"
+        ));
+        assert_eq!(head_noun(&words("NOTICE IS HEREBY GIVEN")), Some("notice"));
+        assert!(!reads_past_title(
+            "Amended and Restated Lease Agreement",
+            &words("Amended and Restated Lease Agreement"),
+            "Lease Agreement"
+        ));
+        assert!(!reads_past_title(
+            "Notice of Default",
+            &words("Notice of Default"),
+            "Notice of Default"
+        ));
+        let (outcome, _) = facts_for(
+            "IN THE UNITED STATES DISTRICT COURT\n\nPA ADVISORS, LLC,\nPlaintiff,\nv.\n\
+             GOOGLE INC., et al.,\nDefendants.\n\n\
+             PLAINTIFF\u{2019}S NOTICE OF VOLUNTARY DISMISSAL OF WPP GROUP PLC\n\n\
+             Plaintiff hereby dismisses WPP GROUP PLC.\n\nDated: January 24, 2008",
+            |index| ModelFacts {
+                document_type: Some(
+                    "PLAINTIFF'S NOTICE OF VOLUNTARY DISMISSAL OF WPP GROUP PLC".into(),
+                ),
+                type_evidence: vec![id_of(index, "VOLUNTARY DISMISSAL")],
+                document_date: Some("2008-01-24".into()),
+                date_evidence: vec![id_of(index, "January 24, 2008")],
+                parties: vec![
+                    party(
+                        "PA ADVISORS, LLC",
+                        Some(PartyRole::Client),
+                        &[id_of(index, "PA ADVISORS")],
+                    ),
+                    party(
+                        "WPP GROUP PLC",
+                        Some(PartyRole::Client),
+                        &[id_of(index, "VOLUNTARY DISMISSAL")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome
+                .proposal
+                .document_type
+                .as_deref()
+                .map(str::to_lowercase)
+                .as_deref(),
+            Some("notice of voluntary dismissal")
         );
     }
 }
