@@ -870,12 +870,29 @@ instructions' state and replaces the document's tokens, and then has the
 server save its slot (`POST /slots/0?action=save`). The file therefore holds
 the instructions and no word of anything filed. That rests on how b11946 keeps
 a slot: a request that reuses only part of the cached prompt drops the rest,
-its tokens and its checkpoints. So it is checked on every save: the server
-says how many tokens it saved, and a file holding more than the
+its tokens and the context checkpoints taken inside it, and the file is the
+slot's token list, the model's state for those tokens, and the checkpoints
+left (the recurrent state at a position, about 50 MiB each). So every save is
+read back before it is renamed into place (`slots::saved_state_reach`): the
+token count from the file's own header, the position each checkpoint reaches,
+and the server's count of what it saved. A file that reaches past the
 instructions-only request's prompt and the one token it generated is deleted
-before it is renamed into place (`Save::HeldMore`), so a runtime that kept
-more would leave nothing of a document on disk. On the runners the 9B saved
-492 tokens, the request's 477 cached and 15 processed. Every later launch of
+(`Save::HeldMore`), and so is one whose checkpoint list cannot be read
+(`Save::Unchecked`), as a runtime that wrote it differently would leave. What
+is checked is how far the saved state reaches, by position, not where each
+checkpoint came from: one inside the request's own 15 tokens is taken to be
+the request's, which on b11946 it is, since the server keeps no checkpoint
+past where the two prompts part. After any change of runtime the speed
+battery's `live_slots` job is the check to run: it saves through the app's own
+code against the real server, reads the file back and fails unless the
+restore works. On the runners the 9B saved 492 tokens, the request's 477
+cached and 15 processed. On the 4-core box with the pinned 4B (b11946), a
+file saved straight after a 1,094-token document held 1,179 tokens and
+checkpoints at 477, 834 and 1,090 (249,433,044 bytes) and would be deleted;
+the one saved after the instructions-only request held 492 tokens and
+checkpoints at 477 and 488 (174,210,604 bytes), and a release build read it
+back in 26 ms, from the page cache as just after a save (35 ms for the larger
+file). Every later launch of
 the same configuration restores the file (`POST /slots/0?action=restore`)
 after the health check and before the server is handed to anything that
 sends it a document, so the restore never races one. Both calls carry the
@@ -927,7 +944,7 @@ steady-state reply byte for byte in every case. An earlier run on two EPYC 7763
 runners measured the same saving, 32.8 s of an 80-82 s first request. The
 file is 174 MB for either pinned model and is restored in 44-60 ms. The app's
 own code was run the same way: the env-gated live test drives `RuntimeModel`
-and `LlamaLauncher` through four launches of the real server, and on a runner
+and `LlamaLauncher` through three lifetimes of the real server, and on a runner
 (the speed battery's `live_slots` job, the pinned 4B, an EPYC 9V74) the
 third launch restored the 4B's file in 60 ms and read a 928-token agreement
 with 477 tokens cached and 451 processed in 10.3 s, against 20.8 s from
@@ -938,8 +955,10 @@ The file's name is the tier and a hash of everything the saved state depends
 on: the model's SHA-256, the server's build as `/props` reports it, the turns
 before the document with the template switches they are rendered with
 (`client::cached_prefix_identity`), every launch argument but the port, key and
-paths (threads, context, batch size, flags), and the processor features that
-choose ggml's CPU backend. A file is only ever restored into a server that
+paths (threads, context, batch size, flags), the processor features that
+choose ggml's CPU backend, and the version of the rules above for what a save
+keeps and when (`SLOT_SCHEME`), so a release that changes them never restores
+a file saved under the old ones. A file is only ever restored into a server that
 would have computed the same state, so the first document's reply is the one it
 would have got as the second. A launch removes its tier's files for any other
 configuration, and any save a stopped server left unfinished (saves are
@@ -951,8 +970,9 @@ folder with `std::filesystem` from UTF-8 text, which Windows' C++ library
 reads in the ANSI code page). And before every launch the server itself is
 asked whether it takes the folder: `llama-server --slot-save-path DIR
 --version` checks the folder while it reads its arguments and exits, without
-a model, in milliseconds (13 ms for b11946 on the 4-core box; a missing
-folder exits 1). A folder it refuses is not passed, so a server that will not
+a model, in milliseconds: b11946 exited 0 for a folder and 1 for a missing
+folder or a file, in 9-16 ms on the 4-core box at a load of 1.3 and 17-47 ms
+at a load of 10-15 (five and three tries of each). A folder it refuses is not passed, so a server that will not
 start, for whatever reason, fails on its three tries as it would without a
 slot folder (`LlamaServer::accepts_slot_directory`).
 

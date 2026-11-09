@@ -601,7 +601,11 @@ fn log_save(tier: ModelTier, save: intern_engine::slots::Save) {
             tokens,
             request_tokens,
         } => eprintln!(
-            "intern: the {} local model's server saved {tokens} tokens where the instructions are {request_tokens}; the file was deleted",
+            "intern: the {} local model's server saved state for {tokens} tokens where the instructions are {request_tokens}; the file was deleted",
+            tier.as_str()
+        ),
+        Save::Unchecked => eprintln!(
+            "intern: the {} local model's saved instructions could not be read back to check them; the file was deleted",
             tier.as_str()
         ),
         Save::Uneven | Save::NoRoom | Save::NotNeeded => {}
@@ -11211,9 +11215,11 @@ mod runtime_tests {
         let _ = std::fs::remove_dir_all(directory);
     }
 
-    /// The real llama-server across restarts. A lifetime whose first request
-    /// is the self-test saves nothing; one whose first request is a document
-    /// long enough to process the instructions in one piece saves them; the
+    /// The real llama-server across restarts, three lifetimes of it. A
+    /// lifetime whose first request is the self-test saves nothing; one
+    /// whose first request is a document long enough to process the
+    /// instructions in one piece saves them, and the file holds state for
+    /// no more than the instructions-only request; the
     /// next lifetime restores them, and its first document gets the same
     /// cached tokens and the same reply as when it is read later in that
     /// lifetime - and as when it is the first document of a lifetime with
@@ -11308,6 +11314,20 @@ mod runtime_tests {
         assert!(saved[0].starts_with("fast-") && saved[0].ends_with(".bin"));
         let size = std::fs::metadata(slots.join(&saved[0])).unwrap().len();
         assert_eq!(timings(&cold).cached_tokens, 0);
+        // Read from the file itself: the instructions-only request's tokens,
+        // and no checkpoint past them, none of the agreement's.
+        let state = intern_engine::slots::saved_state_reach(&slots.join(&saved[0]))
+            .expect("the saved file's tokens and checkpoints");
+        eprintln!(
+            "slot file holds {} tokens; checkpoints at {:?}",
+            state.tokens,
+            state
+                .checkpoints
+                .iter()
+                .map(|checkpoint| checkpoint.n_tokens)
+                .collect::<Vec<_>>()
+        );
+        assert!(state.reach() + 256 < timings(&cold).prompt_tokens);
 
         // A restart: the first document finds the instructions restored.
         let started = std::time::Instant::now();

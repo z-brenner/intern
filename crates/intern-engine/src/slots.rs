@@ -22,6 +22,7 @@ use std::{
     collections::HashMap,
     ffi::OsStr,
     fs,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, PoisonError,
@@ -45,10 +46,20 @@ const SLOT_EXTENSION: &str = "bin";
 /// so a server stopped in the middle of one never leaves a file that looks
 /// whole.
 const PARTIAL_EXTENSION: &str = "part";
-/// A save leaves at least this much of the disk free, or is not made: a
-/// file is 174 MB for either model (the instructions' 492 tokens), and the
-/// speed-up is not worth a full disk.
-const MIN_FREE_AFTER_SAVE: u64 = 2 * 1024 * 1024 * 1024;
+/// A save is made only when at least this much of the disk is free before
+/// it: a file is 174 MB for either model (the instructions' 492 tokens), so
+/// a save leaves at least 1.8 GB, and the speed-up is not worth a full disk.
+const MIN_FREE_BEFORE_SAVE: u64 = 2 * 1024 * 1024 * 1024;
+/// The rules a file was saved under: what a save keeps, and when it is
+/// made. Hashed into the file's name, so a release that changes them never
+/// restores a file saved under the old ones.
+const SLOT_SCHEME: &str = "1";
+/// The most tokens the instructions-only request may process past what it
+/// finds cached: its own short turn, 15 tokens on b11946. More means the
+/// server reused less than the instructions and recomputed part of them in
+/// the request's own batch, so the slot no longer holds them as a long first
+/// document computed them, and nothing is saved.
+const FIXED_TURN_MAX_TOKENS: u64 = 32;
 /// Saving or restoring moves a few hundred megabytes; a cold disk on a busy
 /// laptop is given far longer than that takes.
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(120);
@@ -80,8 +91,13 @@ impl SlotIdentity<'_> {
     /// separator, no `..`), and the same for the same configuration on every
     /// launch.
     pub fn file_name(&self) -> String {
+        self.file_name_under(SLOT_SCHEME)
+    }
+
+    fn file_name_under(&self, scheme: &str) -> String {
         let mut hasher = Sha256::new();
         for part in [
+            scheme,
             self.label,
             self.model_sha256,
             self.runtime_build,
@@ -204,14 +220,171 @@ pub enum Save {
     Uneven,
     /// Too little room on the disk.
     NoRoom,
-    /// The server saved more than the instructions-only request left in
-    /// its slot - `tokens` against that request's `request_tokens` - so the
-    /// file may hold part of the document read before it. It was deleted.
+    /// The file held state for more tokens than the instructions-only
+    /// request left in the slot - `tokens`, in its token list or in a
+    /// context checkpoint, against that request's `request_tokens` - so it
+    /// may hold part of the document read before it. It was deleted.
     HeldMore {
         tokens: u64,
         request_tokens: u64,
     },
+    /// The file's own token count or its checkpoints could not be read
+    /// ([`saved_state_reach`]), so what it holds is not known. It was
+    /// deleted.
+    Unchecked,
     Failed,
+}
+
+/// A context checkpoint a slot file carries: the model's state after its
+/// first `n_tokens` tokens, positions `pos_min` to `pos_max`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SavedCheckpoint {
+    pub n_tokens: i64,
+    pub pos_min: i32,
+    pub pos_max: i32,
+}
+
+/// What a slot file holds state for, read from the file itself.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SavedState {
+    /// The tokens its token list holds.
+    pub tokens: u64,
+    /// The context checkpoints appended after the model's state.
+    pub checkpoints: Vec<SavedCheckpoint>,
+}
+
+impl SavedState {
+    /// The furthest token any of it holds state for.
+    pub fn reach(&self) -> u64 {
+        self.checkpoints
+            .iter()
+            .map(|checkpoint| {
+                let n_tokens = u64::try_from(checkpoint.n_tokens).unwrap_or(u64::MAX);
+                let after = u64::try_from(i64::from(checkpoint.pos_max) + 1).unwrap_or(0);
+                n_tokens.max(after)
+            })
+            .fold(self.tokens, u64::max)
+    }
+}
+
+/// llama.cpp's sequence state file (`llama_state_seq_save_file`): "ggsq",
+/// version 4, a count of 32-bit words and the words - the slot's tokens as
+/// the server packs them - then the model's state.
+const STATE_MAGIC: [u8; 8] = [b'q', b's', b'g', b'g', 4, 0, 0, 0];
+/// How llama-server packs the slot's tokens into those words
+/// (`server_tokens::serialize`): this marker, version 1, the token count and
+/// the tokens, then the media the prompt held (none here). Without the
+/// marker the words are the tokens themselves, as older servers wrote them.
+const PACKED_TOKENS_MARKER: u32 = u32::MAX;
+const PACKED_TOKENS_VERSION: u32 = 1;
+/// llama-server's checkpoint list (`save_slot_checkpoints`), appended after
+/// that state: "SCKP", version 1.
+const CHECKPOINT_MAGIC: [u8; 8] = [b'S', b'C', b'K', b'P', 1, 0, 0, 0];
+/// How much of the file is searched at a time for the checkpoint list.
+const SEARCH_CHUNK: usize = 8 * 1024 * 1024;
+
+/// What the slot file at `path` holds state for, as llama-server b11946
+/// writes it: the token count from the state's header, and the checkpoint
+/// list that ends the file - a count, then each checkpoint's `n_tokens`
+/// (i64), `pos_min` and `pos_max` (i32), and its target, draft and
+/// speculative states, each a u64 length and that many bytes.
+///
+/// The model's state before the list has no length of its own, so the list
+/// is found by its magic, searched from the front, and taken only where it
+/// reads to exactly the end of the file. `None` when the header is not
+/// that, or no such list ends the file: a runtime that writes either
+/// differently, or keeps no checkpoints, gives a file nothing here can
+/// vouch for.
+pub fn saved_state_reach(path: &Path) -> Option<SavedState> {
+    saved_state_in_chunks(path, SEARCH_CHUNK)
+}
+
+/// [`saved_state_reach`], searching `chunk` bytes at a time (at least the
+/// magic's length).
+fn saved_state_in_chunks(path: &Path, chunk: usize) -> Option<SavedState> {
+    let mut file = fs::File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let mut header = [0_u8; 12];
+    file.read_exact(&mut header).ok()?;
+    if header[..8] != STATE_MAGIC {
+        return None;
+    }
+    let words = u32::from_le_bytes(header[8..12].try_into().ok()?);
+    let tokens = if words >= 3 {
+        let mut packed = [0_u8; 12];
+        file.read_exact(&mut packed).ok()?;
+        let word = |at: usize| {
+            u32::from_le_bytes([packed[at], packed[at + 1], packed[at + 2], packed[at + 3]])
+        };
+        match (word(0), word(4), word(8)) {
+            (PACKED_TOKENS_MARKER, PACKED_TOKENS_VERSION, count) if count <= words - 3 => {
+                u64::from(count)
+            }
+            (PACKED_TOKENS_MARKER, _, _) => return None,
+            _ => u64::from(words),
+        }
+    } else {
+        u64::from(words)
+    };
+    let finder = memchr::memmem::Finder::new(&CHECKPOINT_MAGIC);
+    let mut reader = fs::File::open(path).ok()?;
+    let mut chunk = vec![0_u8; chunk.max(CHECKPOINT_MAGIC.len())];
+    let mut start = 0_u64;
+    let mut kept = 0_usize;
+    loop {
+        let read = reader.read(&mut chunk[kept..]).ok()?;
+        let filled = kept + read;
+        for found in finder.find_iter(&chunk[..filled]) {
+            let offset = start + found as u64;
+            if let Some(checkpoints) = checkpoints_at(&mut file, offset, length) {
+                return Some(SavedState {
+                    tokens,
+                    checkpoints,
+                });
+            }
+        }
+        if read == 0 {
+            return None;
+        }
+        // Keep the last few bytes, so a magic split across two reads is
+        // still found, and found once.
+        kept = filled.min(CHECKPOINT_MAGIC.len() - 1);
+        chunk.copy_within(filled - kept..filled, 0);
+        start += (filled - kept) as u64;
+    }
+}
+
+/// The checkpoint list at `offset`, if one starts there and ends the file.
+fn checkpoints_at(file: &mut fs::File, offset: u64, length: u64) -> Option<Vec<SavedCheckpoint>> {
+    fn read<const N: usize>(file: &mut fs::File) -> Option<[u8; N]> {
+        let mut bytes = [0_u8; N];
+        file.read_exact(&mut bytes).ok()?;
+        Some(bytes)
+    }
+    file.seek(SeekFrom::Start(offset + CHECKPOINT_MAGIC.len() as u64))
+        .ok()?;
+    let count = u32::from_le_bytes(read(file)?);
+    let mut checkpoints = Vec::new();
+    for _ in 0..count {
+        let n_tokens = i64::from_le_bytes(read(file)?);
+        let pos_min = i32::from_le_bytes(read(file)?);
+        let pos_max = i32::from_le_bytes(read(file)?);
+        for _ in 0..3 {
+            let size = u64::from_le_bytes(read(file)?);
+            let at = file.stream_position().ok()?;
+            if size > length.checked_sub(at)? {
+                return None;
+            }
+            file.seek(SeekFrom::Current(i64::try_from(size).ok()?))
+                .ok()?;
+        }
+        checkpoints.push(SavedCheckpoint {
+            n_tokens,
+            pos_min,
+            pos_max,
+        });
+    }
+    (file.stream_position().ok()? == length).then_some(checkpoints)
 }
 
 /// The instructions' length in tokens for each configuration, by slot file
@@ -257,7 +430,7 @@ pub struct SlotKeeper {
     /// Nothing for this configuration is on disk, or what was would not
     /// restore: the next document's state is worth saving.
     unsaved: AtomicBool,
-    /// [`MIN_FREE_AFTER_SAVE`], apart from tests, which run on any disk.
+    /// [`MIN_FREE_BEFORE_SAVE`], apart from tests, which run on any disk.
     min_free: u64,
     /// The request sent just before a save, which leaves the slot holding
     /// the instructions and no document
@@ -292,7 +465,7 @@ impl SlotKeeper {
             label: identity.label.to_owned(),
             file_name: identity.file_name(),
             unsaved: AtomicBool::new(true),
-            min_free: MIN_FREE_AFTER_SAVE,
+            min_free: MIN_FREE_BEFORE_SAVE,
             instructions_only,
             micro_batch,
             known,
@@ -384,16 +557,28 @@ impl SlotKeeper {
     /// first.
     ///
     /// The slot then holds that document: its tokens, and the state the
-    /// model built from them. Saved as it is, a person's document would
-    /// outlive its filing in a file of Intern's. So the instructions-only
-    /// request goes first: it reuses the instructions' state the document
-    /// left, and replaces the document's tokens with two fixed words. What
-    /// is saved is the instructions, and the next document reuses them
-    /// exactly as it would have reused them after the document. The server
-    /// says how many tokens it saved; a file with more than that request's
-    /// prompt and the one token it generated is deleted at once
-    /// ([`Save::HeldMore`]), so a runtime that kept more of the slot than
-    /// this one would leave nothing of a document on disk.
+    /// model built from them, in the slot and in the context checkpoints
+    /// the server took while it read them. Saved as it is, a person's
+    /// document would outlive its filing in a file of Intern's. So the
+    /// instructions-only request goes first: it reuses the instructions'
+    /// state the document left, and replaces the document's tokens with two
+    /// fixed words; b11946 drops every checkpoint past where the two
+    /// prompts part. What is saved is the instructions, and the next
+    /// document reuses them exactly as it would have reused them after the
+    /// document.
+    ///
+    /// The saved file is then read back before it is kept: its token list's
+    /// count and the position each of its checkpoints reaches
+    /// ([`saved_state_reach`]), and the server's own count of what it saved.
+    /// A file reaching past that request's prompt and the one token it
+    /// generated is deleted ([`Save::HeldMore`]), and so is one whose
+    /// checkpoints cannot be read ([`Save::Unchecked`]). What is checked is
+    /// how far the saved state reaches, by position: a checkpoint inside the
+    /// request's own 15 tokens is taken to be the request's, as on b11946
+    /// it is, since the server keeps no checkpoint past where the prompts
+    /// part. The speed battery's `live_slots` job runs the app's own save
+    /// against the real server; it is the check to run after any runtime
+    /// change.
     ///
     /// The instructions' length is what that request finds cached. Until a
     /// lifetime of this configuration has sent it, a short first document
@@ -427,6 +612,9 @@ impl SlotKeeper {
                 return Save::Failed;
             }
         };
+        if request.processed > FIXED_TURN_MAX_TOKENS {
+            return Save::Uneven;
+        }
         self.known.record(&self.file_name, request.cached);
         if !self.even(first_request_tokens, request.cached) {
             return Save::Uneven;
@@ -446,10 +634,15 @@ impl SlotKeeper {
             return Save::Failed;
         };
         let request_tokens = request.cached + request.processed;
-        if saved.n_saved > request_tokens + 1 {
+        let Some(state) = saved_state_reach(&partial) else {
+            let _ = fs::remove_file(&partial);
+            return Save::Unchecked;
+        };
+        let reach = state.reach().max(saved.n_saved);
+        if reach > request_tokens + 1 {
             let _ = fs::remove_file(&partial);
             return Save::HeldMore {
-                tokens: saved.n_saved,
+                tokens: reach,
                 request_tokens,
             };
         }
@@ -562,6 +755,54 @@ mod tests {
     /// cached and 11 processed, as the real one finds 477 and 15.
     const REQUEST_TOKENS: u64 = 477 + 11;
 
+    /// A slot file as b11946 writes one: the state's header and `tokens`
+    /// tokens, `state` standing in for the model's state, then the
+    /// checkpoint list, each checkpoint `(n_tokens, data bytes)` with no
+    /// draft or speculative state, unless `checkpoints` is `None`.
+    fn slot_file(tokens: u32, state: &[u8], checkpoints: Option<&[(i64, usize)]>) -> Vec<u8> {
+        let mut file = STATE_MAGIC.to_vec();
+        file.extend((tokens + 4).to_le_bytes());
+        file.extend(PACKED_TOKENS_MARKER.to_le_bytes());
+        file.extend(PACKED_TOKENS_VERSION.to_le_bytes());
+        file.extend(tokens.to_le_bytes());
+        file.extend((0..tokens).flat_map(|token| token.to_le_bytes()));
+        file.extend(0_u32.to_le_bytes());
+        file.extend(state);
+        if let Some(checkpoints) = checkpoints {
+            file.extend(CHECKPOINT_MAGIC);
+            file.extend(u32::try_from(checkpoints.len()).unwrap().to_le_bytes());
+            for &(n_tokens, bytes) in checkpoints {
+                file.extend(n_tokens.to_le_bytes());
+                file.extend(0_i32.to_le_bytes());
+                file.extend((i32::try_from(n_tokens).unwrap() - 1).to_le_bytes());
+                file.extend(u64::try_from(bytes).unwrap().to_le_bytes());
+                file.extend(vec![7_u8; bytes]);
+                file.extend(0_u64.to_le_bytes());
+                file.extend(0_u64.to_le_bytes());
+            }
+        }
+        file
+    }
+
+    /// What the fake server saves, and what its instructions-only request
+    /// processed.
+    #[derive(Clone)]
+    struct Saving {
+        n_saved: u64,
+        file: Vec<u8>,
+        processed: u64,
+    }
+
+    /// As b11946 saves after the instructions-only request: its tokens,
+    /// and checkpoints where the user turn starts and 4 before the end.
+    fn as_b11946() -> Saving {
+        Saving {
+            n_saved: REQUEST_TOKENS,
+            file: slot_file(488, b"state", Some(&[(477, 64), (484, 64)])),
+            processed: 11,
+        }
+    }
+
     /// A fake llama-server's slot endpoints over `directory`: a save writes
     /// the named file there as the real one does, a restore reads it.
     fn fake_llama(
@@ -569,17 +810,23 @@ mod tests {
         key: &'static str,
         restore_fails: bool,
     ) -> crate::test_support::RoutedServer {
-        fake_llama_saving(directory, key, restore_fails, REQUEST_TOKENS)
+        fake_llama_saving(directory, key, restore_fails, as_b11946())
     }
 
-    /// The same, saving `saved_tokens` of slot.
+    /// The same, saving `saving`.
     fn fake_llama_saving(
         directory: &Path,
         key: &'static str,
         restore_fails: bool,
-        saved_tokens: u64,
+        saving: Saving,
     ) -> crate::test_support::RoutedServer {
         let directory = directory.to_path_buf();
+        let completion = json!({
+            "choices": [{"finish_reason": "length", "message": {"content": "{"}}],
+            "timings": {"cache_n": 477, "prompt_n": saving.processed},
+        })
+        .to_string();
+        let written = saving.file.len();
         routed_server(move |request: &RoutedRequest| {
             if request.authorization.as_deref() != Some(&format!("Bearer {key}")) {
                 return (401, r#"{"error":"Invalid API Key"}"#.to_owned());
@@ -589,16 +836,12 @@ mod tests {
                 .and_then(|body| body["filename"].as_str().map(str::to_owned));
             match (request.method.as_str(), request.path.as_str(), filename) {
                 ("GET", "/props", _) => (200, r#"{"build_info":"b11946-8ca4060b"}"#.to_owned()),
-                ("POST", "/v1/chat/completions", _) => (
-                    200,
-                    r#"{"choices":[{"finish_reason":"length","message":{"content":"{"}}],"timings":{"cache_n":477,"prompt_n":11}}"#
-                        .to_owned(),
-                ),
+                ("POST", "/v1/chat/completions", _) => (200, completion.clone()),
                 ("POST", "/slots/0?action=save", Some(name)) => {
-                    fs::write(directory.join(&name), b"state").unwrap();
+                    fs::write(directory.join(&name), &saving.file).unwrap();
                     (
                         200,
-                        json!({"id_slot":0,"filename":name,"n_saved":saved_tokens,"n_written":5,"timings":{"save_ms":640.5}})
+                        json!({"id_slot":0,"filename":name,"n_saved":saving.n_saved,"n_written":written,"timings":{"save_ms":640.5}})
                             .to_string(),
                     )
                 }
@@ -608,7 +851,7 @@ mod tests {
                     }
                     (
                         200,
-                        json!({"id_slot":0,"filename":name,"n_restored":REQUEST_TOKENS,"n_read":5,"timings":{"restore_ms":183.4}})
+                        json!({"id_slot":0,"filename":name,"n_restored":REQUEST_TOKENS,"n_read":written,"timings":{"restore_ms":183.4}})
                             .to_string(),
                     )
                 }
@@ -680,6 +923,11 @@ mod tests {
         for other in others {
             assert_ne!(other.file_name(), name, "{other:?}");
         }
+        assert_ne!(
+            base.file_name_under("2"),
+            name,
+            "the rules it was saved under"
+        );
         let fast = SlotIdentity {
             label: "fast",
             ..base
@@ -699,11 +947,12 @@ mod tests {
         let first = keeper(&server, directory.path());
         assert_eq!(first.restore(), Restore::NoFile);
         assert!(server.requests().is_empty(), "no file, no request");
+        let written = as_b11946().file.len() as u64;
         assert_eq!(
             first.save_once(LONG_FIRST_REQUEST),
             Save::Saved {
                 tokens: REQUEST_TOKENS,
-                bytes: 5,
+                bytes: written,
                 millis: 640.5
             }
         );
@@ -735,7 +984,7 @@ mod tests {
             second.restore(),
             Restore::Restored {
                 tokens: REQUEST_TOKENS,
-                bytes: 5,
+                bytes: written,
                 millis: 183.4
             }
         );
@@ -773,7 +1022,7 @@ mod tests {
             keeper.save_once(LONG_FIRST_REQUEST),
             Save::Saved { .. }
         ));
-        assert_eq!(fs::read(keeper.path()).unwrap(), b"state");
+        assert_eq!(fs::read(keeper.path()).unwrap(), as_b11946().file);
     }
 
     /// A lifetime whose instructions were not processed in one piece -
@@ -841,32 +1090,177 @@ mod tests {
         assert!(third.path().is_file());
     }
 
-    /// A server that saves more of its slot than the instructions-only
-    /// request left there - a runtime that kept part of the document read
-    /// before it - leaves no file: neither the saved one nor its partial.
+    /// A save that keeps state for more than the instructions-only request
+    /// left in the slot - a runtime that kept part of the document read
+    /// before it, by the server's count, in the file's token list, or in a
+    /// checkpoint past the request - leaves no file: neither the saved one
+    /// nor its partial. So does a file whose checkpoints cannot be read.
     #[test]
     fn a_slot_holding_more_than_the_instructions_is_not_kept() {
-        let directory = tempfile::tempdir().unwrap();
-        let server = fake_llama_saving(directory.path(), "secret", false, 1_104);
-        let holding_more = keeper(&server, directory.path());
-        assert_eq!(
-            holding_more.save_once(LONG_FIRST_REQUEST),
-            Save::HeldMore {
-                tokens: 1_104,
-                request_tokens: REQUEST_TOKENS
-            }
-        );
-        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
-        assert_eq!(holding_more.save_once(LONG_FIRST_REQUEST), Save::NotNeeded);
+        let b11946 = as_b11946();
+        let document_checkpoints: &[(i64, usize)] = &[(477, 64), (484, 64), (1_090, 64)];
+        for (saving, expected) in [
+            (
+                Saving {
+                    n_saved: 1_104,
+                    ..b11946.clone()
+                },
+                Save::HeldMore {
+                    tokens: 1_104,
+                    request_tokens: REQUEST_TOKENS,
+                },
+            ),
+            (
+                Saving {
+                    file: slot_file(1_104, b"state", Some(&[(477, 64)])),
+                    ..b11946.clone()
+                },
+                Save::HeldMore {
+                    tokens: 1_104,
+                    request_tokens: REQUEST_TOKENS,
+                },
+            ),
+            (
+                Saving {
+                    file: slot_file(488, b"state", Some(document_checkpoints)),
+                    ..b11946.clone()
+                },
+                Save::HeldMore {
+                    tokens: 1_090,
+                    request_tokens: REQUEST_TOKENS,
+                },
+            ),
+            (
+                Saving {
+                    file: slot_file(488, b"state", None),
+                    ..b11946.clone()
+                },
+                Save::Unchecked,
+            ),
+            (
+                Saving {
+                    file: b"not a slot file".to_vec(),
+                    ..b11946.clone()
+                },
+                Save::Unchecked,
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let server = fake_llama_saving(directory.path(), "secret", false, saving);
+            let holding_more = keeper(&server, directory.path());
+            assert_eq!(holding_more.save_once(LONG_FIRST_REQUEST), expected);
+            assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+            assert_eq!(holding_more.save_once(LONG_FIRST_REQUEST), Save::NotNeeded);
+        }
 
         // The one token the request generated may be kept with it.
         let directory = tempfile::tempdir().unwrap();
-        let server = fake_llama_saving(directory.path(), "secret", false, REQUEST_TOKENS + 1);
+        let with_reply = Saving {
+            n_saved: REQUEST_TOKENS + 1,
+            file: slot_file(489, b"state", Some(&[(477, 64), (484, 64)])),
+            ..b11946
+        };
+        let server = fake_llama_saving(directory.path(), "secret", false, with_reply);
         let with_reply = keeper(&server, directory.path());
         assert!(matches!(
             with_reply.save_once(LONG_FIRST_REQUEST),
             Save::Saved { .. }
         ));
+    }
+
+    /// An instructions-only request that processed more than its own short
+    /// turn found less than the instructions cached and recomputed the rest
+    /// in its own batch: the slot is not the even state, and nothing is
+    /// saved.
+    #[test]
+    fn a_request_that_recomputed_part_of_the_instructions_saves_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let recomputed = Saving {
+            processed: 120,
+            ..as_b11946()
+        };
+        let server = fake_llama_saving(directory.path(), "secret", false, recomputed);
+        let keeper = keeper(&server, directory.path());
+        assert_eq!(keeper.save_once(Some(2_000)), Save::Uneven);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+        assert!(
+            server
+                .requests()
+                .iter()
+                .all(|request| request.path != "/slots/0?action=save")
+        );
+    }
+
+    /// The checkpoint list is found wherever it starts, also across two
+    /// reads, past state bytes that happen to hold its magic, and only when
+    /// it reads to the end of the file.
+    #[test]
+    fn the_saved_state_is_read_from_the_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("slot.bin");
+        let mut state = vec![0_u8; 300];
+        state[100..108].copy_from_slice(&CHECKPOINT_MAGIC);
+        state[108..112].copy_from_slice(&2_u32.to_le_bytes());
+        let file = slot_file(492, &state, Some(&[(477, 40), (488, 40)]));
+        fs::write(&path, &file).unwrap();
+        let expected = SavedState {
+            tokens: 492,
+            checkpoints: vec![
+                SavedCheckpoint {
+                    n_tokens: 477,
+                    pos_min: 0,
+                    pos_max: 476,
+                },
+                SavedCheckpoint {
+                    n_tokens: 488,
+                    pos_min: 0,
+                    pos_max: 487,
+                },
+            ],
+        };
+        for chunk in [8, 9, 13, 64, 1_000, SEARCH_CHUNK] {
+            assert_eq!(saved_state_in_chunks(&path, chunk), Some(expected.clone()));
+        }
+        assert_eq!(saved_state_reach(&path).unwrap().reach(), 492);
+
+        // A list that stops short of the end, or runs past it.
+        let mut longer = file.clone();
+        longer.push(0);
+        fs::write(&path, &longer).unwrap();
+        assert_eq!(saved_state_reach(&path), None);
+        fs::write(&path, &file[..file.len() - 1]).unwrap();
+        assert_eq!(saved_state_reach(&path), None);
+        // Another state version, or another packing of the tokens.
+        for (at, value) in [(4, 5), (16, 2)] {
+            let mut other = file.clone();
+            other[at] = value;
+            fs::write(&path, &other).unwrap();
+            assert_eq!(saved_state_reach(&path), None, "byte {at}");
+        }
+        // Tokens written as they are, by an older server.
+        let mut plain = STATE_MAGIC.to_vec();
+        plain.extend(3_u32.to_le_bytes());
+        plain.extend([0_u8; 12]);
+        plain.extend(&file[file.len() - 2 * (8 + 4 + 4 + 8 + 40 + 16) - 12..]);
+        fs::write(&path, &plain).unwrap();
+        assert_eq!(saved_state_reach(&path).map(|state| state.tokens), Some(3));
+        assert_eq!(saved_state_reach(&directory.path().join("missing")), None);
+    }
+
+    /// Set INTERN_SLOT_FILE to a file llama-server saved to read what it
+    /// holds; skipped otherwise.
+    #[test]
+    fn a_real_slot_file_is_read() {
+        let Some(path) = std::env::var_os("INTERN_SLOT_FILE") else {
+            return;
+        };
+        let started = std::time::Instant::now();
+        let state = saved_state_reach(Path::new(&path)).expect("a b11946 slot file");
+        eprintln!(
+            "{state:?}, reaching {}, read in {:?}",
+            state.reach(),
+            started.elapsed()
+        );
     }
 
     /// No save on a disk without room for it, and none tried later in the

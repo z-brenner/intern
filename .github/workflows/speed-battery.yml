@@ -531,9 +531,11 @@ jobs:
           path: ${{ runner.temp }}/ocr-pages/out/
 
   # The app's own code, not a script that does as it does: the live test
-  # starts the pinned llama-server through RuntimeModel and LlamaLauncher four
-  # times, as an app would across restarts, and prints what each lifetime's
-  # first document cost.
+  # starts the pinned llama-server through RuntimeModel and LlamaLauncher three
+  # times, as an app would across restarts, reads the saved file back (its
+  # tokens and checkpoints), and prints what each lifetime's first document
+  # cost. Run it after any change of llama-server: the save's privacy check
+  # reads the file as b11946 writes it.
   live-slots:
     name: The app's slot restore, live
     needs: plan

@@ -107,7 +107,7 @@ reply), so the file holds the instructions and none of the document.
 
 `live_the_first_document_after_a_restart_finds_the_instructions_restored`
 (`src-tauri/src/commands.rs`) drives the real `RuntimeModel` and
-`LlamaLauncher` through four launches of the real server: the speed
+`LlamaLauncher` through three lifetimes of the real server: the speed
 battery's `live_slots` job, run 42613236166 at d24fc11, the pinned
 Qwen3.5-4B and the pinned `b11946` server on an AMD EPYC 9V74 runner (4
 logical processors, the `zen4` backend), four threads as the app chooses
