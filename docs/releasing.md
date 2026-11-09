@@ -73,6 +73,15 @@ but `docs/qa/`.
    carry, and if the committed sign-off was accepted for other inputs it is
    treated as pending for the run, with a note in the job summary. Download the
    `intern-whole-product-qa-<run>-<attempt>` artifact.
+
+   Dispatch **CI** (`ci.yml`) on `main` at the same commit as well; it runs
+   beside QA and changes nothing. Only a dispatched run takes the Windows step
+   "Smoke test an update over v0.1.0-alpha.14", which installs that release's
+   published installer and then this build's over it with `/UPDATE`, as the
+   in-app updater does, and requires the old root llama.cpp build gone and an
+   empty folder after the uninstall (`src-tauri/windows/hooks.nsh`). QA and the
+   release workflow do not run it. It must pass before the release is
+   dispatched.
 4. **Review the capture and record the sign-off**, following the reviewer rule
    below. In one commit that changes nothing outside `docs/qa/`:
    - `docs/qa/latest-implementation.png`: the capture from the artifact,

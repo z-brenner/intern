@@ -2,9 +2,12 @@
 param(
     [Parameter(Mandatory = $true)][string]$InstallerPath,
     # An earlier release's installer to install first, so that InstallerPath
-    # runs as an update over it: silently, with /UPDATE, as the in-app
-    # updater runs it. Everything after is checked as for a fresh install,
-    # the empty folder after the uninstall included.
+    # runs as an update over it, with /UPDATE as the in-app updater passes it.
+    # The updater runs it passive (/P /R: a progress window that asks nothing,
+    # then a restart of the app); this runs it silent (/S), which runs the
+    # same install section and hooks without a window or a restart.
+    # Everything after is checked as for a fresh install, the empty folder
+    # after the uninstall included.
     [string]$PreviousInstallerPath,
     [string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA "Intern"),
     [string]$FixtureDirectory = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "fixtures/generated"),
@@ -39,8 +42,8 @@ $StartupErrorLog = Join-Path $UserDataDirectory "logs/startup-error.log"
 if (Test-Path -LiteralPath $StartupErrorLog) { Remove-Item -LiteralPath $StartupErrorLog -Force }
 $AppProcess = $null
 # What releases up to alpha.14 installed at the root for a llama.cpp build of
-# their own (src-tauri/windows/hooks.nsh removes them before an update writes
-# anything): none may be there after this installer has run.
+# their own (src-tauri/windows/hooks.nsh removes them once an update has
+# written its own files): none may be there after this installer has run.
 $OldRootLlamaFiles = @(
     "llama-server.exe", "llama-server-impl.dll", "llama-common.dll", "llama.dll", "mtmd.dll", "ggml.dll", "ggml-base.dll", "ggml-rpc.dll", "libomp140.x86_64.dll",
     "ggml-cpu-x64.dll", "ggml-cpu-sse42.dll", "ggml-cpu-ssse3.dll", "ggml-cpu-sandybridge.dll", "ggml-cpu-ivybridge.dll", "ggml-cpu-piledriver.dll", "ggml-cpu-haswell.dll",

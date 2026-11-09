@@ -250,7 +250,7 @@ it('requires the installed llama-server in llama-upstream and starts it from the
 
 // Releases up to alpha.14 installed a llama.cpp build at the install root, and
 // an update installs over the old files without uninstalling them, so the
-// installer's pre-install hook removes that build by name. The names are the
+// installer's post-install hook removes that build by name. The names are the
 // ones the releases' published inventories list at the root as llama.cpp's (or
 // the OpenMP runtime alpha.11 carried with it), and the smoke checks the same
 // list is gone after it has installed - over such a release, when asked.
@@ -260,26 +260,49 @@ const OLD_ROOT_LLAMA_FILES = [
     .map((variant) => `ggml-cpu-${variant}.dll`),
 ];
 
-it('removes the root llama.cpp build of releases up to alpha.14 before an install, by name, only over Intern', async () => {
+it('removes the root llama.cpp build of releases up to alpha.14 once an update has installed, by name, only over Intern', async () => {
   const hooks = await readFile('src-tauri/windows/hooks.nsh', 'utf8');
-  const preinstall = /!macro NSIS_HOOK_PREINSTALL\b([\s\S]*?)!macroend/.exec(hooks)?.[1] ?? '';
-  const code = preinstall.split('\n').filter((line) => !line.trimStart().startsWith(';')).join('\n');
-  // Over an existing install only: a first install into a folder of someone's
-  // own deletes nothing.
-  expect(code).toMatch(/^\s*\$\{If\} \$\{FileExists\} "\$INSTDIR\\\$\{MAINBINARYNAME\}\.exe"$/m);
-  const deleted = [...code.matchAll(/^\s*Delete "\$INSTDIR\\([^"\\]+)"$/gm)].map((match) => match[1]);
+  const code = (name: string) => (new RegExp(`!macro ${name}\\b([\\s\\S]*?)!macroend`).exec(hooks)?.[1] ?? '')
+    .split('\n').filter((line) => !line.trimStart().startsWith(';')).join('\n');
+  // The pre-install hook runs before the template checks that Intern is not
+  // running, and before an install can still be cancelled: it only notes
+  // whether Intern was installed, and deletes nothing.
+  const preinstall = code('NSIS_HOOK_PREINSTALL');
+  expect(hooks).toMatch(/^Var InternWasInstalled$/m);
+  expect(preinstall).toMatch(/^\s*StrCpy \$InternWasInstalled 0$/m);
+  expect(preinstall).toMatch(/^\s*\$\{If\} \$\{FileExists\} "\$INSTDIR\\\$\{MAINBINARYNAME\}\.exe"$/m);
+  expect(preinstall).toMatch(/^\s*StrCpy \$InternWasInstalled 1$/m);
+  expect(preinstall).not.toMatch(/\bDelete\b/);
+  // The post-install hook runs once the app is closed and this build's files
+  // are written, and deletes only over an earlier install: a first install
+  // into a folder of someone's own deletes nothing. Intern.exe is there by
+  // then either way, so it cannot be what decides.
+  const postinstall = code('NSIS_HOOK_POSTINSTALL');
+  expect(postinstall).toMatch(/^\s*\$\{If\} \$InternWasInstalled = 1$/m);
+  expect(postinstall).not.toContain('FileExists');
+  const guarded = /\$\{If\} \$InternWasInstalled = 1\n([\s\S]*?)\$\{EndIf\}/.exec(postinstall)?.[1] ?? '';
+  const deleted = [...guarded.matchAll(/^\s*Delete "\$INSTDIR\\([^"\\]+)"$/gm)].map((match) => match[1]);
   expect(deleted.sort()).toEqual([...OLD_ROOT_LLAMA_FILES].sort());
-  // Nothing else: no pattern, no folder, nothing under llama-upstream\.
-  expect(code.match(/\bDelete\b/g)).toHaveLength(OLD_ROOT_LLAMA_FILES.length);
-  expect(code).not.toMatch(/\*|\?|RMDir|llama-upstream|\/r\b|\/REBOOTOK/i);
+  // Nothing else: no pattern, no folder, nothing under llama-upstream\, and
+  // no delete outside the guard.
+  expect(postinstall.match(/\bDelete\b/g)).toHaveLength(OLD_ROOT_LLAMA_FILES.length);
+  expect(postinstall).not.toMatch(/\*|\?|RMDir|llama-upstream|\/r\b|\/REBOOTOK/i);
+  // The Send to shortcut is still written on every install, updates included.
+  expect(postinstall.indexOf('CreateShortcut')).toBeGreaterThan(postinstall.indexOf('${EndIf}'));
 
   const smoke = await readFile('scripts/smoke-installer.ps1', 'utf8');
   const listed = /\$OldRootLlamaFiles = @\(([\s\S]*?)\)\n/.exec(smoke)?.[1]
     .split(',').map((name) => name.trim().replace(/"/g, ''));
   expect(listed?.sort()).toEqual([...OLD_ROOT_LLAMA_FILES].sort());
   expect(smoke).toContain('if (Test-Path -LiteralPath (Join-Path $InstallDirectory $OldRootFile)) { throw');
-  // An update runs the installer over the earlier release the way the in-app
-  // updater does: silently, with /UPDATE, and never uninstalls first.
+  // None of the names may be a file this build installs at the root, or the
+  // hook would delete what the install has just written. The root's files
+  // come from globs over folders the Windows fetch stages, so the installed
+  // manifest is where the smoke looks.
+  expect(smoke).toContain('if ($Seen.ContainsKey($OldRootFile)) { throw');
+  // An update runs the installer over the earlier release with /UPDATE, as
+  // the in-app updater does, silently rather than passive (the same install
+  // section and hooks), and never uninstalls first.
   expect(smoke).toContain('[string]$PreviousInstallerPath');
   expect(smoke).toContain('$InstallArguments = "/S /UPDATE"');
   expect(smoke).toContain('Start-Process -FilePath $Installer -ArgumentList $InstallArguments -Wait -PassThru');

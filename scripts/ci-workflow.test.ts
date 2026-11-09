@@ -181,6 +181,15 @@ describe('the Windows builds', () => {
     expect(step).toContain('"20177531ab3f5f0b428ac79a63f813a83b2d5b460ee695c39f607aeec76f218f"');
     expect(step).toContain('./scripts/smoke-installer.ps1 -InstallerPath $Installer.FullName -PreviousInstallerPath $Previous');
     expect(step.indexOf('Get-FileHash')).toBeLessThan(step.indexOf('./scripts/smoke-installer.ps1'));
+    // Neither QA nor the release workflow runs it, so the release sequence
+    // asks for the dispatched run by the step's name.
+    for (const name of ['qa.yml', 'release.yml']) {
+      expect(await readFile(`.github/workflows/${name}`, 'utf8'), name).not.toContain('-PreviousInstallerPath');
+    }
+    const releasing = await readFile('docs/releasing.md', 'utf8');
+    const sequence = releasing.slice(releasing.indexOf('## The sequence'), releasing.indexOf('Dispatch "Release'));
+    expect(sequence).toContain('Dispatch **CI** (`ci.yml`) on `main` at the same commit');
+    expect(sequence).toContain('"Smoke test an update over v0.1.0-alpha.14"');
   });
 });
 
