@@ -183,37 +183,41 @@ it('lets a Linux file manager open documents with Intern', async () => {
   expect(template).not.toMatch(/^MimeType=(?!\{\{mime_type\}\})/m);
 });
 
-// Both llama.cpp release zips are flat: llama-server sits beside every CLI
-// tool, their impl DLLs and an RPC backend. The Windows package takes each
-// server's import closure and every CPU backend variant - ggml picks the one
-// the processor can run at start-up - and nothing else. The PrismML fork's,
-// for the fast tier, installs beside the executables; upstream's, for the
-// accurate tier, in llama-upstream\, with the OpenMP runtime its ggml-base
-// and CPU backends import. The fork's zip carries an OpenMP runtime too, but
-// nothing in its CPU build imports it.
-it('stages exactly each llama-server, its import closure and the CPU backend variants', async () => {
-  const fetch = await readFile('scripts/fetch-windows-assets.ps1', 'utf8');
+// The llama.cpp release zip is flat: llama-server sits beside every CLI tool,
+// their impl DLLs and an RPC backend. The Windows package takes the server's
+// import closure and every CPU backend variant - ggml picks the one the
+// processor can run at start-up - and nothing else, into llama-upstream\, with
+// the OpenMP runtime its ggml-base and CPU backends import. It is the one
+// llama.cpp build: no llama-server is a sidecar at the install root any more.
+it('stages exactly one llama-server, its import closure and the CPU backend variants, in llama-upstream', async () => {
+  const [fetch, config, manifest] = await Promise.all([
+    readFile('scripts/fetch-windows-assets.ps1', 'utf8'),
+    readFile('src-tauri/tauri.conf.json', 'utf8').then(JSON.parse),
+    readFile('src-tauri/resources/runtime-assets.json', 'utf8').then(JSON.parse),
+  ]);
   const closure = ['llama-server-impl.dll', 'llama-common.dll', 'mtmd.dll', 'llama.dll', 'ggml.dll', 'ggml-base.dll'];
-  for (const runtime of ['Prism', 'Upstream']) {
-    const required = new RegExp(`\\$${runtime}Required = @\\(([^)]*)\\)`).exec(fetch)?.[1];
-    expect(required?.split(',').map((name) => name.trim().replace(/"/g, '')), runtime).toEqual(closure);
-  }
-  // Each list is staged with its own server, into its own folder.
-  expect(fetch).toContain('$PrismServer = Join-Path $BinariesDirectory "llama-server-$TargetTriple.exe"');
-  expect(fetch).toMatch(/Install-LlamaServer -Archive \$Downloads\["llama\.cpp"\] .*-ServerDestination \$PrismServer -Folder "sidecars" -Required \$PrismRequired$/m);
+  const required = /\$UpstreamRequired = @\(([^)]*)\)/.exec(fetch)?.[1];
+  expect(required?.split(',').map((name) => name.trim().replace(/"/g, ''))).toEqual(closure);
   expect(fetch).toContain('$LlamaUpstreamDirectory = Join-Path $NativeDirectory "llama-upstream"');
   expect(fetch).toContain('$UpstreamServer = Join-Path $LlamaUpstreamDirectory "llama-server.exe"');
   expect(fetch).toMatch(/Install-LlamaServer -Archive \$Downloads\["llama\.cpp-upstream"\] .*-ServerDestination \$UpstreamServer -Folder "llama-upstream" -Required \$UpstreamRequired$/m);
+  expect(fetch.match(/Install-LlamaServer -Archive/g)).toHaveLength(1);
   expect(fetch).toContain('return "llama-upstream/$(Split-Path -Leaf $Path)"');
   expect(fetch).toContain('-Filter "ggml-cpu-*.dll"');
   expect(fetch).toContain('carries no CPU backend');
   expect(fetch).not.toMatch(/-notmatch '-impl\\\.dll\$'/);
-  // No RPC backend for either build, and not the fork's OpenMP runtime.
+  // No RPC backend, and no other build's OpenMP runtime.
   for (const unwanted of ['ggml-rpc', 'libomp140']) expect(fetch).not.toContain(`"${unwanted}`);
+  // No llama-server sidecar: not in the bundle, not pinned, and one an earlier
+  // staging left in binaries\ is removed before the inventory is taken.
+  expect(config.bundle.externalBin).toEqual(['binaries/intern-worker', 'binaries/tesseract']);
+  expect(manifest.downloads.map((download: { id: string }) => download.id).filter((id: string) => id.startsWith('llama.cpp')).sort())
+    .toEqual(['llama.cpp-license', 'llama.cpp-upstream']);
+  expect(fetch).toContain('$StaleLlamaSidecar = Join-Path $BinariesDirectory "llama-server-$TargetTriple.exe"');
+  expect(fetch.indexOf('Remove-Item -LiteralPath $StaleLlamaSidecar')).toBeLessThan(fetch.indexOf('$BundledFiles = @('));
 
-  // libomp.dll ships for upstream only, beside upstream's server, owned by
-  // LLVM's OpenMP package rather than llama.cpp, with its license. Comments
-  // are left out: they explain the fork's runtime by name.
+  // libomp.dll ships beside upstream's server, owned by LLVM's OpenMP
+  // package rather than llama.cpp, with its license.
   const code = fetch.split('\n').filter((line) => !line.trimStart().startsWith('#')).join('\n');
   expect(code).toContain('$OpenMpRuntime = Join-Path $UpstreamDirectory "libomp.dll"');
   expect(code).toContain('Copy-SidecarDll $OpenMpRuntime "llvm-openmp" $UpstreamVersion -Folder "llama-upstream"');
@@ -224,21 +228,83 @@ it('stages exactly each llama-server, its import closure and the CPU backend var
   expect(code).toContain('Copy-RuntimeFile $OpenMpLicense (Join-Path $LicensesDirectory "llvm-openmp-LICENSE.txt")');
 });
 
-// The installed package must carry both servers, and each must start from
-// where it is installed: a process cannot start at all while a DLL it imports
-// is missing from beside it, and upstream's ggml-base imports libomp.dll.
-it('requires both installed llama-server builds and starts each from its own folder', async () => {
+// The installed package must carry the server, and it must start from where
+// it is installed: a process cannot start at all while a DLL it imports is
+// missing from beside it, and upstream's ggml-base imports libomp.dll.
+it('requires the installed llama-server in llama-upstream and starts it from there', async () => {
   const smoke = await readFile('scripts/smoke-installer.ps1', 'utf8');
   const required = /foreach \(\$Required in @\(([^)]*)\)\)/.exec(smoke)?.[1]
     .split(',').map((name) => name.trim().replace(/"/g, ''));
   expect(required).toEqual(expect.arrayContaining([
-    'llama-server.exe', 'llama-upstream/llama-server.exe', 'llama-upstream/libomp.dll', 'llama-upstream/ggml-base.dll',
+    'llama-upstream/llama-server.exe', 'llama-upstream/libomp.dll', 'llama-upstream/ggml-base.dll',
   ]));
-  expect(smoke).toContain('foreach ($ServerRelative in @("llama-server.exe", "llama-upstream/llama-server.exe"))');
+  expect(required).not.toContain('llama-server.exe');
+  expect(smoke).toContain('foreach ($ServerRelative in @("llama-upstream/llama-server.exe"))');
   expect(smoke).toContain('-ArgumentList "--version" -WorkingDirectory (Split-Path -Parent $ServerPath)');
   expect(smoke).toContain('if ($ServerProcess.ExitCode -ne 0) { throw');
   // Its output stays out of the installation, which the uninstall check
   // further down requires to be empty again.
   expect(smoke).toContain('$ServerOutput = Join-Path ([IO.Path]::GetTempPath())');
   expect(smoke.indexOf('"--version"')).toBeLessThan(smoke.indexOf('$Uninstaller = '));
+});
+
+// Releases up to alpha.14 installed a llama.cpp build at the install root, and
+// an update installs over the old files without uninstalling them, so the
+// installer's post-install hook removes that build by name. The names are the
+// ones the releases' published inventories list at the root as llama.cpp's (or
+// the OpenMP runtime alpha.11 carried with it), and the smoke checks the same
+// list is gone after it has installed - over such a release, when asked.
+const OLD_ROOT_LLAMA_FILES = [
+  'llama-server.exe', 'llama-server-impl.dll', 'llama-common.dll', 'llama.dll', 'mtmd.dll', 'ggml.dll', 'ggml-base.dll', 'ggml-rpc.dll', 'libomp140.x86_64.dll',
+  ...['x64', 'sse42', 'ssse3', 'sandybridge', 'ivybridge', 'piledriver', 'haswell', 'alderlake', 'skylakex', 'cannonlake', 'cascadelake', 'cooperlake', 'icelake', 'zen4', 'sapphirerapids']
+    .map((variant) => `ggml-cpu-${variant}.dll`),
+];
+
+it('removes the root llama.cpp build of releases up to alpha.14 once an update has installed, by name, only over Intern', async () => {
+  const hooks = await readFile('src-tauri/windows/hooks.nsh', 'utf8');
+  const code = (name: string) => (new RegExp(`!macro ${name}\\b([\\s\\S]*?)!macroend`).exec(hooks)?.[1] ?? '')
+    .split('\n').filter((line) => !line.trimStart().startsWith(';')).join('\n');
+  // The pre-install hook runs before the template checks that Intern is not
+  // running, and before an install can still be cancelled: it only notes
+  // whether Intern was installed, and deletes nothing.
+  const preinstall = code('NSIS_HOOK_PREINSTALL');
+  expect(hooks).toMatch(/^Var InternWasInstalled$/m);
+  expect(preinstall).toMatch(/^\s*StrCpy \$InternWasInstalled 0$/m);
+  expect(preinstall).toMatch(/^\s*\$\{If\} \$\{FileExists\} "\$INSTDIR\\\$\{MAINBINARYNAME\}\.exe"$/m);
+  expect(preinstall).toMatch(/^\s*StrCpy \$InternWasInstalled 1$/m);
+  expect(preinstall).not.toMatch(/\bDelete\b/);
+  // The post-install hook runs once the app is closed and this build's files
+  // are written, and deletes only over an earlier install: a first install
+  // into a folder of someone's own deletes nothing. Intern.exe is there by
+  // then either way, so it cannot be what decides.
+  const postinstall = code('NSIS_HOOK_POSTINSTALL');
+  expect(postinstall).toMatch(/^\s*\$\{If\} \$InternWasInstalled = 1$/m);
+  expect(postinstall).not.toContain('FileExists');
+  const guarded = /\$\{If\} \$InternWasInstalled = 1\n([\s\S]*?)\$\{EndIf\}/.exec(postinstall)?.[1] ?? '';
+  const deleted = [...guarded.matchAll(/^\s*Delete "\$INSTDIR\\([^"\\]+)"$/gm)].map((match) => match[1]);
+  expect(deleted.sort()).toEqual([...OLD_ROOT_LLAMA_FILES].sort());
+  // Nothing else: no pattern, no folder, nothing under llama-upstream\, and
+  // no delete outside the guard.
+  expect(postinstall.match(/\bDelete\b/g)).toHaveLength(OLD_ROOT_LLAMA_FILES.length);
+  expect(postinstall).not.toMatch(/\*|\?|RMDir|llama-upstream|\/r\b|\/REBOOTOK/i);
+  // The Send to shortcut is still written on every install, updates included.
+  expect(postinstall.indexOf('CreateShortcut')).toBeGreaterThan(postinstall.indexOf('${EndIf}'));
+
+  const smoke = await readFile('scripts/smoke-installer.ps1', 'utf8');
+  const listed = /\$OldRootLlamaFiles = @\(([\s\S]*?)\)\n/.exec(smoke)?.[1]
+    .split(',').map((name) => name.trim().replace(/"/g, ''));
+  expect(listed?.sort()).toEqual([...OLD_ROOT_LLAMA_FILES].sort());
+  expect(smoke).toContain('if (Test-Path -LiteralPath (Join-Path $InstallDirectory $OldRootFile)) { throw');
+  // None of the names may be a file this build installs at the root, or the
+  // hook would delete what the install has just written. The root's files
+  // come from globs over folders the Windows fetch stages, so the installed
+  // manifest is where the smoke looks.
+  expect(smoke).toContain('if ($Seen.ContainsKey($OldRootFile)) { throw');
+  // An update runs the installer over the earlier release with /UPDATE, as
+  // the in-app updater does, silently rather than passive (the same install
+  // section and hooks), and never uninstalls first.
+  expect(smoke).toContain('[string]$PreviousInstallerPath');
+  expect(smoke).toContain('$InstallArguments = "/S /UPDATE"');
+  expect(smoke).toContain('Start-Process -FilePath $Installer -ArgumentList $InstallArguments -Wait -PassThru');
+  expect(smoke.indexOf('$PreviousInstall = Start-Process')).toBeLessThan(smoke.indexOf('$Install = Start-Process'));
 });

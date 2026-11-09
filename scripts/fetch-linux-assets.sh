@@ -11,13 +11,10 @@
 #   cargo build --locked -p intern-worker --release --features windows-native
 #
 # What the runtime holds, and how each part is pinned:
-#   llama-server, its libraries, and one CPU backend per x86-64 generation,
-#       twice - two llama.cpp builds, each its publisher's prebuilt Ubuntu
-#       x86-64 archive, by size and SHA-256:
-#         Prism: the PrismML fork's release pinned below, flat in runtime/,
-#           which runs the fast tier (the Bonsai 2 ternary models need it).
-#         Upstream: ggml-org's release pinned below, in
-#           runtime/llama-upstream/, which runs the accurate tier.
+#   llama-server, its libraries, and one CPU backend per x86-64 generation:
+#       ggml-org's llama.cpp release pinned below, its prebuilt Ubuntu x86-64
+#       archive by size and SHA-256, in runtime/llama-upstream/, which runs
+#       both tiers.
 #   libpdfium.so: PDFium chromium/7881 from pdfium-binaries, by size and
 #       SHA-256, as the Windows package's.
 #   libonnxruntime.so and ocr-models/: scripts/fetch-ocr-runtime.sh, by its
@@ -42,34 +39,18 @@ if [ "$#" -gt 1 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# THE LLAMA.CPP PINS. The local models run on two builds of llama.cpp, each
-# its publisher's own prebuilt Ubuntu x86-64 release.
-#
-# Prism: the PrismML fork, which reads the Bonsai 2 ternary models, and runs
-# the fast tier from runtime/. To move the pin, change the release on the
-# next line; it must be one of the releases whose archive size and SHA-256
-# are pinned in the table below it (add a row for a new one).
-# LLAMA_CPP_RELEASE in the environment picks another pinned release for a
-# trial build, and the inventory always records which one was staged.
-LLAMA_CPP_RELEASE="${LLAMA_CPP_RELEASE:-prism-b10826-c9c34bc}"
-case "$LLAMA_CPP_RELEASE" in
-  prism-b10777-e3de715) LLAMA_CPP_SIZE=17882710 LLAMA_CPP_SHA256="3f97b6fbec0065fede2be92f05df531c1050636fc2613e1ba0d975249df19713" ;;
-  prism-b10826-c9c34bc) LLAMA_CPP_SIZE=17912930 LLAMA_CPP_SHA256="66a250f38c3f8e2064e2f913b3a26ff5bae10955b67e8ff38c72ab48cbecf28c" ;;
-  *) echo "llama.cpp $LLAMA_CPP_RELEASE has no pinned size and SHA-256 in scripts/fetch-linux-assets.sh" >&2; exit 1 ;;
-esac
-#
-# Upstream: ggml-org's llama.cpp, which runs the accurate tier from
-# runtime/llama-upstream/. Its pin is these three values and nothing else:
-# the environment cannot choose another, and moving it means changing all
-# three from the release's page.
+# THE LLAMA.CPP PIN. The local models run on ggml-org's llama.cpp, its own
+# prebuilt Ubuntu x86-64 release, from runtime/llama-upstream/. Its pin is
+# these three values and nothing else: the environment cannot choose another,
+# and moving it means changing all three from the release's page.
 LLAMA_UPSTREAM_RELEASE="b11946"
 LLAMA_UPSTREAM_SIZE=22647372
 LLAMA_UPSTREAM_SHA256="9e44e1a59e971f0de3fbf74fa46355ab48fed7bb51c1c16b56a96c355947f8dd"
 # ---------------------------------------------------------------------------
-LLAMA_CPP_REPOSITORY="https://github.com/PrismML-Eng/llama.cpp"
 LLAMA_UPSTREAM_REPOSITORY="https://github.com/ggml-org/llama.cpp"
-# Where in runtime/ the upstream build goes: the app starts the accurate
-# tier's server from runtime/llama-upstream/llama-server.
+# Where in runtime/ the build goes: the app starts both tiers' server from
+# runtime/llama-upstream/llama-server. The folder keeps the name it had while
+# another llama.cpp build sat in runtime/ itself (until alpha.14).
 LLAMA_UPSTREAM_FOLDER="llama-upstream"
 
 PDFIUM_VERSION="chromium/7881"
@@ -120,11 +101,11 @@ STAGE="$WORK/package"
 mkdir -p "$STAGE/runtime/tessdata" "$STAGE/licenses"
 PACKAGES="$WORK/packages.tsv"
 : > "$PACKAGES"
-# One line per staged llama.cpp build, for the inventory.
+# One line per staged llama.cpp build (one), for the inventory.
 LLAMA_BUILDS="$WORK/llama.cpp.tsv"
 : > "$LLAMA_BUILDS"
-# Every staged llama.cpp file, and each build's llama-server, as paths under
-# runtime/, and the release of each server, for the checks before anything is
+# Every staged llama.cpp file, and the build's llama-server, as paths under
+# runtime/, and the release of the server, for the checks before anything is
 # replaced.
 LLAMA_STAGED=()
 LLAMA_SERVERS=()
@@ -204,9 +185,9 @@ needed() {
 # carry - libc, libstdc++, libgomp, OpenSSL - comes from the distribution,
 # and the package depends on it.
 #
-# The two builds carry libraries of the same names (libllama.so.0,
-# libggml-base.so.0, ...), and each server must load its own build's: that is
-# why each build has a folder to itself and every file in it looks for the
+# The server must load its own build's libraries (libllama.so.0,
+# libggml-base.so.0, ...) and no copy of the same name found elsewhere: that
+# is why the build has a folder to itself and every file in it looks for the
 # others beside itself, and what the checks before the tree is replaced
 # confirm.
 stage_llama() {
@@ -289,7 +270,6 @@ stage_llama() {
     "$folder" "$repository" "$release" "$archive" "$url" "$size" "$sha256" >> "$LLAMA_BUILDS"
 }
 
-stage_llama "$LLAMA_CPP_RELEASE" "$LLAMA_CPP_REPOSITORY" "$LLAMA_CPP_SIZE" "$LLAMA_CPP_SHA256" .
 stage_llama "$LLAMA_UPSTREAM_RELEASE" "$LLAMA_UPSTREAM_REPOSITORY" "$LLAMA_UPSTREAM_SIZE" "$LLAMA_UPSTREAM_SHA256" "$LLAMA_UPSTREAM_FOLDER"
 
 # --- PDFium ---------------------------------------------------------------
@@ -342,10 +322,9 @@ owned_by intern-worker Intern "$INTERN_VERSION"
 # --- check the staged runtime before it replaces anything -------------------
 # Every library the staged executables need resolves, from beside them or
 # from the system; every library a llama.cpp file needs that its own build
-# carries resolves to the copy beside it, never to the other build's of the
-# same name; and each build's llama-server runs and reports its release's
-# build number (both publishers name a release b<build>, Prism with a prefix
-# and the commit after it).
+# carries resolves to the copy beside it, never to another of the same name;
+# and the llama-server runs and reports its release's build number (ggml-org
+# names a release b<build>).
 for path in intern-worker "${LLAMA_STAGED[@]}"; do
   if ldd "$STAGE/runtime/$path" | grep -q 'not found'; then
     echo "runtime/$path needs a library that is neither staged nor installed:" >&2
@@ -371,7 +350,7 @@ for index in "${!LLAMA_SERVERS[@]}"; do
     echo "the staged runtime/$server does not run" >&2
     exit 1
   fi
-  build="$(sed -n 's/^\(prism-\)\{0,1\}b\([0-9]\{1,\}\)\(-.*\)\{0,1\}$/\2/p' <<< "$release")"
+  build="$(sed -n 's/^b\([0-9]\{1,\}\)$/\1/p' <<< "$release")"
   if [ -z "$build" ] || ! grep -qF "(build $build," "$WORK/llama-server-version.txt"; then
     cat "$WORK/llama-server-version.txt" >&2
     echo "the staged runtime/$server does not report llama.cpp $release's build number" >&2
@@ -396,4 +375,4 @@ cp -a "$STAGE/runtime" "$RESOURCES/runtime"
 cp -a "$STAGE/licenses" "$RESOURCES/licenses"
 node "$ROOT/scripts/linux-runtime-inventory.mjs" verify "$RESOURCES"
 echo "Pinned Linux runtime assets are staged and verified in src-tauri/resources/runtime" \
-  "(llama.cpp $LLAMA_CPP_RELEASE, and $LLAMA_UPSTREAM_RELEASE in runtime/$LLAMA_UPSTREAM_FOLDER)."
+  "(llama.cpp $LLAMA_UPSTREAM_RELEASE in runtime/$LLAMA_UPSTREAM_FOLDER)."

@@ -243,47 +243,15 @@ pub fn server_options(tier: ModelTier) -> ServerOptions {
     }
 }
 
-/// The llama.cpp build a tier's server is started from. Intern ships two,
-/// and runs one server at a time whichever it is: a change of tier stops one
-/// and starts the other, as it always has.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ServerRuntime {
-    /// PrismML's fork, `prism-b10826-c9c34bc`: the only build that reads the
-    /// PQ2_0 tensors the Bonsai 2 models were stored in. Still packaged, and
-    /// no longer what any pinned model runs on.
-    Prism,
-    /// ggml-org's llama.cpp `b11946`, about 1,100 builds past the one Prism
-    /// forked from. It read Qwen3.5 2B 19% faster than Prism on Linux, at the
-    /// same accuracy (`bench/reports/speed-linux-cpu-2026-10-29`), and 25%
-    /// faster on Windows; both Qwen3.5 models run on it.
-    Upstream,
-}
-
-/// The folder, inside the sidecar folder, that holds the upstream runtime.
-/// Both builds name their CPU backends alike (`ggml-cpu-*`) and load them
-/// from beside their own llama-server, so they cannot share one folder.
-/// Prism's stays where the one runtime always was.
+/// The folder, inside the sidecar folder, that holds the llama.cpp runtime
+/// both tiers' server is started from: ggml-org's llama.cpp `b11946`, its
+/// llama-server beside every library it loads and one CPU backend per x86-64
+/// generation. It read the 77-document evaluation 19% faster than the
+/// llama.cpp fork Intern also shipped until alpha.14, at the same accuracy
+/// (`bench/reports/speed-linux-cpu-2026-10-29`), and 25% faster on Windows.
+/// The folder keeps the name it had beside that fork, so an update replaces
+/// its files in place.
 pub const UPSTREAM_RUNTIME_FOLDER: &str = "llama-upstream";
-
-impl ServerRuntime {
-    /// The folder this runtime's llama-server is in, relative to the sidecar
-    /// folder: `None` for the sidecar folder itself.
-    pub const fn subfolder(self) -> Option<&'static str> {
-        match self {
-            Self::Prism => None,
-            Self::Upstream => Some(UPSTREAM_RUNTIME_FOLDER),
-        }
-    }
-}
-
-/// The runtime `tier`'s server is started from: upstream for both, since
-/// both are Qwen3.5 models and upstream reads them fastest. Prism stays in
-/// the package for the Bonsai 2 models an earlier build pinned.
-pub const fn server_runtime(tier: ModelTier) -> ServerRuntime {
-    match tier {
-        ModelTier::Fast | ModelTier::Accurate => ServerRuntime::Upstream,
-    }
-}
 
 /// How long a loaded model may sit without a document before it is unloaded,
 /// giving its memory back to the machine. The next document loads it again,
@@ -1116,16 +1084,6 @@ mod tests {
             assert_eq!(options.extra_arguments, tier_server_flags(tier));
         }
         assert_eq!(IDLE_UNLOAD_AFTER.as_secs(), 600);
-    }
-
-    /// Both Qwen3.5 models run on upstream, from a folder of its own beside
-    /// Prism's, which stays where the one runtime always was.
-    #[test]
-    fn both_tiers_run_on_the_upstream_runtime() {
-        assert_eq!(server_runtime(F), ServerRuntime::Upstream);
-        assert_eq!(server_runtime(A), ServerRuntime::Upstream);
-        assert_eq!(ServerRuntime::Prism.subfolder(), None);
-        assert_eq!(ServerRuntime::Upstream.subfolder(), Some("llama-upstream"));
     }
 
     #[test]

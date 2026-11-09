@@ -723,7 +723,7 @@ named as it was keeps whatever the reviewer had typed.
 | | |
 | --- | --- |
 | Models | Qwen3.5 9B, Q4_K_M GGUF (5.29 GiB), the accurate model; Qwen3.5 4B, Q4_K_M GGUF (2.55 GiB), the quick one, which stands in while memory is short and reads first on a new install. One loaded at a time |
-| Runtime | two llama.cpp builds, CPU only: upstream `b11946` runs both models; the PrismML fork, release `prism-b10826-c9c34bc`, is still packaged and runs nothing the manifest pins |
+| Runtime | llama.cpp `b11946` (ggml-org), CPU only, in `llama-upstream/` of the sidecar folder; both models run on it |
 | Context | 8,192 tokens |
 | Threads | every logical processor, at most 8, for generation and for prompt processing alike |
 | Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below) |
@@ -853,18 +853,46 @@ model reads; with no other model, setup reports the failure as it always has.
 A paused download stays paused across restarts (a `<model>.paused` marker
 beside its partial file).
 
-Both models run on the upstream runtime (`tiers::server_runtime`). Upstream
-llama.cpp `b11946` read Qwen3.5 2B 19% faster than Prism on Linux, at the same
-accuracy
+Both models run on upstream llama.cpp `b11946`, the one llama.cpp build the
+packages carry, in a `llama-upstream` folder inside the sidecar folder - the
+install root on Windows, the `runtime` folder on Linux
+(`tiers::UPSTREAM_RUNTIME_FOLDER`). It read the 77-document evaluation 19%
+faster than the PrismML fork the packages also carried until alpha.14, at the
+same accuracy
 ([`bench/reports/speed-linux-cpu-2026-10-29`](../bench/reports/speed-linux-cpu-2026-10-29/README.md)),
-and 25% faster on Windows. Prism's llama-server, which only the Bonsai 2
-models' PQ2_0 weights needed, is still packaged where the one runtime always
-was, in the sidecar folder - the install root on Windows, the `runtime` folder
-on Linux - and upstream's is in a `llama-upstream` folder inside it. Both
-builds name their CPU backends `ggml-cpu-*`, and ggml loads them from the
-executable's folder and the current directory, so each server is started in
-its own folder. A runtime that is missing fails to start like any other
-server, and the tiers that run on it are set aside.
+and 25% faster on Windows; the fork, needed only for the PQ2_0 weights of
+models earlier builds pinned, ran nothing the manifest pinned from alpha.13 on
+and was dropped from both packages after alpha.14. Measured on CI (run
+42576796231, against the alpha.14 release and main's last CI run): the Windows
+installer went from 64,683,750 to 55,491,985 bytes and the installed folder
+from 203,786,390 to 160,709,786 bytes (51 files at the root to 29); the `.deb`
+from 90.8 to 74.4 MB and its installed size from 207 to 167 MB.
+
+ggml loads its `ggml-cpu-*` backends from the executable's folder and the
+current directory, so the server is started in its own folder. A missing
+server fails to start like any other, and the tier that needed it is set
+aside.
+
+An update installs over the old files: the Windows updater runs the new
+installer with `/UPDATE` (passive, `/P`), and the NSIS template then skips its
+uninstall. The fork's 22 files at the install root would stay, and outlive an
+uninstall, so the installer's post-install hook
+(`src-tauri/windows/hooks.nsh`) deletes them by name - the names the alpha.11
+to alpha.14 runtime inventories list there as llama.cpp's - and only when the
+folder held Intern's executable before the install began, which the
+pre-install hook notes. It runs after the template has closed a running
+Intern, whose job object ends a server alpha.11 or alpha.12 ran from those
+files, and after this build's files are written, so an install cancelled at
+the template's prompt or failing on the way leaves the earlier release whole.
+None of the names is a file this build installs, which the smoke checks in the
+installed manifest. `scripts/smoke-installer.ps1 -PreviousInstallerPath`
+installs a release and then the new installer over it with `/S /UPDATE`
+(silent rather than passive: the same install section and hooks), and requires
+none of those files at the root and an empty folder after the uninstall; CI
+runs it against alpha.14's published installer when started by hand, and a
+release dispatches that run ([releasing](releasing.md)). A `.deb` upgrade
+needs nothing of the kind: dpkg removes the files the old package had and the
+new one does not.
 
 One llama-server runs at a time. A document planned onto the model that is not
 loaded unloads it and loads the other under the same `lifecycle` lock and
@@ -973,8 +1001,11 @@ digest-checked when its download ends and self-tested the first time a
 document loads it. While all of that still matches, the next launch starts the
 server with neither check; when any of it changes, the model is hashed and
 self-tested once and stamped again, and a failed self-test removes its entry.
-A new build of one runtime sends only its own model through the checks again.
-A stamp from the single-model or the one-runtime build vouches for nothing.
+Both models run on the one llama-server, so a new build of it sends both
+through the checks again, and so does every update of Intern; a changed model
+file sends only itself. A stamp of an earlier schema - the single-model
+build's, or one that recorded a single server binary for every file - vouches
+for nothing.
 Within a session the digest is read at most once: restarts - a cancel, a
 recovery, a swap, a reload after idle - start a file that still looks exactly
 as it did when it was checked, and refuse one that does not. The

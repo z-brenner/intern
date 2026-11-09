@@ -9,10 +9,10 @@
     reads with on a machine with the memory for it - asks it the way the app
     does (the tier's prompt profile),
     starts the packaged llama.cpp server the app runs that tier on (upstream
-    llama.cpp in llama-upstream\ for the accurate tier, the PrismML fork at
-    the runtime's root for the fast one) text-only on a loopback port with a
-    random key, runs every generated fixture through `intern-evaluate`, and
-    records accuracy, review rate, latency, and peak model memory.
+    llama.cpp in llama-upstream\, which both tiers run on) text-only on a
+    loopback port with a random key, runs every generated fixture through
+    `intern-evaluate`, and records accuracy, review rate, latency, and peak
+    model memory.
 
     Nothing leaves the machine except the pinned model download.
 #>
@@ -95,9 +95,7 @@ function Get-FreePort {
 $ModelPath = Get-PinnedModel -Spec $ModelSpec -Directory $ModelDirectory
 # The llama.cpp build the app runs the tier on: upstream llama.cpp, in the
 # runtime's llama-upstream folder, for both Qwen3.5 models (tiers.rs
-# server_runtime). The PrismML fork at the runtime's root, whose PQ2_0 kernels
-# the Bonsai models needed, runs nothing the manifest pins. The server loads
-# the DLLs installed beside it.
+# UPSTREAM_RUNTIME_FOLDER). The server loads the DLLs installed beside it.
 $ServerRelative = "llama-upstream/llama-server.exe"
 $Server = [IO.Path]::GetFullPath((Join-Path $Runtime $ServerRelative))
 if (-not (Test-Path -LiteralPath $Server -PathType Leaf)) { throw "Staged runtime has no $ServerRelative for the $Tier tier" }

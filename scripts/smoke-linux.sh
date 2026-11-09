@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The Linux smoke: a package-shaped runtime checked against its inventory,
-# both of its llama-servers run from it - Prism's in runtime/, for the fast
-# tier, and upstream's in runtime/llama-upstream/, for the accurate one - and
-# the parser worker driven through the release fixtures with it - and, when
+# its llama-server run from it - upstream's, in runtime/llama-upstream/, which
+# both tiers run on - and the parser worker driven through the release
+# fixtures with it - and, when
 # asked, the desktop app started under Xvfb and the whole pipeline run without
 # a window on a real model. Nothing here needs a display, a desktop session or
 # root. See docs/linux.md.
@@ -25,9 +25,7 @@
 #                  app uses, and name a fixture with intern-analyze
 #                  (INTERN_ANALYZE, or built with cargo).
 #   --tier TIER    the tier GGUF is for, fast or accurate; both run on
-#                  upstream's runtime/llama-upstream/llama-server (Prism's
-#                  runtime/llama-server is still packaged and checked, and
-#                  runs nothing the manifest pins). Without it, the tier
+#                  runtime/llama-upstream/llama-server. Without it, the tier
 #                  src-tauri/resources/model-manifest.json gives a file of
 #                  GGUF's name.
 #
@@ -115,15 +113,18 @@ else
   RUNTIME_ROOT="$WORK/stage"
 fi
 RUNTIME="$RUNTIME_ROOT/runtime"
-# The two llama.cpp builds, each in a folder of its own: Prism's in runtime/
-# itself, where the one runtime always was, and upstream's, which both tiers
-# run on.
-PRISM_LLAMA="$RUNTIME"
-ACCURATE_LLAMA="$RUNTIME/llama-upstream"
+# The llama.cpp build both tiers run on, in a folder of its own. Nothing of
+# another build is packaged in runtime/ itself any more (the inventory check
+# above refuses a file it does not list).
+UPSTREAM_LLAMA="$RUNTIME/llama-upstream"
+if [ -e "$RUNTIME/llama-server" ]; then
+  echo "runtime/llama-server is packaged; the one llama-server belongs in runtime/llama-upstream/" >&2
+  exit 1
+fi
 
-# Starts DIR/llama-server and checks it runs on its own build: the two builds
-# carry libraries and CPU backends of the same names, and each server must
-# load the ones beside it.
+# Starts DIR/llama-server and checks it runs on its own build: it must load
+# the libraries and CPU backends beside it, never copies of the same names
+# found elsewhere.
 check_llama_server() {
   local dir="$1" label="$2" library arrow resolved devices
   step "Starting $label llama-server from ${dir#"$RUNTIME_ROOT/"}"
@@ -154,8 +155,7 @@ check_llama_server() {
   fi
   grep -o 'loaded CPU backend from .*' <<< "$devices"
 }
-check_llama_server "$PRISM_LLAMA" "Prism's"
-check_llama_server "$ACCURATE_LLAMA" "upstream's (accurate tier)"
+check_llama_server "$UPSTREAM_LLAMA" "upstream's (both tiers)"
 
 step "Driving the parser worker through the release fixtures"
 if ! command -v tesseract > /dev/null && [ ! -x "$RUNTIME/tesseract" ]; then
@@ -167,10 +167,9 @@ node "$ROOT/scripts/smoke-worker.mjs" --worker "$RUNTIME/intern-worker" --runtim
 if [ -n "$MODEL" ]; then
   # The server the app runs that tier on.
   # Both tiers' models are Qwen3.5 models, which run on upstream
-  # (tiers.rs server_runtime); Prism's server is checked above and runs
-  # nothing the manifest pins.
+  # (tiers.rs UPSTREAM_RUNTIME_FOLDER).
   case "$TIER" in
-    fast | accurate) MODEL_LLAMA="$ACCURATE_LLAMA" ;;
+    fast | accurate) MODEL_LLAMA="$UPSTREAM_LLAMA" ;;
   esac
   step "Naming a fixture through the real pipeline with $(basename "$MODEL") on the $TIER tier's ${MODEL_LLAMA#"$RUNTIME_ROOT/"}/llama-server"
   if [ -z "${INTERN_ANALYZE:-}" ]; then

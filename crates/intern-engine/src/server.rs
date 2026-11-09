@@ -29,8 +29,8 @@ const SERVER_LOG: &str = "llama-server.log";
 
 /// Flags every local model is launched with, each measured end to end on
 /// Intern's own requests in the 77-document evaluation
-/// (`bench/reports/bonsai-linux-cpu-2026-10-27`, Prism `b10826`, which has
-/// every one of them):
+/// (`bench/reports/bonsai-linux-cpu-2026-10-27`, on the llama.cpp fork then
+/// packaged, build 10826, which has every one of them):
 ///
 /// * `--cache-ram 0`: llama-server otherwise keeps every finished prompt in
 ///   an 8 GiB host-memory cache. Intern's prompts never repeat - only the
@@ -40,8 +40,8 @@ const SERVER_LOG: &str = "llama-server.log";
 ///   each model), the prefix was still reused, and the time rose 1-2%.
 /// * `-ub 256`: on the AVX2-only CPU code path most laptops load, documents
 ///   took 13-14% less time than with the default 512, with the same replies;
-///   on AVX-512 it made no difference. On upstream `b11946`, which the
-///   accurate tier runs on, 128, 256 and 512 all fell within run-to-run noise
+///   on AVX-512 it made no difference. On upstream `b11946`, which both
+///   tiers run on, 128, 256 and 512 all fell within run-to-run noise
 ///   on the AVX2 and AVX-VNNI paths, and 128 or 512 changed most replies, so
 ///   256 stays (`bench/reports/speed-linux-cpu-2026-10-29`).
 /// * `--prio -1 --poll 0`: low thread priority, and threads that sleep
@@ -457,8 +457,9 @@ impl ProcessLauncher for StdProcessLauncher {
 ///
 /// ggml loads its `ggml-cpu-*` backends from the executable's folder and
 /// from the current directory. On Windows Intern's current directory is often
-/// the install root, where Prism's CPU backends sit under the same names as
-/// upstream's; in its own folder, each llama-server finds its own.
+/// the install root, which before alpha.15 also held another llama.cpp
+/// build's CPU backends under the same names; in its own folder, llama-server
+/// finds its own and nothing else.
 ///
 /// A path with a folder is made absolute first, since a relative program is
 /// found from the child's directory on some platforms and the parent's on

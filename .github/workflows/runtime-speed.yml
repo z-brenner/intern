@@ -1,11 +1,12 @@
 name: Runtime speed on Windows
 
-# The packaged llama.cpp runtime against upstream llama.cpp on a Windows
-# runner: the same 26 recorded InternBench requests replayed through each,
-# timed, and compared reply for reply with the reply the request got live.
-# One more run puts the fast tier's model through upstream, which both tiers
-# run on, for its speed alone: the requests were recorded for the accurate
-# model, so its replies are compared with that capture but mean less.
+# The packaged llama.cpp runtime, upstream llama.cpp, on a Windows runner:
+# the same 26 recorded InternBench requests replayed through it twice with the
+# accurate tier's model, timed, and compared reply for reply with the reply
+# the request got live. One more run puts the fast tier's model through it,
+# for its speed alone: the requests were recorded for the accurate model, so
+# its replies are compared with that capture but mean less. Until alpha.14
+# it also timed the llama.cpp fork the package then carried.
 # Laboratory measurement only: it gates nothing and publishes nothing. See
 # bench/reports/speed-linux-cpu-2026-10-29.
 
@@ -15,8 +16,8 @@ name: Runtime speed on Windows
 # (scripts/probe-windows-memory.ps1, bench/reports/windows-memory-2026-11-09).
 
 # Run by hand (Actions > Runtime speed on Windows > Run workflow): the speed
-# run takes about 70 minutes of a Windows runner and the memory probe about
-# 15, so no push or pull request starts either.
+# run takes most of an hour of a Windows runner and the memory probe about
+# 15 minutes, so no push or pull request starts either.
 on:
   workflow_dispatch:
     inputs:
@@ -38,7 +39,7 @@ concurrency:
 
 jobs:
   windows-runtime-speed:
-    name: Windows runtime speed (Prism vs upstream llama.cpp, and the fast tier)
+    name: Windows runtime speed (upstream llama.cpp, both tiers)
     if: inputs.probe != 'memory'
     runs-on: windows-latest
     timeout-minutes: 180
@@ -51,7 +52,7 @@ jobs:
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Fetch the pinned model and both runtimes
+      - name: Fetch the pinned models and the runtime
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -67,14 +68,9 @@ jobs:
             $Model = ($Manifest.models | Where-Object tier -eq $Tier).files | Where-Object role -eq "model"
             Get-Pinned $Model.url $Model.sha256 "lab\$Tier.gguf"
           }
-          $Assets = Get-Content src-tauri/resources/runtime-assets.json -Raw | ConvertFrom-Json
-          $Prism = $Assets.downloads | Where-Object id -eq "llama.cpp"
-          Get-Pinned $Prism.url $Prism.sha256 "lab\prism.zip"
           Get-Pinned $env:UPSTREAM_URL $env:UPSTREAM_SHA256 "lab\upstream.zip"
-          Expand-Archive lab\prism.zip lab\prism
           Expand-Archive lab\upstream.zip lab\upstream
           [ordered]@{
-            prism = [string]$Prism.version
             upstream = $env:UPSTREAM_VERSION
             cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
             logical_processors = [int]$env:NUMBER_OF_PROCESSORS
@@ -83,14 +79,13 @@ jobs:
             threads = [Math]::Max(2, [Math]::Min(12, [int][Math]::Floor([int]$env:NUMBER_OF_PROCESSORS / 2)))
           } | ConvertTo-Json | Set-Content lab\context.json -Encoding utf8NoBOM
           Get-Content lab\context.json
-      - name: Replay the requests (accurate on prism, upstream; fast on upstream; accurate on upstream, prism)
+      - name: Replay the requests (accurate, fast, accurate again)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $Threads = (Get-Content lab\context.json -Raw | ConvertFrom-Json).threads
           $Port = 18200
-          $Runs = @(@("prism", "accurate", "prism-1"), @("upstream", "accurate", "upstream-1"),
-            @("upstream", "fast", "fast-1"), @("upstream", "accurate", "upstream-2"), @("prism", "accurate", "prism-2"))
+          $Runs = @(@("upstream", "accurate", "upstream-1"), @("upstream", "fast", "fast-1"), @("upstream", "accurate", "upstream-2"))
           foreach ($Run in $Runs) {
             $Runtime = $Run[0]; $Label = $Run[2]
             $Model = (Resolve-Path "lab\$($Run[1]).gguf").Path
@@ -125,8 +120,8 @@ jobs:
           import glob, json, os
           context = json.load(open("lab/context.json", encoding="utf-8-sig"))
           lines = [f"Windows runner: {context['cpu']}, {context['logical_processors']} logical processors, "
-                   f"{context['threads']} server threads; Prism {context['prism']}, upstream {context['upstream']}",
-                   "", "prism-N and upstream-N run the accurate model; fast-1 runs the fast one on upstream, "
+                   f"{context['threads']} server threads; upstream {context['upstream']}",
+                   "", "upstream-N run the accurate model; fast-1 runs the fast one, "
                    "against requests recorded for the accurate model, so its time means most.",
                    "", "| Run | Time per document | Prefill (median) | Decode (median) | Replies identical to the Linux capture |",
                    "| --- | ---: | ---: | ---: | ---: |"]

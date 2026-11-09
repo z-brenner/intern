@@ -73,6 +73,15 @@ but `docs/qa/`.
    carry, and if the committed sign-off was accepted for other inputs it is
    treated as pending for the run, with a note in the job summary. Download the
    `intern-whole-product-qa-<run>-<attempt>` artifact.
+
+   Dispatch **CI** (`ci.yml`) on `main` at the same commit as well; it runs
+   beside QA and changes nothing. Only a dispatched run takes the Windows step
+   "Smoke test an update over v0.1.0-alpha.14", which installs that release's
+   published installer and then this build's over it with `/UPDATE`, as the
+   in-app updater does, and requires the old root llama.cpp build gone and an
+   empty folder after the uninstall (`src-tauri/windows/hooks.nsh`). QA and the
+   release workflow do not run it. It must pass before the release is
+   dispatched.
 4. **Review the capture and record the sign-off**, following the reviewer rule
    below. In one commit that changes nothing outside `docs/qa/`:
    - `docs/qa/latest-implementation.png`: the capture from the artifact,
@@ -168,14 +177,14 @@ and accepts it. It is only worth anything if that is true.
 - **The release job failed before tagging.** Fix the cause. If the fix is
   outside `docs/qa/`, it changes the release inputs, so QA runs again first.
 - **QA's corpus scoring hit its 60-minute limit.** Usually a wedged
-  llama-server: the accurate model's, upstream llama.cpp from the staged
-  runtime's `llama-upstream` folder, which is the one the corpus is scored on.
+  llama-server: upstream llama.cpp from the staged runtime's `llama-upstream`
+  folder, running the accurate model, which is the one the corpus is scored
+  on.
   `docs/qa/logs/model-evaluation.log` in the artifact shows where it stopped;
   run QA again.
 - **The installer smoke says an installed llama-server exited with
   -1073741515.** That is `STATUS_DLL_NOT_FOUND`: a DLL the server imports is
-  not beside it. The PrismML fork's server, for the fast model, loads its DLLs
-  from the install root; upstream's, for the accurate model, loads its own and
+  not beside it. The server, which both models run on, loads its own DLLs and
   LLVM's `libomp.dll` from `llama-upstream\`. Compare what
   `scripts/fetch-windows-assets.ps1` staged in `src-tauri/resources/native/`
   with the server's imports in the pinned archive.

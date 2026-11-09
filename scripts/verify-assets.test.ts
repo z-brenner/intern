@@ -8,11 +8,11 @@ import { verifyRuntimeAssets } from './verify-assets.mjs';
 describe('runtime asset verification', () => {
   const pin = (manifest: any, id: string) => manifest.downloads.find((download: any) => download.id === id);
   it.each([
-    ['changed URL', (manifest: any) => { pin(manifest, 'llama.cpp').url = 'https://example.invalid/llama.zip'; }],
+    ['changed URL', (manifest: any) => { pin(manifest, 'llama.cpp-upstream').url = 'https://example.invalid/llama.zip'; }],
     ['changed archive basename', (manifest: any) => { pin(manifest, 'llama.cpp-license').archive = 'other.tgz'; }],
     ['unsafe archive path', (manifest: any) => { pin(manifest, 'eng.traineddata').archive = '../eng.traineddata'; }],
-    ['extra download', (manifest: any) => { manifest.downloads.push({ ...pin(manifest, 'llama.cpp'), id: 'extra' }); }],
-    // The accurate tier's llama.cpp is pinned exactly as the fast tier's is.
+    ['extra download', (manifest: any) => { manifest.downloads.push({ ...pin(manifest, 'llama.cpp-upstream'), id: 'extra' }); }],
+    // The one llama.cpp build is pinned by its release, URL and digest.
     ['changed upstream llama.cpp release', (manifest: any) => {
       const upstream = pin(manifest, 'llama.cpp-upstream');
       upstream.url = upstream.url.replaceAll('b11946', 'b11947');
@@ -20,6 +20,14 @@ describe('runtime asset verification', () => {
     ['changed upstream llama.cpp digest', (manifest: any) => { pin(manifest, 'llama.cpp-upstream').sha256 = '0'.repeat(64); }],
     ['missing upstream llama.cpp download', (manifest: any) => {
       manifest.downloads = manifest.downloads.filter((download: any) => download.id !== 'llama.cpp-upstream');
+    }],
+    // The llama.cpp license is upstream's, from the tag the archive was built
+    // at; the fork's tag that once supplied it is no pin any more.
+    ['license from another llama.cpp tag', (manifest: any) => {
+      pin(manifest, 'llama.cpp-license').url = 'https://raw.githubusercontent.com/ggml-org/llama.cpp/b11947/LICENSE';
+    }],
+    ['pin of a second llama.cpp build', (manifest: any) => {
+      manifest.downloads.push({ ...pin(manifest, 'llama.cpp-upstream'), id: 'llama.cpp' });
     }],
     ['changed vcpkg repository', (manifest: any) => { manifest.vcpkg.repository = 'https://example.invalid/vcpkg.git'; }],
     // A model URL on a branch rather than a commit is not a pin: the same
@@ -163,7 +171,7 @@ describe('runtime asset verification', () => {
       expect(model.version).toMatch(/^[0-9a-f]{40}$/);
     }
     await expect(verifyRuntimeAssets(join(process.cwd(), 'src-tauri/resources/runtime-assets.json'), { requireExpectedPins: true }))
-      .resolves.toMatchObject({ verifiedDownloads: 11 });
+      .resolves.toMatchObject({ verifiedDownloads: 10 });
   });
 
   it('refuses a bundle that carries only part of the OCR runtime', async () => {

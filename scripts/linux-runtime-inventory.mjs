@@ -11,9 +11,10 @@
 // `llama_cpp` lists the llama.cpp builds the runtime carries, one object per
 // build: the archive it came from (repository, release, archive, url, size,
 // sha256) and `path`, the folder under runtime/ that holds its llama-server
-// and libraries - "." for runtime/ itself, where Prism's build has always
-// been, and "llama-upstream" for ggml-org's. LLAMA_CPP_JSON holds that
-// list, or a single build's object, which is a build in runtime/ itself.
+// and libraries - "llama-upstream" for ggml-org's, the one build packages
+// carry now, or "." for runtime/ itself, where packages up to alpha.14 kept a
+// second. LLAMA_CPP_JSON holds that list, or a single build's object, which
+// is a build in runtime/ itself.
 //
 //   node scripts/linux-runtime-inventory.mjs write ROOT PACKAGES_TSV LLAMA_CPP_JSON
 //   node scripts/linux-runtime-inventory.mjs verify ROOT

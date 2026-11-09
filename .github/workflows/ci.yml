@@ -167,7 +167,6 @@ jobs:
           cargo build --locked -p intern-worker
           mkdir -p src-tauri/binaries src-tauri/resources/licenses src-tauri/resources/tessdata src-tauri/resources/native/pdfium src-tauri/resources/native/sidecars src-tauri/resources/native/llama-upstream src-tauri/resources/ocr-models src-tauri/resources/runtime
           cp target/debug/intern-worker src-tauri/binaries/intern-worker-x86_64-unknown-linux-gnu
-          install -m 755 /dev/null src-tauri/binaries/llama-server-x86_64-unknown-linux-gnu
           install -m 755 /dev/null src-tauri/binaries/tesseract-x86_64-unknown-linux-gnu
           touch src-tauri/resources/licenses/compile-placeholder.txt
           touch src-tauri/resources/tessdata/compile-placeholder.traineddata
@@ -314,7 +313,6 @@ jobs:
           cargo build --locked -p intern-worker
           New-Item -ItemType Directory src-tauri\binaries -Force | Out-Null
           Copy-Item target\debug\intern-worker.exe src-tauri\binaries\intern-worker-x86_64-pc-windows-msvc.exe -Force
-          New-Item -ItemType File src-tauri\binaries\llama-server-x86_64-pc-windows-msvc.exe -Force | Out-Null
           New-Item -ItemType File src-tauri\binaries\tesseract-x86_64-pc-windows-msvc.exe -Force | Out-Null
           New-Item -ItemType Directory src-tauri\resources\licenses -Force | Out-Null
           New-Item -ItemType Directory src-tauri\resources\tessdata -Force | Out-Null
@@ -398,6 +396,36 @@ jobs:
           $Installer = Get-ChildItem target\release\bundle\nsis\*.exe | Select-Object -First 1
           if (-not $Installer) { throw "NSIS installer was not produced" }
           ./scripts/smoke-installer.ps1 -InstallerPath $Installer.FullName
+      # The in-app updater runs a new installer over the old files with
+      # /UPDATE, never uninstalling first, so whatever an older release put at
+      # the install root and this one does not ship stays unless
+      # src-tauri/windows/hooks.nsh removes it. alpha.14 is the last release
+      # that installed a llama.cpp build there. The smoke installs it, then
+      # this installer over it as the updater does, and requires the folder
+      # empty after the uninstall as before. Only when the workflow is started
+      # by hand: it downloads the 65 MB release installer, checked against the
+      # SHA-256 in that release's SHA256SUMS.txt.
+      - name: Smoke test an update over v0.1.0-alpha.14
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          $Previous = Join-Path $env:RUNNER_TEMP "Intern_0.1.0-alpha.14_x64-setup.exe"
+          for ($Attempt = 1; -not (Test-Path -LiteralPath $Previous); $Attempt++) {
+            try {
+              Invoke-WebRequest -Uri "https://github.com/z-brenner/intern/releases/download/v0.1.0-alpha.14/Intern_0.1.0-alpha.14_x64-setup.exe" -OutFile $Previous -MaximumRedirection 5
+            } catch {
+              if (Test-Path -LiteralPath $Previous) { Remove-Item -LiteralPath $Previous -Force }
+              if ($Attempt -ge 3) { throw }
+              Start-Sleep -Seconds (15 * $Attempt)
+            }
+          }
+          $Digest = (Get-FileHash -LiteralPath $Previous -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($Digest -ne "20177531ab3f5f0b428ac79a63f813a83b2d5b460ee695c39f607aeec76f218f") { throw "The alpha.14 installer has SHA-256 $Digest, not the published one" }
+          # The smoke above leaves the install folder empty, or gone.
+          $InstallDirectory = Join-Path $env:LOCALAPPDATA "Intern"
+          if (Test-Path -LiteralPath $InstallDirectory) { Remove-Item -LiteralPath $InstallDirectory }
+          $Installer = Get-ChildItem target\release\bundle\nsis\*.exe | Select-Object -First 1
+          ./scripts/smoke-installer.ps1 -InstallerPath $Installer.FullName -PreviousInstallerPath $Previous
       - name: Upload Windows installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

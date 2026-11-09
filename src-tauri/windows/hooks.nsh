@@ -10,7 +10,73 @@
 ; The template's own uninstall already removes the autostart value from the
 ; HKCU Run key, so nothing here touches it.
 
+; Whether the install folder already held Intern when this install began,
+; that is whether this install is over an earlier one. Set by the
+; pre-install hook, before the template writes anything; read by the
+; post-install hook, by when this build's own Intern.exe is there either way.
+Var InternWasInstalled
+
+!macro NSIS_HOOK_PREINSTALL
+  StrCpy $InternWasInstalled 0
+  ${If} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
+    StrCpy $InternWasInstalled 1
+  ${EndIf}
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
+  ; Releases up to alpha.14 also carried a llama.cpp build at the install
+  ; root, beside Intern.exe: the PrismML fork's (alpha.12 to alpha.14), and
+  ; upstream b10361 before it (alpha.11). This build ships none there: its
+  ; one llama.cpp build is in llama-upstream\. An update installs over the
+  ; old files without uninstalling them first (the updater passes /UPDATE,
+  ; and the template then skips its uninstall), so the old root build - 22
+  ; files, 43 MB - would stay, and, missing from this build's uninstall
+  ; list, outlive an uninstall too.
+  ;
+  ; This runs once this build's files are written, after the template's
+  ; check that Intern is not running. alpha.11 and alpha.12 ran their models
+  ; on the root llama-server; the check closes the app (asking first in an
+  ; interactive install), and the job object Intern keeps its children in
+  ; ends the server with it, so none of these files is still loaded here.
+  ; An install cancelled at that check, or failing before here, leaves the
+  ; earlier release whole. None of these names is a file this build
+  ; installs (scripts/smoke-installer.ps1 checks both its manifest and the
+  ; folder).
+  ;
+  ; Each name is one that those releases' own runtime inventories
+  ; (runtime-assets.json, published with each release) list at the install
+  ; root as llama.cpp's, or as the OpenMP runtime alpha.11 shipped with it.
+  ; No pattern, so nothing else at the root and nothing in llama-upstream\
+  ; can match; and only a folder that held Intern before this install is
+  ; touched, so a first install into a folder of someone's own leaves what
+  ; is there.
+  ${If} $InternWasInstalled = 1
+    Delete "$INSTDIR\llama-server.exe"
+    Delete "$INSTDIR\llama-server-impl.dll"
+    Delete "$INSTDIR\llama-common.dll"
+    Delete "$INSTDIR\llama.dll"
+    Delete "$INSTDIR\mtmd.dll"
+    Delete "$INSTDIR\ggml.dll"
+    Delete "$INSTDIR\ggml-base.dll"
+    Delete "$INSTDIR\ggml-rpc.dll"
+    Delete "$INSTDIR\libomp140.x86_64.dll"
+    Delete "$INSTDIR\ggml-cpu-x64.dll"
+    Delete "$INSTDIR\ggml-cpu-sse42.dll"
+    Delete "$INSTDIR\ggml-cpu-ssse3.dll"
+    Delete "$INSTDIR\ggml-cpu-sandybridge.dll"
+    Delete "$INSTDIR\ggml-cpu-ivybridge.dll"
+    Delete "$INSTDIR\ggml-cpu-piledriver.dll"
+    Delete "$INSTDIR\ggml-cpu-haswell.dll"
+    Delete "$INSTDIR\ggml-cpu-alderlake.dll"
+    Delete "$INSTDIR\ggml-cpu-skylakex.dll"
+    Delete "$INSTDIR\ggml-cpu-cannonlake.dll"
+    Delete "$INSTDIR\ggml-cpu-cascadelake.dll"
+    Delete "$INSTDIR\ggml-cpu-cooperlake.dll"
+    Delete "$INSTDIR\ggml-cpu-icelake.dll"
+    Delete "$INSTDIR\ggml-cpu-zen4.dll"
+    Delete "$INSTDIR\ggml-cpu-sapphirerapids.dll"
+  ${EndIf}
+
   ; Written on every install, updates included: a person updating from a
   ; release without the shortcut gets it, at the cost of restoring one a
   ; person deleted by hand.

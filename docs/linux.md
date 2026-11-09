@@ -24,7 +24,7 @@ model, or **Choose existing model files** points at one you have.
 | What | Where |
 | --- | --- |
 | The app | `/usr/bin/intern`, and **Intern** in the applications menu |
-| The two llama-servers, the parser worker, PDFium, ONNX Runtime, the OCR models, tessdata | `/usr/lib/Intern/runtime/` (the accurate tier's llama-server in `runtime/llama-upstream/`), listed with every file's SHA-256 in `runtime-inventory.json` there |
+| llama-server, the parser worker, PDFium, ONNX Runtime, the OCR models, tessdata | `/usr/lib/Intern/runtime/` (llama-server in `runtime/llama-upstream/`), listed with every file's SHA-256 in `runtime-inventory.json` there |
 | Third-party licenses | `/usr/lib/Intern/licenses/` and `/usr/lib/Intern/resources/THIRD_PARTY_NOTICES.md` |
 | The model, the queue, settings, logs | `~/.local/share/com.intern.app/` (`logs/startup-error.log` if Intern cannot start, `logs/intern.log` for a crash) |
 | **Start Intern when you sign in** | `~/.config/autostart/Intern.desktop` |
@@ -74,62 +74,48 @@ INTERN_RUNTIME_DIR=/tmp/intern-stage/runtime npm run tauri dev
 
 | Part | Source | Pinned by |
 | --- | --- | --- |
-| `llama-server`, `libllama*`, `libggml*`, `libmtmd`, and a `libggml-cpu-*.so` per x86-64 generation: Prism's, which runs nothing the manifest pins | The [PrismML llama.cpp fork](https://github.com/PrismML-Eng/llama.cpp), which reads the Bonsai 2 ternary models an earlier build pinned: its prebuilt `llama-<release>-bin-ubuntu-x64.tar.gz` | The release, at the top of `scripts/fetch-linux-assets.sh`, and its archive's size and SHA-256 |
-| `llama-upstream/`: the same files again, both tiers' | [llama.cpp](https://github.com/ggml-org/llama.cpp) itself (ggml-org), `b11946`: its prebuilt `llama-b11946-bin-ubuntu-x64.tar.gz` | The release and its archive's size and SHA-256, beside Prism's pin |
+| `llama-upstream/`: `llama-server`, `libllama*`, `libggml*`, `libmtmd`, and a `libggml-cpu-*.so` per x86-64 generation, both tiers' | [llama.cpp](https://github.com/ggml-org/llama.cpp) itself (ggml-org), `b11946`: its prebuilt `llama-b11946-bin-ubuntu-x64.tar.gz` | The release and its archive's size and SHA-256, at the top of `scripts/fetch-linux-assets.sh` |
 | `libpdfium.so` | pdfium-binaries `chromium/7881`, as on Windows | Size and SHA-256 |
 | `libonnxruntime.so`, `ocr-models/` | ONNX Runtime 1.30.0's PyPI wheel; the PP-OCR models | `scripts/fetch-ocr-runtime.sh` and `runtime-assets.json` |
 | `tessdata/eng.traineddata`, `osd.traineddata` | `tessdata_fast`, as on Windows | `runtime-assets.json` |
 | `intern-worker` | This repository | Its digest, in the inventory |
 
-**llama.cpp** comes twice: two builds. **Prism's**, the PrismML fork whose
-ternary kernels the Bonsai 2 models an earlier build pinned need, is still
-staged in `runtime/` itself, where it has always been, and runs nothing the
-manifest pins now. **Upstream's**, ggml-org's own llama.cpp, runs both tiers
-from `runtime/llama-upstream/`: it read Qwen3.5 2B's 77 evaluation documents
-19% faster than Prism with no loss of accuracy
-([report](../bench/reports/speed-linux-cpu-2026-10-29/README.md)). Each is
-its publisher's own prebuilt Ubuntu x86-64 release, CPU-only and portable: it
-carries one CPU backend per x86-64 generation, from `sse42` (Prism's from
-`ssse3`) up to `sapphirerapids` and `zen4`, and llama-server loads at run
-time the one the machine it runs on can execute. Only llama-server is staged
-from each, with the libraries it needs and those backends - not the archive's
-other tools, nor its RPC backend - and every library carries an `$ORIGIN` run
-path, so each build's folder works wherever it is put. The two builds'
-libraries share names (`libllama.so.0`, `libggml-base.so.0`, ...), which is
-why each has a folder to itself: the script refuses an archive whose files
+**llama.cpp** is ggml-org's own, `b11946`, and runs both tiers from
+`runtime/llama-upstream/`: it read the 77 evaluation documents 19%
+faster than the PrismML fork the package also carried until alpha.14, with no
+loss of accuracy
+([report](../bench/reports/speed-linux-cpu-2026-10-29/README.md)). The
+package takes the release's prebuilt Ubuntu x86-64 archive, CPU-only and
+portable: it
+carries one CPU backend per x86-64 generation, from `sse42` up to
+`sapphirerapids` and `zen4`, and llama-server loads at run time the one the
+machine it runs on can execute. Only llama-server is staged, with the
+libraries it needs and those backends - not the archive's other tools, nor
+its RPC backend - and every library carries an `$ORIGIN` run path, so the
+folder works wherever it is put. The script refuses an archive whose files
 look for their libraries anywhere but beside themselves, a library that
-resolves to nothing or to the other build's copy, and a llama-server that
-does not run or reports another build number than its release's. Both
-archives are linked against the system's OpenSSL 3, `libgomp` and
-`libstdc++`, which the package depends on. One text,
-`licenses/llama.cpp-LICENSE.txt`, is the license of both: the two releases'
-MIT `LICENSE` files are byte for byte the same, and the script refuses to
-stage them if that ever stops being so.
+resolves to nothing or to a copy of the same name elsewhere, and a
+llama-server that does not run or reports another build number than its
+release's. The archive is linked against the system's OpenSSL 3, `libgomp`
+and `libstdc++`, which the package depends on. Its MIT `LICENSE` is installed
+as `licenses/llama.cpp-LICENSE.txt`; it is byte for byte the text the Windows
+package pins from the same tag.
 
-Prism's release is one pin: `LLAMA_CPP_RELEASE` at the top of
-`scripts/fetch-linux-assets.sh`, `prism-b10826-c9c34bc` today - the build the
-77-document evaluation ran both shipped models on, and the one the Windows
-package carries too. The table under
-it holds the archive size and SHA-256 of every release that may be staged -
-`prism-b10777-e3de715` and `prism-b10826-c9c34bc` - so moving to one already
-there is a one-word change, and to a new one a new row from its release page.
-To stage another pinned release without changing the default, set
-`LLAMA_CPP_RELEASE` in the environment. Upstream's release, `b11946`, is
-pinned beside it by its release, size and SHA-256 alone: the environment
-cannot choose another, and moving it means all three anew from its release
-page. There is no build from source: both publish the archive with each
-release.
+The release is pinned by its release, size and SHA-256 alone, at the top of
+`scripts/fetch-linux-assets.sh`: the environment cannot choose another, and
+moving it means all three anew from its release page. There is no build from
+source: ggml-org publishes the archive with each release. The folder keeps the
+name `llama-upstream` it had while the fork sat in `runtime/` itself; a
+`.deb` upgrade from a package that carried the fork removes the fork's files,
+as dpkg removes every file the old package had and the new one does not.
 
-The inventory records both builds in `llama_cpp`, each with the archive it
-came from and `path`, its folder under `runtime/`, and lists every file of
-each as the package `llama.cpp` at its build's release; it refuses a
-`llama.cpp` file in any folder but its build's:
+The inventory records the build in `llama_cpp`, with the archive it came from
+and `path`, its folder under `runtime/`, and lists every file of it as the
+package `llama.cpp` at its release; it refuses a `llama.cpp` file in any
+folder but its build's:
 
 ```json
 "llama_cpp": [
-  { "path": ".", "repository": "https://github.com/PrismML-Eng/llama.cpp",
-    "release": "prism-b10826-c9c34bc", "archive": "llama-prism-b10826-c9c34bc-bin-ubuntu-x64.tar.gz",
-    "url": "…", "size": 17912930, "sha256": "66a250f3…" },
   { "path": "llama-upstream", "repository": "https://github.com/ggml-org/llama.cpp",
     "release": "b11946", "archive": "llama-b11946-bin-ubuntu-x64.tar.gz",
     "url": "…", "size": 22647372, "sha256": "9e44e1a5…" }
@@ -146,22 +132,21 @@ ships; the worker uses a `tesseract` in the runtime folder if one is put
 there, and otherwise the one on `PATH`. OCR output can differ by a character
 from the Windows package's Tesseract 5.5.2.
 
-**The llama-servers and the worker live in `/usr/lib/Intern/runtime`, not
+**llama-server and the worker live in `/usr/lib/Intern/runtime`, not
 `/usr/bin`.** A package's `/usr/bin/llama-server` and `/usr/bin/tesseract`
 would collide with the distribution's own, and llama-server looks for its CPU
-backends beside itself. The app starts the worker and the fast tier's
-llama-server from the runtime folder, and the accurate tier's from
-`runtime/llama-upstream/`.
+backends beside itself. The app starts the worker from the runtime folder,
+and both tiers' llama-server from `runtime/llama-upstream/`.
 
 ## Testing without a desktop
 
 Everything below runs on a machine with no display and no desktop session,
 such as the VM a coding agent works in. Run `npm run fixtures` first.
 
-`scripts/smoke-linux.sh` checks a runtime against its inventory, starts both
-its llama-servers - Prism's in `runtime/` and upstream's in
-`runtime/llama-upstream/` - and checks each loads its own build's libraries
-and a CPU backend from its own folder, and drives the parser worker
+`scripts/smoke-linux.sh` checks a runtime against its inventory, starts its
+llama-server in `runtime/llama-upstream/` and checks it loads its own build's
+libraries and a CPU backend from its own folder (and that no llama-server is
+packaged in `runtime/` itself), and drives the parser worker
 through the release fixtures - native text, PDFium-rendered scans through
 PP-OCR, DOCX, images, and the documents it must refuse
 (`scripts/smoke-worker.mjs`, the port of `scripts/smoke-worker.ps1`):
@@ -175,8 +160,7 @@ scripts/smoke-linux.sh --runtime /usr/lib/Intern    # an installed package
 private D-Bus session, and checks that it shows its window, writes no startup
 error, and that killing it outright leaves none of its processes running.
 `--model GGUF` also runs the whole pipeline without a window: the
-llama-server the app runs that model's tier on - upstream's for the accurate
-model, Prism's for the fast one - with the flags the app uses, and
+llama-server the app runs both tiers on, with the flags the app uses, and
 `intern-analyze` naming a fixture through it. The tier is the one
 `src-tauri/resources/model-manifest.json` gives a file of that name;
 `--tier fast` or `--tier accurate` names it for any other file.

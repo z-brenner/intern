@@ -549,11 +549,10 @@ results.
 
 ## Windows runtime assets and installer
 
-From PowerShell on Windows, fetch the exact llama.cpp builds (the PrismML fork's
-`prism-b10826-c9c34bc` release, which the fast model runs on, and upstream
-llama.cpp `b11946`, which the accurate model runs on), PDFium chromium/7881,
-Tesseract 5.5.2, tessdata, ONNX Runtime 1.30.0 and OCR model assets
-([OCR](docs/ocr.md) says which models and why):
+From PowerShell on Windows, fetch the exact llama.cpp build (upstream llama.cpp
+`b11946`, which both local models run on, installed in `llama-upstream\`),
+PDFium chromium/7881, Tesseract 5.5.2, tessdata, ONNX Runtime 1.30.0 and OCR
+model assets ([OCR](docs/ocr.md) says which models and why):
 
 ```powershell
 cargo build --locked -p intern-worker --release --features windows-native
@@ -570,18 +569,23 @@ byte length and committed SHA-256 digest match. The fetcher checks out the exact
 vcpkg baseline, stages only required executables/DLLs/trained data and the full
 upstream/vcpkg license closure, and records both source and packaged paths plus a
 digest for every file in `src-tauri/resources/runtime-assets.json`.
-Each llama.cpp build ships as its `llama-server` and exactly the DLLs it loads:
-the fork's beside `Intern.exe`, and upstream's in a `llama-upstream` folder of
-its own, since the two builds' DLLs share names. Upstream's also needs LLVM's
-OpenMP runtime, `libomp.dll`, which ships there with its license.
+llama.cpp ships as its `llama-server` and exactly the DLLs it loads, in a
+`llama-upstream` folder of its own beside `Intern.exe`, with LLVM's OpenMP
+runtime, `libomp.dll`, which its `ggml-base.dll` imports, and that runtime's
+license. Nothing of llama.cpp's sits beside `Intern.exe` itself; an update
+from a release that put a build there deletes it (the installer hooks,
+`src-tauri/windows/hooks.nsh`).
 Tauri produces a per-user NSIS installer. To smoke-test a clean installer:
 
 ```powershell
 ./scripts/smoke-installer.ps1 -InstallerPath target/release/bundle/nsis/Intern_0.1.0-alpha.14_x64-setup.exe
 ```
 
-The smoke test also starts both installed servers with `--version`, each from
-its own folder, which fails if a DLL either one imports is missing.
+The smoke test also starts the installed server with `--version` from its own
+folder, which fails if a DLL it imports is missing, and fails if any file of
+the old root build is installed. `-PreviousInstallerPath` installs an earlier
+release first and then this installer over it with `/UPDATE`, as the updater
+does, and requires the old root build gone afterwards.
 The installer includes third-party notices and the generated `licenses/`
 inventory but never includes `.gguf` model files. Local model weights are
 installed separately under the user's local application data only after explicit
