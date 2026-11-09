@@ -175,6 +175,25 @@ the directory holds a `tesseract` of its own. `scripts/fetch-linux-assets.sh`
 and `scripts/stage-linux-runtime.sh` build exactly such a directory, the Linux
 package's runtime ([Linux](linux.md)).
 
+`scripts/record-corpus.sh` is `record-corpus.ps1` for Linux: the same server
+flags, `--token-confidence`, the baseline at the 0.7 gate, with `MODEL`,
+`LLAMA_SERVER` and `INTERN_RUNTIME_DIR` from the environment, and the outputs
+in a directory of its own (`corpus-recording.json`, `corpus-baseline.json`,
+`report.json`) for a person to read before copying them over the committed
+ones. `candidate-bench.yml` runs it on an Ubuntu runner as the set
+`fixtures`, beside InternBench and the real sets, with the worker, PDFium and
+PP-OCR the Linux package stages: a recording made on the branch that changed
+the prompt, on the same machine class as that branch's InternBench run.
+
+A recording made with `--token-confidence` keeps, beside the gate's
+`token_confidence` (`min`, `mean`, `tokens`), every token of the reply as the
+server reported it (`token_probabilities`: the token, its log-probability,
+the `top_logprobs` alternatives, and its bytes where its text cannot carry
+them). Nothing replays from it - the gate is scored from `token_confidence`,
+exactly as for a recording made before the list was kept - but another
+reading of the same reply (the first token, the margin to the runner-up, the
+type's tokens) can be swept offline over it.
+
 ## Re-recording only some fixtures
 
 A change to how the worker reads one kind of document - how scans are OCR'd,

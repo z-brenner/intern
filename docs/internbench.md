@@ -224,7 +224,10 @@ summary gives the headline lines (`filename`, `unsafe ready`, `total per
 document`), the server's peak RSS, the wall time, the runner's CPU and the
 `ggml-cpu-*` backend `llama-server` loaded; the report, recording and logs
 are an artifact named `candidate-<label>-<set>-<run id>`, kept 14 days.
-Runners differ, so compare jobs that the summary puts on the same CPU.
+Runners differ, so compare jobs that the summary puts on the same CPU. The
+set `fixtures` records the fixture corpus instead, with
+`scripts/record-corpus.sh` (docs/evaluation.md); its artifact carries
+`corpus-recording.json` and `corpus-baseline.json`.
 
 ### Server settings on GitHub runners
 

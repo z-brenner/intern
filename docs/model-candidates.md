@@ -41,7 +41,9 @@ written is the signal.
 * **The recording.** `ModelRequest::sha256` hashes the user turn only. The
   grammar, sampling settings, and the new fields are transport, so the committed
   `fixtures/corpus-recording.json` still replays with 0 regressions and no
-  `stale_prompt`.
+  `stale_prompt`. Since November 2026 a recording also keeps the reply's whole
+  per-token list (`token_probabilities`), so other aggregations than the
+  minimum can be compared offline; replay reads only `token_confidence`.
 * **The reply.** Decoding is greedy. Two live runs on a freshly started server,
   one without logprobs and one with, gave byte-identical proposals for all 21
   fixtures.
