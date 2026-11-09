@@ -1,5 +1,12 @@
-import { readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
+
+const exec = promisify(execFile);
 
 /** One job of a workflow, from its key to the next job's. */
 function jobOf(workflow: string, id: string): string {
@@ -83,6 +90,51 @@ describe('the cargo caches in CI', () => {
       expect(prefix, id).toMatch(/^cargo-[\w-]*\$\{\{ runner\.os \}\}-$/);
       expect(step, id).toMatch(new RegExp(`^ {10}restore-keys: ${prefix.replace(/[$.{}]/g, '\\$&')}$`, 'm'));
       expect(key, id).not.toContain('runtime-assets.json');
+    }
+  });
+
+  // With restore-keys, the entry saved after a lock change would carry the
+  // earlier entry's builds of the workspace's own crates, which a release's
+  // version bump leaves unused, and the next entry those and its own, release
+  // after release, toward the repository's cache limit.
+  it('drop the workspace builds an inexact restore brings back, before anything builds', async () => {
+    const workflow = await ci();
+    for (const id of ['corpus-replay', 'rust-ubuntu', 'linux-desktop', 'windows-release-gates']) {
+      const steps = stepsOf(jobOf(workflow, id));
+      const cache = steps.findIndex((step) => step.includes('actions/cache@') && /^ {12}target$/m.test(step));
+      expect(steps[cache], id).toMatch(/^ {8}id: cargo-cache$/m);
+      const prune = steps.findIndex((step) => /^ {8}run: bash scripts\/prune-cargo-workspace\.sh$/m.test(step));
+      expect(prune, id).toBe(cache + 1);
+      expect(steps[prune], id).toMatch(/^ {8}if: steps\.cargo-cache\.outputs\.cache-hit != 'true'$/m);
+      expect(steps[prune], id).toMatch(/^ {8}shell: bash$/m);
+      const code = (step: string) => step.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n');
+      const builds = steps.findIndex((step) => /\bcargo (build|run|test|clippy)\b|tauri build/.test(code(step)));
+      expect(builds, id).toBeGreaterThan(prune);
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('prune every build of a workspace package and keep third-party ones', async () => {
+    const target = await mkdtemp(join(tmpdir(), 'prune-cargo-'));
+    try {
+      const files = {
+        workspace: [
+          'release/deps/libintern_engine-0123456789abcdef.rlib',
+          'release/deps/libintern_engine-fedcba9876543210.rlib',
+          'release/.fingerprint/intern-engine-0123456789abcdef/lib-intern_engine',
+          'debug/build/intern-app-0123456789abcdef/output',
+          'debug/deps/intern_bench-0123456789abcdef',
+        ],
+        thirdParty: ['debug/deps/libserde-0123456789abcdef.rlib', 'release/.fingerprint/serde-0123456789abcdef/lib-serde'],
+      };
+      for (const file of [...files.workspace, ...files.thirdParty]) {
+        await mkdir(dirname(join(target, file)), { recursive: true });
+        await writeFile(join(target, file), '');
+      }
+      await exec('bash', ['scripts/prune-cargo-workspace.sh'], { env: { ...process.env, CARGO_TARGET_DIR: target } });
+      for (const file of files.workspace) expect(existsSync(join(target, file)), file).toBe(false);
+      for (const file of files.thirdParty) expect(existsSync(join(target, file)), file).toBe(true);
+    } finally {
+      await rm(target, { recursive: true, force: true });
     }
   });
 
