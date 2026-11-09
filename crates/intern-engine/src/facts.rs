@@ -558,6 +558,7 @@ pub fn validate_facts_at(
             }
             TypeReading::Retitled { phrase, line } => {
                 support.document_type = Support::Unsupported;
+                type_unit = unit_holding(scope, &line).map(|unit| unit.ordinal);
                 type_line = Some(line);
                 type_title = Some(phrase.clone());
                 push(&mut reasons, ReviewReason::TypeInferred);
@@ -578,16 +579,32 @@ pub fn validate_facts_at(
     // statement it encloses - unless it is a kind of letter itself. The
     // name waits for a person.
     let layout = LetterLayout::of(scope);
+    // The reply may cite the body's mention of a type the heading above
+    // the salutation states too ("NOTICE OF TERMINATION" over "This notice
+    // of termination confirms ..."): the heading is the type.
+    let talking = |unit: &EvidenceUnit, line: &str, value: &str| {
+        layout.below_salutation(unit, line)
+            && !words(value).iter().any(|word| word == "letter")
+            && !layout.states_above_salutation(scope, value)
+    };
     if let Some(unit) = type_unit.and_then(|ordinal| scope.unit_at(ordinal))
         && let Some(value) = document_type.as_deref()
-        && layout.below_salutation(unit, type_line.as_deref().unwrap_or_default())
-        && !words(value).iter().any(|word| word == "letter")
-        // The reply may cite the body's mention of a type the heading above
-        // the salutation states too ("NOTICE OF TERMINATION" over "This
-        // notice of termination confirms ..."): the heading is the type.
-        && !layout.states_above_salutation(scope, value)
+        && talking(unit, type_line.as_deref().unwrap_or_default(), value)
     {
         push(&mut reasons, ReviewReason::TypeUnsupported);
+        // In a document laid out as a letter, what the letter talks about
+        // is no kind for it: "Letter" stands in, for a person to complete
+        // ("I am writing to provide you with advice", "the Order to Show
+        // Cause proceeding IS TERMINATED", a question about a "Strategic
+        // Plan"). A notice, an invoice or an agreement sent as a letter is
+        // still one, its heading under the greeting ("Dear Ms. Roe: /
+        // NOTICE OF RENT INCREASE").
+        if layout.laid_out_as_letter(scope) && no_kind_of_its_own(Some(value)) {
+            document_type = Some("Letter".to_owned());
+            type_title = None;
+            type_line = None;
+            push(&mut reasons, ReviewReason::TypeInferred);
+        }
     }
     // "Never 'Document', 'Agreement' or 'Letter' alone", as the prompt
     // says: a bare generic word that no title of the document completed
@@ -607,7 +624,14 @@ pub fn validate_facts_at(
         push(&mut reasons, ReviewReason::TypeMissing);
     }
     if document_type.is_none() {
-        match title_of(scope) {
+        // A title read below a letter's salutation is the letter talking,
+        // as above.
+        let inferred = title_of(scope).filter(|(inferred, line)| {
+            !(layout.laid_out_as_letter(scope)
+                && no_kind_of_its_own(Some(inferred))
+                && unit_holding(scope, line).is_some_and(|unit| talking(unit, line, inferred)))
+        });
+        match inferred {
             Some((inferred, line)) => {
                 type_line = Some(line);
                 type_title = Some(inferred.clone());
@@ -1955,6 +1979,24 @@ fn stamp_date_cited(
                 .then(|| stamped.clone())
         })
     })
+}
+
+/// Whether a type names no class a letter could carry of its own - a
+/// notice, an invoice, an agreement, a form, an email - only a record or
+/// no known kind: what a letter may talk about.
+fn no_kind_of_its_own(document_type: Option<&str>) -> bool {
+    matches!(
+        DocumentClass::of(document_type),
+        DocumentClass::Unknown | DocumentClass::Record
+    )
+}
+
+/// The unit of the context that holds `line` as one of its lines.
+fn unit_holding<'a>(scope: &ValidationScope<'a>, line: &str) -> Option<&'a EvidenceUnit> {
+    let line = line.trim();
+    scope
+        .context_units()
+        .find(|unit| unit.text.lines().any(|held| held.trim() == line))
 }
 
 /// Keeps the line that shows a found fact as evidence, once.
@@ -12453,6 +12495,33 @@ Rickmansworth,
                 title,
                 "{re}"
             );
+        }
+    }
+
+    /// In a document laid out as a letter, a type read from what the letter
+    /// talks about below its salutation gives way to "Letter", still for a
+    /// person to complete.
+    #[test]
+    fn a_letter_typed_by_its_talk_stands_in_as_a_letter() {
+        let (outcome, _) = facts_for(
+            "Office of Fair Trading\nFleetbank House\n\n11 September 2013\n\nDear Chancellor\n\n\
+             I am writing to provide you with advice, as requested, concerning the divestments.\n\n\
+             Yours sincerely,\n\nClive Maxwell",
+            |index| ModelFacts {
+                document_type: Some("advice".into()),
+                type_evidence: vec![id_of(index, "I am writing")],
+                document_date: Some("2013-09-11".into()),
+                date_evidence: vec![id_of(index, "11 September 2013")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some("Letter"));
+        for reason in [
+            ReviewReason::TypeUnsupported,
+            ReviewReason::TypeInferred,
+            ReviewReason::TypeMissing,
+        ] {
+            assert!(outcome.reasons.contains(&reason), "{:?}", outcome.reasons);
         }
     }
 }
