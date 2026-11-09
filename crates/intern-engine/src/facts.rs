@@ -2036,10 +2036,13 @@ fn under_a_receipt_label(scope: &ValidationScope<'_>, unit: &EvidenceUnit, at: u
 }
 
 /// Whether the unit a loose reading of `date` was found in reads it only
-/// under receipts' labels: each of its lines that states `date` as
-/// [`read_date_positions`] reads it stands under a "RECEIVED" or "FILED"
-/// ([`under_a_receipt_label`]), whatever form the loose date takes there
-/// (a stamp's figures apart, "November 22,1923", "02-Jun-17").
+/// under receipts' labels: with every line under a "RECEIVED" or "FILED"
+/// ([`under_a_receipt_label`]) taken out, together with the lines a date
+/// begun on it wraps onto ("RECEIVED November" over "22,1923"), the rest
+/// of the unit no longer states `date` as [`read_date_positions`] reads it,
+/// whatever loose form it takes (a stamp's figures apart,
+/// "November 22,1923", "02-Jun-17"). The unit is read whole, as the
+/// digest reads it, so a date wrapped across lines is found as one.
 fn read_only_on_a_receipt_stamp(
     scope: &ValidationScope<'_>,
     unit: Option<&EvidenceUnit>,
@@ -2048,13 +2051,35 @@ fn read_only_on_a_receipt_stamp(
     let Some(unit) = unit else {
         return false;
     };
-    let mut reading = unit
-        .text
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| !read_date_positions(date, &normalize(line)).is_empty())
-        .peekable();
-    reading.peek().is_some() && reading.all(|(at, _)| under_a_receipt_label(scope, unit, at))
+    let reads = |text: &str| !read_date_positions(date, &normalize(text)).is_empty();
+    if !reads(&unit.text) {
+        return false;
+    }
+    let lines = unit.text.lines().collect::<Vec<_>>();
+    let mut rest = Vec::with_capacity(lines.len());
+    let mut at = 0;
+    while at < lines.len() {
+        if !under_a_receipt_label(scope, unit, at) {
+            rest.push(lines[at]);
+            at += 1;
+            continue;
+        }
+        // A date the labelled line begins may end one or two lines on: the
+        // lines after it are taken with it only when the date needs it, so
+        // a dateline of its own below a stamp ("RECEIVED" / "JAN 3 1924" /
+        // "November 22,1923") stays.
+        let wrapped = (!reads(lines[at]))
+            .then(|| {
+                (2..=3).find(|span| {
+                    at + span <= lines.len()
+                        && reads(&lines[at..at + span].join(" "))
+                        && !reads(&lines[at + 1..at + span].join(" "))
+                })
+            })
+            .flatten();
+        at += wrapped.unwrap_or(1);
+    }
+    !reads(&rest.join("\n"))
 }
 
 /// Whether a type names no class a letter could carry of its own - a
@@ -12639,6 +12664,29 @@ Rickmansworth,
                 false,
             ),
             ("FILED November 22,1923", "November 22", "1923-11-22", false),
+            ("November\n22,1923", "November", "1923-11-22", true),
+            (
+                "RECEIVED November\n22,1923",
+                "November",
+                "1923-11-22",
+                false,
+            ),
+            (
+                "RECEIVED\nNovember\n22,1923",
+                "November",
+                "1923-11-22",
+                false,
+            ),
+            ("RECEIVED\nSEP 1 8\n2015", "SEP 1 8", "2015-09-18", false),
+            // A dateline of its own two lines under a receipt's label is
+            // no part of the receipt's date.
+            (
+                "Received in the Office of the Clerk on\nJAN 3 1924 by the deputy clerk\n\
+                 November 22,1923, the date of the company's letter to the court",
+                "November 22,1923, the date",
+                "1923-11-22",
+                true,
+            ),
         ] {
             let letter = format!(
                 "ARP INDUSTRIES\n\n{stamp}\n\nMr. Alfred Puccinelli\n\nDear Mr. Puccinelli:\n\n\
