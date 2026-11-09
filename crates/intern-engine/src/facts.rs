@@ -4045,13 +4045,40 @@ fn defines_role(after: &str, terms: &[&str]) -> bool {
     if let Some(rest) = trimmed.strip_prefix("as ") {
         return has_term(window_forward(rest, 0, 40));
     }
+    // An appositive role, unless it is the label of the party's number:
+    // ", company number 3899612" and "Employer ID Number NN-NNNNNNN" give
+    // the party's registration, not its side.
     terms.iter().any(|term| {
         trimmed.starts_with(term)
             && !trimmed[term.len()..]
                 .chars()
                 .next()
                 .is_some_and(char::is_alphanumeric)
+            && !trimmed[term.len()..]
+                .split(|character: char| !character.is_alphanumeric())
+                .find(|word| !word.is_empty())
+                .is_some_and(labels_a_number)
     })
+}
+
+/// Whether a word labels a number: "number", "no", "ID", "registration" -
+/// or opens with "number", where a layout ran the value into its label
+/// ("NumberNN-NNNNNNN").
+fn labels_a_number(word: &str) -> bool {
+    matches!(
+        word,
+        "number"
+            | "numbers"
+            | "no"
+            | "nos"
+            | "id"
+            | "identification"
+            | "registration"
+            | "reg"
+            | "ref"
+            | "reference"
+            | "code"
+    ) || word.starts_with("number")
 }
 
 /// Where `needle` stands in `haystack` as whole words.
@@ -11865,5 +11892,21 @@ Rickmansworth,
             "{:?}",
             facts.parties
         );
+    }
+
+    /// A role word right after a name names its side - ", Tenant" - unless
+    /// it labels the party's number: ", company number 3899612", "Employer
+    /// ID Number NN-NNNNNNN".
+    #[test]
+    fn a_role_word_labeling_a_number_defines_no_role() {
+        let employer = role_words(PartyRole::Employer).1;
+        assert!(defines_role(", tenant, agrees", &["tenant"]));
+        assert!(defines_role(" (the \"company\") agrees", employer));
+        assert!(!defines_role(
+            ", company number 3899612 and good electricity gas limited",
+            employer
+        ));
+        assert!(!defines_role(" employer id numbernn-nnnnnnn", employer));
+        assert!(!defines_role(" company reg. no. 0412", employer));
     }
 }
