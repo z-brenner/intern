@@ -21,9 +21,12 @@ idle, and 3 s and 15 s after the server exits. With BalloonMiB, a process that
 holds that much memory in its working set (a browser's share, say) runs
 throughout, so the machine starts with less available. Then it applies plan()'s
 arithmetic (src-tauri/src/commands.rs) with the constants in tiers.rs, read from
-the source so the probe judges what the code ships: with a model loaded, the plan
-sees ullAvailPhys plus tiers::unload_gives_back(tier, file size), and the
-accurate model fits when that reaches MIN_AVAILABLE_FOR_ACCURATE.
+the source, two ways. With a model loaded, the plan sees ullAvailPhys plus a
+credit for what unloading that model gives back, and the accurate model fits when
+that reaches MIN_AVAILABLE_FOR_ACCURATE. The credit the app uses is the live
+server's working set (tiers::memory_released_by); the estimate
+tiers::unload_gives_back(tier, file size), which the app credited up to alpha.14,
+is now only its fallback for a server it cannot read. The probe judges both.
 #>
 param(
     [Parameter(Mandatory = $true)] [string]$Server,
@@ -284,15 +287,17 @@ function Find-Sample([string]$Tier, [string]$Stage) {
 }
 
 # plan() in commands.rs: with `tier` loaded, the plan sees what the machine
-# reports available plus tiers::unload_gives_back(tier, file size), that is
-# resident_estimate(tier) - file size; the accurate model fits at the floor.
+# reports available plus the server's working set (tiers::memory_released_by),
+# or, when it cannot read that, the estimate tiers::unload_gives_back(tier, file
+# size), that is resident_estimate(tier) - file size. The accurate model fits at
+# the floor. Each verdict is made both ways.
 $Verdicts = [System.Collections.Generic.List[object]]::new()
 $Lines = [System.Collections.Generic.List[string]]::new()
 $Lines.Add("Windows memory probe: $([Environment]::ProcessorCount) logical processors, $Threads server threads, " +
     "$((Find-Sample 'none' 'start').total_phys_mib) MiB physical, a balloon of $BalloonMiB MiB; " +
     "MIN_AVAILABLE_FOR_ACCURATE $Floor MiB.")
 $Lines.Add("")
-$Lines.Add("| Loaded | Stage | Available | Working set | Shipped credit | Plan sees | Accurate model | Credit = working set | Plan sees | Accurate model |")
+$Lines.Add("| Loaded | Stage | Available | Working set | Estimate (fallback) | Plan sees | Accurate model | Credit = working set | Plan sees | Accurate model |")
 $Lines.Add("| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | --- |")
 foreach ($Tier in $Models.Keys) {
     $Credit = [Math]::Max(0, $Resident[$Tier] - $FileMiB[$Tier])
@@ -305,7 +310,7 @@ foreach ($Tier in $Models.Keys) {
             stage                 = $Stage
             avail_phys_mib        = $Sample.avail_phys_mib
             working_set_mib       = $Sample.working_set_mib
-            shipped_credit_mib    = $Credit
+            estimate_credit_mib   = $Credit
             plan_sees_mib         = $Sees
             accurate_fits         = ($Sees -ge $Floor)
             measured_credit_mib   = $Sample.working_set_mib
@@ -320,7 +325,7 @@ foreach ($Tier in $Models.Keys) {
 }
 
 $Lines.Add("")
-$Lines.Add("| Model | Available before load | After request | Taken by the load | Given back 3 s after exit | Shipped credit | Under-credit |")
+$Lines.Add("| Model | Available before load | After request | Taken by the load | Given back 3 s after exit | Estimate (fallback) | Under-credit |")
 $Lines.Add("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
 $Bands = @{}
 foreach ($Tier in $Models.Keys) {
@@ -331,19 +336,20 @@ foreach ($Tier in $Models.Keys) {
     $Credit = [Math]::Max(0, $Resident[$Tier] - $FileMiB[$Tier])
     $Taken = [Math]::Round($Before - $Loaded, 1)
     $GivenBack = [Math]::Round($Exited - $Idle, 1)
-    $Bands[$Tier] = [ordered]@{ taken_mib = $Taken; given_back_mib = $GivenBack; shipped_credit_mib = $Credit }
+    $Bands[$Tier] = [ordered]@{ taken_mib = $Taken; given_back_mib = $GivenBack; estimate_credit_mib = $Credit }
     $Lines.Add("| $Tier | $Before | $Loaded | $Taken | $GivenBack | $Credit | $([Math]::Round($GivenBack - $Credit, 1)) |")
 }
 
 # On a machine with A MiB available before any model is loaded, and these
-# models taking what they took here: the accurate model is loaded when
-# A >= floor; with it loaded the plan stands it down when A - taken + credit
-# < floor; with the fast one loaded it brings the accurate one back when
-# A - taken + credit >= floor.
-$StandsDown = [Math]::Round($Floor + $Bands.accurate.taken_mib - $Bands.accurate.shipped_credit_mib, 1)
-$ComesBack = [Math]::Round($Floor + $Bands.fast.taken_mib - $Bands.fast.shipped_credit_mib, 1)
+# models taking what they took here after one document (a linear extrapolation
+# from this one load: Windows may trim harder where less is available), and the
+# estimate credited: the accurate model is loaded when A >= floor; with it loaded
+# the plan stands it down when A - taken + credit < floor; with the fast one
+# loaded it brings the accurate one back when A - taken + credit >= floor.
+$StandsDown = [Math]::Round($Floor + $Bands.accurate.taken_mib - $Bands.accurate.estimate_credit_mib, 1)
+$ComesBack = [Math]::Round($Floor + $Bands.fast.taken_mib - $Bands.fast.estimate_credit_mib, 1)
 $Lines.Add("")
-$Lines.Add("With the shipped credit, a machine with A MiB available before any model is loaded:")
+$Lines.Add("Credited only the estimate (the fallback; up to alpha.14 the only credit), a machine with A MiB available before any model is loaded:")
 $Lines.Add("- loads the accurate model for the first document when A >= $Floor;")
 $Lines.Add("- with the accurate model loaded, plans the fast one for the next document when A < $StandsDown;")
 $Lines.Add("- with the fast model loaded, plans the accurate one again when A >= $ComesBack.")
