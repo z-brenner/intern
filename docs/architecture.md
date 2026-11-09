@@ -829,6 +829,16 @@ before the one after: a swap before every document for a machine with about
 working set, the plan sees what the machine has once the server exits: at the
 probe's six exits the two differed by 83 MiB at most
 ([`bench/reports/windows-memory-2026-11-09`](../bench/reports/windows-memory-2026-11-09/README.md)).
+That figure is not quite alike for the two models: with 2 GiB held it came out
+404 MiB higher with the 4B loaded than with the 9B right after a document, and
+917 MiB higher with the 4B a minute idle, so by the same arithmetic a machine a
+few hundred MiB short of the floor with nothing loaded would still swap them,
+before every document or at every pause. A loaded 4B is therefore asked for
+1,024 MiB more than the floor before it makes way for the 9B
+(`tiers::UPGRADE_MARGIN`, in `tiers::memory_for_plan`); a loaded 9B is still
+stood down at the floor itself, so the margin keeps the smaller model longer,
+never the larger, and a machine whose memory drifts around the floor is not
+swapped back and forth either.
 When the accurate model is wanted - by
 Automatic or by name - but is not installed yet or does not fit, the quick
 model reads instead, provisionally; its readings are sent back to the accurate
