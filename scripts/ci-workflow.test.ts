@@ -233,3 +233,49 @@ describe('the Pages deployment', () => {
     expect(release.indexOf('  pages:\n')).toBeGreaterThan(release.indexOf('gh release create $Tag'));
   });
 });
+
+describe('the server speed battery', () => {
+  const battery = async () => stepsOf(jobOf(await readFile('.github/workflows/speed-battery.yml', 'utf8'), 'battery'));
+
+  // ggml loads its CPU backends from the folder /proc/self/exe resolves to,
+  // so a folder of symlinks to the release loads the release's own best
+  // variant: an AMX or AVX-512 path no laptop has. Hard links are files of
+  // their own, and a folder holding one variant can load only that one.
+  it('pins one CPU backend with hard links, before any server starts', async () => {
+    const steps = await battery();
+    const pin = steps.findIndex((step) => step.includes('name: Pin the CPU backend'));
+    expect(pin).toBeGreaterThan(steps.findIndex((step) => step.includes('name: Fetch llama-server')));
+    const step = steps[pin];
+    expect(step).toContain("if: inputs.cpu_variant != ''");
+    expect(step).toContain('cp -a --link "$source/." "$pinned/"');
+    expect(step).not.toMatch(/ln -s|--symbolic/);
+    expect(step).toContain(`! -name "libggml-cpu-$CPU_VARIANT.so" -delete`);
+    expect(step).toContain('echo "LLAMA_SERVER=$pinned/');
+    for (const name of ['Measure the cold start', 'Run the battery']) {
+      expect(steps.findIndex((s) => s.includes(`name: ${name}`)), name).toBeGreaterThan(pin);
+    }
+    // The summary reads what the loaded backend was built for from the
+    // server's own log, so a pin that did not take is visible.
+    expect(steps.find((s) => s.includes('name: Summarize'))).toContain('system_info:');
+  });
+
+  // The battery warms every slot before it times anything, so the first
+  // document of a server lifetime - the one a slot restore speeds up - is
+  // timed only by the cold-start step, on fresh servers, before the battery.
+  it('times the cold start on fresh servers before the warmed battery', async () => {
+    const steps = await battery();
+    const cold = steps.findIndex((step) => step.includes('name: Measure the cold start'));
+    expect(cold).toBeGreaterThan(steps.findIndex((step) => step.includes('name: Fetch and verify the model')));
+    expect(cold).toBeLessThan(steps.findIndex((step) => step.includes('name: Run the battery')));
+    expect(steps[cold]).toContain('if: inputs.cold_start');
+    expect(steps[cold]).toContain('scripts/bonsai-eval/cold-start.py');
+    const upload = steps.find((step) => step.includes('actions/upload-artifact@'))!;
+    expect(upload).toContain('out/cold-start/cold-start.json');
+    const script = await readFile('scripts/bonsai-eval/cold-start.py', 'utf8');
+    // The app's launch, with the slot directory and a key the slot calls carry.
+    for (const flag of ['"--cache-ram", "0", "-ub", "256", "--prio", "-1", "--poll", "0", "--no-mmproj"', '"--slot-save-path"', '"--api-key"']) {
+      expect(script).toContain(flag);
+    }
+    expect(script).toContain('add_header("Authorization", f"Bearer {key}")');
+  });
+});

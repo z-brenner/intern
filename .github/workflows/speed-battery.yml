@@ -7,6 +7,15 @@ name: Server speed battery on Linux
 # runner's CPU is whatever the fleet hands out (the summary names it): read
 # each job's baseline-to-variant ratio, never a time across jobs.
 # Laboratory measurement only: it gates nothing and publishes nothing.
+#
+# cold_start adds, before the battery, the request every server lifetime
+# starts with and the battery otherwise never times (it warms every slot
+# first): an unwarmed first request on a fresh server, with and without the
+# system-turn state restored from a slot file saved earlier in the same job,
+# as the app restores it at every model load (scripts/bonsai-eval/cold-start.py).
+# cpu_variant pins ggml's CPU backend to one variant, so a laptop class
+# (haswell: AVX2; alderlake: AVX2 with AVX-VNNI) is measured on a runner that
+# would otherwise load its own AVX-512 or AMX build.
 
 on:
   workflow_dispatch:
@@ -44,6 +53,20 @@ on:
         required: false
         default: ""
         type: string
+      cold_start:
+        description: >-
+          Also time an unwarmed first request on a fresh server, with and
+          without a slot restore (the app's first document after a load)
+        required: false
+        default: false
+        type: boolean
+      cpu_variant:
+        description: >-
+          Load only this ggml CPU backend (haswell, alderlake, icelake, ...);
+          empty for the one the runner's CPU picks
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -65,6 +88,7 @@ jobs:
           THREADS: ${{ inputs.threads }}
           EVERY: ${{ inputs.every }}
           LLAMA_RELEASE: ${{ inputs.llama_release }}
+          CPU_VARIANT: ${{ inputs.cpu_variant }}
         run: |
           python3 -I - <<'EOF2'
           import json, os, re, sys
@@ -100,6 +124,11 @@ jobs:
               fail("every must be 1 to 9")
           if os.environ["LLAMA_RELEASE"] and not re.fullmatch(r"b[0-9]{4,6}", os.environ["LLAMA_RELEASE"]):
               fail("llama_release must look like b12078")
+          # The x86 variants the release builds (ggml/src/CMakeLists.txt at b11946).
+          variants_built = {"x64", "sse42", "sandybridge", "ivybridge", "piledriver", "haswell", "skylakex",
+                            "cannonlake", "cascadelake", "cooperlake", "icelake", "zen4", "alderlake", "sapphirerapids"}
+          if os.environ["CPU_VARIANT"] and os.environ["CPU_VARIANT"] not in variants_built:
+              fail(f"cpu_variant must be one of {', '.join(sorted(variants_built))}")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write("matrix=" + json.dumps({"include": variants}) + "\n")
           EOF2
@@ -154,6 +183,26 @@ jobs:
           [ -n "$server" ] && [ -f "$server" ] || { echo "$archive carries no llama-server" >&2; exit 1; }
           chmod 0755 "$server"
           echo "LLAMA_SERVER=$server" >> "$GITHUB_ENV"
+      # ggml loads every libggml-cpu-*.so beside the executable it resolves
+      # through /proc/self/exe and keeps the best one this CPU runs, so a
+      # folder of symlinks still loads the original folder's best. Hard links
+      # are files of their own: a folder holding one variant loads only that
+      # one, or no CPU backend at all on a CPU without its features (the
+      # server then fails to start, and the job with it).
+      - name: Pin the CPU backend
+        if: inputs.cpu_variant != ''
+        env:
+          CPU_VARIANT: ${{ inputs.cpu_variant }}
+        run: |
+          source="$(dirname "$LLAMA_SERVER")"
+          pinned="$LAB/llama-$CPU_VARIANT"
+          [ -f "$source/libggml-cpu-$CPU_VARIANT.so" ] || { echo "the release carries no libggml-cpu-$CPU_VARIANT.so" >&2; exit 1; }
+          mkdir -p "$pinned"
+          cp -a --link "$source/." "$pinned/"
+          find "$pinned" -maxdepth 1 -name 'libggml-cpu-*.so' ! -name "libggml-cpu-$CPU_VARIANT.so" -delete
+          ls "$pinned" | grep '^libggml-cpu-' | tee "$OUT/cpu-backends.txt"
+          [ "$(grep -c . "$OUT/cpu-backends.txt")" = 1 ]
+          echo "LLAMA_SERVER=$pinned/$(basename "$LLAMA_SERVER")" >> "$GITHUB_ENV"
       - name: Fetch and verify the model
         env:
           MODEL_URL: ${{ inputs.model_url }}
@@ -165,6 +214,16 @@ jobs:
             --output "$LAB/model/model.gguf" "$MODEL_URL"
           echo "$MODEL_SHA256  $LAB/model/model.gguf" | sha256sum --check --strict
           echo "MODEL=$LAB/model/model.gguf" >> "$GITHUB_ENV"
+      # Before the battery, so its servers are the first this job starts after
+      # the model's download: the page cache holds the file, as it does for an
+      # app that unloaded its model after ten idle minutes.
+      - name: Measure the cold start
+        if: inputs.cold_start
+        env:
+          THREADS: ${{ inputs.threads }}
+        run: |
+          python3 -I scripts/bonsai-eval/cold-start.py --server-bin "$LLAMA_SERVER" --model "$MODEL" \
+            --wire "$REQUESTS" --threads "$THREADS" --out "$OUT/cold-start"
       # Baseline, variant, baseline, variant: the app's flags each time, the
       # variant's appended (a repeated flag's last value wins in llama-server),
       # every slot warmed first, replies compared with the first baseline's.
@@ -195,9 +254,10 @@ jobs:
           VARIANT_ARGS: ${{ matrix.args }}
           THREADS: ${{ inputs.threads }}
           LLAMA_RELEASE: ${{ inputs.llama_release }}
+          CPU_VARIANT: ${{ inputs.cpu_variant }}
         run: |
           python3 -I - <<'EOF3'
-          import json, os, re, statistics
+          import glob, json, os, re, statistics
 
           out = os.environ["OUT"]
           rows = []
@@ -240,6 +300,39 @@ jobs:
               cpu = None
           lines.append(f"- runner CPU: {cpu.group(1).strip() if cpu else 'unknown'}")
           lines.append(f"- llama-server: {os.environ['LLAMA_RELEASE'] or 'the pinned upstream build'}")
+          # What the loaded backend was built for, from the server's own
+          # system_info line: the proof that cpu_variant took.
+          features = None
+          for log in sorted(glob.glob(os.path.join(out, "*", "llama-server.log")) + glob.glob(os.path.join(out, "*", "*", "llama-server.log"))):
+              with open(log, encoding="utf-8", errors="replace") as file:
+                  found = re.search(r"system_info:.*?\| (CPU : .*)$", file.read(), re.M)
+              if found:
+                  features = found.group(1).strip()
+                  break
+          variant = os.environ["CPU_VARIANT"]
+          lines.append(f"- CPU backend: {'libggml-cpu-' + variant + '.so only' if variant else 'the runner CPU picks'}; built for `{features or 'not logged'}`")
+          try:
+              with open(os.path.join(out, "cold-start", "cold-start.json"), encoding="utf-8") as file:
+                  cold = json.load(file)["summary"]
+          except (OSError, KeyError, ValueError):
+              cold = None
+          if cold:
+              def same(flags):
+                  return "-" if flags is None else f"{sum(flags)}/{len(flags)}"
+              lines += [
+                  "",
+                  "#### Cold start: the first request a fresh server answers",
+                  "",
+                  "| first request | cache_n | prompt tokens | prompt (ms) | whole request (s) | reply identical to the steady state |",
+                  "| --- | --- | ---: | ---: | ---: | ---: |",
+                  f"| no restore | {cold['cold_cache_n']} | {cold['cold_prompt_n']} | {cold['cold_prompt_ms']} | {cold['cold_latency_s']} | {same(cold['cold_identical_to_steady'])} |",
+                  f"| slot restored | {cold['restored_cache_n']} | {cold['restored_prompt_n']} | {cold['restored_prompt_ms']} | {cold['restored_latency_s']} | {same(cold['restored_identical_to_steady'])} |",
+                  f"| steady state | {cold['steady_cache_n']} | - | {cold['steady_prompt_ms']} | - | - |",
+                  "",
+                  f"- first-document saving: {cold['first_document_saving_s']} s (prompt time without the restore, less with it, less the restore)",
+                  f"- slot file: {cold['slot_file_bytes']} bytes, {cold['saved_tokens']} tokens, saved in {cold['save_ms']} ms; restored in {cold['restore_ms']} ms ({cold['restore_wall_ms']} ms wall), all restores answered: {cold['restore_ok']}",
+                  f"- server start to healthy: {cold['load_s']} s mean",
+              ]
           lines.append("")
           text = "\n".join(lines)
           print(text)
@@ -257,5 +350,7 @@ jobs:
             ${{ runner.temp }}/speed-battery/out/**/replay.json
             ${{ runner.temp }}/speed-battery/out/**/server-command.txt
             ${{ runner.temp }}/speed-battery/out/**/llama-server.log
+            ${{ runner.temp }}/speed-battery/out/cold-start/cold-start.json
             ${{ runner.temp }}/speed-battery/out/lscpu.txt
+            ${{ runner.temp }}/speed-battery/out/cpu-backends.txt
             ${{ runner.temp }}/speed-battery/out/llama-release.sha256
