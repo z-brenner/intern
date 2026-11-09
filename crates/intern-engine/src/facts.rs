@@ -914,6 +914,11 @@ pub fn validate_facts_at(
             parties_supported = false;
             continue;
         }
+        // A redaction marks where a name was taken out of a published
+        // copy ("Dear [REDACTED]"): it names no one.
+        if is_redaction(name) {
+            continue;
+        }
         let loose = normalize_loosely(name);
         let normalized = normalize(name);
         let found = find(
@@ -4543,6 +4548,20 @@ fn field_subject(scope: &ValidationScope<'_>) -> Option<String> {
             .join(" ");
         (!value.is_empty()).then_some(value)
     })
+}
+
+/// Whether a name is a redaction's marker: "REDACTED", "[name withheld]".
+fn is_redaction(name: &str) -> bool {
+    let name_words = words(name);
+    name_words
+        .iter()
+        .any(|word| matches!(word.as_str(), "redacted" | "withheld"))
+        && name_words.iter().all(|word| {
+            matches!(
+                word.as_str(),
+                "redacted" | "withheld" | "name" | "names" | "personal" | "details"
+            )
+        })
 }
 
 /// Courtesy titles a person's name is written after, never part of the
@@ -12389,5 +12408,16 @@ Rickmansworth,
         ] {
             assert_eq!(without_courtesy_title(written), name, "{written}");
         }
+    }
+
+    /// A redaction's marker names no one; a name with the word in it is
+    /// still a name.
+    #[test]
+    fn a_redaction_is_no_party() {
+        assert!(is_redaction("REDACTED"));
+        assert!(is_redaction("\\[REDACTED]"));
+        assert!(is_redaction("[name withheld]"));
+        assert!(!is_redaction("Redacted Records Ltd"));
+        assert!(!is_redaction("Jane Doe"));
     }
 }
