@@ -141,7 +141,10 @@ reply still names it, and after the re-recording a fallen recall is a line
 of the new baseline's diff, for the review to weigh.
 On the four whole real sets, 44 of 225 recorded documents never get the gold
 date or a party into the prompt, and 40 of them are named wrong: a third of
-all their wrong names (see [internbench.md](internbench.md#gates)).
+all their wrong names. That was measured by replaying the whole runner
+recordings the committed ones were cut from against the whole samples' gold;
+`bench/realdocs/README.md` says how, and gives the same counts for the
+committed documents.
 
 Accepting a new state is the same as here: run the CI command with
 `--write-baseline` and commit the baseline with the change, its diff the
@@ -150,12 +153,16 @@ review (`bench/realdocs/README.md` has the commands for the real sets).
 **Which documents can be committed.** A recording holds the text extracted
 from each document. For the real sets it is committed only where the
 source's licence plainly permits redistribution: a US federal work (17
-U.S.C. 105), CC0, a Public Domain Mark or dedication, the UK Open Government
+U.S.C. 105), CC0, a dedication by the rights holder, the UK Open Government
 Licence v3.0, or a Creative Commons Attribution licence. Public records with
-no licence text, site terms, other licences, documents a third party wrote,
-and anything unclear stay out; `bench/realdocs/SOURCES.md` gives each
-document's licence and attribution, or why it was left out. The documents
-themselves are never committed.
+no licence text, site terms, other licences and anything unclear stay out.
+So does a document a third party wrote, or one that encloses or reproduces
+such writing in full, since a licence covers only what its giver wrote; and
+a Public Domain Mark that a record's holder, not its author, applied clears
+only a firm's bill or a public body's notice made before 1906.
+`bench/realdocs/SOURCES.md` gives the rule, each document's licence and
+attribution, or why it was left out. The documents themselves are never
+committed.
 
 **A prompt change carries its re-recordings.** A change to `prompt.rs`,
 `index.rs`, `retrieve.rs` or the grammar makes the recorded replies stale,

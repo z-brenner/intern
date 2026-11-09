@@ -750,11 +750,19 @@ or right, and its evidence recalls, are held as InternBench's are
 state, and the baseline diff is the review.
 
 Only documents whose source licence plainly permits redistribution are
-committed: a US federal work (17 U.S.C. 105), CC0, a Public Domain Mark or
-dedication, the UK Open Government Licence v3.0, or a Creative Commons
+committed: a US federal work (17 U.S.C. 105), CC0, a dedication by the
+rights holder, the UK Open Government Licence v3.0, or a Creative Commons
 Attribution licence. Public records with no licence text, site terms, other
-licences, library rights statements, documents a third party wrote and
-anything unclear are left out. `bench/realdocs/SOURCES.md` lists every
+licences, library rights statements and anything unclear are left out. A
+licence covers only what its giver wrote, so a document a third party wrote
+is left out, and so is one that encloses or reproduces such writing in full
+(an agency's release with a supplier's invoices, a company's
+representations or an employee's forms filed in a personal capacity). A
+Public Domain Mark that a record's holder, not its author, applied clears
+only a firm's bill or a public body's notice made before 1906: unpublished,
+such a record is protected in the US for at most 120 years from its making,
+while a person's own writing is protected for their life and 70 years
+whatever its age. `bench/realdocs/SOURCES.md` lists every
 document of the four samples with its licence and attribution or the reason
 it was left out, and `scripts/realdocs-gate.test.ts` holds the recordings,
 `SOURCES.md` and the baselines to each other.

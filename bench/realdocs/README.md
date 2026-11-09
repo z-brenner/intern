@@ -19,9 +19,14 @@ model and no document fetched. A change to the prompt, indexing or retrieval fai
 
 A recording holds the text the parser worker extracted from each document, the hash of each
 prompt and the model's reply: extracted text of real documents. It is committed only for
-documents whose source licence plainly permits redistribution (US federal works, CC0, a Public
-Domain Mark or dedication, the UK OGL v3.0, CC BY), and nothing unclear; `SOURCES.md` gives the
-rule and each document's reason. The documents themselves are never committed.
+documents whose source licence plainly permits redistribution (US federal works, CC0, a
+dedication by the rights holder, the UK OGL v3.0, CC BY), and nothing unclear. A licence covers
+only what its giver wrote: a document someone else wrote is left out, and so is one that encloses
+or reproduces such writing in full (a supplier's invoices, a company's representations, an
+employee's forms filed in a personal capacity). A Public Domain Mark that a record's holder, not
+its author, applied clears only a firm's bill or a public body's notice made before 1906.
+`SOURCES.md` gives the rule, why, and each document's reason. The documents themselves are never
+committed.
 
 | Set | Sample | Cleared | Committed | Named right | Named wrong | No filename gold | Wrong names filed ready | Gold date or party not in the prompt |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -33,11 +38,15 @@ rule and each document's reason. The documents themselves are never committed.
 
 Four cleared documents are not committed because the runner never fetched them (ftc.gov answered
 403 to two, archive.org 500 to one, tile.loc.gov 429 to one). The committed documents are a
-harder half than the whole sets: the same recordings name 92 of 219 scored documents right
-across all four sets, 39 of 100 here. Replaying a set takes 0.7 to 3.0 s on a GitHub runner in a
-release build (CI runs 42578520445 and 42594755612: 1.4, 1.4, 0.7 and 1.7 s, then 2.2, 2.5, 1.3
-and 3.0 s, for the sets as they were then, a few documents larger); on a shared machine it
-depends on the load.
+harder half than the whole sets. The whole runner recordings these were cut from, replayed at the
+same gate against the whole samples' gold (CI's commands without `--recording` and `--baseline`;
+measured on 2026-11-09, with code that scores them exactly as main at `ebc5d8f` does), name 92 of
+219 scored documents right across the four sets, against 39 of 100 here; and 44 of their 225
+recorded documents never get the gold date or a party into the prompt, 40 of them named wrong, a
+third of the 127 wrong names. Replaying a set takes 0.7 to 3.0 s on a GitHub runner in a release
+build (CI runs 42578520445 and 42594755612: 1.4, 1.4, 0.7 and 1.7 s, then 2.2, 2.5, 1.3 and
+3.0 s, for the sets as they were then, a few documents larger); on a shared machine it depends on
+the load.
 
 ## How CI runs it
 
