@@ -122,10 +122,13 @@ pub const fn min_available_for(tier: ModelTier) -> u64 {
 /// * Qwen3.5 9B: 8,300-8,500 MiB (5.7 GB of weights).
 ///
 /// With the prompt cache off neither grows from there. Unloading the model
-/// to load another gives this back, so the runtime counts it as available
-/// when it plans with a model already loaded: otherwise a loaded accurate
-/// model would be judged not to fit beside itself, and swapped for the fast
-/// one before every document.
+/// to load another gives back what of this the machine does not already
+/// count as available, so the runtime counts that as available when it plans
+/// with a model already loaded: otherwise a loaded accurate model would be
+/// judged not to fit beside itself, and swapped for the fast one before
+/// every document. It reads that from the live server
+/// ([`memory_released_by`]); this estimate is for when it cannot
+/// ([`unload_gives_back`]).
 pub const fn resident_estimate(tier: ModelTier) -> u64 {
     match tier {
         ModelTier::Fast => 4_700 * MIB,
@@ -141,7 +144,11 @@ pub const fn resident_estimate(tier: ModelTier) -> u64 {
 /// and 2.7 GB of weights it keeps reading, about 6.2 GB in all. At a 6 GB
 /// limit it read a document in 95 s against 72 s with no limit; at 5 GB it
 /// thrashed (421 s). The 4B was not measured under a limit; its resident
-/// set stands in.
+/// set stands in. Windows does not take those pages back at once: right
+/// after a document the 9B's working set on a 16 GB runner was 8.1 GB, the
+/// touched originals included, and a minute idle trimmed it to 6.3-7.5 GB;
+/// what it needs under a squeeze there is not measured
+/// (`bench/reports/windows-memory-2026-11-09`).
 pub const fn working_set(tier: ModelTier) -> u64 {
     match tier {
         ModelTier::Fast => 4_700 * MIB,
@@ -149,16 +156,30 @@ pub const fn working_set(tier: ModelTier) -> u64 {
     }
 }
 
-/// What unloading `tier`'s model gives back to [`available_memory_bytes`],
-/// for a model whose weights file is `model_file_bytes` long.
+/// An estimate of what unloading `tier`'s model gives back to
+/// [`available_memory_bytes`], for a model whose weights file is
+/// `model_file_bytes` long: what the runtime credits a loaded model with
+/// when the live server's own figure ([`memory_released_by`]) cannot be
+/// read.
 ///
-/// Not the whole [`resident_estimate`]: llama-server maps the GGUF, and the
-/// mapped weights are clean file-backed pages that `MemAvailable` on Linux,
-/// and the available physical memory on Windows (which counts the standby
-/// list), already report as reclaimable. Crediting them again counted them
-/// twice, so a loaded quick model could make the accurate one look as if it
-/// fit on a machine that cannot hold it. Only the rest - the context, the
-/// compute buffers, any repacked weights - comes back on unload.
+/// Not the whole [`resident_estimate`]: llama-server maps the GGUF, and on
+/// Linux the mapped weights are page cache that `MemAvailable` already
+/// reports as reclaimable. Crediting them again counted them twice, so a
+/// loaded quick model could make the accurate one look as if it fit on a
+/// machine that cannot hold it. Only the rest - the context, the compute
+/// buffers, the repacked weights - comes back on unload: 2,883 MiB for the
+/// 9B against 3,317 MiB of anonymous memory measured
+/// (`bench/reports/speed-linux-cpu-2026-11-05`).
+///
+/// On Windows it is far short. The available physical memory counts the
+/// standby list, where a mapped file's cached pages wait, but not the pages
+/// a process has in its working set, and the server keeps the weights it
+/// has touched there until it exits or the system trims them. Measured on a
+/// 16 GB runner (`bench/reports/windows-memory-2026-11-09`): right after a
+/// document the 9B's working set was 8,108 MiB and the 4B's 4,513, against
+/// the 2,883 and 2,086 this credits; with 2 GiB held by another process
+/// that stood the loaded 9B down for the 4B before the next document, and
+/// the loaded 4B down for the 9B before the one after.
 pub const fn unload_gives_back(tier: ModelTier, model_file_bytes: u64) -> u64 {
     resident_estimate(tier).saturating_sub(model_file_bytes)
 }
@@ -462,9 +483,12 @@ pub fn wants_token_confidence(tier: ModelTier) -> bool {
 /// it cannot be read. Never panics.
 ///
 /// On Linux, the kernel's own estimate (`MemAvailable`): free memory plus the
-/// page cache and reclaimable slabs it could give up without swapping. On
-/// Windows, `GlobalMemoryStatusEx`'s available physical memory, which counts
-/// the standby list the same way.
+/// page cache and reclaimable slabs it could give up without swapping, mapped
+/// or not. On Windows, `GlobalMemoryStatusEx`'s available physical memory: the
+/// free, zero and standby lists. That counts a file's cached pages too, but
+/// not the ones a process has in its working set, a running model's mapped
+/// weights among them, so the two do not count a loaded model alike (see
+/// [`memory_released_by`]).
 pub fn available_memory_bytes() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
@@ -483,12 +507,57 @@ pub fn available_memory_bytes() -> Option<u64> {
     }
 }
 
+/// What stopping `process` would add to [`available_memory_bytes`], in
+/// bytes, read from the live process; `None` when it cannot be read. Never
+/// panics.
+///
+/// On Windows, the process's working set (`GetProcessMemoryInfo`): every
+/// page in it is on none of the lists the available physical memory counts,
+/// and every page in it goes back to one when the process exits - its
+/// private memory to the free list, the mapped weights it touched to the
+/// standby list. On a 16 GB runner the available memory 3 s after the 9B or
+/// the 4B exited was the available memory before plus the working set
+/// before, to within 83 MiB in six stops
+/// (`bench/reports/windows-memory-2026-11-09`). On Linux, its anonymous
+/// resident memory (`RssAnon`): `MemAvailable` already counts the mapped
+/// weights, which are page cache, so only the rest comes back.
+pub fn memory_released_by(process: &std::process::Child) -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string(format!("/proc/{}/status", process.id()))
+            .ok()
+            .as_deref()
+            .and_then(rss_anon_from_status)
+    }
+    #[cfg(windows)]
+    {
+        windows_memory::working_set(process)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = process;
+        None
+    }
+}
+
 /// `MemAvailable` from the text of `/proc/meminfo`, in bytes.
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 fn mem_available_from_meminfo(meminfo: &str) -> Option<u64> {
-    let line = meminfo
-        .lines()
-        .find_map(|line| line.strip_prefix("MemAvailable:"))?;
+    proc_field_bytes(meminfo, "MemAvailable:")
+}
+
+/// `RssAnon` from the text of `/proc/<pid>/status`, in bytes. A process
+/// that has exited and not yet been reaped has no such line.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn rss_anon_from_status(status: &str) -> Option<u64> {
+    proc_field_bytes(status, "RssAnon:")
+}
+
+/// The amount on the line of a `/proc` file that starts with `field`, in
+/// bytes: the kernel writes these in kB, and a bare number is taken as is.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn proc_field_bytes(text: &str, field: &str) -> Option<u64> {
+    let line = text.lines().find_map(|line| line.strip_prefix(field))?;
     let mut words = line.split_whitespace();
     let amount = words.next()?.parse::<u64>().ok()?;
     match words.next() {
@@ -498,12 +567,44 @@ fn mem_available_from_meminfo(meminfo: &str) -> Option<u64> {
     }
 }
 
-// One Win32 call with no safe wrapper in the dependency tree. The rest of the
-// crate keeps `#![deny(unsafe_code)]`.
+// Two Win32 calls with no safe wrapper in the dependency tree. The rest of
+// the crate keeps `#![deny(unsafe_code)]`.
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod windows_memory {
-    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    use std::os::windows::io::AsRawHandle;
+
+    use windows_sys::Win32::{
+        Foundation::HANDLE,
+        System::{
+            ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
+            SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX},
+        },
+    };
+
+    /// The working set of a child this process started, through the handle
+    /// `Child` owns, which carries every access right the call needs.
+    /// `K32GetProcessMemoryInfo` is `GetProcessMemoryInfo` as kernel32
+    /// exports it, so no other library is loaded for it.
+    pub(super) fn working_set(process: &std::process::Child) -> Option<u64> {
+        let size = u32::try_from(size_of::<PROCESS_MEMORY_COUNTERS>()).ok()?;
+        let mut counters = PROCESS_MEMORY_COUNTERS {
+            cb: size,
+            ..PROCESS_MEMORY_COUNTERS::default()
+        };
+        // SAFETY: the handle is owned by `process` and open for the whole
+        // call; `counters` is a correctly sized PROCESS_MEMORY_COUNTERS with
+        // its size given, as the call requires, and lives for the whole
+        // call. Failure is reported through the return value, which is
+        // checked.
+        let succeeded = unsafe {
+            K32GetProcessMemoryInfo(process.as_raw_handle() as HANDLE, &mut counters, size)
+        };
+        if succeeded == 0 {
+            return None;
+        }
+        u64::try_from(counters.WorkingSetSize).ok()
+    }
 
     pub(super) fn available_physical() -> Option<u64> {
         let mut status = MEMORYSTATUSEX {
@@ -769,8 +870,9 @@ mod tests {
         }
     }
 
-    /// The mapped weights are counted as available already, so only the
-    /// rest of a loaded model comes back on unload - never less than nothing.
+    /// The estimate: the mapped weights are counted as available already
+    /// (on Linux), so only the rest of a loaded model comes back on unload -
+    /// never less than nothing.
     #[test]
     fn unloading_gives_back_only_what_is_not_the_mapped_file() {
         assert_eq!(unload_gives_back(F, 0), resident_estimate(F));
@@ -928,5 +1030,47 @@ mod tests {
     fn this_machine_reports_some_available_memory() {
         let available = available_memory_bytes().expect("readable here");
         assert!(available > 0);
+    }
+
+    #[test]
+    fn rss_anon_is_read_from_a_process_status() {
+        let status = "Name:\tllama-server\nVmRSS:\t 8949776 kB\nRssAnon:\t 3396644 kB\n\
+                      RssFile:\t 5553132 kB\nRssShmem:\t       0 kB\n";
+        assert_eq!(rss_anon_from_status(status), Some(3_396_644 * 1024));
+        // A process that has exited and not been reaped has no memory map.
+        assert_eq!(
+            rss_anon_from_status("Name:\tsleep\nState:\tZ (zombie)\n"),
+            None
+        );
+        assert_eq!(rss_anon_from_status("RssAnon:\t 12 MB\n"), None);
+        assert_eq!(rss_anon_from_status("RssAnon:\n"), None);
+    }
+
+    /// The live reading the runtime credits a loaded model with works on a
+    /// real child process here: something, while it runs.
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn a_running_child_reports_what_its_exit_would_give_back() {
+        let mut command = if cfg!(windows) {
+            let mut command = std::process::Command::new("ping");
+            command.args(["-n", "30", "127.0.0.1"]);
+            command
+        } else {
+            let mut command = std::process::Command::new("sleep");
+            command.arg("30");
+            command
+        };
+        let mut child = command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("a child starts");
+        let released = memory_released_by(&child);
+        let _ = child.kill();
+        let _ = child.wait();
+        let released = released.expect("readable while it runs");
+        assert!(released > 0);
+        assert!(released < 1024 * MIB, "{released} bytes for an idle child");
     }
 }
