@@ -56,6 +56,23 @@ each one's SHA-256). Exit 2 is a regression; the reports go up with the job's ar
 `scripts/realdocs-gate.test.ts` checks, on every `npm test`, that each recording holds exactly the
 documents `SOURCES.md` marks as recorded and that each baseline covers exactly the recording.
 
+## What it catches that InternBench does not
+
+Measured on 2026-11-09 by running the job's steps exactly as `ci.yml` writes them, on a copy of the
+tree with one change each (never committed), in a cold release build on a 4-core box (2 min 6 s
+to build, then 1.5 s for the fixtures, 0.4 s for the digest fixtures, 11 s for InternBench and
+3.4, 3.3, 1.9 and 3.9 s for the real sets):
+
+- Unchanged: every step passes.
+- The rule "a letter is to its client" in `compose.rs` reverted (`To` back to `For`): the fixtures,
+  the digest fixtures and InternBench pass; real1, real3 and real4 fail on three names lost
+  (`real-letter-05`, `real3-office-03`, `real4-letter-02`) and two more relations
+  (`real-letter-07`, `real3-letter-10`).
+- Retrieval's date and party budgets cut to 60 tokens: every replay but the digest fixtures fails,
+  each changed prompt `stale_prompt`, as a prompt change should. With `--allow-stale` the recall
+  gate still fails them: `prompt_recall` falls on 6 real documents and 3 InternBench ones, and
+  InternBench's `data-processing-agreement-10p` fails on `context_subject_recall` alone.
+
 ## Changing the baselines
 
 A replay fails on any document that gets worse; one that gets better is reported as an
