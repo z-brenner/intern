@@ -23,7 +23,8 @@ throughout, so the machine starts with less available. Then it applies plan()'s
 arithmetic (src-tauri/src/commands.rs) with the constants in tiers.rs, read from
 the source, two ways. With a model loaded, the plan sees ullAvailPhys plus a
 credit for what unloading that model gives back, and the accurate model fits when
-that reaches MIN_AVAILABLE_FOR_ACCURATE. The credit the app uses is the live
+that reaches MIN_AVAILABLE_FOR_ACCURATE, plus UPGRADE_MARGIN while the fast model is
+the one loaded. The credit the app uses is the live
 server's working set (tiers::memory_released_by); the estimate
 tiers::unload_gives_back(tier, file size), which the app credited up to alpha.14,
 is now only its fallback for a server it cannot read. The probe judges both.
@@ -117,6 +118,7 @@ function Get-MiBConstant([string]$Pattern, [string]$Name) {
     [int]($Match.Groups[1].Value -replace "_", "")
 }
 $Floor = Get-MiBConstant 'pub const MIN_AVAILABLE_FOR_ACCURATE: u64 = ([0-9_]+) \* MIB;' "MIN_AVAILABLE_FOR_ACCURATE"
+$Margin = Get-MiBConstant 'pub const UPGRADE_MARGIN: u64 = ([0-9_]+) \* MIB;' "UPGRADE_MARGIN"
 $ResidentPattern = 'pub const fn resident_estimate\(tier: ModelTier\) -> u64 \{\s*match tier \{\s*ModelTier::Fast => ([0-9_]+) \* MIB,\s*ModelTier::Accurate => ([0-9_]+) \* MIB,'
 $ResidentMatch = [regex]::Match($TiersSource, $ResidentPattern)
 if (-not $ResidentMatch.Success) { throw "tiers.rs no longer states resident_estimate the way this probe reads it" }
@@ -290,17 +292,21 @@ function Find-Sample([string]$Tier, [string]$Stage) {
 # reports available plus the server's working set (tiers::memory_released_by),
 # or, when it cannot read that, the estimate tiers::unload_gives_back(tier, file
 # size), that is resident_estimate(tier) - file size. The accurate model fits at
-# the floor. Each verdict is made both ways.
+# the floor, and with the fast model loaded at the floor plus UPGRADE_MARGIN
+# (tiers::memory_for_plan). Each verdict is made both ways. The estimate's
+# verdicts, and the bands below, are the arithmetic up to alpha.14, which had
+# no margin.
 $Verdicts = [System.Collections.Generic.List[object]]::new()
 $Lines = [System.Collections.Generic.List[string]]::new()
 $Lines.Add("Windows memory probe: $([Environment]::ProcessorCount) logical processors, $Threads server threads, " +
     "$((Find-Sample 'none' 'start').total_phys_mib) MiB physical, a balloon of $BalloonMiB MiB; " +
-    "MIN_AVAILABLE_FOR_ACCURATE $Floor MiB.")
+    "MIN_AVAILABLE_FOR_ACCURATE $Floor MiB, UPGRADE_MARGIN $Margin MiB.")
 $Lines.Add("")
 $Lines.Add("| Loaded | Stage | Available | Working set | Estimate (fallback) | Plan sees | Accurate model | Credit = working set | Plan sees | Accurate model |")
 $Lines.Add("| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | --- |")
 foreach ($Tier in $Models.Keys) {
-    $Credit = [Math]::Max(0, $Resident[$Tier] - $FileMiB[$Tier])
+    $Credit = [Math]::Max(0.0, $Resident[$Tier] - $FileMiB[$Tier])
+    $Asked = if ($Tier -eq "fast") { $Floor + $Margin } else { $Floor }
     foreach ($Stage in @("after-health", "after-request", "after-idle")) {
         $Sample = Find-Sample $Tier $Stage
         $Sees = $Sample.avail_phys_mib + $Credit
@@ -315,7 +321,7 @@ foreach ($Tier in $Models.Keys) {
             accurate_fits         = ($Sees -ge $Floor)
             measured_credit_mib   = $Sample.working_set_mib
             plan_sees_measured    = $SeesMeasured
-            accurate_fits_measured = ($SeesMeasured -ge $Floor)
+            accurate_fits_measured = ($SeesMeasured -ge $Asked)
         }
         $Verdicts.Add($Verdict)
         $Word = { param($Fits) if ($Fits) { "fits" } else { "does not fit" } }
@@ -333,7 +339,7 @@ foreach ($Tier in $Models.Keys) {
     $Loaded = (Find-Sample $Tier "after-request").avail_phys_mib
     $Idle = (Find-Sample $Tier "after-idle").avail_phys_mib
     $Exited = (Find-Sample $Tier "exit+3s").avail_phys_mib
-    $Credit = [Math]::Max(0, $Resident[$Tier] - $FileMiB[$Tier])
+    $Credit = [Math]::Max(0.0, $Resident[$Tier] - $FileMiB[$Tier])
     $Taken = [Math]::Round($Before - $Loaded, 1)
     $GivenBack = [Math]::Round($Exited - $Idle, 1)
     $Bands[$Tier] = [ordered]@{ taken_mib = $Taken; given_back_mib = $GivenBack; estimate_credit_mib = $Credit }
@@ -372,6 +378,7 @@ $Report = [ordered]@{
     idle_seconds     = $IdleSeconds
     balloon_mib      = $BalloonMiB
     floor_mib        = $Floor
+    upgrade_margin_mib = $Margin
     resident_mib     = $Resident
     file_mib         = $FileMiB
     samples          = $Samples

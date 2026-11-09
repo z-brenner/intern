@@ -116,18 +116,19 @@ not committed (the repository ignores `*.log`); they are in each run's
 
 Sums are of the unrounded figures, with the credit the app works out from
 the pinned files' sizes: 2,882.6 MiB for the 9B, 2,086.0 for the 4B. The
-probe rounded the credit to whole MiB, so its own tables and the committed
-`plan_sees_mib` run up to 0.4 MiB higher; no verdict differs. Which stage a
-plan sees depends on when it runs. A plan made with a model loaded usually
-follows a document, so it sees the after-a-document stage. The exception is
-the first document after a launch with a model already vouched for (stamped
-by an earlier self-test): setup starts the model the launch's plan chose
-and returns, so with documents already waiting, the first one is planned
-against a server that has just started, about the after-`/health` stage. A
-model not yet vouched for reads the self-test's probes before setup
-returns, so its first plan sees a server that has already read. (After an
-idle unload the plan is made with nothing loaded and the document is read
-right after the start, with no plan between.)
+probe as run rounded the credit to whole MiB (`[Math]::Max(0, ...)` took
+its integer overload; it now passes `0.0`), so its own tables and the
+committed `plan_sees_mib` differ by up to 0.4 MiB; no verdict differs.
+Which stage a plan sees depends on when it runs. A plan made with a model
+loaded usually follows a document, so it sees the after-a-document stage.
+The exception is the first document after a launch with a model already
+vouched for (stamped by an earlier self-test): setup starts the model the
+launch's plan chose and returns, so with documents already waiting, the
+first one is planned against a server that has just started, about the
+after-`/health` stage. A model not yet vouched for reads the self-test's
+probes before setup returns, so its first plan sees a server that has
+already read. (After an idle unload the plan is made with nothing loaded
+and the document is read right after the start, with no plan between.)
 
 On the runner as it comes, with 12,873-13,205 MiB available and nothing
 else running, the loaded 9B passes after a document by 100 and 260 MiB.
