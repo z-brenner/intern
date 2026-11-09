@@ -1082,7 +1082,8 @@ fn display_width(inspection: &PdfPageInspection) -> f64 {
 
 /// The route a page read from its own text takes: the one it was given,
 /// unless OCR was what it wanted and could not have, in which case its text
-/// routes it as if it had no image to read.
+/// routes it as if it had no image to read: no layer to read again (a
+/// doubled one is rebuilt from its geometry, as overprinted text is).
 fn native_route(route: PageRoute, signals: &RouteSignals) -> PageRoute {
     match route {
         PageRoute::Fast | PageRoute::Layout => route,
@@ -1090,6 +1091,7 @@ fn native_route(route: PageRoute, signals: &RouteSignals) -> PageRoute {
             &RouteSignals {
                 image_region: 0,
                 garbage: 0,
+                invisible: 0,
                 ..*signals
             },
             false,

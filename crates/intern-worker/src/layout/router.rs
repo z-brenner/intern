@@ -305,6 +305,12 @@ pub mod thresholds {
     /// ...whose words look like OCR errors at least this often is a bad
     /// prior OCR, and is read again.
     pub const GARBAGE_LAYER: u16 = 40;
+    /// ...or whose segments are drawn over one another this much is a
+    /// doubled prior OCR - every word laid down two or three times, "June
+    /// 1 7, / 1 7, 2025" - and is read again. On the four real sets' 69
+    /// layered pages the four Oregon DEQ notices' 56 pages measure 920 to
+    /// 1000 per mille and no other page more than 95.
+    pub const DOUBLED_LAYER: u16 = 500;
     /// An image this large that no text overlaps may hold text of its own.
     pub const IMAGE_REGION: u16 = 150;
     /// Text this short is not enough native text to trust a page to.
@@ -321,7 +327,8 @@ pub mod thresholds {
 ///
 /// `needs_ocr` is the scan rule pages have always been routed by
 /// ([`crate::extract::page_needs_ocr`]); it wins outright. A text layer that
-/// is a bad prior OCR of a full-page image is read again. Native text with
+/// is a bad prior OCR of a full-page image - garbled, or every word laid
+/// down twice - is read again. Native text with
 /// a large image no text overlaps gets that image read too. A page whose
 /// text PDFium would run together - side by side flows, table rows,
 /// labeled grids, overprinted text - is rebuilt from its geometry; every
@@ -333,7 +340,7 @@ pub fn route_page(signals: &RouteSignals, needs_ocr: bool) -> PageRoute {
     }
     if signals.invisible >= INVISIBLE_LAYER
         && signals.image_coverage >= FULL_PAGE_IMAGE
-        && signals.garbage >= GARBAGE_LAYER
+        && (signals.garbage >= GARBAGE_LAYER || signals.overlap >= DOUBLED_LAYER)
     {
         return PageRoute::Ocr;
     }
@@ -1081,6 +1088,38 @@ mod tests {
             ),
             PageRoute::Fast,
             "a clean invisible layer is kept"
+        );
+        let doubled_layer = RouteSignals {
+            garbage: 0,
+            overlap: 998,
+            ..bad_layer
+        };
+        assert_eq!(
+            route_page(&doubled_layer, false),
+            PageRoute::Ocr,
+            "a layer with every word drawn twice is read again"
+        );
+        assert_eq!(
+            route_page(
+                &RouteSignals {
+                    overlap: 95,
+                    ..doubled_layer
+                },
+                false
+            ),
+            PageRoute::Fast,
+            "a layer a little overprinted is kept, as the real sets' others are"
+        );
+        assert_eq!(
+            route_page(
+                &RouteSignals {
+                    invisible: 0,
+                    ..doubled_layer
+                },
+                false
+            ),
+            PageRoute::Layout,
+            "visible overprinted text is rebuilt from its geometry, not read again"
         );
         assert_eq!(
             route_page(
