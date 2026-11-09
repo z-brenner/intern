@@ -46,6 +46,8 @@ struct StallingServer {
 
 struct HeaderCancelServer {
     url: String,
+    address: std::net::SocketAddr,
+    requested: Option<mpsc::Receiver<()>>,
     disconnected: mpsc::Receiver<()>,
     join: Option<thread::JoinHandle<()>>,
 }
@@ -55,17 +57,19 @@ impl HeaderCancelServer {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let (disconnected_sender, disconnected) = mpsc::channel();
+        let (request_sender, requested) = mpsc::channel();
         let join = thread::spawn(move || {
             let Ok((mut stream, _)) = listener.accept() else {
                 return;
             };
-            let _ = read_request(&mut stream);
             if stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .is_err()
             {
                 return;
             }
+            let _ = read_request(&mut stream);
+            let _ = request_sender.send(());
             let mut byte = [0_u8; 1];
             loop {
                 match std::io::Read::read(&mut stream, &mut byte) {
@@ -79,6 +83,8 @@ impl HeaderCancelServer {
         });
         Self {
             url: format!("http://{address}/model.gguf"),
+            address,
+            requested: Some(requested),
             disconnected,
             join: Some(join),
         }
@@ -93,6 +99,12 @@ impl HeaderCancelServer {
 
 impl Drop for HeaderCancelServer {
     fn drop(&mut self) {
+        // Cancellation may win before a request is sent. Wake accept so even
+        // that case (and a test unwinding) can join the server thread.
+        drop(TcpStream::connect_timeout(
+            &self.address,
+            Duration::from_secs(1),
+        ));
         if let Some(join) = self.join.take() {
             // Joining must not panic. A panic here can run while the test is
             // already unwinding, and a panic during a panic aborts the whole test
@@ -665,17 +677,33 @@ fn cancellation_during_a_stalled_body_preserves_received_partial() {
 }
 
 #[test]
+fn header_cancel_server_can_stop_without_a_request() {
+    let (done, stopped) = mpsc::channel();
+    thread::spawn(move || {
+        drop(HeaderCancelServer::new());
+        let _ = done.send(());
+    });
+    stopped
+        .recv_timeout(Duration::from_secs(2))
+        .expect("unused server must stop");
+}
+
+#[test]
 fn default_policy_cancels_header_acquisition_and_joins_network_work() {
     let bytes = b"model bytes";
-    let server = HeaderCancelServer::new();
+    let mut server = HeaderCancelServer::new();
+    let requested = server.requested.take().unwrap();
     let directory = tempdir().unwrap();
     let cancellation = CancellationToken::new();
     let cancel_from_thread = cancellation.clone();
     let cancel_thread = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(100));
+        requested
+            .recv_timeout(Duration::from_secs(5))
+            .expect("request must reach server");
+        let started = Instant::now();
         cancel_from_thread.cancel();
+        started
     });
-    let started = Instant::now();
 
     let error = downloader(u64::MAX)
         .download(
@@ -685,7 +713,7 @@ fn default_policy_cancels_header_acquisition_and_joins_network_work() {
             |_| {},
         )
         .unwrap_err();
-    cancel_thread.join().unwrap();
+    let started = cancel_thread.join().unwrap();
 
     assert_eq!(error.code(), ModelErrorCode::DownloadCanceled);
     assert!(started.elapsed() < Duration::from_secs(2));

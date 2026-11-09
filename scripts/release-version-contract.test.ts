@@ -1,10 +1,10 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { expect, it } from 'vitest';
 
-const version = '0.1.0-alpha.14';
+const version = '0.1.0-alpha.15';
 const tag = `v${version}`;
 
-it('keeps every current alpha.3 release surface synchronized without rewriting historical alpha.2 records', async () => {
+it('keeps every current release surface synchronized without rewriting historical records', async () => {
   const [packageJson, packageLock, workspace, tauri, workerProtocol, smoke, sbom, assets, notices, readme, checklist, release, ci, notes, evidenceValidator] = await Promise.all([
     readFile('package.json', 'utf8').then(JSON.parse),
     readFile('package-lock.json', 'utf8').then(JSON.parse),
