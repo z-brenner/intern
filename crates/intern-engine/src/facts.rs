@@ -950,7 +950,7 @@ pub fn validate_facts_at(
     // and is no party of their own.
     let organizations = parties
         .iter()
-        .filter(|party| is_organization(&party.name))
+        .filter(|party| is_organization_name(&party.name))
         .map(|party| normalize_loosely(&party.name))
         .collect::<Vec<_>>();
     for party in &mut parties {
@@ -985,7 +985,7 @@ pub fn validate_facts_at(
     let standing = parties
         .iter()
         .map(|party| {
-            if party.copied || party.signatory || is_organization(&party.name) {
+            if party.copied || party.signatory || is_organization_name(&party.name) {
                 Standing::Unknown
             } else if labeled_party(scope, &party.name, class) {
                 // A label that gives them a party's role ("Recipient:",
@@ -1016,9 +1016,9 @@ pub fn validate_facts_at(
         .zip(&standing)
         .filter(|(party, _)| !party.copied && !party.signatory)
         .collect::<Vec<_>>();
-    let only_people = left
-        .iter()
-        .all(|(party, standing)| !is_organization(&party.name) && **standing != Standing::Subject);
+    let only_people = left.iter().all(|(party, standing)| {
+        !is_organization_name(&party.name) && **standing != Standing::Subject
+    });
     if acting_for && only_people {
         let found = match class {
             DocumentClass::Issued => Vec::new(),
@@ -1238,7 +1238,7 @@ pub fn validate_facts_at(
                     .proposed_role
                     .is_some_and(|role| matches!(role, PartyRole::Sender | PartyRole::Issuer))
             };
-            if party.copied || is_organization(&party.name) || !addressed {
+            if party.copied || is_organization_name(&party.name) || !addressed {
                 continue;
             }
             let named = parties
@@ -1343,7 +1343,7 @@ pub fn validate_facts_at(
                     party.role,
                     Some(PartyRole::Addressee | PartyRole::Recipient)
                 )
-                || is_organization(&party.name)
+                || is_organization_name(&party.name)
                 || named_as_an_organization(scope, &party.name)
                 || !named_as_a_person(scope, &party.name)
                 || !party
@@ -4341,6 +4341,50 @@ fn is_organization(name: &str) -> bool {
         .is_some_and(|word| crate::cues::ORGANIZATION_ENDINGS.contains(&word))
 }
 
+/// Nouns a public body's or a membership body's name is headed by, besides
+/// the [`crate::cues::ORGANIZATION_ENDINGS`] a company's name ends on:
+/// "Home Affairs Select Committee", "Horizon Compensation Advisory Board",
+/// "Ministry of Defence".
+const BODY_NOUNS: &[&str] = &[
+    "committee",
+    "board",
+    "commission",
+    "ministry",
+    "office",
+    "bureau",
+    "administration",
+    "directorate",
+    "secretariat",
+    "inspectorate",
+    "tribunal",
+    "federation",
+    "organisation",
+    "organization",
+];
+
+/// Whether a party's name is an organization's: [`is_organization`], or a
+/// name headed by a body's noun, at its end or before the "of", "for" or
+/// "on" that completes it - "Migration Advisory Committee", "International
+/// Union of Biochemistry", "Office for National Statistics". A person's post
+/// is headed by no such noun ("Secretary of State", "Chair of the Board",
+/// "Treasurer of the International Union"), so the people who hold one stay
+/// people. Only a party's name is read this way: a line of an address or a
+/// signature block that ends on "Committee" may still be a post's.
+fn is_organization_name(name: &str) -> bool {
+    if is_organization(name) {
+        return true;
+    }
+    let loose = normalize_loosely(name);
+    let name_words = loose.split_whitespace().collect::<Vec<_>>();
+    let head = name_words
+        .iter()
+        .position(|word| matches!(*word, "of" | "for" | "on"))
+        .unwrap_or(name_words.len());
+    name_words[..head].last().is_some_and(|word| {
+        BODY_NOUNS.contains(word) || crate::cues::ORGANIZATION_ENDINGS.contains(word)
+    })
+}
+
 /// The most words a line naming an organization in an inside address runs
 /// to: more is a sentence.
 const ORGANIZATION_LINE_WORDS: usize = 10;
@@ -4947,7 +4991,7 @@ const JOB_TITLE_WORDS: &[&str] = &[
 /// of People Operations Northstar Lantern Works LLC", "Keziah Ambrose,
 /// Owner, Briarport Coffee Roasters LLC".
 fn signs_for(scope: &ValidationScope<'_>, name: &str, organizations: &[String]) -> bool {
-    if is_organization(name) || organizations.is_empty() {
+    if is_organization_name(name) || organizations.is_empty() {
         return false;
     }
     let loose = normalize_loosely(name);
@@ -11749,6 +11793,78 @@ Rickmansworth,
                 .contains("bramble"),
             "{:?}",
             outcome.proposal
+        );
+    }
+
+    /// A body's name ends on its noun ("Committee", "Board") or puts it
+    /// before what completes it ("Union of Biochemistry", "Office for
+    /// National Statistics"); a post is headed by no such noun.
+    #[test]
+    fn a_body_named_by_its_noun_is_an_organization() {
+        for name in [
+            "Home Affairs Select Committee",
+            "Horizon Compensation Advisory Board",
+            "International Union of Biochemistry",
+            "Office of Fair Trading",
+            "Office for National Statistics",
+            "Committee on Standards in Public Life",
+            "Department of Energy",
+            "Northstar Lantern Works LLC",
+        ] {
+            assert!(is_organization_name(name), "{name}");
+        }
+        for name in [
+            "Secretary of State for Business",
+            "Chair of the Board",
+            "Lord Lang of Monkton",
+            "Rashmi Panigrahi",
+        ] {
+            assert!(!is_organization_name(name), "{name}");
+        }
+    }
+
+    /// A committee or a union the reply named is a party, never the staff
+    /// of one: the post a person holds there ("Chair, Home Affairs Select
+    /// Committee") does not make the committee a signatory.
+    #[test]
+    fn a_body_the_reply_named_is_no_one_s_staff() {
+        let (outcome, _) = facts_for(
+            "Home Secretary\n2 Marsham Street\nLondon SW1P 4DF\n\nRt Hon Yvette Cooper MP\n\
+             Chair, Home Affairs Select Committee\nHouse of Commons\nLondon SW1A 0AA\n\n\
+             28 April 2020\n\nDear Chair,\n\nPlease find below a further update on the work \
+             of my department, in line with the commitments made to your Committee.\n\n\
+             Yours sincerely,\n\nHome Secretary",
+            |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some("2020-04-28".into()),
+                date_evidence: vec![id_of(index, "28 April 2020")],
+                parties: vec![
+                    party(
+                        "Home Secretary",
+                        Some(PartyRole::Sender),
+                        &[id_of(index, "Marsham")],
+                    ),
+                    party(
+                        "Home Affairs Select Committee",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "Chair, Home Affairs")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            },
+        );
+        let facts = outcome.facts.expect("facts");
+        let committee = facts
+            .parties
+            .iter()
+            .find(|party| party.name == "Home Affairs Select Committee")
+            .expect("the committee is kept");
+        assert!(!committee.signatory, "{:?}", facts.parties);
+        assert_ne!(
+            committee.role,
+            Some(PartyRole::Other),
+            "{:?}",
+            facts.parties
         );
     }
 }
