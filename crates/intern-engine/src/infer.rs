@@ -913,6 +913,32 @@ const ISSUED_TYPES: &[&str] = &[
     "remittance",
 ];
 
+/// Whether a line labels `party` with one of `cues`, both written as
+/// [`normalize_loosely`] writes them: a cue anywhere on the line, as on a
+/// plain line ("remit to acme inc"), except that in a table's row a label's
+/// cell - a cue ending on its colon - labels the cells after it, never the
+/// one before it. The customer's name at the head of an invoice's row is
+/// not where payment goes because a later cell of the row reads "Please
+/// Remit To:".
+pub(crate) fn cue_labels(line: &str, party: &str, cues: &[&str]) -> bool {
+    if !line.contains('|') {
+        return line.contains(party) && cues.iter().any(|cue| line.contains(cue));
+    }
+    let cells = line
+        .split('|')
+        .map(str::trim)
+        .filter(|cell| !cell.is_empty())
+        .collect::<Vec<_>>();
+    let cued = |cell: &str| cues.iter().any(|cue| cell.contains(cue));
+    cells.iter().enumerate().any(|(at, cell)| {
+        cell.contains(party)
+            && cells
+                .iter()
+                .enumerate()
+                .any(|(other, text)| cued(text) && (other <= at || !text.ends_with(':')))
+    })
+}
+
 /// For an invoice-like document the model gave two parties and "between",
 /// the party that issued it, alone, "from". The bill-to, sold-to, or ship-to
 /// line names the customer; the other party issued it. Unchanged when the
@@ -938,10 +964,7 @@ pub fn repair_issued_relation(
         .collect();
     let on_line_with = |party: &str, cues: &[&str]| {
         let party = normalize_loosely(party);
-        !party.is_empty()
-            && lines
-                .iter()
-                .any(|line| line.contains(&party) && cues.iter().any(|cue| line.contains(cue)))
+        !party.is_empty() && lines.iter().any(|line| cue_labels(line, &party, cues))
     };
     let customers: Vec<bool> = parties
         .iter()
@@ -1746,5 +1769,53 @@ Date: April 1, 2026",
         );
         assert_eq!(kept, parties);
         assert_eq!(relation, PartyRelation::Between);
+    }
+
+    /// A label's cell in a table's row labels the cells after it, not the
+    /// party's cell before it.
+    #[test]
+    fn a_cue_in_another_cell_of_the_row_labels_no_party() {
+        let issuers = &["remit to"];
+        assert!(cue_labels(
+            "remit to acme corporation",
+            "acme corporation",
+            issuers
+        ));
+        assert!(cue_labels(
+            "| please remit to: | acme corporation |",
+            "acme corporation",
+            issuers
+        ));
+        assert!(cue_labels(
+            "| remit to: acme corporation | net 30 |",
+            "acme corporation",
+            issuers
+        ));
+        assert!(cue_labels(
+            "| acme corporation | remit to |",
+            "acme corporation",
+            issuers
+        ));
+        assert!(!cue_labels(
+            "| eog resources inc |  |  | please remit to: |  |",
+            "eog resources inc",
+            issuers
+        ));
+        // The issuer is then named by the customer's cue alone.
+        let digest = digest_of(
+            "| INVOICE | |\n| EOG RESOURCES, INC. | | | Please Remit To: | |\n\
+             | Bill To: | EOG RESOURCES, INC. |\n| TRANSWESTERN PIPELINE COMPANY | |\n",
+        );
+        let (parties, relation) = repair_issued_relation(
+            Some("Invoice"),
+            vec![
+                "EOG RESOURCES, INC.".to_owned(),
+                "TRANSWESTERN PIPELINE COMPANY".to_owned(),
+            ],
+            PartyRelation::Between,
+            &digest,
+        );
+        assert_eq!(parties, vec!["TRANSWESTERN PIPELINE COMPANY".to_owned()]);
+        assert_eq!(relation, PartyRelation::From);
     }
 }

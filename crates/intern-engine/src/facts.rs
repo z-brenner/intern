@@ -3904,10 +3904,9 @@ fn unit_supports_role(
         return true;
     }
     let on_cue_line = |cues: &[&str]| {
-        unit.text.lines().any(|line| {
-            let line = normalize_loosely(line);
-            line.contains(loose) && cues.iter().any(|cue| line.contains(cue))
-        })
+        unit.text
+            .lines()
+            .any(|line| crate::infer::cue_labels(&normalize_loosely(line), loose, cues))
     };
     match role {
         PartyRole::Issuer => on_cue_line(ISSUER_CUES),
