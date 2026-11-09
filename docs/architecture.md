@@ -809,9 +809,25 @@ file being the original of what was repacked and reclaimable at no cost), the
 parser worker's 0.71 GB OCR peak, and 1 GiB left for the person's own work -
 6.5 GiB for the quick model, 8 GiB for the accurate one. A 16 GB laptop has
 the latter with a browser open, and not with a browser and an office suite at
-work, which is what the quick model is for. What unloading the loaded model would free counts as
-available too - its context and buffers, not its mapped weights, which the
-machine already reports as reclaimable. When the accurate model is wanted - by
+work, which is what the quick model is for. What unloading the loaded model
+would free counts as available too, so the plan judges the machine as it would
+be with no model loaded, whichever model is loaded. That is read from the live
+server (`tiers::memory_released_by`): on Linux its anonymous memory (`RssAnon`),
+since `MemAvailable` already counts its mapped weights as page cache; on Windows
+its working set, since the available physical memory counts only the free, zero
+and standby lists, and the weights the server has touched stay in its working
+set until it exits or the system trims them. When the server cannot be read, an
+estimate stands in: the resident high-water mark less the model file
+(`tiers::unload_gives_back`), about right on Linux. On Windows that estimate is
+far short. On a 16 GB runner the 9B's working set right after a document was
+8.1 GB where the estimate credits 2.9 GB, and with 2 GiB held by another
+process, as a browser holds it, the estimate stood the loaded 9B down for the
+4B before the next document and the loaded 4B down for the 9B before the one
+after: a swap before every document for a machine with about 10 to 13 GB
+available before any model is loaded. Credited the working set, the plan sees
+what the machine had with no model loaded, to within 0.1 GB
+([`bench/reports/windows-memory-2026-11-09`](../bench/reports/windows-memory-2026-11-09/README.md)).
+When the accurate model is wanted - by
 Automatic or by name - but is not installed yet or does not fit, the quick
 model reads instead, provisionally; its readings are sent back to the accurate
 model only on evidence that it can read - it was just verified, or it just read
