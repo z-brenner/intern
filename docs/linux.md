@@ -84,8 +84,9 @@ INTERN_RUNTIME_DIR=/tmp/intern-stage/runtime npm run tauri dev
 `runtime/llama-upstream/`: it read Qwen3.5 2B's 77 evaluation documents 19%
 faster than the PrismML fork the package also carried until alpha.14, with no
 loss of accuracy
-([report](../bench/reports/speed-linux-cpu-2026-10-29/README.md)). It is
-ggml-org's own prebuilt Ubuntu x86-64 release, CPU-only and portable: it
+([report](../bench/reports/speed-linux-cpu-2026-10-29/README.md)). The
+package takes the release's prebuilt Ubuntu x86-64 archive, CPU-only and
+portable: it
 carries one CPU backend per x86-64 generation, from `sse42` up to
 `sapphirerapids` and `zen4`, and llama-server loads at run time the one the
 machine it runs on can execute. Only llama-server is staged, with the

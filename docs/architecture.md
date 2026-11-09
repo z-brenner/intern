@@ -833,20 +833,29 @@ PrismML fork the packages also carried until alpha.14, at the same accuracy
 ([`bench/reports/speed-linux-cpu-2026-10-29`](../bench/reports/speed-linux-cpu-2026-10-29/README.md)),
 and 25% faster on Windows; the fork, which only the Bonsai 2 models' PQ2_0
 weights needed, ran nothing the manifest pinned from alpha.13 on and was
-dropped from both packages in alpha.15 (43 MB of the Windows install, 40 MB
-of the Linux one). ggml loads its `ggml-cpu-*` backends from the executable's
-folder and the current directory, so the server is started in its own folder.
-A missing server fails to start like any other, and the tier that needed it
-is set aside.
+dropped from both packages after alpha.14. Measured on CI (run 42576796231,
+against the alpha.14 release and main's last CI run): the Windows installer
+went from 64,683,750 to 55,491,985 bytes and the installed folder from
+203,786,390 to 160,709,786 bytes (51 files at the root to 29); the `.deb` from
+90.8 to 74.4 MB and its installed size from 207 to 167 MB.
+
+ggml loads its `ggml-cpu-*` backends from the executable's folder and the
+current directory, so the server is started in its own folder. A missing
+server fails to start like any other, and the tier that needed it is set
+aside.
 
 An update installs over the old files: the Windows updater runs the new
 installer with `/UPDATE`, and the NSIS template then skips its uninstall. The
 fork's 22 files at the install root would stay, and outlive an uninstall, so
 the installer's pre-install hook (`src-tauri/windows/hooks.nsh`) deletes them
 by name - the names the alpha.11 to alpha.14 runtime inventories list there
-as llama.cpp's - and only in a folder that already holds `Intern.exe`. A
-`.deb` upgrade needs nothing of the kind: dpkg removes the files the old
-package had and the new one does not.
+as llama.cpp's - and only in a folder that already holds Intern's executable.
+`scripts/smoke-installer.ps1 -PreviousInstallerPath` installs a release and
+then the new installer over it with `/S /UPDATE`, as the updater does, and
+requires none of those files at the root and an empty folder after the
+uninstall; CI runs it against alpha.14's published installer when started by
+hand. A `.deb` upgrade needs nothing of the kind: dpkg removes the files the
+old package had and the new one does not.
 
 One llama-server runs at a time. A document planned onto the model that is not
 loaded unloads it and loads the other under the same `lifecycle` lock and
