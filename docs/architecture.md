@@ -726,7 +726,7 @@ named as it was keeps whatever the reviewer had typed.
 | Runtime | two llama.cpp builds, CPU only: upstream `b11946` runs both models; the PrismML fork, release `prism-b10826-c9c34bc`, is still packaged and runs nothing the manifest pins |
 | Context | 8,192 tokens |
 | Threads | every logical processor, at most 8, for generation and for prompt processing alike |
-| Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below) |
+| Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below); `--slot-save-path` ([the instructions across a restart](#the-instructions-across-a-restart)) |
 | Vision | none. No projector is pinned, downloaded, or loaded, and the request type has no field for an image |
 
 The model is text-first. Essentially every business document has usable text,
@@ -846,6 +846,82 @@ does mid-request. A model unused for ten minutes is unloaded, giving its memory
 back; the next document loads it again without reading the file, since this
 session already checked it. The review panel says which model read a document,
 and that a provisional reading will be read again.
+
+### The instructions across a restart
+
+Every evidence request opens with the same system turn, 477 tokens on both
+pinned models. llama-server keeps their state from one document to the next in
+a context checkpoint it takes where the user turn starts - the models are
+hybrids whose recurrent layers cannot be rolled back token by token, so the
+checkpoint is the only way the prefix survives - and every document after the
+first reports 477 cached tokens. The first document of a server lifetime has
+nothing cached and processes the instructions itself: at sign-in, and after
+every ten-minute idle unload. A warm-up request would not help: the app loads
+the model when a document arrives, so a warm-up would race that document for
+the server's one slot and save nothing.
+
+So each server is started with `--slot-save-path`, the `slots` folder in the
+app's local data, and its state is carried across the restart
+(`intern_engine::slots`). After the first document a server lifetime reads to
+the end, and only when there was no file to restore, Intern sends the
+instructions-only request (`client::instructions_only_request`: the same turns
+before the document, then "JSON only.", one token of reply), which reuses the
+instructions' state and replaces the document's tokens, and then has the
+server save its slot (`POST /slots/0?action=save`). The file therefore holds
+the instructions and no word of anything filed. Every later launch of the same
+configuration restores it (`POST /slots/0?action=restore`) after the health
+check and before the server is handed to anything that sends it a document, so
+the restore never races one. Both calls carry the server's key, as every other
+call does. The save runs on the queue's thread while the model is held for
+reading, so an idle unload cannot stop the server under it; it delays that one
+document by the save, once per configuration.
+
+Only an even state is saved. llama-server processes a prompt it starts from
+nothing in micro-batches and breaks the batch where the last user turn starts
+and 4 and 4 + `-ub` tokens before the end. A first request shorter than the
+instructions plus 260 tokens has one of those breaks inside the instructions,
+and they come out a little different: on a runner, a slot saved after a
+637-token first request and restored gave the 9B a different reply to a
+purchase order (the date role and the subject changed) than the same server
+gave it as a later document. A server lifetime keeps the instructions its first
+request computed, so before slot files the replies of a whole lifetime already
+depended on how long its first document was. The save is made only when the
+document that triggers it was the lifetime's first request and long enough to
+process the instructions in one piece, which most documents are (InternBench's
+median prompt is 1,347 tokens); a lifetime whose first request was the
+self-test or a short document saves nothing, and the next one tries again.
+Restored, the file gives every lifetime the instructions such a document gives
+them, whatever is read first.
+
+Measured on runners ([`bench/reports/cold-start-linux-cpu-2026-11-09`](../bench/reports/cold-start-linux-cpu-2026-11-09/README.md);
+the 9B on the AVX2 `haswell` backend, four threads, saved as the app saves):
+the first document after a load processed 930 prompt tokens in 39.3 s on an
+AMD EPYC 9V45 and 54.0 s on a 9V74 with nothing restored, and 453 in 19.3 s and
+26.5 s restored, the same as a document later in the lifetime; the whole first
+request fell from 50.6 to 30.1 s and from 68.5 to 41.1 s, and its reply was the
+steady-state reply byte for byte in every case. An earlier run on two EPYC 7763
+runners measured the same saving, 32.8 s of an 80-82 s first request. The
+file is 174 MB for either pinned model and is restored in 44-107 ms; on the
+4-core box the app's own code restored the 4B's in 107 ms, and its first
+document then read 451 tokens in 11.6 s against 928 in 30.1 s with nothing
+restored, with the same reply.
+
+The file's name is the tier and a hash of everything the saved state depends
+on: the model's SHA-256, the server's build as `/props` reports it, the turns
+before the document with the template switches they are rendered with
+(`client::cached_prefix_identity`), every launch argument but the port, key and
+paths (threads, context, batch size, flags), and the processor features that
+choose ggml's CPU backend. A file is only ever restored into a server that
+would have computed the same state, so the first document's reply is the one it
+would have got as the second. A launch removes its tier's files for any other
+configuration, and any save a stopped server left unfinished (saves are
+written as `.part` and renamed), so there is at most one file per tier. Every
+failure costs only the speed-up: a restore that fails removes the file and the
+next document saves a new one; a save is skipped with less than 2 GiB free; a
+folder llama-server cannot name (on Windows, a path outside ASCII: the server
+checks the folder with `std::filesystem` from UTF-8 text, which Windows' C++
+library reads in the ANSI code page) or a server that will not start with the
+flag is started without it.
 
 A new install downloads the quick model first and opens the queue as soon as it
 has passed its digest and its semantic self-test. The accurate model downloads
