@@ -4334,11 +4334,31 @@ fn defines_role(after: &str, terms: &[&str]) -> bool {
                 .chars()
                 .next()
                 .is_some_and(char::is_alphanumeric)
-            && !trimmed[term.len()..]
-                .split(|character: char| !character.is_alphanumeric())
-                .find(|word| !word.is_empty())
-                .is_some_and(labels_a_number)
+            && !labels_the_partys_number(&trimmed[term.len()..])
     })
+}
+
+/// Whether `text`, after a role word, opens with the label of the party's
+/// number ([`labels_a_number`]). "No." labels one only before a
+/// registration's figures ("Company No. 3899612"): "Tenant No. 2" counts
+/// the party among the others on its side.
+fn labels_the_partys_number(text: &str) -> bool {
+    let after = text.trim_start_matches(|character: char| !character.is_alphanumeric());
+    let label = after
+        .split(|character: char| !character.is_alphanumeric())
+        .next()
+        .unwrap_or_default();
+    if !labels_a_number(label) {
+        return false;
+    }
+    if !matches!(label, "no" | "nos") {
+        return true;
+    }
+    after[label.len()..]
+        .trim_start_matches(|character: char| !character.is_alphanumeric())
+        .split_whitespace()
+        .next()
+        .is_some_and(|value| value.chars().filter(char::is_ascii_digit).count() >= 3)
 }
 
 /// Whether a word labels a number: "number", "no", "ID", "registration" -
@@ -12317,6 +12337,10 @@ Rickmansworth,
         ));
         assert!(!defines_role(" employer id numbernn-nnnnnnn", employer));
         assert!(!defines_role(" company reg. no. 0412", employer));
+        assert!(!defines_role(", company no. 3899612, agrees", employer));
+        // "No." that counts a party among its side's labels no number.
+        assert!(defines_role(", tenant no. 2, agrees", &["tenant"]));
+        assert!(defines_role(", tenant no 1 and", &["tenant"]));
     }
 
     /// An organization the reply named as the recipient, which the inside
