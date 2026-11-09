@@ -3446,6 +3446,10 @@ struct LetterLayout {
     /// Where the salutation stands: the first page's first line that opens
     /// "Dear ...", as its unit's ordinal and the line's place in the unit.
     salutation: Option<(u32, usize)>,
+    /// Where a court document's caption ends: the last of the first page's
+    /// first units that sets its sides against each other ("v.",
+    /// "-against-") or labels one ("Plaintiff,"), under a court's heading.
+    caption: Option<u32>,
 }
 
 impl LetterLayout {
@@ -3468,10 +3472,41 @@ impl LetterLayout {
             .find(|unit| is_bare_date(unit))
             .map(|unit| unit.ordinal)
             .filter(|_| salutation.is_some());
+        let head = page().take(12).collect::<Vec<_>>();
+        let has_word = |unit: &EvidenceUnit, wanted: &[&str]| {
+            normalize_loosely(&unit.text.replace(['|', '-'], " "))
+                .split_whitespace()
+                .any(|word| {
+                    wanted.contains(&word)
+                        || wanted.contains(&word.trim_end_matches(['s', ':', ';']))
+                })
+        };
+        let caption = head
+            .iter()
+            .any(|unit| has_word(unit, FORUM_WORDS))
+            .then(|| {
+                head.iter()
+                    .filter(|unit| {
+                        has_word(unit, VERSUS_WORDS)
+                            || has_word(unit, BRINGING_SIDE)
+                            || has_word(unit, ANSWERING_SIDE)
+                    })
+                    .map(|unit| unit.ordinal)
+                    .max()
+            })
+            .flatten();
         Self {
             dateline,
             salutation,
+            caption,
         }
+    }
+
+    /// Whether a unit is part of a court document's caption: at its head,
+    /// down to the last line that sets out or labels its sides. A caption
+    /// names the sides of a case, never a letterhead's sender.
+    fn in_caption(self, unit: &EvidenceUnit) -> bool {
+        self.caption.is_some_and(|end| unit.ordinal <= end)
     }
 
     /// Whether the document is laid out as a letter: its first page greets
@@ -4014,14 +4049,20 @@ fn unit_supports_role(
     // the opening paragraph that happens to be among them, and its name
     // opens a line of its own: a line OCR ran two names into is no one's
     // letterhead.
+    // A caption's head or an address block - a person's line ("The Rt Hon
+    // George Osborne MP") over the organization's - is no letterhead.
     if matches!(role, PartyRole::Issuer | PartyRole::Sender)
         && unit.features.position.letterhead
         && letter.before_dateline(unit)
+        && !letter.in_caption(unit)
         && unit.text.chars().count() <= LETTERHEAD_CHARACTERS
-        && unit
-            .text
-            .lines()
-            .any(|line| normalize_loosely(line).starts_with(loose))
+        && {
+            let lines = unit.text.lines().collect::<Vec<_>>();
+            lines
+                .iter()
+                .position(|line| normalize_loosely(line).starts_with(loose))
+                .is_some_and(|at| !lines[..at].iter().any(|line| names_a_person(line)))
+        }
     {
         return true;
     }
@@ -12132,5 +12173,58 @@ Rickmansworth,
                 "{replied}"
             );
         }
+    }
+
+    /// A court document's caption names the sides of its case, and a
+    /// British letter's address block names who it is to: neither is the
+    /// letterhead of the party a line in it names.
+    #[test]
+    fn a_caption_or_an_address_block_is_no_letterhead() {
+        let (outcome, _) = facts_for(
+            "UNITED STATES DISTRICT COURT\nSOUTHERN DISTRICT OF NEW YORK\n\nLUXO AS,\n\n\
+             -against-\n\nTHE WALT DISNEY COMPANY\n\nPlaintiff,\n\nNOTICE OF DISMISSAL\n\n\
+             Defendants.\n\nPlaintiff hereby dismisses this action.\n\nDated: November 2, 2009",
+            |index| ModelFacts {
+                document_type: Some("NOTICE OF DISMISSAL".into()),
+                document_date: Some("2009-11-02".into()),
+                date_evidence: vec![id_of(index, "November 2, 2009")],
+                parties: vec![party(
+                    "LUXO AS",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "LUXO")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        let facts = outcome.facts.expect("facts");
+        assert_ne!(
+            facts.parties[0].document_role,
+            Some(PartyRole::Issuer),
+            "{:?}",
+            facts.parties
+        );
+        let (outcome, _) = facts_for(
+            "From the Chief Executive Office Of Fair Trading\n\nThe Rt Hon George Osborne MP\n\
+             Chancellor of the Exchequer\nHM Treasury\n1 Horse Guards Road\n\n11 September 2013\n\
+             Dear Chancellor\n\nI am writing to provide you with advice.\n\nYours sincerely",
+            |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some("2013-09-11".into()),
+                date_evidence: vec![id_of(index, "11 September 2013")],
+                parties: vec![party(
+                    "HM Treasury",
+                    Some(PartyRole::Employer),
+                    &[id_of(index, "HM Treasury")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        let facts = outcome.facts.expect("facts");
+        assert_ne!(
+            facts.parties[0].document_role,
+            Some(PartyRole::Issuer),
+            "{:?}",
+            facts.parties
+        );
     }
 }
