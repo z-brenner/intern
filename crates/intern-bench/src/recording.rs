@@ -163,6 +163,9 @@ pub struct Exchange {
     pub wall_micros: u64,
 }
 
+// A recording holds one reply per request, read once: the size of a failed
+// reply's slot costs nothing worth a box around every proposal.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum RecordedReply {
