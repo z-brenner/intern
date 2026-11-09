@@ -27,6 +27,12 @@ const MAX_SPAWN_ATTEMPTS: usize = 3;
 /// The server's standard error, under the log directory when one is set.
 const SERVER_LOG: &str = "llama-server.log";
 
+/// The micro-batch `-ub` sets, in tokens. llama-server breaks a prompt it
+/// processes from nothing at 4 + this many tokens before its end, which
+/// decides whether the instructions are processed in one piece
+/// ([`crate::slots::SlotKeeper::save_once`]).
+pub const MICRO_BATCH_TOKENS: u64 = 256;
+
 /// Flags every local model is launched with, each measured end to end on
 /// Intern's own requests in the 77-document evaluation
 /// (`bench/reports/bonsai-linux-cpu-2026-10-27`, Prism `b10826`, which has
@@ -49,12 +55,6 @@ const SERVER_LOG: &str = "llama-server.log";
 ///   and together these cost nothing measurable (-2% to +3% against the
 ///   default flags, within the run-to-run noise) with identical replies. On
 ///   upstream, spinning (`--poll 50`) was no faster either.
-/// The micro-batch `-ub` sets, in tokens. llama-server breaks a prompt it
-/// processes from nothing at 4 + this many tokens before its end, which
-/// decides whether the instructions are processed in one piece
-/// ([`crate::slots::SlotKeeper::save_once`]).
-pub const MICRO_BATCH_TOKENS: u64 = 256;
-
 pub const MEASURED_FLAGS: &[&str] = &[
     "--cache-ram",
     "0",
