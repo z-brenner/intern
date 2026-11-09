@@ -2090,7 +2090,7 @@
     ],
     "document_date": "2026-01-19",
     "acceptable_dates": [],
-    "date_role": "sent",
+    "date_role": "issuance",
     "forbidden_dates": [
      {
       "date": "2025-12-03",
@@ -2469,7 +2469,7 @@
     ],
     "document_date": "2026-11-03",
     "acceptable_dates": [],
-    "date_role": "decision",
+    "date_role": "notice",
     "forbidden_dates": [
      {
       "date": "2026-11-06",
@@ -3567,7 +3567,7 @@
     "acceptable_types": [],
     "document_date": "1891-07-12",
     "acceptable_dates": [],
-    "date_role": "payment",
+    "date_role": "issuance",
     "forbidden_dates": [
      {
       "date": "1891-01-14",
@@ -3722,7 +3722,7 @@
     ],
     "document_date": "2025-09-30",
     "acceptable_dates": [],
-    "date_role": "period_end",
+    "date_role": "other",
     "forbidden_dates": [
      {
       "date": "2021-12-16",
@@ -3796,7 +3796,7 @@
     "acceptable_dates": [
      "1990-06-15"
     ],
-    "date_role": "signature",
+    "date_role": "execution",
     "forbidden_dates": [
      {
       "date": "2022-11-28",
@@ -3891,7 +3891,7 @@
     "acceptable_dates": [
      "1982-03-04"
     ],
-    "date_role": "signature",
+    "date_role": "execution",
     "forbidden_dates": [
      {
       "date": "2026-09-08",
@@ -4475,7 +4475,7 @@
     ],
     "document_date": "2025-02-25",
     "acceptable_dates": [],
-    "date_role": "meeting",
+    "date_role": "issuance",
     "forbidden_dates": [
      {
       "date": "2025-01-28",
@@ -4561,7 +4561,7 @@
     ],
     "document_date": "2025-05-29",
     "acceptable_dates": [],
-    "date_role": "meeting",
+    "date_role": "issuance",
     "forbidden_dates": [
      {
       "date": "2025-04-22",
@@ -4649,7 +4649,7 @@
     ],
     "document_date": "2024-10-29",
     "acceptable_dates": [],
-    "date_role": "meeting",
+    "date_role": "issuance",
     "forbidden_dates": [],
     "parties": [
      "Visiting Committee on Advanced Technology"
@@ -4738,7 +4738,7 @@
     ],
     "document_date": "2024-02-14",
     "acceptable_dates": [],
-    "date_role": "meeting",
+    "date_role": "issuance",
     "forbidden_dates": [
      {
       "date": "2024-03-01",
@@ -4832,7 +4832,7 @@
     ],
     "document_date": "2018-06-14",
     "acceptable_dates": [],
-    "date_role": "meeting",
+    "date_role": "issuance",
     "forbidden_dates": [],
     "parties": [],
     "party_relation": null,
@@ -4889,7 +4889,7 @@
     ],
     "document_date": null,
     "acceptable_dates": [],
-    "date_role": "issue",
+    "date_role": "issuance",
     "forbidden_dates": [
      {
       "date": "2026-09-09",
@@ -5015,7 +5015,7 @@
     ],
     "document_date": "2023-09-30",
     "acceptable_dates": [],
-    "date_role": "period_end",
+    "date_role": "other",
     "forbidden_dates": [
      {
       "date": "2022-01-26",
