@@ -4,6 +4,7 @@
  "recording": "candidate-bench run 42577779669, commit d21399c (main ebc5d8f's engine)",
  "replayed_with": "intern-bench of main ebc5d8f, --min-token-confidence 0.7 (and 0.5 for readiness_at_0_5)",
  "gold": "sample-heldout4.json as committed with this file. The gold fixed before the run (d21399c) also accepted 'to All FHA-Approved Mortgagees' for real5-memo-05 and -06, under which both names are right (16/52); that alternative was removed after the run so that every memorandum is named from its issuer (14/52).",
+ "fields": "type_correct, date_correct, parties_correct and relation_correct are intern-bench's own verdicts on each field at 0.7. classes says why a wrong name is wrong; a class's text before ' (' is the row of the README's failure-class table that counts it, and a class that has no row there counts as Other.",
  "readings": [
   {
    "id": "real5-letter-01",
@@ -25,6 +26,10 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": null,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
@@ -52,6 +57,10 @@
    "expected_readiness": "ready",
    "scorer": true,
    "adjudicated": true,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -75,6 +84,10 @@
    "expected_readiness": "ready",
    "scorer": true,
    "adjudicated": true,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -99,12 +112,15 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "a person named instead of the organization",
-    "type generic: a bare Letter"
+    "a person named instead of the organization (FMCSA's Deputy Administrator, not the FMCSA)"
    ]
   },
   {
@@ -125,6 +141,10 @@
    "expected_readiness": "either",
    "scorer": true,
    "adjudicated": true,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -147,6 +167,10 @@
    "expected_readiness": "ready",
    "scorer": true,
    "adjudicated": true,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -170,12 +194,15 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "relation reversed: the sender named as recipient's office",
-    "type generic: a bare Letter"
+    "the addressee's division named instead of its agency ('Division of Clearing and Risk', where the gold accepts the CFTC)"
    ]
   },
   {
@@ -195,6 +222,10 @@
    "expected_readiness": "ready",
    "scorer": true,
    "adjudicated": true,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -219,6 +250,10 @@
    "expected_readiness": "ready",
    "scorer": true,
    "adjudicated": true,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -245,6 +280,10 @@
    "expected_readiness": "ready",
    "scorer": true,
    "adjudicated": true,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -268,6 +307,10 @@
    "expected_readiness": "ready",
    "scorer": true,
    "adjudicated": true,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -293,6 +336,10 @@
    "expected_readiness": "either",
    "scorer": true,
    "adjudicated": true,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -318,6 +365,10 @@
    "expected_readiness": "either",
    "scorer": true,
    "adjudicated": true,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -341,11 +392,15 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "party shortened beyond its legal form (the Directorate-General's name cut)"
+    "a party cut short (the Directorate-General's name)"
    ]
   },
   {
@@ -369,11 +424,15 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "relation reversed: the addressee named as sender"
+    "relation reversed (the addressee named as sender)"
    ]
   },
   {
@@ -397,11 +456,15 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "a person named with an honorific (Mr.); otherwise right"
+    "an honorific added to a person's name (Mr.); otherwise right"
    ]
   },
   {
@@ -425,6 +488,10 @@
    "expected_readiness": "needs_review",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": false,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
@@ -451,11 +518,15 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": false,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "an attachment named instead of the document (an attached invoice)"
+    "a party the document only mentions (an attached invoice's issuer, with the invoice's type)"
    ]
   },
   {
@@ -478,12 +549,15 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "relation reversed: the issuer named as recipient",
-    "type generic: a bare Letter"
+    "relation reversed (a reply named to its own sender)"
    ]
   },
   {
@@ -505,12 +579,15 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
    "classes": [
-    "a party the document only mentions (the request's subject)",
-    "type generic: a bare Letter"
+    "a party the document only mentions (the request's subject)"
    ]
   },
   {
@@ -534,13 +611,17 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": false,
+   "date_correct": false,
+   "parties_correct": true,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
    "classes": [
-    "OCR: a historic hand",
+    "OCR (a 19th-century hand)",
     "no date read",
-    "type generic: Document"
+    "type missing (named \"Document\")"
    ]
   },
   {
@@ -560,6 +641,10 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
@@ -588,12 +673,15 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "relation reversed: the addressee named as sender",
-    "type generic: a bare Letter"
+    "relation reversed (a request named from the agency it is addressed to)"
    ]
   },
   {
@@ -613,6 +701,10 @@
    "expected_readiness": "ready",
    "scorer": true,
    "adjudicated": true,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -636,11 +728,15 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
    "classes": [
-    "a person named instead of the organization"
+    "a person named instead of the organization (a joint liquidator, not the liquidators' firm)"
    ]
   },
   {
@@ -661,11 +757,15 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": false,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "type generic: Document"
+    "type missing (named \"Document\")"
    ]
   },
   {
@@ -683,6 +783,10 @@
    "expected_readiness": "ready",
    "scorer": true,
    "adjudicated": true,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -705,11 +809,15 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
    "classes": [
-    "a person named instead of the organization"
+    "a person named instead of the organization (the District Court Executive, not the court)"
    ]
   },
   {
@@ -727,6 +835,10 @@
    "expected_readiness": "ready",
    "scorer": null,
    "adjudicated": null,
+   "type_correct": null,
+   "date_correct": null,
+   "parties_correct": null,
+   "relation_correct": null,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": null,
@@ -750,6 +862,10 @@
    "expected_readiness": "needs_review",
    "scorer": null,
    "adjudicated": null,
+   "type_correct": true,
+   "date_correct": null,
+   "parties_correct": false,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -776,6 +892,10 @@
    "expected_readiness": "needs_review",
    "scorer": null,
    "adjudicated": null,
+   "type_correct": true,
+   "date_correct": null,
+   "parties_correct": false,
+   "relation_correct": null,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.0,
@@ -803,12 +923,16 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "type copies a heading with its date ('Enforcement Release July 15, 2025')",
-    "a wrong joining word ('with' its subject, which the gold names 'for')"
+    "a heading copied into the type with its date or weekday ('Enforcement Release July 15, 2025')",
+    "a release's subject named 'with' (the gold names it 'for')"
    ]
   },
   {
@@ -828,12 +952,16 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": true,
    "prompt_recall": 1.0,
    "classes": [
-    "type copies a heading with its date",
-    "parties: the Treasury and the subject, between"
+    "a heading copied into the type with its date or weekday ('Enforcement Release September 22, 2025')",
+    "the Treasury named beside an enforcement release's subject"
    ]
   },
   {
@@ -851,12 +979,16 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": false,
    "unsafe_ready": true,
    "unsafe_ready_at_0_5": true,
    "prompt_recall": 1.0,
    "classes": [
-    "type copies a heading with its date",
-    "parties: the Treasury and the subject, between"
+    "a heading copied into the type with its date or weekday ('Enforcement Release December 4, 2025')",
+    "the Treasury named beside an enforcement release's subject"
    ]
   },
   {
@@ -879,13 +1011,17 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": false,
+   "date_correct": false,
+   "parties_correct": true,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
    "classes": [
-    "OCR: a historic hand",
+    "OCR (a 19th-century hand)",
     "no date read",
-    "type generic: Document"
+    "type missing (named \"Document\")"
    ]
   },
   {
@@ -907,13 +1043,17 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": false,
+   "date_correct": false,
+   "parties_correct": true,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
    "classes": [
-    "OCR: a historic hand",
+    "OCR (a 19th-century hand)",
     "no date read",
-    "type generic: Document"
+    "type missing (named \"Document\")"
    ]
   },
   {
@@ -937,13 +1077,17 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": false,
+   "date_correct": false,
+   "parties_correct": false,
+   "relation_correct": null,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
    "classes": [
-    "OCR: a historic hand",
+    "OCR (a 19th-century hand)",
     "no date read",
-    "type generic: Document",
+    "type missing (named \"Document\")",
     "no party named"
    ]
   },
@@ -967,13 +1111,17 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": false,
+   "date_correct": false,
+   "parties_correct": false,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
    "classes": [
-    "OCR: a historic hand",
+    "OCR (a 19th-century hand)",
     "no date read",
-    "type generic: Document",
+    "type missing (named \"Document\")",
     "OCR noise read as a party"
    ]
   },
@@ -997,13 +1145,17 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": false,
+   "date_correct": false,
+   "parties_correct": false,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.0,
    "classes": [
-    "OCR: a historic hand",
+    "OCR (a 19th-century hand)",
     "no date read",
-    "type generic: Document",
+    "type missing (named \"Document\")",
     "OCR noise read as a party"
    ]
   },
@@ -1024,6 +1176,10 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": true,
    "prompt_recall": 1.0,
@@ -1050,11 +1206,15 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": null,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "type cut short ('Activity Report')"
+    "a type cut short ('Activity Report')"
    ]
   },
   {
@@ -1077,14 +1237,18 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": false,
+   "date_correct": false,
+   "parties_correct": false,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.0,
    "classes": [
-    "OCR: a scanned form",
+    "OCR (a scanned form)",
     "no date read",
-    "type generic: Document",
-    "the form's addressee named"
+    "type missing (named \"Document\")",
+    "the form's addressee named (National Archives and Records Service)"
    ]
   },
   {
@@ -1107,13 +1271,17 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": false,
+   "date_correct": false,
+   "parties_correct": false,
+   "relation_correct": null,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.0,
    "classes": [
-    "OCR: a scanned form",
+    "OCR (a scanned form)",
     "no date read",
-    "type generic: Document",
+    "type missing (named \"Document\")",
     "no party named"
    ]
   },
@@ -1134,11 +1302,15 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": true,
    "prompt_recall": 0.5,
    "classes": [
-    "a memo's addressee group named instead of its issuer"
+    "a memorandum's addressees named instead of its issuer ('to Regional Directors, Officers-in-Charge, and Resident Officers')"
    ]
   },
   {
@@ -1158,11 +1330,15 @@
    "expected_readiness": "either",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": true,
    "prompt_recall": 0.5,
    "classes": [
-    "a memo's addressee group named instead of its issuer"
+    "a memorandum's addressees named instead of its issuer ('to All Regional Directors, Officers-in-Charge, and Resident Officers')"
    ]
   },
   {
@@ -1180,11 +1356,15 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": null,
    "unsafe_ready": true,
    "unsafe_ready_at_0_5": true,
    "prompt_recall": 1.0,
    "classes": [
-    "a memo's addressee group named instead of its issuer"
+    "a memorandum's addressees named instead of its issuer ('for Heads of Executive Departments and Agencies')"
    ]
   },
   {
@@ -1204,11 +1384,15 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
    "classes": [
-    "a memo's addressee group named instead of its issuer",
+    "a memorandum's addressees named instead of its issuer ('for the Heads of Executive Departments and Agencies')",
     "the parent office named (Executive Office of the President)"
    ]
   },
@@ -1229,11 +1413,15 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
    "classes": [
-    "a memo's addressee group named instead of its issuer ('to All FHA-Approved Mortgagees')"
+    "a memorandum's addressees named instead of its issuer ('to All FHA-Approved Mortgagees')"
    ]
   },
   {
@@ -1254,11 +1442,15 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
    "classes": [
-    "a memo's addressee group named instead of its issuer ('to All FHA-Approved Mortgagees')"
+    "a memorandum's addressees named instead of its issuer ('to All FHA-Approved Mortgagees')"
    ]
   },
   {
@@ -1276,6 +1468,10 @@
    "expected_readiness": "ready",
    "scorer": true,
    "adjudicated": true,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -1299,11 +1495,15 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": false,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "type generic: Document"
+    "type missing (named \"Document\")"
    ]
   },
   {
@@ -1323,11 +1523,15 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": true,
    "prompt_recall": 1.0,
    "classes": [
-    "type copies a heading with its weekday ('Minutes of the Tuesday')"
+    "a heading copied into the type with its date or weekday ('Minutes of the Tuesday')"
    ]
   },
   {
@@ -1348,11 +1552,15 @@
    "expected_readiness": "ready",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "type copies a heading with its weekday ('Minutes of the Wednesday')"
+    "a heading copied into the type with its date or weekday ('Minutes of the Wednesday')"
    ]
   },
   {
@@ -1372,6 +1580,10 @@
    "expected_readiness": "either",
    "scorer": true,
    "adjudicated": true,
+   "type_correct": true,
+   "date_correct": true,
+   "parties_correct": true,
+   "relation_correct": null,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -1395,6 +1607,10 @@
    "expected_readiness": "needs_review",
    "scorer": null,
    "adjudicated": null,
+   "type_correct": true,
+   "date_correct": null,
+   "parties_correct": true,
+   "relation_correct": true,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
@@ -1423,6 +1639,10 @@
    "expected_readiness": "needs_review",
    "scorer": null,
    "adjudicated": null,
+   "type_correct": true,
+   "date_correct": null,
+   "parties_correct": false,
+   "relation_correct": null,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": null,
@@ -1450,11 +1670,15 @@
    "expected_readiness": "needs_review",
    "scorer": false,
    "adjudicated": false,
+   "type_correct": false,
+   "date_correct": true,
+   "parties_correct": false,
+   "relation_correct": null,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "type generic: Document",
+    "type missing (named \"Document\")",
     "a source code read as a party ('RD&S')"
    ]
   }

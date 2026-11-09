@@ -189,9 +189,11 @@ OF EXECUTIVE DEPARTMENTS AND AGENCIES", "To: All FHA-Approved Mortgagees"), beca
 document from that issuer has the same addressees and the name would not tell them apart. The
 gold now says the same for all four memoranda and both mortgagee letters. Every name was read
 against both: none the scorer marks wrong is right, and each of the 14 it marks right is right, so
-the adjudicated and scorer counts agree. Two come close and stay wrong: "Letter to Mr. Moritz
-Körner" (an honorific added) and "Letter to Directorate General Financial Services" (the
-Directorate-General's name cut short).
+the adjudicated and scorer counts agree. Three come close and stay wrong: "Letter to Mr. Moritz
+Körner" (an honorific added), "Letter to Directorate General Financial Services" (the
+Directorate-General's name cut short) and "Letter to Division of Clearing and Risk" (a request
+named to the CFTC division it is addressed to, where the gold accepts the Commission; the earlier
+sets counted a request letter named to the Antitrust Division, not its department, as a loss).
 
 | | Gate 0.7 (shipped) | Gate 0.5 |
 |---|---:|---:|
@@ -215,9 +217,11 @@ NLRB memoranda ("to Regional Directors, Officers-in-Charge, and Resident Officer
 M-25-14 ("for Heads of Executive Departments and Agencies"), for 19/52, with 1 wrong name ready at
 0.7 and 4 at 0.5. The convention above is the one this report argues, and the stricter of the two.
 
-For comparison, the same engine and model at 0.7 on the earlier sets (the round's replay kit,
-`kit/main-ebc5d8f/summary.txt`): 23/55, 28/56, 16/53 and 25/55 right, with 2, 0, 0 and 0 wrong
-names ready.
+For comparison, the same engine and model at 0.7 on the earlier sets, as the
+[alpha.14 release notes](../../../docs/releases/v0.1.0-alpha.14.md) give them (Known
+limitations): 23, 28, 16 and 25 right, of 55, 56, 53 and 55 scored, with 2, 0, 0 and 0 wrong names
+ready. The denominators are from replaying those runs' recordings the same way, with the
+`intern-bench run --replay` command under [Reproduce](#reproduce).
 
 **By kind and text layer, at 0.7** (right / scored, ready, wrong ready):
 
@@ -242,23 +246,31 @@ three CMS approval letters, both Welsh FOI responses ("Letter from Welsh Governm
 notices, one set of FRTIB minutes, and the Welsh minutes (no party, as the gold wants). All but two
 (a Gazette liquidation notice and the FRTIB minutes) are in review.
 
-**Why the 38 wrong names are wrong** (`readings.json` gives each; a name can fail more than one
-way; the last column counts names the 0.5 gate would have filed):
+**Why the 38 wrong names are wrong** (`readings.json` gives each name's classes beside the
+scorer's verdict on its type, date, parties and relation; a name can fail more than one way; the
+last column counts names the 0.5 gate would have filed):
 
 | Class | Names | Ready at 0.5 |
 |---|---:|---:|
-| Type generic or missing ("Document", a bare "Letter" where the gold needs more) | 16 | 0 |
+| Type missing ("Document": no type read, or none the text supports) | 11 | 0 |
 | No date read (all on images and scans) | 9 | 0 |
-| OCR: a 19th-century hand or a scanned form | 8 | 0 |
+| OCR (a 19th-century hand or a scanned form) | 8 | 0 |
 | A memorandum's addressees named instead of its issuer ("for Heads of Executive Departments and Agencies", "to Regional Directors, ...", "to All Fha-Approved Mortgagees") | 6 | 3 |
-| Relation reversed (a request letter named "from" the agency it is addressed to; a reply named "to" its own sender) | 4 | 0 |
 | A heading copied into the type with its date or weekday ("Enforcement Release December 4, 2025", "Minutes of the Tuesday") | 5 | 3 |
-| A person named instead of the organization | 3 | 0 |
+| Relation reversed (a request to the CFTC and a letter to the European Commission named "from" the body they are addressed to; a reply named "to" its own sender) | 3 | 0 |
+| A person named instead of the organization (an addressee, a liquidator, a court's executive) | 3 | 0 |
 | No party named | 3 | 0 |
-| Enforcement releases named "between U.S. Department of the Treasury and" their subject | 2 | 2 |
-| A party the document only mentions (an attachment's issuer, a request's subject) | 3 | 0 |
+| A party the document only mentions (an attachment's issuer, twice; a request's subject) | 3 | 0 |
+| The Treasury named beside an enforcement release's subject ("between U.S. Department of the Treasury and ...") | 2 | 2 |
 | An invoice's customer named as its issuer | 1 | 1 |
-| Other (a type cut short, a parent office, OCR noise or a source code read as a party, a form's addressee, a party cut short, an honorific, a release's subject named "with") | 9 | 0 |
+| Other (a type cut short, a parent office, an addressee's division named for its agency, OCR noise or a source code read as a party, a form's addressee, a party cut short, an honorific, a release's subject named "with") | 10 | 0 |
+
+The scorer marks the type wrong in 12 of the 38: the 11 in the first row and `letter-18`, named
+for the invoice attached to it. It marks the type right in the six whose type wording loses the
+name (the five headings and `invoice-07`'s "Activity Report"), because a type passes when it
+carries every meaningful word of an accepted type, while a name must match a gold name whole. A
+bare "Letter" costs no name its type: every letter's gold here accepts it, though the engine
+sends a bare "Letter" to review.
 
 **The 2 wrong names filed at 0.7:**
 - **OFAC's Gracetown, Inc. enforcement release**, as "2025-12-04 Enforcement Release December 4,
@@ -278,8 +290,9 @@ documents on average (real4: 0.90). Twenty documents lost some gold evidence, an
 among them are named wrong. Eleven of the twenty are images and scans whose OCR missed the date
 or party (the scanned OMB memorandum among them, its letterhead read as
 "OFFlCEOFMANAGEMENTANDBUDGET"); five are gold artifacts (an issuer printed only in a letterhead
-graphic, as with HUD, or not printed at all, as with the NLRB, or printed letter-spaced, as with
-the S.D.N.Y.); the other four are retrieval losses on native text (`letter-20`, `letter-22`,
+graphic, as with HUD, or not printed by name, as with the NLRB, whose GC 25-05 prints only its
+Office of the General Counsel and GC 25-06 only "NLRB" in citations, or printed letter-spaced, as
+with the S.D.N.Y.); the other four are retrieval losses on native text (`letter-20`, `letter-22`,
 `notice-02`, `notice-08`).
 
 **Speed.** p50 72.2 s per document, p95 132 s, at most 228 s; 74.5 minutes for the run
@@ -298,8 +311,9 @@ the S.D.N.Y.); the other four are retrieval losses on native text (`letter-20`, 
   type. Any rule for them must be written now from this set, which then stops being held out; a
   sixth set would be needed to measure it.
 - **Parties, not types or dates, are the 9B's weak field on modern documents** (27 of 48 against
-  44 and 43). Relation direction on request and reply letters, and naming a person where the body
-  issues, are the recurring causes.
+  44 and 43). Memoranda named for their addressees (6), letters named the wrong way round (3), a
+  person named where the body issues (3) and a party the document only mentions (3) are the
+  recurring causes.
 - **The review gate held:** every document whose gold expects review went there, and at 0.7 the
   gate filed 2 wrong names of 4.
 
@@ -325,5 +339,7 @@ workflow and `fetch.py` write from `sample-heldout4.json`.
 The recording (`recording.json`, 3.3 MB) is the run's artifact
 `candidate-qwen35-9b-q4km-real5-42577779669`, kept 14 days. It is not committed here; most of the
 set is openly licensed, so it could be, with the documents' licences listed beside it.
-`readings.json` gives each document's name at both gates, the gold name, the verdicts, the prompt
-recall and the failure classes.
+`readings.json` gives each document's name at both gates, the gold name, the name's verdicts, the
+scorer's verdict on its type, date, parties and relation, the prompt recall and the failure
+classes. `scripts/realdocs-readings.test.ts` holds the classes to those verdicts and the failure
+class table above to the classes.
