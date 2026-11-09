@@ -6,7 +6,9 @@ import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 
 async function openSettings() {
   fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
-  return screen.findByRole('dialog', { name: 'Settings' });
+  const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+  fireEvent.click(within(dialog).getByText('Naming and filing', { selector: 'summary' }));
+  return dialog;
 }
 
 describe('your organization\'s names', () => {

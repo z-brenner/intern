@@ -12,7 +12,7 @@ it('keeps the machine label and leaves out Microsoft identity in a build without
   fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
   const dialog = screen.getByRole('dialog', { name: 'Settings' });
   // The shared-folder options appear, under Advanced, once Settings knows this build is not managed.
-  fireEvent.click(await within(dialog).findByText('Advanced: shared folders and support details'));
+  fireEvent.click(await within(dialog).findByText('Shared folders and troubleshooting'));
   expect(await within(dialog).findByLabelText("This machine's name")).toBeVisible();
   expect(within(dialog).getByRole('button', { name: 'Set up folders step by step…' })).toBeVisible();
   expect(within(dialog).getByText('C:\\Intern\\Input')).toBeVisible();

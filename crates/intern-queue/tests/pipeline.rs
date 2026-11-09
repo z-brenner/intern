@@ -1661,14 +1661,21 @@ fn automatic_apply_targets_only_ready_items_and_rechecks_source_fingerprint() {
         model,
         Arc::clone(&files),
         AppSettings {
-            automatic_rename: true,
+            automatic_rename: false,
             ..AppSettings::default()
         },
     );
     pipeline
         .enqueue_files(&[ready.clone(), review, changed.clone()])
         .unwrap();
-    files.trust(&changed, "mutated-after-ingest");
+    pipeline.run_until_idle().unwrap();
+    files.trust(&changed, "mutated-after-analysis");
+    SettingsStore::new(temp.path().join("settings.json"))
+        .save(&AppSettings {
+            automatic_rename: true,
+            ..AppSettings::default()
+        })
+        .unwrap();
 
     pipeline.run_until_idle().unwrap();
 
@@ -1763,12 +1770,19 @@ fn fingerprint_failure_is_durable_and_does_not_stop_the_queue() {
         model,
         Arc::clone(&files),
         AppSettings {
-            automatic_rename: true,
+            automatic_rename: false,
             ..AppSettings::default()
         },
     );
     pipeline.enqueue_files(&[first.clone(), second]).unwrap();
+    pipeline.run_until_idle().unwrap();
     files.forget(&first);
+    SettingsStore::new(temp.path().join("settings.json"))
+        .save(&AppSettings {
+            automatic_rename: true,
+            ..AppSettings::default()
+        })
+        .unwrap();
 
     pipeline.run_until_idle().unwrap();
 
@@ -6480,6 +6494,86 @@ fn approve_after_edit_reports_file_changed() {
             .any(|reason| reason == "FILE_CHANGED")
     );
     assert!(files.applies.lock().unwrap().is_empty());
+}
+
+/// Sync can finish while a document waits behind other work. The reading
+/// must be bound to the version actually read, not the earlier arrival.
+#[test]
+fn a_file_updated_while_queued_can_be_approved_after_its_first_reading() {
+    struct ReadingWorker;
+    impl WorkerBoundary for ReadingWorker {
+        fn extract(
+            &self,
+            _: &str,
+            path: &Path,
+            _: &mut dyn FnMut(ExtractProgress),
+        ) -> Result<DocumentSource, WorkerFailure> {
+            Ok(parsed(&fs::read_to_string(path).unwrap()))
+        }
+        fn cancel(&self, _: &str) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+        fn restart(&self) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+    }
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "scan.pdf");
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        Arc::new(ReadingWorker),
+        Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))])),
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap();
+    let id = pipeline.enqueue_files(std::slice::from_ref(&path)).unwrap()[0].id;
+    fs::write(&path, SIGNED_AGREEMENT).unwrap();
+    let analyzed_hash = StdFileSystem.hash(&path).unwrap();
+
+    pipeline.run_until_idle().unwrap();
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+
+    let item = item_of(&pipeline, id);
+    assert_eq!(item.status, QueueStatus::Completed);
+    assert_eq!(item.source_hash, analyzed_hash);
+    assert_eq!(
+        fs::read_to_string(item.receipt.unwrap().destination).unwrap(),
+        SIGNED_AGREEMENT
+    );
+}
+
+#[test]
+fn a_queued_file_updated_to_an_already_completed_document_is_held_as_a_duplicate() {
+    let temp = tempdir().unwrap();
+    let first = source(temp.path(), "first.pdf");
+    fs::write(&first, SIGNED_AGREEMENT).unwrap();
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 1);
+    let completed = ready_document(&pipeline, &first);
+    pipeline
+        .approve(completed, AGREEMENT_NAME, "Agreement")
+        .unwrap();
+    let second = source(temp.path(), "second.pdf");
+    let id = pipeline
+        .enqueue_files(std::slice::from_ref(&second))
+        .unwrap()[0]
+        .id;
+    fs::write(&second, SIGNED_AGREEMENT).unwrap();
+
+    pipeline.run_until_idle().unwrap();
+
+    let item = item_of(&pipeline, id);
+    assert_eq!(item.status, QueueStatus::NeedsReview);
+    assert_eq!(item.error_code, Some(ErrorCode::Duplicate));
+    assert!(
+        item.proposal.is_none(),
+        "an exact duplicate needs no model reading"
+    );
+    assert!(second.exists());
 }
 
 /// Re-analyze is the way on from FILE_CHANGED: the file is read again, as it

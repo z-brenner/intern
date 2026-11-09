@@ -103,10 +103,11 @@ describe('SharePoint connection in Settings', () => {
   it('keeps model, spellings, layout, renaming, descriptions, updates, and help', async () => {
     renderDialog(managedBridge());
     await screen.findByRole('region', { name: 'SharePoint connection' });
+    for (const title of ['Naming and filing', 'Learned spellings', 'Local processing', 'SharePoint descriptions']) fireEvent.click(screen.getByText(title, { selector: 'summary' }));
     expect(screen.getByLabelText('Arrange filed documents')).toBeVisible();
     expect(screen.getByLabelText('Automatically rename high-confidence files')).toBeVisible();
-    expect(screen.getByText('Spellings Intern has learned')).toBeVisible();
-    expect(screen.getByLabelText(/local model on this computer/i)).toBeVisible();
+    expect(screen.getByText('Learned spellings', { selector: 'summary' })).toBeVisible();
+    expect(screen.getByRole('group', { name: 'Local model' })).toBeVisible();
     expect(screen.getByLabelText('Write a description record for each filed document')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Check for updates' })).toBeVisible();
     expect(screen.getByRole('button', { name: /open the guide/i })).toBeVisible();
@@ -400,7 +401,7 @@ describe('SharePoint connection in Settings', () => {
     let resolveOnboarding!: (value: OnboardingStatus) => void;
     const bridge = managedBridge({ getOnboarding: vi.fn(() => new Promise<OnboardingStatus>((done) => { resolveOnboarding = done; })) });
     const { onSave } = renderDialog(bridge);
-    fireEvent.click(screen.getByRole('button', { name: 'Change output folder' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change Completed folder' }));
     expect(await screen.findByText('C:\\Elsewhere')).toBeVisible();
     await waitFor(() => expect(bridge.getOnboarding).toHaveBeenCalled());
     await act(async () => { resolveOnboarding({ currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: true }); });
@@ -429,7 +430,7 @@ describe('SharePoint connection in Settings', () => {
     await act(async () => { resolveOnboarding({ currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: true }); });
     expect(await screen.findByRole('region', { name: 'SharePoint connection' })).toBeVisible();
     expect(screen.queryByRole('status', { name: 'Loading intake settings' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Change input folder' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Change Queue folder' })).not.toBeInTheDocument();
   });
 
   // A failed read is not an answer: the build may well carry the
@@ -439,7 +440,7 @@ describe('SharePoint connection in Settings', () => {
     renderDialog(bridge);
 
     expect(await screen.findByLabelText('Also process documents uploaded by others')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Change input folder' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Change Queue folder' })).toBeVisible();
     expect(screen.getByRole('group', { name: 'Microsoft upload identity' })).toBeInTheDocument();
     expect(screen.queryByRole('status', { name: 'Loading intake settings' })).not.toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'SharePoint connection' })).not.toBeInTheDocument();
@@ -454,8 +455,8 @@ describe('SharePoint connection in Settings', () => {
     await act(async () => {});
 
     expect(screen.queryByRole('region', { name: 'SharePoint connection' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Change output folder' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Change input folder' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Change Completed folder' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Change Queue folder' })).toBeVisible();
     // Under Advanced, folded away but still there.
     expect(screen.getByLabelText("This machine's name")).toBeInTheDocument();
     expect(screen.getByLabelText('Also process documents uploaded by others')).toBeInTheDocument();
@@ -478,7 +479,7 @@ describe('SharePoint connection in Settings', () => {
     const unmanaged = { currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: false };
 
     const view = render(<SettingsDialog settings={settings} bridge={managedBridge({ getOnboarding: vi.fn(async () => unmanaged), microsoftIntakeStatus })} selection={picker} onSave={vi.fn(async () => {})} onClose={() => {}} onCheckForUpdate={async () => ({ state: 'unsupported' })} onInstallUpdate={async () => {}} />);
-    expect(await screen.findByRole('button', { name: 'Change input folder' })).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Change Queue folder' })).toBeVisible();
     await act(async () => {});
     expect(screen.queryByRole('group', { name: 'Microsoft upload identity' })).not.toBeInTheDocument();
     expect(screen.queryByText(/browser preview/i)).not.toBeInTheDocument();
@@ -504,7 +505,7 @@ describe('SharePoint connection in Settings', () => {
     await waitFor(() => {
       const active = document.activeElement as HTMLElement;
       expect(screen.getByRole('dialog', { name: 'Settings' })).toContainElement(active);
-      expect(screen.getByLabelText('Arrange filed documents')).toHaveFocus();
+      expect(screen.getByText('Naming and filing', { selector: 'summary' })).toHaveFocus();
     });
   });
 
@@ -522,7 +523,7 @@ describe('SharePoint connection in Settings', () => {
     } finally {
       observer.disconnect();
     }
-    expect(seen[0]).toBe(screen.getByLabelText('Arrange filed documents'));
+    expect(seen[0]).toBe(screen.getByText('Naming and filing', { selector: 'summary' }));
   });
 
   it('lets the keyboard reach the support details disclosure', async () => {

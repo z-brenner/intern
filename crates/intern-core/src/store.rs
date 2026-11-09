@@ -553,6 +553,48 @@ impl QueueStore {
         Ok(item)
     }
 
+    /// Bind a claimed local reading to the bytes present when extraction
+    /// starts. Arrival may precede extraction by minutes while sync finishes.
+    /// An already analyzed or differently owned item can never be rebound.
+    pub fn refresh_extraction_hash(
+        &self,
+        id: i64,
+        previous: &str,
+        current: &str,
+    ) -> InternResult<QueueItem> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(InternError::from)?;
+        let changed = transaction
+            .execute(
+                "UPDATE queue_items SET source_hash = ?1, updated_at = ?2
+             WHERE id = ?3 AND source_hash = ?4 AND status = 'extracting'
+               AND owner_session = ?5 AND lease_expires_at > ?2",
+                params![current, now(), id, previous, self.session_id],
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::SqliteFailure(failure, _)
+                    if failure.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+                {
+                    InternError::new(
+                        ErrorCode::Duplicate,
+                        "this version of the file is already in the queue",
+                    )
+                }
+                other => other.into(),
+            })?;
+        if changed != 1 {
+            return Err(InternError::new(
+                ErrorCode::StateConflict,
+                "the claimed reading changed or its lease expired",
+            ));
+        }
+        let item = query_one(&transaction, "WHERE id = ?1", params![id])?;
+        transaction.commit().map_err(InternError::from)?;
+        Ok(item)
+    }
+
     pub fn transition(
         &self,
         id: i64,

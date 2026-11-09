@@ -56,25 +56,21 @@ describe('what the site says about the network', () => {
   it('says the automatic check can be switched off, with the label the setting carries', async () => {
     const settings = await readFile('src/components/SettingsDialog.tsx', 'utf8');
     const label = 'Check for updates automatically';
-    expect(settings).toContain(`${label} (when Intern starts and every 6 hours)`);
+    expect(settings).toContain(label);
     for (const { name, html } of await sitePages()) expect(text(html), name).toContain(label);
   });
 
-  it('mentions the hosted model wherever it promises that documents stay on the machine', async () => {
+  it('describes local processing without advertising API-key setup', async () => {
     for (const { name, html } of await sitePages()) {
       const words = text(html);
-      expect(words, name).toMatch(/hosted model/i);
-      // Each promise is qualified in the same sentence, not somewhere else on the page.
-      for (const promise of words.matchAll(/never leaves? the (machine|computer)|no remote processing|start to finish/gi)) {
-        const following = words.slice(promise.index, promise.index + promise[0].length + 80);
-        expect(following, `${name}: "${promise[0]}"`).toMatch(/unless you turn on a hosted model/i);
-      }
+      expect(words, name).toMatch(/on your computer|run locally/);
+      expect(words, name).not.toMatch(/your own API key|turn on a hosted model|Set up a hosted model/i);
     }
   });
 
   it('lists every kind of request on the download page', async () => {
     const index = text(await readFile('site/index.html', 'utf8'));
-    for (const request of ['Model file', 'Update check', 'Hosted model, if you choose one', 'Microsoft sign-in and Graph, provisioned builds only']) {
+    for (const request of ['Model file', 'Update check', 'Microsoft sign-in and Graph, provisioned builds only']) {
       expect(index).toContain(request);
     }
   });
@@ -95,17 +91,14 @@ describe('what the site says about the network', () => {
     }
   });
 
-  // Unticking the automatic check stops only the check. A hosted model is
-  // sent each arriving document without a click, and a provisioned build asks
-  // Microsoft about each upload, so the answer to "nothing on its own" has to
-  // say both.
+  // Provisioned builds still contact Microsoft about each upload even when
+  // the automatic update check is disabled.
   it('says what else contacts the network when asked how to stop all unrequested traffic', async () => {
     const guide = text(await readFile('site/guide.html', 'utf8'));
     const start = guide.indexOf('Intern must not contact anything on its own');
     expect(start).toBeGreaterThan(0);
-    const answer = guide.slice(start, guide.indexOf('NAMING AND THE HOSTED MODEL', start));
+    const answer = guide.slice(start, guide.indexOf('NAMING', start));
     expect(answer).toContain('Check for updates automatically');
-    expect(answer).toMatch(/hosted/i);
     expect(answer).toMatch(/provisioned[\s\S]*Microsoft|Microsoft[\s\S]*provisioned/);
     expect(guide).not.toContain('makes no request it was not asked to make');
   });
@@ -153,7 +146,7 @@ describe('what the guide says about setting up a folder', () => {
     const guide = text(await readFile('site/guide.html', 'utf8'));
     expect(guide).toContain('Set up folders step by step…');
     expect(guide).toContain('only you add documents to');
-    expect(guide).toContain('This is a private local input folder');
+    expect(guide).toContain('This is a private local Queue folder');
     expect(guide).toMatch(/provisioned/);
     expect(guide).not.toMatch(/In Settings, pick that folder/);
     expect(guide).not.toMatch(/That's it\. Files that appear in the folder get processed/);
@@ -165,8 +158,8 @@ describe('what the guide says about setting up a folder', () => {
       readFile('src/components/FolderSetupFlow.tsx', 'utf8'),
     ]);
     expect(settings).toContain('Set up folders step by step…');
-    expect(settings).toContain('This is a private local input folder, not a shared or synced folder');
-    expect(guide).toContain('This is a private local input folder, not a shared or synced folder');
+    expect(settings).toContain('This is a private local Queue folder, not a shared or synced folder');
+    expect(guide).toContain('This is a private local Queue folder, not a shared or synced folder');
     expect(setup).toContain('Look for OneDrive folders again');
     expect(guide).toContain('Look for OneDrive folders again');
     for (const hint of ['Put files here that you want Intern to process.', 'Processed files end up here, renamed.']) {
@@ -175,10 +168,10 @@ describe('what the guide says about setting up a folder', () => {
     }
   });
 
-  it('says adding a file copies it into the input folder and leaves the original', async () => {
+  it('says adding a file copies it into the Queue folder and leaves the original', async () => {
     const guide = text(await readFile('site/guide.html', 'utf8'));
-    expect(guide).toMatch(/copied (here|into the input folder)[^.]*; the original(s)? stay/);
+    expect(guide).toMatch(/copied (here|into the Queue folder)[^.]*; the original(s)? stay/);
     expect(guide).toMatch(/Send to (>|&gt;) Intern/);
-    expect(guide).toMatch(/Intern copies them into your input folder/);
+    expect(guide).toMatch(/Intern copies them into your Queue folder/);
   });
 });

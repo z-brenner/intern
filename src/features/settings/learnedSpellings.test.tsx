@@ -6,7 +6,9 @@ import type { LearnedRule } from '../../types';
 
 async function openSettings() {
   fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
-  return screen.findByRole('dialog', { name: 'Settings' });
+  const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+  fireEvent.click(within(dialog).getByText('Learned spellings', { selector: 'summary' }));
+  return dialog;
 }
 
 const learned: LearnedRule[] = [

@@ -191,15 +191,53 @@ pub struct LoadedSettings {
 #[derive(Clone, Debug)]
 pub struct SettingsStore {
     path: PathBuf,
+    local_analysis_only: bool,
 }
 
 impl SettingsStore {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        Self {
+            path: path.into(),
+            local_analysis_only: false,
+        }
+    }
+
+    /// Application view after retiring API-key analysis. This also applies
+    /// when a read-only settings file cannot be migrated on disk.
+    pub fn local_analysis_only(mut self) -> Self {
+        self.local_analysis_only = true;
+        self
     }
 
     pub fn load(&self) -> PipelineResult<AppSettings> {
         self.load_with_report().map(|loaded| loaded.settings)
+    }
+
+    /// Retire the old API-key mode at application startup. Change only this
+    /// field: a future or damaged unrelated setting must remain available for
+    /// the normal settings recovery UI instead of being silently defaulted.
+    pub fn retire_hosted_model(&self) -> PipelineResult<bool> {
+        if !self.path.exists() {
+            return Ok(false);
+        }
+        let bytes = fs::read(&self.path).map_err(|_| {
+            PipelineError::new("SETTINGS_UNAVAILABLE", "settings could not be read")
+        })?;
+        let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
+        let Ok(Value::Object(mut fields)) = serde_json::from_slice::<Value>(bytes) else {
+            return Ok(false);
+        };
+        if fields.get("modelSource").and_then(Value::as_str) != Some("hosted") {
+            return Ok(false);
+        }
+        fields.insert("modelSource".into(), Value::String("local".into()));
+        let bytes = serde_json::to_vec_pretty(&fields).map_err(|_| settings_invalid())?;
+        let mut temporary = self.path.as_os_str().to_owned();
+        temporary.push(".tmp");
+        let temporary = PathBuf::from(temporary);
+        write_sync(&temporary, &bytes).map_err(io_error)?;
+        fs::rename(&temporary, &self.path).map_err(io_error)?;
+        Ok(true)
     }
 
     /// The settings, and the fields of the file that had to be defaulted.
@@ -219,13 +257,18 @@ impl SettingsStore {
         let Value::Object(fields) = document else {
             return Err(settings_invalid());
         };
-        match serde_json::from_value::<AppSettings>(Value::Object(fields.clone())) {
+        let mut loaded = match serde_json::from_value::<AppSettings>(Value::Object(fields.clone()))
+        {
             Ok(settings) => Ok(LoadedSettings {
                 settings,
                 unreadable: Vec::new(),
             }),
             Err(_) => keep_what_parses(fields),
+        }?;
+        if self.local_analysis_only {
+            loaded.settings.model_source = ModelSource::Local;
         }
+        Ok(loaded)
     }
 
     pub fn save(&self, settings: &AppSettings) -> PipelineResult<()> {

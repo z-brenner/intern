@@ -99,8 +99,8 @@ impl LockRetry {
 }
 
 /// Classify a failure to read or move the source. A lock that outlived the
-/// retry policy is its own outcome; anything else is the pre-existing
-/// "changed or unavailable" verdict. Either way the operating system's own
+/// retry policy is its own outcome; another access failure is an I/O error,
+/// not evidence of changed content. Either way the operating system's own
 /// error is carried into the message rather than discarded, because "os error
 /// 32" is the difference between a sync client mid-upload and a real problem.
 fn source_failure(error: &io::Error, changed: &'static str) -> InternError {
@@ -110,7 +110,7 @@ fn source_failure(error: &io::Error, changed: &'static str) -> InternError {
             format!("source is still held by another process ({error})"),
         )
     } else {
-        InternError::new(ErrorCode::FileChanged, format!("{changed} ({error})"))
+        InternError::new(ErrorCode::IoError, format!("{changed} ({error})"))
     }
 }
 
@@ -914,12 +914,12 @@ impl FileApplier {
             .lock_retry
             .run(|| self.filesystem.lock_for_delete(source))
             .map_err(|error| source_failure(&error, "source cannot be exclusively verified"))?;
-        let identity = locked.identity().map_err(|_| {
-            InternError::new(ErrorCode::FileChanged, "source identity is unavailable")
-        })?;
+        let identity = locked
+            .identity()
+            .map_err(|error| source_failure(&error, "source identity is unavailable"))?;
         let pre_hash = locked
             .hash()
-            .map_err(|_| InternError::new(ErrorCode::FileChanged, "source cannot be verified"))?;
+            .map_err(|error| source_failure(&error, "source cannot be verified"))?;
         if pre_hash != expected_fingerprint {
             return Err(InternError::new(
                 ErrorCode::FileChanged,

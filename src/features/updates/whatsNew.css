@@ -1,0 +1,6 @@
+.whats-new { color: var(--text); }
+.whats-new::backdrop { background: var(--scrim); }
+.whats-new h2 { margin: 0 0 16px; font-family: var(--font-display); font-size: 22px; }
+.whats-new ul { padding-left: 20px; margin: 0 0 20px; }
+.whats-new li { margin-bottom: 12px; font-size: 14px; line-height: 1.5; }
+.whats-new button { display: block; margin-left: auto; }

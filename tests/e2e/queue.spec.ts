@@ -61,6 +61,7 @@ test('naming your organization in Settings files a waiting proposal by the other
 
   await page.getByRole('button', { name: /Settings/i }).click();
   const dialog = page.getByRole('dialog', { name: /Settings/i });
+  await dialog.locator('summary', { hasText: 'Naming and filing' }).click();
   // One name per line; the blank line a list picks up is not a name.
   await dialog.getByLabel('Your organization\'s names').fill('TenantCo Inc.\n\n');
   await dialog.getByRole('button', { name: 'Save settings' }).click();

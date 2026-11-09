@@ -26,8 +26,8 @@ export interface GridColumn {
 }
 
 export const COLUMNS: readonly GridColumn[] = [
-  { key: 'original', label: 'Original filename', copyable: true },
   { key: 'status', label: 'Status', copyable: false },
+  { key: 'original', label: 'Original filename', copyable: true },
   { key: 'proposed', label: 'Proposed filename', copyable: true },
   { key: 'description', label: 'Description', copyable: true },
   { key: 'check', label: 'Check', copyable: true },

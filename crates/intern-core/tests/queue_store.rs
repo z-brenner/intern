@@ -55,6 +55,91 @@ fn duplicate_unchanged_path_focuses_existing_item_but_same_hash_at_new_path_enqu
 }
 
 #[test]
+fn extraction_hash_refresh_requires_the_current_claim_and_cannot_change_a_finished_reading() {
+    let temp = TempDir::new().unwrap();
+    let db = store(&temp);
+    let other_session = store(&temp);
+    let item = db.enqueue(Path::new("doc.pdf"), "arrival").unwrap();
+    assert_eq!(
+        db.refresh_extraction_hash(item.id, "arrival", "current")
+            .unwrap_err()
+            .code(),
+        ErrorCode::StateConflict
+    );
+    db.claim_next().unwrap().unwrap();
+    assert_eq!(
+        other_session
+            .refresh_extraction_hash(item.id, "arrival", "current")
+            .unwrap_err()
+            .code(),
+        ErrorCode::StateConflict
+    );
+    assert_eq!(
+        db.refresh_extraction_hash(item.id, "wrong", "current")
+            .unwrap_err()
+            .code(),
+        ErrorCode::StateConflict
+    );
+    let refreshed = db
+        .refresh_extraction_hash(item.id, "arrival", "current")
+        .unwrap();
+    assert_eq!(refreshed.source_hash, "current");
+    db.transition(
+        item.id,
+        QueueStatus::Extracting,
+        QueueStatus::Analyzing,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        db.refresh_extraction_hash(item.id, "current", "later")
+            .unwrap_err()
+            .code(),
+        ErrorCode::StateConflict
+    );
+    assert_eq!(db.list().unwrap()[0].source_hash, "current");
+}
+
+#[test]
+fn extraction_hash_refresh_does_not_overwrite_an_existing_version() {
+    let temp = TempDir::new().unwrap();
+    let db = store(&temp);
+    let path = Path::new("doc.pdf");
+    let item = db.enqueue(path, "arrival").unwrap();
+    db.enqueue(path, "current").unwrap();
+    db.claim_next().unwrap().unwrap();
+    assert_eq!(
+        db.refresh_extraction_hash(item.id, "arrival", "current")
+            .unwrap_err()
+            .code(),
+        ErrorCode::Duplicate
+    );
+    assert_eq!(db.list().unwrap().len(), 2);
+}
+
+#[test]
+fn extraction_hash_refresh_refuses_an_expired_lease() {
+    let temp = TempDir::new().unwrap();
+    let db = store(&temp);
+    let item = db.enqueue(Path::new("doc.pdf"), "arrival").unwrap();
+    db.claim_next().unwrap().unwrap();
+    rusqlite::Connection::open(temp.path().join("queue.sqlite3"))
+        .unwrap()
+        .execute(
+            "UPDATE queue_items SET lease_expires_at = 0 WHERE id = ?1",
+            [item.id],
+        )
+        .unwrap();
+    assert_eq!(
+        db.refresh_extraction_hash(item.id, "arrival", "current")
+            .unwrap_err()
+            .code(),
+        ErrorCode::StateConflict
+    );
+    assert_eq!(db.list().unwrap()[0].source_hash, "arrival");
+}
+
+#[test]
 fn exactly_one_concurrent_claimant_wins() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("queue.sqlite3");

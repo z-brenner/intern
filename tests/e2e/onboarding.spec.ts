@@ -98,7 +98,7 @@ test('a person sets up Intern for the fixed SharePoint library without typing an
   await expect(page.getByRole('button', { name: 'Set up Intern' })).toHaveCount(0);
 });
 
-test('a person chooses an input and an output folder, with no sign-in, nothing to type, and nothing to skip', async ({ page }) => {
+test('a person chooses Queue and Completed folders, with no sign-in, nothing to type, and nothing to skip', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/?folderSetup=fake');
 
@@ -109,14 +109,14 @@ test('a person chooses an input and an output folder, with no sign-in, nothing t
   await expect(main.getByRole('button', { name: 'Not now' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Choose folders' }).click();
 
-  await expect(main.getByRole('heading', { level: 1, name: 'Choose your input folder' })).toBeFocused();
+  await expect(main.getByRole('heading', { level: 1, name: 'Choose your Queue folder' })).toBeFocused();
   await expect(main.getByRole('textbox')).toHaveCount(0);
   await expect(main.getByText('Legal - Documents (Contoso SharePoint)')).toBeVisible();
   await expect(main.getByText('Synced by OneDrive').first()).toBeVisible();
   await page.getByRole('button', { name: 'Use Legal - Documents (Contoso SharePoint)' }).click();
 
-  await expectAccessibleStep(page, 'Choose your output folder', 'Output folder', 'Create Input and Output folders');
-  await page.getByRole('button', { name: 'Create Input and Output folders' }).click();
+  await expectAccessibleStep(page, 'Choose your Completed folder', 'Completed folder', 'Create both folders');
+  await page.getByRole('button', { name: 'Create both folders' }).click();
 
   await expect(main.getByRole('heading', { level: 1, name: 'You’re all set' })).toBeFocused();
   await expect(main.getByText('Legal - Documents (Contoso SharePoint) › Input')).toBeVisible();
@@ -136,15 +136,15 @@ test('both folders are at the top of Settings, and change in a click', async ({ 
   await expect(folders.getByText('Put files here that you want Intern to process.')).toBeVisible();
   await expect(folders.getByText('C:\\Intern\\Output')).toBeVisible();
   await expect(folders.getByText('Processed files end up here, renamed.')).toBeVisible();
-  await expect(folders.getByRole('button', { name: 'Change input folder' })).toBeVisible();
-  await expect(folders.getByRole('button', { name: 'Change output folder' })).toBeVisible();
+  await expect(folders.getByRole('button', { name: 'Change Queue folder' })).toBeVisible();
+  await expect(folders.getByRole('button', { name: 'Change Completed folder' })).toBeVisible();
   await expect(dialog.getByLabel('Watch a folder for new documents')).toHaveCount(0);
 
   // The synced locations, under Advanced, are one-click choices.
-  await dialog.getByText('Advanced: shared folders and support details').click();
-  await dialog.getByRole('button', { name: 'Use OneDrive – Contoso as the output folder' }).click();
+  await dialog.getByText('Shared folders and troubleshooting').click();
+  await dialog.getByRole('button', { name: 'Use OneDrive – Contoso as the Completed folder' }).click();
   await expect(folders.getByText('C:\\Users\\pat\\OneDrive - Contoso')).toBeVisible();
-  // An output folder OneDrive syncs gets records for SharePoint's Description column.
+  // An Completed folder OneDrive syncs gets records for SharePoint's Description column.
   await expect(dialog.getByLabel('Write a description record for each filed document')).toBeChecked();
   await dialog.getByRole('button', { name: 'Save settings' }).click();
   await expect(dialog).toHaveCount(0);

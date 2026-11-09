@@ -21,12 +21,9 @@ describe('the update settings', () => {
     render(<App bridge={bridge} />);
 
     let dialog = await openSettings();
-    const toggle = () => within(dialog).getByLabelText('Check for updates automatically (when Intern starts and every 6 hours)');
+    const toggle = () => within(dialog).getByLabelText('Check for updates automatically');
     expect(toggle()).toBeChecked();
-    expect(within(dialog).getByText('Turn this off and Intern asks only when you press Check for updates.')).toBeVisible();
     fireEvent.click(toggle());
-    expect(within(dialog).getByText('Off: Intern asks only when you press Check for updates.')).toBeVisible();
-    expect(within(dialog).queryByText('Turn this off and Intern asks only when you press Check for updates.')).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument());
     expect((await bridge.getSettings()).skipUpdateChecks).toBe(true);

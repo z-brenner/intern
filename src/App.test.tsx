@@ -117,10 +117,10 @@ describe('desktop drag and drop', () => {
     await waitFor(() => expect(desktop.listening('tauri://drag-drop')).toBe(true));
 
     desktop.emit('tauri://drag-enter', { paths: ['C:/Docs/a.pdf'], position: { x: 1, y: 2 } });
-    expect(screen.getByText('Drop to copy 1 file into your input folder')).toBeVisible();
+    expect(screen.getByText('Drop to copy 1 file into your Queue folder')).toBeVisible();
     desktop.emit('tauri://drag-drop', { paths: ['C:/Docs/a.pdf'], position: { x: 1, y: 2 } });
 
-    expect(await screen.findByText('Nothing was copied: no input folder is set up yet. Choose one in Settings, under Folders.')).toBeVisible();
+    expect(await screen.findByText('Nothing was copied: no Queue folder is set up yet. Choose one in Settings, under Folders.')).toBeVisible();
     expect(screen.queryByRole('row', { name: /a\.pdf/ })).not.toBeInTheDocument();
   });
 });

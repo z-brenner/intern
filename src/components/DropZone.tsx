@@ -47,7 +47,7 @@ export function DropZone({ variant = 'panel', inputFolder = '', outputFolder = '
     setOver(false);
     onDrop(event.dataTransfer);
   };
-  const input = inputFolder || 'your input folder';
+  const input = inputFolder || 'your Queue folder';
   const label = `Drag files or folders here to copy them into ${input}`;
   return <div className={`drop-zone drop-zone--${variant}${over ? ' drag-over' : ''}`} aria-label={label} aria-describedby="supported-formats" role="region"
     onDragOver={(event) => { event.preventDefault(); if (!over) setOver(true); }}
@@ -57,7 +57,7 @@ export function DropZone({ variant = 'panel', inputFolder = '', outputFolder = '
       ? <div className="drop-copy">
         <span className="drop-mark"><Icon icon={FileUp} /></span>
         <h2>Drop documents here</h2>
-        <p>Intern copies them into your input folder{inputFolder ? <>, <strong>{inputFolder}</strong></> : ''}, reads each one on this device, and proposes a clear new name. Processed files end up in your output folder{outputFolder ? <>, <strong>{outputFolder}</strong></> : ''}.</p>
+        <p>Copies go to your Queue folder{inputFolder ? <>, <strong>{inputFolder}</strong></> : ''}. Approved files go to your Completed folder{outputFolder ? <>, <strong>{outputFolder}</strong></> : ''}.</p>
         <p>{automaticRename
           ? 'Documents Intern is sure about are renamed on their own; the rest wait for you to approve them.'
           : 'Nothing is renamed until you approve it.'} Your originals stay where they are.</p>

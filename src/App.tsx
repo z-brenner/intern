@@ -623,7 +623,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       setActionMessage(message);
       if (report.skipped.length > 0) setSkippedNotice(message);
     } catch (error) {
-      setActionError(`Your settings were saved, but the files already in your input folder could not be added to the queue. ${describeActionError(error)}`);
+      setActionError(`Your settings were saved, but the files already in your Queue folder could not be added to the queue. ${describeActionError(error)}`);
     }
     await refreshAfterSettings();
   };
@@ -797,7 +797,6 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       onStart={model.start}
       onCancel={model.cancel}
       onChooseExisting={model.chooseExisting}
-      onUseHostedModel={() => setSettingsOpen(true)}
     />
     {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={() => setSettingsOpen(false)} onSave={async (next) => { await saveSettings(next); setSettingsOpen(false); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
   </>;
@@ -818,7 +817,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       {renameApplying && (!updateInstalling || updateProgress?.fraction === 1) && <p className="check-hint">Waiting for a rename to finish</p>}
     </div>}
     <AppHeader inert={drawerOpen} busy={actionPending} paused={paused} inputFolder={inputName}
-      privacy={{ hosted: settings.modelSource === 'hosted', hostedService: hostedService(settings), modelDownloaded: modelReady(model.setup), automaticUpdateChecks, lastUpdateCheck }}
+      privacy={{ modelDownloaded: modelReady(model.setup), automaticUpdateChecks, lastUpdateCheck }}
       onSettings={openSettings} onHelp={() => void openGuide()} onAddFiles={addFiles} onAddFolder={addFolder} onTogglePause={() => void (async () => { if (await runQueueAction(() => paused ? bridge.resumeQueue() : bridge.pauseQueue(), `Queue ${paused ? 'resumed' : 'paused'}.`)) setPaused(!paused); })()} />
     <div className="workspace"><section className="queue-panel" aria-label="Queue items" inert={drawerOpen || undefined}>
       {queueError && <div className="note note--failed" role="alert" aria-label="Queue connection error">
@@ -978,15 +977,9 @@ function useVerifiedInbox(bridge: DesktopBridge, managed: boolean, inputFolder: 
   return verified;
 }
 
-/** Who a hosted model's requests go to, as the privacy badge names it. */
-function hostedService(settings: AppSettings): string | undefined {
-  if (settings.hostedProvider === 'anthropic') return 'Anthropic';
-  try { return new URL(settings.hostedBaseUrl).host || undefined; } catch { return undefined; }
-}
-
 /** "Drop to copy 3 files into Input": a drop copies into the input folder, named when it is known. */
 function dropOverlayText(count: number, inputFolder: string) {
-  const into = inputFolder || 'your input folder';
+  const into = inputFolder || 'your Queue folder';
   return count > 0 ? `Drop to copy ${count} ${count === 1 ? 'file' : 'files'} into ${into}` : `Drop to copy files into ${into}`;
 }
 

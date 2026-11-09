@@ -602,7 +602,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // too" finds them there and holds them again.
   const heldCopies = new Map<string, string>();
   const inputFolder = () => {
-    if (!settings.intakeEnabled || !settings.intakeFolder.trim()) throw { code: 'INPUT_FOLDER_NOT_SET', message: 'no input folder is set up; choose one in Settings' };
+    if (!settings.intakeEnabled || !settings.intakeFolder.trim()) throw { code: 'INPUT_FOLDER_NOT_SET', message: 'no Queue folder is set up; choose one in Settings' };
     return settings.intakeFolder.replace(/[\\/]+$/, '');
   };
   // Every document queued in the input folder - copied there, or found

@@ -10,16 +10,16 @@ type Step = 'welcome' | 'pick' | 'output' | 'existing' | 'ready';
 interface Props {
   bridge: DesktopBridge;
   selection?: SelectionBoundary;
-  /** First run, or a launch with no input folder: start with the welcome screen. There is no skipping it. */
+  /** First run, or a launch with no Queue folder: start with the welcome screen. There is no skipping it. */
   welcome?: boolean;
   onDone(): Promise<void> | void;
   /** Leave without changing anything, when opened from Settings. */
   onCancel?(): void;
 }
 
-/** What the input folder is for, said the same way everywhere. */
+/** What the Queue folder is for, said the same way everywhere. */
 export const INPUT_FOLDER_HINT = 'Put files here that you want Intern to process.';
-/** What the output folder is for, said the same way everywhere. */
+/** What the Completed folder is for, said the same way everywhere. */
 export const OUTPUT_FOLDER_HINT = 'Processed files end up here, renamed.';
 
 function codeOf(error: unknown): string | undefined {
@@ -35,10 +35,10 @@ function describe(error: unknown): string {
 }
 
 /**
- * The setup Intern cannot be used without: an input folder - put files here
- * that you want processed - and an output folder - processed files end up
+ * The setup Intern cannot be used without: a Queue folder - put files here
+ * that you want processed - and a Completed folder - processed files end up
  * here, renamed - then one question about what is already in the input
- * folder. Choosing the input folder is the proof that its documents are the
+ * folder. Choosing the Queue folder is the proof that its documents are the
  * person's own, so there is no Microsoft sign-in here; the verified team
  * Inbox of an administrator's deployment is set up by the other flow.
  */
@@ -48,7 +48,7 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
   const [intake, setIntake] = useState('');
   const [destination, setDestination] = useState('');
   // The folders already saved, when there are any: an earlier release let a
-  // person choose an output folder and skip the input folder, and that
+  // person choose a Completed folder and skip the Queue folder, and that
   // choice is offered again rather than asked from scratch.
   const [saved, setSaved] = useState<{ input: string; output: string }>({ input: '', output: '' });
   const [existing, setExisting] = useState(0);
@@ -101,7 +101,7 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
     entry (AUTOSTART_FAILED) costs a note on the last step, never the setup
     nobody can get past. An install from an earlier release keeps its own
     choices for those, for teammates' uploads, and for description records,
-    which are only switched on here for an output folder chosen now.
+    which are only switched on here for a Completed folder chosen now.
   */
   const save = async (watched: string, filed: string, processExisting: boolean) => {
     const settings = await bridge.getSettings();
@@ -152,7 +152,7 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
     else await save(watched, filed, false);
   };
   // A synced location's top folder holds everything in it, so Intern makes
-  // an Input folder to watch there and an Output folder beside that, both
+  // a Queue folder to watch there and a Completed folder beside that, both
   // synced.
   const makeInputAndOutput = async () => {
     const input = await bridge.createInputFolder(intake);
@@ -160,22 +160,22 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
   };
 
   const known = roots ?? [];
-  // An output folder beside a synced location's own top folder would sit
+  // An Completed folder beside a synced location's own top folder would sit
   // outside it, where OneDrive does not reach.
   const besideLeavesSync = known.some((root) => contains(intake, root.path));
   // A drive's or a share's top folder has nothing beside it: the backend
-  // refuses to make an output folder there, so the button that asked it to
+  // refuses to make a Completed folder there, so the button that asked it to
   // could only ever fail.
   const beside = besideLeavesSync ? undefined : outputBeside(intake);
   const nothingBeside = !besideLeavesSync && beside === undefined;
-  // The output folder already saved, when it still works with this input.
+  // The Completed folder already saved, when it still works with this input.
   const keep = saved.output && !besideLeavesSync && !outputFolderProblem(intake, saved.output) ? saved.output : '';
-  // The input folder saved before watching was turned off, offered again -
+  // The Queue folder saved before watching was turned off, offered again -
   // unless it is one of the synced locations listed anyway.
   const previousInput = saved.input && !known.some((root) => contains(root.path, saved.input) && contains(saved.input, root.path)) ? saved.input : '';
   const steps: Array<[Step, string]> = [
     ...(welcome ? [['welcome', 'Welcome'] as [Step, string]] : []),
-    ['pick', 'Input folder'], ['output', 'Output folder'], ['existing', 'Files already there'], ['ready', 'Ready'],
+    ['pick', 'Queue folder'], ['output', 'Completed folder'], ['existing', 'Files already there'], ['ready', 'Ready'],
   ];
   const current = steps.findIndex(([id]) => id === step);
   const alert = problem && <p className="onboarding-alert" role="alert">{problem}</p>;
@@ -196,8 +196,8 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
         <h1 ref={heading} tabIndex={-1}>Your documents, renamed and filed</h1>
         <p>Intern works with two folders. Choose them now; you can change them later in Settings.</p>
         <dl className="setup-folders">
-          <div><dt>Input folder</dt><dd><span>{INPUT_FOLDER_HINT}</span></dd></div>
-          <div><dt>Output folder</dt><dd><span>{OUTPUT_FOLDER_HINT}</span></dd></div>
+          <div><dt>Queue folder</dt><dd><span>{INPUT_FOLDER_HINT}</span></dd></div>
+          <div><dt>Completed folder</dt><dd><span>{OUTPUT_FOLDER_HINT}</span></dd></div>
         </dl>
         {alert}
         <div className="onboarding-actions">
@@ -205,7 +205,7 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
         </div>
       </>}
       {step === 'pick' && <>
-        <h1 ref={heading} tabIndex={-1}>Choose your input folder</h1>
+        <h1 ref={heading} tabIndex={-1}>Choose your Queue folder</h1>
         <p><strong>{INPUT_FOLDER_HINT}</strong> Pick a folder only you add files to. Files you drop on Intern’s window are copied into it too.</p>
         {!roots && <p role="status" aria-live="polite">Looking for OneDrive folders on this computer…</p>}
         {roots && (roots.length > 0 || previousInput) && <ul className="folder-choices" aria-label="Suggested folders">
@@ -229,19 +229,19 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
         </div>
       </>}
       {step === 'output' && <>
-        <h1 ref={heading} tabIndex={-1}>Choose your output folder</h1>
+        <h1 ref={heading} tabIndex={-1}>Choose your Completed folder</h1>
         <p><strong>{OUTPUT_FOLDER_HINT}</strong> Neither folder may be inside the other.</p>
         {besideLeavesSync
           ? <p>You chose all of <strong>{label(intake)}</strong>. Intern will make two folders in it: <strong>Input</strong>, for files to process, and <strong>Output</strong>, where processed files end up.</p>
           : <>
-            <p>Input folder: <strong>{label(intake)}</strong></p>
-            {keep && <p>Your output folder until now: <strong>{label(keep)}</strong></p>}
+            <p>Queue folder: <strong>{label(intake)}</strong></p>
+            {keep && <p>Your Completed folder until now: <strong>{label(keep)}</strong></p>}
             {!keep && nothingBeside && <p>A drive’s top folder has nothing beside it. Choose a folder for processed files.</p>}
           </>}
         {alert}
         <div className="onboarding-actions">
           {besideLeavesSync
-            ? <button type="button" className="primary" disabled={busy} onClick={() => void run(makeInputAndOutput)}>Create Input and Output folders</button>
+            ? <button type="button" className="primary" disabled={busy} onClick={() => void run(makeInputAndOutput)}>Create both folders</button>
             : <>
               {keep && <button type="button" className="primary" disabled={busy} onClick={() => void run(() => fileInto(intake, keep))}>Keep using this folder</button>}
               {!nothingBeside && <button type="button" className={keep ? undefined : 'primary'} disabled={busy} onClick={() => void run(async () => { await fileInto(intake, await bridge.createOutputFolder(intake)); })}>Create an “Output” folder next to it</button>}
@@ -249,11 +249,11 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
             </>}
           <button type="button" disabled={busy} onClick={() => { setProblem(''); setStep('pick'); }}>Back</button>
         </div>
-        {beside !== undefined && <p className="onboarding-support">New Output folder: {beside}</p>}
+        {beside !== undefined && <p className="onboarding-support">New Completed folder: {beside}</p>}
       </>}
       {step === 'existing' && <>
         <h1 ref={heading} tabIndex={-1}>Process what is already there?</h1>
-        <p>Your input folder already has {existing === 1 ? '1 file' : `${existing} files`} in it. Should Intern process {existing === 1 ? 'it' : 'them'} too, or only files you add from now on?</p>
+        <p>Your Queue folder already has {existing === 1 ? '1 file' : `${existing} files`} in it. Should Intern process {existing === 1 ? 'it' : 'them'} too, or only files you add from now on?</p>
         {alert}
         <div className="onboarding-actions">
           <button type="button" disabled={busy} onClick={() => void run(() => save(intake, destination, true))}>Process {existing === 1 ? 'it' : 'them'} too</button>
@@ -263,17 +263,17 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
       {step === 'ready' && <>
         <h1 ref={heading} tabIndex={-1} className="onboarding-finished">You’re all set</h1>
         <dl className="setup-folders">
-          <div><dt>Input folder</dt><dd><strong>{label(intake)}</strong><span>{INPUT_FOLDER_HINT} You can also drop them on Intern’s window.</span></dd></div>
-          <div><dt>Output folder</dt><dd><strong>{label(destination)}</strong><span>{OUTPUT_FOLDER_HINT}</span></dd></div>
+          <div><dt>Queue folder</dt><dd><strong>{label(intake)}</strong><span>{INPUT_FOLDER_HINT} You can also drop them on Intern’s window.</span></dd></div>
+          <div><dt>Completed folder</dt><dd><strong>{label(destination)}</strong><span>{OUTPUT_FOLDER_HINT}</span></dd></div>
         </dl>
         <p>You can change either folder any time in Settings.</p>
         {background === 'on' && <p>Intern keeps running in the system tray and starts when you sign in, so files are processed while its window is closed. You can change this in Settings.</p>}
         {background === 'failed' && <div className="note note--review" role="note" aria-label="Start at sign-in">
           <p>Your folders are saved, but Windows would not let Intern start when you sign in, so it works only while it is open. You can try again in Settings, under This computer.</p>
         </div>}
-        {describesForSharePoint && <p>Your output folder is in SharePoint, so Intern also leaves a short description of each document there for SharePoint’s Description column. Settings shows how to fill that column.</p>}
+        {describesForSharePoint && <p>Your Completed folder is in SharePoint, so Intern also leaves a short description of each document there for SharePoint’s Description column. Settings shows how to fill that column.</p>}
         {leftOut && <div className="note note--review" role="note" aria-label="Files not added">
-          <p>{describeAddReport(leftOut)} They stay in your input folder.</p>
+          <p>{describeAddReport(leftOut)} They stay in your Queue folder.</p>
         </div>}
         {alert}
         <div className="onboarding-actions">

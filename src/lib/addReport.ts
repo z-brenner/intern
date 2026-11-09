@@ -20,15 +20,15 @@ const SKIP_REASONS: Record<string, string> = {
   FILE_CHANGED: 'it changed while it was being added',
   UPLOADER_OTHER: 'someone else uploaded it',
   UPLOADER_UNVERIFIED: 'its uploader could not be confirmed',
-  IN_OUTPUT_FOLDER: 'it is already in your output folder',
-  COPY_FAILED: 'it could not be copied into your input folder',
+  IN_OUTPUT_FOLDER: 'it is already in your Completed folder',
+  COPY_FAILED: 'it could not be copied into your Queue folder',
   CLAIMED_ELSEWHERE: 'another computer is already working on it',
-  INPUT_FOLDER_NOT_SET: 'no input folder is set up yet; choose one in Settings',
-  INPUT_FOLDER_UNAVAILABLE: 'your input folder could not be opened',
+  INPUT_FOLDER_NOT_SET: 'no Queue folder is set up yet; choose one in Settings',
+  INPUT_FOLDER_UNAVAILABLE: 'your Queue folder could not be opened',
   SYNC_CONFLICT_COPY: 'a OneDrive conflict copy; resolve the conflict first',
   CLAIM_IO_FAILED: 'Intern could not note in the shared folder that it is working on it',
-  INTAKE_COORDINATION_UNAVAILABLE: 'the input folder’s shared bookkeeping could not be written',
-  NOT_IN_INTAKE_FOLDER: 'it is not in the input folder Intern is watching',
+  INTAKE_COORDINATION_UNAVAILABLE: 'the Queue folder’s shared bookkeeping could not be written',
+  NOT_IN_INTAKE_FOLDER: 'it is not in the Queue folder Intern is watching',
 };
 
 /** At most this many skipped files are named; the rest are counted. */
@@ -61,7 +61,7 @@ function heldSentence(reason: string | undefined, held: number, into: string): s
 
 export function describeAddReport(report: AddReport): string {
   const parts: string[] = [];
-  const into = report.inputFolder ? folderName(report.inputFolder) : 'your input folder';
+  const into = report.inputFolder ? folderName(report.inputFolder) : 'your Queue folder';
   const held = report.held ?? 0;
   if (report.copied !== undefined) {
     if (report.copied > 0) parts.push(`Copied ${files(report.copied)} into ${into}.`);

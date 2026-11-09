@@ -20,6 +20,17 @@ const ambiguous: QueueItem = {
 };
 
 describe('what to check', () => {
+  it('keeps optional analysis details collapsed while the decision stays available', async () => {
+    render(<App bridge={createInMemoryBridge({ items: [ambiguous] })} />);
+    await openRow(await screen.findByRole('row', { name: /Scan 0102.pdf/i }));
+    const disclosure = screen.getByText('Analysis details').closest('details')!;
+    expect(disclosure).not.toHaveAttribute('open');
+    expect(screen.getByRole('button', { name: 'Approve & rename' })).toBeVisible();
+    fireEvent.click(screen.getByText('Analysis details'));
+    expect(disclosure).toHaveAttribute('open');
+    expect(screen.getByText("Model's confidence")).toBeVisible();
+  });
+
   it('says what to check in the table, in words, and marks that part of the name', async () => {
     render(<App bridge={createInMemoryBridge({ items: [ambiguous] })} />);
     const row = await screen.findByRole('row', { name: /Scan 0102.pdf/i });

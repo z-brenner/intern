@@ -318,12 +318,26 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         </div>
       </div>}
       {suggestedDate && <div className="suggestion" role="group" aria-label="Suggested date">
-        <p><Icon icon={CalendarPlus} />The model read <strong>{suggestedDate}</strong> as the document's date, but Intern could not find it written in the document. Every rename needs a date.</p>
+        <p><Icon icon={CalendarPlus} />Suggested date: <strong>{suggestedDate}</strong> (unverified). Check it against the document before using it.</p>
         <div className="suggestion-actions">
           <button type="button" disabled={busy} onClick={useSuggestedDate}>Use this date</button>
           <button type="button" className="primary" disabled={busy} onClick={decides(acceptSuggestedDate)}>Use date &amp; rename</button>
         </div>
       </div>}
+      <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+      {flagged.includes('description') && <p className="flag-line" role="note" aria-label="Part of the name to check">Check the description against the document.</p>}
+    </section>}
+    {/*
+      A renamed file becomes `completed`, which made `editable` false and took
+      the description off screen with it. The sentence describing the document
+      is the other half of what Intern produces, and it was unreachable the
+      moment it was most useful. Read-only here because the proposal is settled,
+      with a copy action so it can go somewhere else.
+    */}
+    {!editable && item.description && <section><h3>Description</h3><p className="settled-description">{item.description}</p>
+      <button type="button" className="copy-description" onClick={() => void navigator.clipboard?.writeText(item.description ?? '')}><Icon icon={ClipboardCopy} />Copy description</button></section>}
+    {(evidence.length > 0 || item.confidence !== undefined || item.readBy) && <details className="analysis-details" key={item.id}>
+      <summary>Analysis details</summary>
       {/*
         The model's figure for its own reading. It no longer has a column:
         a small model overstates it, and what decides review is the checks
@@ -337,29 +351,18 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         accurate one can, unless someone acts on it first.
       */}
       {item.readBy && <p className="check-hint read-by" aria-label="Read by">{readByLine(item.readBy, !item.approved)}</p>}
-      <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label>
-      {flagged.includes('description') && <p className="flag-line" role="note" aria-label="Part of the name to check">Check the description against the document.</p>}
-    </section>}
-    {/*
-      A renamed file becomes `completed`, which made `editable` false and took
-      the description off screen with it. The sentence describing the document
-      is the other half of what Intern produces, and it was unreachable the
-      moment it was most useful. Read-only here because the proposal is settled,
-      with a copy action so it can go somewhere else.
-    */}
-    {!editable && item.description && <section><h3>Description</h3><p className="settled-description">{item.description}</p>
-      <button type="button" className="copy-description" onClick={() => void navigator.clipboard?.writeText(item.description ?? '')}><Icon icon={ClipboardCopy} />Copy description</button></section>}
-    {evidence.length > 0 && <section className="evidence"><h3>Evidence</h3>
-      <p className="section-lead">{verbatim
-        ? 'Lines from the document behind each part of this name.'
-        : 'The model\'s reading of the document, in its own words. These are not lines matched in the document, so check them against it.'}</p>
-      <dl className="evidence-list">{evidence.map(({ label, field, quotes }) => {
-        const doubted = flagged.includes(field);
-        return <div className={`evidence-item${doubted ? ' flagged' : ''}`} key={label}>
-          <dt className="field-label">{doubted && <Icon icon={CircleAlert} />}{label}{doubted && <span className="sr-only"> (check this)</span>}</dt>
-          <dd>{quotes.map((quote) => verbatim ? <q key={quote}>{quote}</q> : <span className="reading" key={quote}>{quote}</span>)}</dd>
-        </div>;
-      })}</dl></section>}
+      {evidence.length > 0 && <section className="evidence"><h3>Evidence</h3>
+        <p className="section-lead">{verbatim
+          ? 'Lines from the document behind each part of this name.'
+          : 'The model\'s reading of the document, in its own words. These are not lines matched in the document, so check them against it.'}</p>
+        <dl className="evidence-list">{evidence.map(({ label, field, quotes }) => {
+          const doubted = flagged.includes(field);
+          return <div className={`evidence-item${doubted ? ' flagged' : ''}`} key={label}>
+            <dt className="field-label">{doubted && <Icon icon={CircleAlert} />}{label}{doubted && <span className="sr-only"> (check this)</span>}</dt>
+            <dd>{quotes.map((quote) => verbatim ? <q key={quote}>{quote}</q> : <span className="reading" key={quote}>{quote}</span>)}</dd>
+          </div>;
+        })}</dl></section>}
+    </details>}
     {/* Settled, a reason is no longer why the item waits - "already had this name" is a note about what happened. */}
     {/* A waiting document is not in review: its reason says why it waits (a document in doubt, to be read again once Intern has shown it can read). */}
     {item.reason && !reviewNote && <section className="note"><h3>{completed ? 'Note' : item.status === 'waiting' ? 'Why it is waiting' : 'Note'}</h3><p>{item.reason}</p>
