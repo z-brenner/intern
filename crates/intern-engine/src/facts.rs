@@ -3551,9 +3551,10 @@ struct LetterLayout {
     salutation: Option<(u32, usize)>,
     /// Where a court document's caption stands, as the ordinals of its
     /// first and last units: from the first of the first page's first units
-    /// that names a court, a tribunal or an arbitration down to the last
-    /// one that sets the case's sides against each other ("v.",
-    /// "-against-") or labels one ("Plaintiff,").
+    /// that names a court, a tribunal or an arbitration, with no dateline
+    /// between it and its sides, down to the last one that sets the case's
+    /// sides against each other ("v.", "-against-") or labels one
+    /// ("Plaintiff,").
     caption: Option<(u32, u32)>,
 }
 
@@ -3610,12 +3611,21 @@ impl LetterLayout {
                         || has_word(line, ANSWERING_SIDE)
                 })
         };
+        // A caption's sides stand under its forum's heading with no
+        // dateline between them: a court's own letterhead over a letter's
+        // dateline heads no caption, though the letter sets out its case
+        // below ("Smith v. Jones, No. 22-cv-123" with no "Re:").
         let caption = head
             .iter()
-            .find(|unit| has_word(&unit.text, FORUM_WORDS))
-            .and_then(|forum| {
+            .filter(|unit| has_word(&unit.text, FORUM_WORDS))
+            .find_map(|forum| {
+                let dated_below = dateline.filter(|&dateline| dateline > forum.ordinal);
                 head.iter()
-                    .filter(|unit| unit.ordinal >= forum.ordinal && sets_out_sides(unit))
+                    .filter(|unit| {
+                        unit.ordinal >= forum.ordinal
+                            && dated_below.is_none_or(|dateline| unit.ordinal < dateline)
+                            && sets_out_sides(unit)
+                    })
                     .map(|unit| unit.ordinal)
                     .max()
                     .map(|end| (forum.ordinal, end))
@@ -12579,6 +12589,53 @@ Rickmansworth,
         let facts = outcome.facts.expect("facts");
         assert_eq!(facts.parties[0].role, Some(PartyRole::Sender));
         assert_eq!(facts.parties[0].role_support, Support::Cited);
+        // A court's own letter sets its case out with no "Re:": the court's
+        // letterhead stands over the letter's dateline and heads no
+        // caption, so it is still the sender's.
+        let court_letter = "UNITED STATES DISTRICT COURT\nSOUTHERN DISTRICT OF NEW YORK\n\
+             Chambers of Judge Jane Roe\n\nMarch 3, 2024\n\nJohn Smith, Esq.\nSmith & Co LLP\n\
+             1 Main Street\nNew York, NY 10001\n\nSmith v. Jones, No. 22-cv-123\n\n\
+             Dear Counsel:\n\nThe conference set for March 10 is adjourned to April 1, \
+             2024.\n\nSO ORDERED.\n\nJane Roe";
+        let index = index_of(court_letter);
+        let context = whole(&index);
+        let scope = ValidationScope::new(&index, &context, &[]);
+        assert_eq!(LetterLayout::of(&scope).caption, None);
+        let (outcome, _) = facts_for(court_letter, |index| ModelFacts {
+            document_type: Some("letter".into()),
+            type_evidence: vec![id_of(index, "Dear Counsel")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "March 3, 2024")],
+            parties: vec![party(
+                "United States District Court",
+                Some(PartyRole::Sender),
+                &[id_of(index, "UNITED STATES DISTRICT COURT")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        let facts = outcome.facts.expect("facts");
+        assert_eq!(facts.parties[0].role_support, Support::Cited);
+        // A caption set out above a letter's dateline is still a caption.
+        let index = index_of(
+            "UNITED STATES DISTRICT COURT\nSOUTHERN DISTRICT OF NEW YORK\n\n\
+             LUXO AS,\nPlaintiff,\n-against-\nTHE WALT DISNEY COMPANY,\nDefendant.\n\n\
+             March 3, 2024\n\nDear Counsel:\n\nThe conference is adjourned.",
+        );
+        let context = whole(&index);
+        let scope = ValidationScope::new(&index, &context, &[]);
+        let layout = LetterLayout::of(&scope);
+        let luxo = index
+            .units()
+            .iter()
+            .find(|unit| unit.text.contains("LUXO"))
+            .expect("unit");
+        assert!(layout.caption.is_some() && layout.in_caption(&index.units()[0]));
+        assert!(layout.in_caption(luxo), "{:?}", layout.caption);
     }
 
     /// A reply that copied a title line with the side filing it, or with
