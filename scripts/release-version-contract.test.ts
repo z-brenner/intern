@@ -32,7 +32,12 @@ it('keeps every current alpha.3 release surface synchronized without rewriting h
   expect(smoke).toContain(`worker_version -ne "${version}"`);
   expect(sbom).toContain(`-Version "${version}"`);
   expect(sbom).toContain(`Intern-v${version}.spdx.json`);
-  expect(assets).toContain(`version = "${version}"`);
+  // The Windows asset fetch reads the version tauri.conf.json carries (checked
+  // above) rather than spelling it: CI keys its runtime-asset cache on the
+  // script, and a version bump there discarded a 22-minute Tesseract build.
+  expect(assets).toContain('$InternVersion = [string](Get-Content -LiteralPath (Join-Path $RepositoryRoot "src-tauri/tauri.conf.json") -Raw | ConvertFrom-Json).version');
+  expect(assets).toContain('name = "Intern"; version = $InternVersion');
+  expect(assets).not.toMatch(/\d+\.\d+\.\d+-alpha\.\d+/);
   expect(notices).toContain(`Intern ${version}`);
   expect(readme).toContain(`Intern_${version}_x64-setup.exe`);
   expect(checklist).toContain(`Intern v${version} release checklist`);

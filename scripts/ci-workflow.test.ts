@@ -65,6 +65,38 @@ describe('the runtime-asset cache in CI', () => {
   });
 });
 
+describe('the cargo caches in CI', () => {
+  // Every release changes Cargo.lock. With the lock's hash as the whole key, the
+  // release pull request and the merge after it each built everything cold:
+  // twelve minutes of Windows tests, nine of bundling and seven of saving.
+  it('restore the newest earlier entry when the lock changes, and key on cargo inputs alone', async () => {
+    const workflow = await ci();
+    const caches = ['corpus-replay', 'rust-ubuntu', 'linux-desktop', 'windows-release-gates'].flatMap((id) =>
+      stepsOf(jobOf(workflow, id))
+        .filter((step) => step.includes('actions/cache@') && /^ {12}target$/m.test(step))
+        .map((step) => [id, step] as const),
+    );
+    expect(caches.map(([id]) => id)).toEqual(['corpus-replay', 'rust-ubuntu', 'linux-desktop', 'windows-release-gates']);
+    for (const [id, step] of caches) {
+      const key = /^ {10}key: (.+)$/m.exec(step)![1];
+      const prefix = key.slice(0, key.indexOf('${{ hashFiles('));
+      expect(prefix, id).toMatch(/^cargo-[\w-]*\$\{\{ runner\.os \}\}-$/);
+      expect(step, id).toMatch(new RegExp(`^ {10}restore-keys: ${prefix.replace(/[$.{}]/g, '\\$&')}$`, 'm'));
+      expect(key, id).not.toContain('runtime-assets.json');
+    }
+  });
+
+  // The asset cache holds a Tesseract built from source for 22 minutes; a key
+  // that moved with the version threw it away on every release.
+  it('key the Windows runtime assets on nothing a release bumps', async () => {
+    const version = JSON.parse(await readFile('package.json', 'utf8')).version as string;
+    const restore = stepsOf(jobOf(await ci(), 'windows-release-gates')).find((step) => step.includes('id: assets-cache'))!;
+    const hashed = /^ {10}key: .*hashFiles\(([^)]*)\)/m.exec(restore)![1].split(',').map((file) => file.trim().replace(/'/g, ''));
+    expect(hashed).toEqual(['src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1']);
+    for (const file of hashed) expect(await readFile(file, 'utf8'), file).not.toContain(version);
+  });
+});
+
 describe('the corpus replay job', () => {
   const sets = [
     ['real1', 'sample.json'],

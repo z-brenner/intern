@@ -207,8 +207,11 @@ jobs:
             target
           # Named for the settings above: an entry saved with incremental state and
           # debug info would otherwise be restored as an exact hit, and never
-          # replaced, for as long as Cargo.lock stays the same.
+          # replaced, for as long as Cargo.lock stays the same. A Cargo.lock
+          # change (every release bumps it) restores the newest earlier entry
+          # and rebuilds only what changed, rather than everything.
           key: cargo-ubuntu-nodebug-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-ubuntu-nodebug-${{ runner.os }}-
       - run: cargo fmt --all -- --check
       # The generator uses nothing but Node itself, so no npm install.
       - name: Generate the clean-room fixtures the worker tests read
@@ -274,6 +277,7 @@ jobs:
             ~/.cargo/git
             target
           key: cargo-linux-desktop-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-linux-desktop-${{ runner.os }}-
       # The runtime's downloads, keyed by the scripts that hold the pins and
       # the manifest the shared pins come from. Nothing restored is trusted for
       # it: every download is checked against its pin again.
@@ -325,13 +329,19 @@ jobs:
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
           rustup default 1.88.0
+      # Keyed on the lock alone: the runtime-asset pins are no cargo input. A
+      # Cargo.lock change, which every release makes, restores the newest
+      # earlier entry and rebuilds only what changed: a cold Windows build was
+      # twelve minutes of tests, nine of bundling and seven of saving the cache,
+      # on the release pull request and again on main.
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~\.cargo\registry
             ~\.cargo\git
             target
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'src-tauri/resources/runtime-assets.json') }}
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
       # Restore and save separately, because actions/cache declares
       # `post-if: success()` and therefore saves nothing when a later step fails.
       # This step builds Tesseract from a pinned vcpkg baseline, and vcpkg pulls
@@ -353,6 +363,11 @@ jobs:
       # its own, which the next run restores and then completes. A partial
       # cache saved under the primary key would instead be restored as a hit
       # for ever and never upgraded.
+      #
+      # The key hashes the pins and the fetch script, and nothing a release
+      # changes: the script reads the app's version from tauri.conf.json rather
+      # than spelling it, so a version bump no longer throws away a 22-minute
+      # Tesseract build.
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         id: assets-cache
         with:

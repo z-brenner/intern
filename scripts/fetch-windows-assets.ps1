@@ -10,6 +10,12 @@ Set-StrictMode -Version Latest
 $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ManifestPath = Join-Path $RepositoryRoot "src-tauri/resources/runtime-assets.json"
 $Manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+# The worker's package version is the app's. It is read, as the Linux fetch
+# reads it, rather than spelled here: CI keys its runtime-asset cache on this
+# script, and a release's version bump would otherwise discard that cache and
+# its 22-minute Tesseract build.
+$InternVersion = [string](Get-Content -LiteralPath (Join-Path $RepositoryRoot "src-tauri/tauri.conf.json") -Raw | ConvertFrom-Json).version
+if (-not $InternVersion) { throw "src-tauri/tauri.conf.json names no version" }
 $WorkDirectory = if ($CacheDirectory) {
     [System.IO.Path]::GetFullPath($CacheDirectory)
 } else {
@@ -182,7 +188,7 @@ function Get-PackagedRuntimePath {
 function Get-RuntimePackages {
     param([Parameter(Mandatory = $true)][string]$Path)
     $Leaf = Split-Path -Leaf $Path
-    if ($Leaf -eq "intern-worker-$TargetTriple.exe") { return @([ordered]@{ name = "Intern"; version = "0.1.0-alpha.14" }) }
+    if ($Leaf -eq "intern-worker-$TargetTriple.exe") { return @([ordered]@{ name = "Intern"; version = $InternVersion }) }
     if ($RuntimePackages.ContainsKey($Path)) { return @($RuntimePackages[$Path]) }
     throw "No package identity for staged runtime file: $Path"
 }
