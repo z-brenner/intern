@@ -2036,10 +2036,10 @@ fn under_a_receipt_label(scope: &ValidationScope<'_>, unit: &EvidenceUnit, at: u
 }
 
 /// Whether the unit a loose reading of `date` was found in reads it only
-/// on receipts' stamps: each of its lines that states `date` as
-/// [`read_date_positions`] reads it is a stamp of that date
-/// ([`stamped_dates`](crate::evidence::stamped_dates)) under a receipt's
-/// label.
+/// under receipts' labels: each of its lines that states `date` as
+/// [`read_date_positions`] reads it stands under a "RECEIVED" or "FILED"
+/// ([`under_a_receipt_label`]), whatever form the loose date takes there
+/// (a stamp's figures apart, "November 22,1923", "02-Jun-17").
 fn read_only_on_a_receipt_stamp(
     scope: &ValidationScope<'_>,
     unit: Option<&EvidenceUnit>,
@@ -2054,13 +2054,7 @@ fn read_only_on_a_receipt_stamp(
         .enumerate()
         .filter(|(_, line)| !read_date_positions(date, &normalize(line)).is_empty())
         .peekable();
-    reading.peek().is_some()
-        && reading.all(|(at, line)| {
-            crate::evidence::stamped_dates(line)
-                .iter()
-                .any(|(stamped, _)| stamped == date)
-                && under_a_receipt_label(scope, unit, at)
-        })
+    reading.peek().is_some() && reading.all(|(at, _)| under_a_receipt_label(scope, unit, at))
 }
 
 /// Whether a type names no class a letter could carry of its own - a
@@ -12624,12 +12618,27 @@ Rickmansworth,
                 "{dated}"
             );
         }
-        // A receipt's stamp is not read loosely, as it repairs nothing.
-        for (stamp, read) in [
-            ("SEP 1 8 2015", true),
-            ("RECEIVED\nSEP 1 8 2015", false),
-            ("RECEIVED SEP 1 8 2015", false),
-            ("FILED SEP 1 8 2015", false),
+        // A receipt's stamp is not read loosely, as it repairs nothing,
+        // whatever loose form its date takes.
+        for (stamp, needle, date, read) in [
+            ("SEP 1 8 2015", "SEP 1 8", "2015-09-18", true),
+            ("RECEIVED\nSEP 1 8 2015", "SEP 1 8", "2015-09-18", false),
+            ("RECEIVED SEP 1 8 2015", "SEP 1 8", "2015-09-18", false),
+            ("FILED SEP 1 8 2015", "SEP 1 8", "2015-09-18", false),
+            ("November 22,1923", "November 22", "1923-11-22", true),
+            (
+                "RECEIVED November 22,1923",
+                "November 22",
+                "1923-11-22",
+                false,
+            ),
+            (
+                "RECEIVED\nNovember 22,1923",
+                "November 22",
+                "1923-11-22",
+                false,
+            ),
+            ("FILED November 22,1923", "November 22", "1923-11-22", false),
         ] {
             let letter = format!(
                 "ARP INDUSTRIES\n\n{stamp}\n\nMr. Alfred Puccinelli\n\nDear Mr. Puccinelli:\n\n\
@@ -12637,12 +12646,12 @@ Rickmansworth,
             );
             let (outcome, _) = facts_for(&letter, |index| ModelFacts {
                 document_type: Some("letter".into()),
-                document_date: Some("2015-09-18".into()),
-                date_evidence: vec![id_of(index, "SEP 1 8")],
+                document_date: Some(date.into()),
+                date_evidence: vec![id_of(index, needle)],
                 ..ModelFacts::default()
             });
             assert_eq!(
-                outcome.proposal.document_date.as_deref() == Some("2015-09-18"),
+                outcome.proposal.document_date.as_deref() == Some(date),
                 read,
                 "{stamp}"
             );
