@@ -129,15 +129,18 @@ pub struct BaselineDocument {
 /// they fail a run when something other than the prompt moves them: the
 /// gold, or how they are scored. What the model quoted (`evidence_recall`)
 /// is the recording's, not the code's, and is not kept.
-pub const REPLAY_VALUES: [&str; 7] = [
-    "prompt_recall",
-    CONTEXT_SCORES[0],
-    CONTEXT_SCORES[1],
-    CONTEXT_SCORES[2],
-    CONTEXT_SCORES[3],
-    CONTEXT_SCORES[4],
-    CONTEXT_SCORES[5],
-];
+///
+/// Built from [`CONTEXT_SCORES`], so a context score added there is kept and
+/// gated without anyone listing it here.
+pub const REPLAY_VALUES: [&str; 1 + CONTEXT_SCORES.len()] = {
+    let mut values = ["prompt_recall"; 1 + CONTEXT_SCORES.len()];
+    let mut index = 0;
+    while index < CONTEXT_SCORES.len() {
+        values[index + 1] = CONTEXT_SCORES[index];
+        index += 1;
+    }
+    values
+};
 
 /// How far a gated value may move the wrong way before the document
 /// regresses, or `None` for one that is not gated (one extraction does not
@@ -1474,6 +1477,15 @@ mod tests {
             }),
             1_000.0,
         )
+    }
+
+    #[test]
+    fn a_replay_baseline_keeps_the_prompt_recall_and_every_context_score() {
+        assert_eq!(REPLAY_VALUES[0], "prompt_recall");
+        assert_eq!(REPLAY_VALUES[1..], CONTEXT_SCORES);
+        for key in REPLAY_VALUES {
+            assert_eq!(value_tolerance(key), Some(0.0), "{key}");
+        }
     }
 
     #[test]
