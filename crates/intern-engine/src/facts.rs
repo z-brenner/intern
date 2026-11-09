@@ -4770,8 +4770,10 @@ const BODY_NOUNS: &[&str] = &[
 /// Union of Biochemistry", "Office for National Statistics". A person's post
 /// is headed by no such noun ("Secretary of State", "Chair of the Board",
 /// "Treasurer of the International Union"), so the people who hold one stay
-/// people. Only a party's name is read this way: a line of an address or a
-/// signature block that ends on "Committee" may still be a post's.
+/// people, and so is a post written before the body it is held at
+/// ("Director, Office of Prescription Drug Promotion", "Member, Board of
+/// Directors"). Only a party's name is read this way: a line of an address
+/// or a signature block that ends on "Committee" may still be a post's.
 fn is_organization_name(name: &str) -> bool {
     if is_organization(name) {
         return true;
@@ -4782,9 +4784,20 @@ fn is_organization_name(name: &str) -> bool {
         .iter()
         .position(|word| matches!(*word, "of" | "for" | "on"))
         .unwrap_or(name_words.len());
-    name_words[..head].last().is_some_and(|word| {
-        BODY_NOUNS.contains(word) || crate::cues::ORGANIZATION_ENDINGS.contains(word)
-    })
+    // "Office of the Chief Counsel, ..." is a body before its comma, though
+    // it names a post.
+    let post_before = name.split_once(',').is_some_and(|(post, _)| {
+        let post_words = words(post);
+        (holds_a_post(post) || post_words.iter().any(|word| word == "member"))
+            && !post_words.iter().any(|word| {
+                BODY_NOUNS.contains(&word.as_str())
+                    || crate::cues::ORGANIZATION_ENDINGS.contains(&word.as_str())
+            })
+    });
+    !post_before
+        && name_words[..head].last().is_some_and(|word| {
+            BODY_NOUNS.contains(word) || crate::cues::ORGANIZATION_ENDINGS.contains(word)
+        })
 }
 
 /// The most words a line naming an organization in an inside address runs
@@ -12228,6 +12241,7 @@ Rickmansworth,
             "Committee on Standards in Public Life",
             "Department of Energy",
             "Northstar Lantern Works LLC",
+            "Office of the Chief Counsel, Food and Drug Administration",
         ] {
             assert!(is_organization_name(name), "{name}");
         }
@@ -12236,6 +12250,9 @@ Rickmansworth,
             "Chair of the Board",
             "Lord Lang of Monkton",
             "Rashmi Panigrahi",
+            // A post written before the body it is held at.
+            "Director, Office of Prescription Drug Promotion",
+            "Member, Board of Directors",
         ] {
             assert!(!is_organization_name(name), "{name}");
         }
