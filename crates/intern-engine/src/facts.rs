@@ -2563,6 +2563,8 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
         title_lines(scope, unit).into_iter().find_map(|line| {
             // A letter's "Re:" line names it when its matter opens with a
             // kind of document: "Re: Demand for Payment - Highmeadow ...".
+            // A kind its number follows names the numbered document the
+            // letter is about: "RE: NDA 208090", "Re: Invoice No. 4471".
             if names_a_matter(line.trim_matches(|c: char| c == '*' || c.is_whitespace())) {
                 let line = line.trim_matches(|c: char| c == '*' || c.is_whitespace());
                 let line_words = words(line);
@@ -2573,11 +2575,17 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
                     .find(|word| names_a_kind(word))?;
                 let phrase = title_phrase(line, head)?;
                 let phrase_words = words(&phrase);
+                let numbered = |end: usize| {
+                    line_words.get(end).is_some_and(|next| {
+                        labels_a_number(next) || next.chars().any(|c| c.is_ascii_digit())
+                    })
+                };
                 return phrase_positions(&line_words, &phrase_words)
                     .into_iter()
                     .any(|at| {
                         at == label
                             && names_document_at(&line_words, at, at + phrase_words.len(), line)
+                            && !numbered(at + phrase_words.len())
                     })
                     .then(|| (phrase, line.to_owned()));
             }
@@ -12419,5 +12427,32 @@ Rickmansworth,
         assert!(is_redaction("[name withheld]"));
         assert!(!is_redaction("Redacted Records Ltd"));
         assert!(!is_redaction("Jane Doe"));
+    }
+
+    /// A "Re:" line's kind followed by its number names the document the
+    /// letter is about, not the letter: the letter's layout stands in.
+    #[test]
+    fn a_numbered_matter_is_no_title() {
+        let letter = |re: &str| {
+            format!(
+                "Food and Drug Administration\n\nFebruary 9, 2018\n\nCollegium Pharmaceutical, \
+                 Inc.\n780 Dedham Street\n\n{re}\n\nDear Mr. Weet:\n\nThe Office of Prescription \
+                 Drug Promotion has reviewed your materials.\n\nSincerely,\n\nJane Smith"
+            )
+        };
+        for (re, title) in [
+            ("RE: NDA 208090", None),
+            ("Re: Invoice No. 4471", None),
+            ("Re: Notice of Default", Some("Notice of Default")),
+        ] {
+            let index = index_of(&letter(re));
+            let context = whole(&index);
+            let scope = ValidationScope::new(&index, &context, &[]);
+            assert_eq!(
+                title_of(&scope).map(|(phrase, _)| phrase).as_deref(),
+                title,
+                "{re}"
+            );
+        }
     }
 }
