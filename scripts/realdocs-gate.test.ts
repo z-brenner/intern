@@ -84,6 +84,10 @@ describe('the committed real-document recordings', () => {
         const document = sample.documents.find((candidate: { id: string }) => candidate.id === row.id);
         expect(row.url, row.id).toBe(document.source.url);
         expect(row.licence, row.id).toMatch(ADMITTED);
+        // A CC BY row names the version the source states.
+        if (row.licence.startsWith('CC BY ')) {
+          expect(document.source.license, row.id).toContain(row.licence.slice('CC BY '.length));
+        }
         // The attribution OGL v3.0 and CC BY require.
         if (row.licence.includes('Open Government Licence')) {
           expect(row.attribution, row.id).toContain('Contains public sector information licensed under the Open Government Licence v3.0');
