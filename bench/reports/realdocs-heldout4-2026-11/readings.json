@@ -3,6 +3,7 @@
  "model": "Qwen3.5 9B Q4_K_M (sha256 03b74727...)",
  "recording": "candidate-bench run 42577779669, commit d21399c (main ebc5d8f's engine)",
  "replayed_with": "intern-bench of main ebc5d8f, --min-token-confidence 0.7 (and 0.5 for readiness_at_0_5)",
+ "gold": "sample-heldout4.json as committed with this file. The gold fixed before the run (d21399c) also accepted 'to All FHA-Approved Mortgagees' for real5-memo-05 and -06, under which both names are right (16/52); that alternative was removed after the run so that every memorandum is named from its issuer (14/52).",
  "readings": [
   {
    "id": "real5-letter-01",
@@ -806,7 +807,8 @@
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 1.0,
    "classes": [
-    "type copies a heading with its date ('Enforcement Release July 15, 2025')"
+    "type copies a heading with its date ('Enforcement Release July 15, 2025')",
+    "a wrong joining word ('with' its subject, which the gold names 'for')"
    ]
   },
   {
@@ -1225,12 +1227,14 @@
    "token_confidence_min": 0.364300400018692,
    "gold_filename": "2025-06-03 Mortgagee Letter from U.S. Department of Housing and Urban Development.pdf",
    "expected_readiness": "ready",
-   "scorer": true,
-   "adjudicated": true,
+   "scorer": false,
+   "adjudicated": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
-   "classes": []
+   "classes": [
+    "a memo's addressee group named instead of its issuer ('to All FHA-Approved Mortgagees')"
+   ]
   },
   {
    "id": "real5-memo-06",
@@ -1248,12 +1252,14 @@
    "token_confidence_min": 0.564293622970581,
    "gold_filename": "2025-06-27 Mortgagee Letter from U.S. Department of Housing and Urban Development.pdf",
    "expected_readiness": "ready",
-   "scorer": true,
-   "adjudicated": true,
+   "scorer": false,
+   "adjudicated": false,
    "unsafe_ready": false,
    "unsafe_ready_at_0_5": false,
    "prompt_recall": 0.5,
-   "classes": []
+   "classes": [
+    "a memo's addressee group named instead of its issuer ('to All FHA-Approved Mortgagees')"
+   ]
   },
   {
    "id": "real5-memo-07",
@@ -1321,8 +1327,7 @@
    "unsafe_ready_at_0_5": true,
    "prompt_recall": 1.0,
    "classes": [
-    "type copies a heading with its weekday ('Minutes of the Tuesday')",
-    "parent agency named (NIST)"
+    "type copies a heading with its weekday ('Minutes of the Tuesday')"
    ]
   },
   {
