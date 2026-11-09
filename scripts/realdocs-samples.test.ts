@@ -6,10 +6,11 @@ import { describe, expect, it } from 'vitest';
 // expected_readiness only when it is one of the values it knows. A gold value
 // outside those vocabularies is never matched and never refused: the field
 // just scores wrong (or not at all) on every run, and no other test notices.
-// The fifth sample shipped with 13 such date roles ("meeting", "signature",
-// "period_end", ...). So every sample is held to the vocabularies the engine
-// declares in intern-engine's domain.rs, which the model's grammar is built
-// from; when an enum there gains or loses a member, this follows it.
+// Words such as "meeting", "signature" or "period_end" read naturally as a
+// date's role but are none of the engine's. So every sample is held to the
+// vocabularies the engine declares in intern-engine's domain.rs, which the
+// model's grammar is built from; when an enum there gains or loses a member,
+// this follows it.
 
 const SAMPLES = 'scripts/realdocs-eval';
 
