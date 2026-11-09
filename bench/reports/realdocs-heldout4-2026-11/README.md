@@ -5,10 +5,10 @@ the four earlier real sets ([the first](../realdocs-2026-11-02/README.md),
 [the second](../realdocs-heldout-2026-11-02/README.md),
 [the third](../realdocs-heldout2-2026-11-03/README.md) and the fourth, `real4`, of the
 [model qualification](../model-qualification-2026-11/README.md)). This set has had no rule written
-from it. It is 57 more real documents from issuers and collections none of those sets used,
-gathered on 2026-11-09, and their gold was written before Intern read any of them. The run below
-is main's engine (`ebc5d8f`, v0.1.0-alpha.14) with the shipped 9B, so this is main's held-out
-score.
+from it. It is 57 more real documents from collections none of those sets used and, but for one
+records form from the IRS, from issuers none of them used (see [The set](#the-set)), gathered on
+2026-11-09, and their gold was written before Intern read any of them. The run below is main's
+engine (`ebc5d8f`, v0.1.0-alpha.14) with the shipped 9B, so this is main's held-out score.
 
 **The answer:**
 - **Main names 14 of 52 right (27%)** at the gate it ships with (0.7), against 42%, 50%, 30% and
@@ -50,14 +50,26 @@ and these rules:
   check or access block; nothing with a private individual's identity, bank, card or medical
   details, nothing about a minor, no family-law or criminal matter.
 
-The rule holds for issuers and collections: no host, URL or SHA-256 is shared with the earlier
-samples, and no earlier document was issued by a body that issues one here. Three of this set's
-issuers do appear in earlier gold, though, as recipients, addressees or traps: the S.D.N.Y. (the
-court that CourtListener letters in the first two sets are addressed to, such as `real-letter-12`
-and `real2-letter-10`), the Welsh Government (the recipient of a DWP letter, `real2-office-07`,
-and a trap in `real3-notice-11`) and OMB (a recipient of `real4-letter-12` and a trap in
-`real3-letter-14`). No engine rule names any of the three; the S.D.N.Y. appears in the engine
-only in the captions of its unit tests.
+The rule held for documents and collections: no host, URL or SHA-256 is shared with the earlier
+samples. It did not wholly hold for issuers, and a check of every name in the five samples' gold
+found these overlaps:
+- **One issuer recurs.** The IRS, which issued the first set's CP161 sample notice
+  (`real-notice-12`, from irs.gov), issues `real5-form-02` here, its 1982 request for records
+  disposition authority (from NARA's catalog).
+- **Four more of this set's issuers are in earlier gold as recipients, addressees or traps:** the
+  S.D.N.Y. (the court that CourtListener letters in the first two sets are addressed to, such as
+  `real-letter-12` and `real2-letter-10`), the Welsh Government (the recipient of a DWP letter,
+  `real2-office-07`, and a trap in `real3-notice-11`), OMB (a recipient of `real4-letter-12` and a
+  trap in `real3-letter-14`) and the FAA (a trap in `real2-letter-04`, a CPSC letter that says the
+  FAA has jurisdiction). The W.D. Tenn. is the court in an earlier removal notice's caption
+  (`real3-notice-08`), though not in its gold.
+
+No engine rule names any of them, and the S.D.N.Y. appears in the engine only in the captions of
+its unit tests. Two engine comments take their examples from them, for rules that name no body:
+the rule that sends a bare "Notice" to review was written for the IRS's CP161 (`facts.rs`), and
+the words an organization's name is made of are explained by "Office of Management and Budget",
+the addressee of `real4-letter-12`. No document here was read as a bare "Notice", and `form-02`,
+read as "Document" with no date and no party, is wrong under any rule.
 
 | Kind | n | Formats |
 |---|---:|---|
