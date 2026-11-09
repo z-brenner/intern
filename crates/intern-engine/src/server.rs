@@ -49,6 +49,12 @@ const SERVER_LOG: &str = "llama-server.log";
 ///   and together these cost nothing measurable (-2% to +3% against the
 ///   default flags, within the run-to-run noise) with identical replies. On
 ///   upstream, spinning (`--poll 50`) was no faster either.
+/// The micro-batch `-ub` sets, in tokens. llama-server breaks a prompt it
+/// processes from nothing at 4 + this many tokens before its end, which
+/// decides whether the instructions are processed in one piece
+/// ([`crate::slots::SlotKeeper::save_once`]).
+pub const MICRO_BATCH_TOKENS: u64 = 256;
+
 pub const MEASURED_FLAGS: &[&str] = &[
     "--cache-ram",
     "0",
@@ -96,6 +102,10 @@ pub struct ServerOptions {
     /// local model tier in [`crate::tiers::server_options`], which is the
     /// one place they are set.
     pub extra_arguments: Vec<String>,
+    /// Where the server may save and restore its slot: the system turn's
+    /// state, kept from one launch to the next ([`crate::slots`]). An
+    /// existing folder, or `None` for a server that keeps nothing.
+    pub slot_directory: Option<PathBuf>,
 }
 
 impl Default for ServerOptions {
@@ -105,6 +115,7 @@ impl Default for ServerOptions {
             context_tokens: CONTEXT_TOKENS,
             startup_timeout: Duration::from_secs(180),
             extra_arguments: Vec::new(),
+            slot_directory: None,
         }
     }
 }
@@ -280,6 +291,10 @@ impl LlamaServer {
             // Loading a vision projector Intern will not use costs hundreds of
             // megabytes of resident memory on every document.
             None => arguments.push("--no-mmproj".into()),
+        }
+        if let Some(directory) = &options.slot_directory {
+            arguments.push("--slot-save-path".into());
+            arguments.push(directory.to_string_lossy().into_owned());
         }
         arguments.extend(options.extra_arguments.iter().cloned());
         arguments
@@ -540,6 +555,7 @@ mod tests {
             context_tokens: 8_192,
             startup_timeout: Duration::from_secs(30),
             extra_arguments: Vec::new(),
+            slot_directory: None,
         }
     }
 
@@ -570,6 +586,7 @@ mod tests {
         };
         assert_eq!(value("--cache-ram"), Some("0"));
         assert_eq!(value("-ub"), Some("256"));
+        assert_eq!(value("-ub"), Some(MICRO_BATCH_TOKENS.to_string().as_str()));
         assert_eq!(value("--prio"), Some("-1"));
         assert_eq!(value("--poll"), Some("0"));
         assert_eq!(value("--threads"), Some("6"));
@@ -580,6 +597,34 @@ mod tests {
         // A cold disk took up to 117 seconds to start a model in the
         // evaluation; the health wait allows more than that.
         assert!(ServerOptions::default().startup_timeout >= Duration::from_secs(180));
+    }
+
+    /// A slot folder is passed to the server whole, as one argument, and
+    /// only when there is one: the server refuses to start on a path that
+    /// is not a folder.
+    #[test]
+    fn a_slot_folder_is_named_only_when_there_is_one() {
+        let without =
+            LlamaServer::arguments_for(Path::new("m.gguf"), None, 51_000, "key", &options());
+        assert!(!without.contains(&"--slot-save-path".to_owned()));
+        let folder = PathBuf::from("/data/Intern Local/slots");
+        let with = LlamaServer::arguments_for(
+            Path::new("m.gguf"),
+            None,
+            51_000,
+            "key",
+            &ServerOptions {
+                slot_directory: Some(folder.clone()),
+                extra_arguments: vec!["--flash-attn".into(), "on".into()],
+                ..options()
+            },
+        );
+        let at = with
+            .iter()
+            .position(|argument| argument == "--slot-save-path")
+            .unwrap();
+        assert_eq!(with[at + 1], folder.to_string_lossy());
+        assert_eq!(&with[with.len() - 2..], ["--flash-attn", "on"]);
     }
 
     #[test]

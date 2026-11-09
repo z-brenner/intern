@@ -459,28 +459,16 @@ impl ModelClient {
     /// is transport, and the token-probability fields in particular change
     /// no generated token.
     fn completion_request(&self, request: &ModelRequest) -> Value {
-        let mut messages = vec![json!({"role": "system", "content": request.system_turn()})];
-        // A profile's exchanges sit between the instructions and the
-        // document, where the server's prompt cache keeps them with the
-        // system turn from one document to the next.
-        for turn in request.profile.map_or(&[][..], PromptProfile::examples) {
-            messages.push(json!({"role": "user", "content": turn.user}));
-            messages.push(json!({"role": "assistant", "content": turn.assistant}));
-        }
-        messages.push(json!({"role": "user", "content": request.prompt}));
         let mut body = json!({
             "model": self.model_id,
-            "messages": messages,
+            "messages": chat_messages(request),
             "stream": false,
             "temperature": 0,
             "top_k": 1,
             "max_tokens": MAX_REPLY_TOKENS,
             "grammar": request.grammar.as_deref().unwrap_or(RESPONSE_GRAMMAR),
             "cache_prompt": true,
-            // Hybrid-reasoning models must answer directly: Intern needs a form
-            // filled in, not a chain of thought, and thinking tokens are pure
-            // latency on a CPU.
-            "chat_template_kwargs": {"enable_thinking": false}
+            "chat_template_kwargs": template_switches()
         });
         if let Some(seed) = request.profile.and_then(PromptProfile::seed) {
             body["seed"] = json!(seed);
@@ -493,6 +481,82 @@ impl ModelClient {
         }
         body
     }
+}
+
+/// The turns of a request, in order: the system turn, a profile's
+/// exchanges, and the document's own turn last.
+fn chat_messages(request: &ModelRequest) -> Vec<Value> {
+    let mut messages = vec![json!({"role": "system", "content": request.system_turn()})];
+    // A profile's exchanges sit between the instructions and the
+    // document, where the server's prompt cache keeps them with the
+    // system turn from one document to the next.
+    for turn in request.profile.map_or(&[][..], PromptProfile::examples) {
+        messages.push(json!({"role": "user", "content": turn.user}));
+        messages.push(json!({"role": "assistant", "content": turn.assistant}));
+    }
+    messages.push(json!({"role": "user", "content": request.prompt}));
+    messages
+}
+
+/// The chat template's switches, the same on every request.
+///
+/// Hybrid-reasoning models must answer directly: Intern needs a form filled
+/// in, not a chain of thought, and thinking tokens are pure latency on a CPU.
+fn template_switches() -> Value {
+    json!({"enable_thinking": false})
+}
+
+/// What the local server keeps from one evidence request to the next,
+/// hashed: every turn before the document's own - the system turn and a
+/// profile's exchanges - and the template switches they are rendered with.
+/// The grammar, the sampler and the token probabilities shape only the
+/// reply, so they are not part of it. A slot file saved after one document
+/// holds this state ([`crate::slots`]), and is only restored where it is
+/// the same.
+pub fn cached_prefix_identity(profile: Option<PromptProfile>) -> String {
+    let request = ModelRequest {
+        system: Some(crate::prompt::evidence_system()),
+        profile,
+        ..ModelRequest::default()
+    };
+    let mut messages = chat_messages(&request);
+    messages.pop();
+    let mut hasher = Sha256::new();
+    hasher.update(Value::Array(messages).to_string().as_bytes());
+    hasher.update([0_u8]);
+    hasher.update(template_switches().to_string().as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// The user turn of [`instructions_only_request`]: two words no document's
+/// turn starts with, so a document after it shares nothing past the
+/// instructions with it.
+const INSTRUCTIONS_ONLY_TURN: &str = "JSON only.";
+
+/// A request that leaves the local server's slot holding the evidence
+/// instructions and nothing of any document: every turn an evidence request
+/// sends before its document, then two fixed words, answered with one token.
+///
+/// Sent after a document, it reuses the instructions' state that document
+/// left behind and replaces the document's own tokens, so a slot file saved
+/// after it ([`crate::slots`]) holds no word of anything a person filed.
+pub fn instructions_only_request(model_id: &str, profile: Option<PromptProfile>) -> Value {
+    let request = ModelRequest {
+        prompt: INSTRUCTIONS_ONLY_TURN.to_owned(),
+        system: Some(crate::prompt::evidence_system()),
+        profile,
+        ..ModelRequest::default()
+    };
+    json!({
+        "model": model_id,
+        "messages": chat_messages(&request),
+        "stream": false,
+        "temperature": 0,
+        "top_k": 1,
+        "max_tokens": 1,
+        "cache_prompt": true,
+        "chat_template_kwargs": template_switches()
+    })
 }
 
 /// How probable the model found the tokens of its `document_date` and
@@ -1499,6 +1563,73 @@ mod tests {
             body["chat_template_kwargs"]["enable_thinking"],
             serde_json::json!(false)
         );
+    }
+
+    /// The prefix a slot file is named for is what every evidence request
+    /// sends before its document, whatever the document: the same system
+    /// turn and profile exchanges, under the same template switches.
+    #[test]
+    fn the_cached_prefix_is_what_every_evidence_request_opens_with() {
+        let client = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m").unwrap();
+        for profile in [None, Some(PromptProfile::Bonsai2)] {
+            let bodies = ["one document", "another"].map(|prompt| {
+                client.completion_request(&ModelRequest {
+                    prompt: prompt.to_owned(),
+                    system: Some(crate::prompt::evidence_system()),
+                    grammar: Some(format!("root ::= \"{prompt}\"")),
+                    profile,
+                    ..ModelRequest::default()
+                })
+            });
+            let leading = |body: &Value| {
+                let mut messages = body["messages"].as_array().unwrap().clone();
+                messages.pop();
+                (messages, body["chat_template_kwargs"].clone())
+            };
+            assert_eq!(leading(&bodies[0]), leading(&bodies[1]));
+            let (messages, switches) = leading(&bodies[0]);
+            let mut hasher = Sha256::new();
+            hasher.update(Value::Array(messages).to_string().as_bytes());
+            hasher.update([0_u8]);
+            hasher.update(switches.to_string().as_bytes());
+            assert_eq!(
+                cached_prefix_identity(profile),
+                format!("{:x}", hasher.finalize())
+            );
+        }
+        assert_ne!(
+            cached_prefix_identity(None),
+            cached_prefix_identity(Some(PromptProfile::Bonsai2))
+        );
+    }
+
+    /// The request a slot is saved after opens exactly as every evidence
+    /// request does, so it reuses and keeps their instructions, and carries
+    /// nothing of a document after them.
+    #[test]
+    fn the_instructions_only_request_opens_as_every_evidence_request_does() {
+        let client = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m").unwrap();
+        for profile in [None, Some(PromptProfile::Bonsai2)] {
+            let document = client.completion_request(&ModelRequest {
+                prompt: "The whole 1-page document follows.".to_owned(),
+                system: Some(crate::prompt::evidence_system()),
+                profile,
+                ..ModelRequest::default()
+            });
+            let probe = instructions_only_request("m", profile);
+            let mut leading = probe["messages"].as_array().unwrap().clone();
+            let last = leading.pop().unwrap();
+            let mut expected = document["messages"].as_array().unwrap().clone();
+            expected.pop();
+            assert_eq!(leading, expected);
+            assert_eq!(last, json!({"role": "user", "content": "JSON only."}));
+            assert_eq!(
+                probe["chat_template_kwargs"],
+                document["chat_template_kwargs"]
+            );
+            assert_eq!(probe["max_tokens"], json!(1));
+            assert_eq!(probe["cache_prompt"], json!(true));
+        }
     }
 
     /// The local server runs without a vision projector. A request that carried
