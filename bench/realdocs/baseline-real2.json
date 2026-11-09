@@ -1,134 +1,28 @@
 {
   "aggregate": {
-    "date_correct": 0.8611,
-    "date_exact": 0.8611,
+    "date_correct": 0.9118,
+    "date_exact": 0.9118,
     "date_forbidden": 0.0,
-    "date_present": 0.8611,
+    "date_present": 0.9118,
     "date_role_correct": 0.3226,
     "description_factual": 1.0,
-    "description_specific": 0.7778,
-    "filename_correct": 0.4167,
-    "forbidden_party_count": 8.0,
-    "needless_review": 0.3636,
-    "parties_correct": 0.7778,
-    "party_forbidden": 0.2222,
-    "party_role_correct": 0.5,
-    "readiness_match": 0.1364,
-    "relation_correct": 0.6389,
+    "description_specific": 0.7647,
+    "filename_correct": 0.4412,
+    "forbidden_party_count": 7.0,
+    "needless_review": 0.381,
+    "parties_correct": 0.7941,
+    "party_forbidden": 0.2059,
+    "party_role_correct": 0.5556,
+    "readiness_match": 0.1429,
+    "relation_correct": 0.6176,
     "trap_date_count": 0.0,
-    "type_correct": 0.8056,
-    "type_present": 0.9444,
+    "type_correct": 0.7941,
+    "type_present": 0.9412,
     "unsafe_ready": 0.0,
     "unsafe_ready_count": 0.0,
-    "unsupported_fact_doc": 0.8333
+    "unsupported_fact_doc": 0.8235
   },
   "documents": {
-    "real2-invoice-10": {
-      "scores": {
-        "date_correct": false,
-        "date_exact": false,
-        "date_forbidden": false,
-        "date_present": false,
-        "description_factual": true,
-        "description_specific": true,
-        "filename_correct": false,
-        "needless_review": false,
-        "parties_correct": false,
-        "party_forbidden": true,
-        "party_role_correct": false,
-        "readiness_match": false,
-        "ready": false,
-        "relation_correct": true,
-        "type_correct": true,
-        "type_present": true,
-        "unsafe_ready": false,
-        "unsupported_fact_doc": true
-      },
-      "status": "completed",
-      "timings": {
-        "analyze_wall_ms": 28829.628,
-        "distill_ms": 0.601,
-        "extraction_wall_ms": 1162.094,
-        "generation_ms": 14275.078,
-        "index_ms": 0.755,
-        "inference_ms": 28823.0,
-        "naming_ms": 0.048,
-        "prefill_ms": 14541.128,
-        "prompt_ms": 0.025,
-        "retrieval_ms": 0.013,
-        "total_ms": 29991.722,
-        "validation_ms": 5.055,
-        "worker_analysis_ms": 0.198,
-        "worker_image_decode_ms": 0.0,
-        "worker_ocr_encode_ms": 76.905,
-        "worker_ocr_engine_ms": 827.957,
-        "worker_ocr_ms": 1003.16,
-        "worker_parse_ms": 1.133,
-        "worker_render_ms": 135.185,
-        "worker_snapshot_ms": 2.759,
-        "worker_total_ms": 1161.753,
-        "worker_vision_ms": 0.0
-      },
-      "values": {
-        "context_date_recall": 0.0,
-        "context_party_recall": 0.0,
-        "context_recall": 0.3333,
-        "context_type_recall": 1.0,
-        "prompt_recall": 0.0
-      }
-    },
-    "real2-invoice-11": {
-      "scores": {
-        "date_correct": false,
-        "date_exact": false,
-        "date_forbidden": false,
-        "date_present": false,
-        "description_factual": true,
-        "description_specific": true,
-        "filename_correct": false,
-        "parties_correct": true,
-        "party_forbidden": false,
-        "party_role_correct": false,
-        "ready": false,
-        "relation_correct": true,
-        "type_correct": true,
-        "type_present": true,
-        "unsafe_ready": false,
-        "unsupported_fact_doc": true
-      },
-      "status": "completed",
-      "timings": {
-        "analyze_wall_ms": 21762.737,
-        "distill_ms": 0.342,
-        "extraction_wall_ms": 678.397,
-        "generation_ms": 13279.002,
-        "index_ms": 0.41,
-        "inference_ms": 21758.0,
-        "naming_ms": 0.027,
-        "prefill_ms": 8471.935,
-        "prompt_ms": 0.019,
-        "retrieval_ms": 0.012,
-        "total_ms": 22441.134,
-        "validation_ms": 3.596,
-        "worker_analysis_ms": 0.103,
-        "worker_image_decode_ms": 0.0,
-        "worker_ocr_encode_ms": 57.925,
-        "worker_ocr_engine_ms": 380.173,
-        "worker_ocr_ms": 517.191,
-        "worker_parse_ms": 0.966,
-        "worker_render_ms": 145.484,
-        "worker_snapshot_ms": 2.135,
-        "worker_total_ms": 678.082,
-        "worker_vision_ms": 0.0
-      },
-      "values": {
-        "context_date_recall": 0.0,
-        "context_party_recall": 0.0,
-        "context_recall": 0.3333,
-        "context_type_recall": 1.0,
-        "prompt_recall": 0.0
-      }
-    },
     "real2-invoice-12": {
       "scores": {
         "date_correct": false,
@@ -1957,35 +1851,35 @@
   },
   "latency": {
     "analyze_wall_ms": {
-      "p50": 47490.246,
+      "p50": 47917.532,
       "p95": 78906.238
     },
     "distill_ms": {
-      "p50": 2.418,
+      "p50": 2.571,
       "p95": 36.651
     },
     "extraction_wall_ms": {
-      "p50": 5.68,
+      "p50": 4.697,
       "p95": 18266.723
     },
     "generation_ms": {
-      "p50": 15422.746,
+      "p50": 15579.675,
       "p95": 17820.947
     },
     "index_ms": {
-      "p50": 3.304,
-      "p95": 48.424
+      "p50": 3.276,
+      "p95": 46.784
     },
     "inference_ms": {
-      "p50": 47470.0,
+      "p50": 47864.0,
       "p95": 78856.0
     },
     "naming_ms": {
-      "p50": 0.405,
+      "p50": 0.477,
       "p95": 3.293
     },
     "prefill_ms": {
-      "p50": 33693.983,
+      "p50": 33724.939,
       "p95": 62270.453
     },
     "prompt_ms": {
@@ -1993,15 +1887,15 @@
       "p95": 0.034
     },
     "retrieval_ms": {
-      "p50": 0.049,
-      "p95": 3.624
+      "p50": 0.044,
+      "p95": 3.64
     },
     "total_ms": {
-      "p50": 51581.343,
+      "p50": 51993.565,
       "p95": 86349.767
     },
     "validation_ms": {
-      "p50": 23.876,
+      "p50": 24.213,
       "p95": 112.564
     },
     "worker_analysis_ms": {
@@ -2025,7 +1919,7 @@
       "p95": 18150.867
     },
     "worker_parse_ms": {
-      "p50": 1.766,
+      "p50": 1.821,
       "p95": 115.593
     },
     "worker_render_ms": {
@@ -2033,11 +1927,11 @@
       "p95": 847.043
     },
     "worker_snapshot_ms": {
-      "p50": 0.228,
-      "p95": 2.135
+      "p50": 0.226,
+      "p95": 0.979
     },
     "worker_total_ms": {
-      "p50": 5.325,
+      "p50": 4.418,
       "p95": 18265.932
     },
     "worker_vision_ms": {

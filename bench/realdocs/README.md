@@ -26,17 +26,18 @@ rule and each document's reason. The documents themselves are never committed.
 | Set | Sample | Cleared | Committed | Named right | Named wrong | No filename gold | Wrong names filed ready | Gold date or party not in the prompt |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | real1 | `sample.json` (60) | 26 | 23 | 9 | 12 | 2 | 0 | 6 (5 named wrong) |
-| real2 | `sample-heldout.json` (60) | 36 | 36 | 15 | 21 | 0 | 0 | 4 (4) |
-| real3 | `sample-heldout2.json` (59) | 25 | 24 | 8 | 16 | 0 | 0 | 5 (5) |
-| real4 | `sample-heldout3.json` (58) | 29 | 29 | 9 | 17 | 3 | 0 | 7 (6) |
-| total | 237 | 116 | 112 | 41 | 66 | 5 | 0 | 22 (20) |
+| real2 | `sample-heldout.json` (60) | 34 | 34 | 15 | 19 | 0 | 0 | 2 (2) |
+| real3 | `sample-heldout2.json` (59) | 23 | 22 | 7 | 15 | 0 | 0 | 5 (5) |
+| real4 | `sample-heldout3.json` (58) | 27 | 27 | 8 | 16 | 3 | 0 | 7 (6) |
+| total | 237 | 110 | 106 | 39 | 62 | 5 | 0 | 20 (18) |
 
 Four cleared documents are not committed because the runner never fetched them (ftc.gov answered
 403 to two, archive.org 500 to one, tile.loc.gov 429 to one). The committed documents are a
 harder half than the whole sets: the same recordings name 92 of 219 scored documents right
-across all four sets, 41 of 107 here. Replaying a set takes under 5 s in a release build: 0.7 to
-3.0 s each on GitHub runners (CI runs 42578520445 and 42594755612: 1.4, 1.4, 0.7 and 1.7 s, then
-2.2, 2.5, 1.3 and 3.0 s), 2.0 to 4.4 s on a loaded 4-core box.
+across all four sets, 39 of 101 here. Replaying a set takes 0.7 to 3.0 s on a GitHub runner in a
+release build (CI runs 42578520445 and 42594755612: 1.4, 1.4, 0.7 and 1.7 s, then 2.2, 2.5, 1.3
+and 3.0 s, for the sets as they were then, a few documents larger); on a shared machine it
+depends on the load.
 
 ## How CI runs it
 
@@ -65,9 +66,11 @@ documents `SOURCES.md` marks as recorded and that each baseline covers exactly t
 Measured on 2026-11-09 by running the job's steps exactly as `ci.yml` writes them, on a copy of the
 tree with one change each (never committed), in a cold release build on a 4-core box (2 min 6 s
 to build, then 1.5 s for the fixtures, 0.4 s for the digest fixtures, 11 s for InternBench and
-3.4, 3.3, 1.9 and 3.9 s for the real sets). real1 then held 30 documents; the seven Enron records
-left out since (`SOURCES.md`) are none of the documents named below, and a replay scores each
-document on its own, so the outcomes stand:
+3.4, 3.3, 1.9 and 3.9 s for the real sets). The sets then held 119 documents. Of the 13 left out
+since (`SOURCES.md`: seven Enron records, two FOI releases and a penalty notice that enclose others'
+writing, and three invoices that their holders, not their authors, marked public domain), only
+`real4-letter-13` is named below; a replay scores each document on its own, so the other
+outcomes stand:
 
 - Unchanged: every step passes.
 - The rule "a letter is to its client" in `compose.rs` reverted (`To` back to `For`): the fixtures,
@@ -76,11 +79,11 @@ document on its own, so the outcomes stand:
   (`real-letter-07`, `real3-letter-10`).
 - Retrieval's date and party budgets cut to 60 tokens: every replay but the digest fixtures fails,
   each changed prompt `stale_prompt`, as a prompt change should (2 fixtures, 19 InternBench
-  documents and 10, 12, 8 and 10 real ones; 9 in real1 now). That is all CI shows of it: a strict
-  replay does not compare a stale document's recalls. With `--allow-stale`, run locally, the
-  recall gate fails them instead: `prompt_recall` falls on 6 real documents and 3 InternBench
-  ones, and InternBench's `data-processing-agreement-10p` fails on `context_subject_recall`
-  alone.
+  documents and 10, 12, 8 and 10 real ones; 9, 12, 7 and 8 of those real ones are committed now).
+  That is all CI shows of it: a strict replay does not compare a stale document's recalls. With
+  `--allow-stale`, run locally, the recall gate fails them instead: `prompt_recall` falls on 6 real
+  documents (5 committed now; `real4-letter-13` is left out) and 3 InternBench ones, and
+  InternBench's `data-processing-agreement-10p` fails on `context_subject_recall` alone.
 
 ## Changing the baselines
 

@@ -1,82 +1,28 @@
 {
   "aggregate": {
-    "date_correct": 0.7917,
-    "date_exact": 0.7917,
-    "date_forbidden": 0.0417,
-    "date_present": 0.8333,
-    "date_role_correct": 0.3158,
+    "date_correct": 0.8182,
+    "date_exact": 0.8182,
+    "date_forbidden": 0.0455,
+    "date_present": 0.8636,
+    "date_role_correct": 0.3333,
     "description_factual": 1.0,
-    "description_specific": 0.75,
-    "filename_correct": 0.3333,
-    "forbidden_party_count": 5.0,
-    "needless_review": 0.3333,
-    "parties_correct": 0.625,
-    "party_forbidden": 0.2083,
-    "party_role_correct": 0.5833,
+    "description_specific": 0.7273,
+    "filename_correct": 0.3182,
+    "forbidden_party_count": 4.0,
+    "needless_review": 0.3,
+    "parties_correct": 0.6364,
+    "party_forbidden": 0.1818,
+    "party_role_correct": 0.6364,
     "readiness_match": 0.0,
-    "relation_correct": 0.6957,
+    "relation_correct": 0.6667,
     "trap_date_count": 1.0,
-    "type_correct": 0.75,
-    "type_present": 0.875,
+    "type_correct": 0.7273,
+    "type_present": 0.8636,
     "unsafe_ready": 0.0,
     "unsafe_ready_count": 0.0,
-    "unsupported_fact_doc": 0.9583
+    "unsupported_fact_doc": 0.9545
   },
   "documents": {
-    "real3-invoice-09": {
-      "scores": {
-        "date_correct": false,
-        "date_exact": false,
-        "date_forbidden": false,
-        "date_present": false,
-        "description_factual": true,
-        "description_specific": true,
-        "filename_correct": false,
-        "needless_review": false,
-        "parties_correct": false,
-        "party_forbidden": true,
-        "party_role_correct": false,
-        "readiness_match": false,
-        "ready": false,
-        "relation_correct": true,
-        "type_correct": true,
-        "type_present": true,
-        "unsafe_ready": false,
-        "unsupported_fact_doc": true
-      },
-      "status": "completed",
-      "timings": {
-        "analyze_wall_ms": 43477.937,
-        "distill_ms": 1.136,
-        "extraction_wall_ms": 1542.387,
-        "generation_ms": 15065.133,
-        "index_ms": 1.361,
-        "inference_ms": 43470.0,
-        "naming_ms": 0.076,
-        "prefill_ms": 28395.605,
-        "prompt_ms": 0.024,
-        "retrieval_ms": 0.017,
-        "total_ms": 45020.324,
-        "validation_ms": 6.165,
-        "worker_analysis_ms": 0.246,
-        "worker_image_decode_ms": 0.0,
-        "worker_ocr_encode_ms": 107.544,
-        "worker_ocr_engine_ms": 1120.407,
-        "worker_ocr_ms": 1334.636,
-        "worker_parse_ms": 0.358,
-        "worker_render_ms": 183.937,
-        "worker_snapshot_ms": 0.309,
-        "worker_total_ms": 1542.052,
-        "worker_vision_ms": 0.0
-      },
-      "values": {
-        "context_date_recall": 1.0,
-        "context_party_recall": 1.0,
-        "context_recall": 1.0,
-        "context_type_recall": 1.0,
-        "prompt_recall": 1.0
-      }
-    },
     "real3-letter-01": {
       "scores": {
         "date_correct": true,
@@ -608,60 +554,6 @@
         "context_recall": 0.6667,
         "context_type_recall": 1.0,
         "prompt_recall": 0.5
-      }
-    },
-    "real3-notice-06": {
-      "scores": {
-        "date_correct": true,
-        "date_exact": true,
-        "date_forbidden": false,
-        "date_present": true,
-        "date_role_correct": false,
-        "description_factual": true,
-        "description_specific": true,
-        "filename_correct": true,
-        "needless_review": true,
-        "parties_correct": true,
-        "party_forbidden": false,
-        "readiness_match": false,
-        "ready": false,
-        "relation_correct": true,
-        "type_correct": true,
-        "type_present": true,
-        "unsafe_ready": false,
-        "unsupported_fact_doc": true
-      },
-      "status": "completed",
-      "timings": {
-        "analyze_wall_ms": 125300.032,
-        "distill_ms": 36.353,
-        "extraction_wall_ms": 52.569,
-        "generation_ms": 21347.352,
-        "index_ms": 49.335,
-        "inference_ms": 125186.0,
-        "naming_ms": 4.621,
-        "prefill_ms": 103826.928,
-        "prompt_ms": 0.033,
-        "retrieval_ms": 3.763,
-        "total_ms": 125352.601,
-        "validation_ms": 71.945,
-        "worker_analysis_ms": 6.434,
-        "worker_image_decode_ms": 0.0,
-        "worker_ocr_encode_ms": 0.0,
-        "worker_ocr_engine_ms": 0.0,
-        "worker_ocr_ms": 0.0,
-        "worker_parse_ms": 42.786,
-        "worker_render_ms": 0.0,
-        "worker_snapshot_ms": 0.325,
-        "worker_total_ms": 50.805,
-        "worker_vision_ms": 0.0
-      },
-      "values": {
-        "context_date_recall": 1.0,
-        "context_party_recall": 1.0,
-        "context_recall": 1.0,
-        "context_type_recall": 1.0,
-        "prompt_recall": 1.0
       }
     },
     "real3-notice-11": {
@@ -1305,35 +1197,35 @@
   "latency": {
     "analyze_wall_ms": {
       "p50": 57576.344,
-      "p95": 113539.281
+      "p95": 99139.777
     },
     "distill_ms": {
       "p50": 2.58,
-      "p95": 36.353
+      "p95": 24.81
     },
     "extraction_wall_ms": {
-      "p50": 19.26,
+      "p50": 10.17,
       "p95": 5109.476
     },
     "generation_ms": {
       "p50": 15944.099,
-      "p95": 21347.352
+      "p95": 21080.065
     },
     "index_ms": {
-      "p50": 3.056,
-      "p95": 45.162
+      "p50": 2.765,
+      "p95": 38.168
     },
     "inference_ms": {
       "p50": 57551.0,
-      "p95": 113480.0
+      "p95": 98979.0
     },
     "naming_ms": {
       "p50": 0.453,
-      "p95": 4.026
+      "p95": 3.938
     },
     "prefill_ms": {
       "p50": 42146.38,
-      "p95": 94157.532
+      "p95": 85922.147
     },
     "prompt_ms": {
       "p50": 0.025,
@@ -1341,19 +1233,19 @@
     },
     "retrieval_ms": {
       "p50": 0.039,
-      "p95": 3.763
+      "p95": 2.378
     },
     "total_ms": {
       "p50": 57579.949,
-      "p95": 113541.992
+      "p95": 99168.462
     },
     "validation_ms": {
       "p50": 22.594,
-      "p95": 71.945
+      "p95": 54.068
     },
     "worker_analysis_ms": {
-      "p50": 0.088,
-      "p95": 2.261
+      "p50": 0.082,
+      "p95": 1.969
     },
     "worker_image_decode_ms": {
       "p50": 0.0,
@@ -1373,18 +1265,18 @@
     },
     "worker_parse_ms": {
       "p50": 3.93,
-      "p95": 42.786
+      "p95": 32.598
     },
     "worker_render_ms": {
       "p50": 0.0,
       "p95": 226.379
     },
     "worker_snapshot_ms": {
-      "p50": 0.283,
+      "p50": 0.278,
       "p95": 3.035
     },
     "worker_total_ms": {
-      "p50": 18.707,
+      "p50": 8.781,
       "p95": 5109.002
     },
     "worker_vision_ms": {

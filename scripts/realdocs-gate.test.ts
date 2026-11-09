@@ -34,9 +34,20 @@ const ADMITTED =
  */
 const SOMEONE_ELSE = /written by|authored by|third.party|uploader|produced by|repackag|underlying|made public by/i;
 
+/**
+ * A Public Domain Mark says a work is free of copyright; the marks here were
+ * applied by the records' holders, not their authors, so one is accepted only
+ * for a record made before this year, which no US term can still cover: an
+ * unpublished work made for hire or of unknown author is protected for at most
+ * 120 years from its making (SOURCES.md, "The rule"). Each such row's title
+ * gives the record's year.
+ */
+const MARKED_BEFORE = 1906;
+
 interface Cleared {
   id: string;
   recorded: boolean;
+  title: string;
   url: string;
   licence: string;
   attribution: string;
@@ -60,10 +71,11 @@ async function sources(): Promise<Record<SetName, Sources>> {
       if (line.startsWith('| `')) {
         const cells = line.split(/(?<!\\)\|/).slice(1, -1).map((cell) => cell.trim());
         expect(cells, line).toHaveLength(6);
-        const [id, recorded, , source, licence, attribution] = cells;
+        const [id, recorded, title, source, licence, attribution] = cells;
         cleared.push({
           id: id.replaceAll('`', ''),
           recorded: recorded.startsWith('yes'),
+          title,
           url: /<([^>]+)>$/.exec(source)?.[1] ?? '',
           licence,
           attribution,
@@ -93,6 +105,11 @@ describe('the committed real-document recordings', () => {
         expect(row.url, row.id).toBe(document.source.url);
         expect(row.licence, row.id).toMatch(ADMITTED);
         expect(document.source.license, row.id).not.toMatch(SOMEONE_ELSE);
+        if (row.licence === 'Public Domain Mark 1.0') {
+          const years = [...row.title.matchAll(/\b(1[5-9]\d\d|20\d\d)\b/g)].map((match) => Number(match[1]));
+          expect(years.length, row.id).toBeGreaterThan(0);
+          expect(Math.max(...years), row.id).toBeLessThan(MARKED_BEFORE);
+        }
         // A CC BY row names the version the source states.
         if (row.licence.startsWith('CC BY ')) {
           expect(document.source.license, row.id).toContain(row.licence.slice('CC BY '.length));
