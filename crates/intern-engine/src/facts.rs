@@ -1957,7 +1957,9 @@ pub fn validate_facts_at(
 /// The date of a rubber stamp a reply cited for `replied` and misread: the
 /// cited line states one date only, a stamp's with its day's figures set
 /// apart, in `replied`'s month and year, and `replied`'s day is the stamp
-/// day's first figure ("SEP 1 8 2015" read as 2015-09-01).
+/// day's first figure ("SEP 1 8 2015" read as 2015-09-01). A stamp a
+/// "RECEIVED" or "FILED" label stands on, or right over, dates a copy's
+/// arrival, not the document, and repairs nothing.
 fn stamp_date_cited(
     scope: &ValidationScope<'_>,
     cited: &[String],
@@ -1965,15 +1967,33 @@ fn stamp_date_cited(
 ) -> Option<String> {
     let (year_month, day) = replied.rsplit_once('-')?;
     let day = day.parse::<u32>().ok()?;
+    let labels_receipt = |line: &str| {
+        words(line)
+            .iter()
+            .any(|word| matches!(word.as_str(), "received" | "recd" | "filed"))
+    };
     scope.cited_units(cited).into_iter().find_map(|unit| {
-        unit.text.lines().find_map(|line| {
+        let lines = unit.text.lines().collect::<Vec<_>>();
+        // The line over the unit's first: the last of the unit before it,
+        // where the index set a stamp's label apart as a heading.
+        let over = scope
+            .index
+            .units()
+            .iter()
+            .filter(|other| other.page == unit.page && other.ordinal < unit.ordinal)
+            .max_by_key(|other| other.ordinal)
+            .and_then(|other| other.text.lines().last());
+        lines.iter().enumerate().find_map(|(at, line)| {
             let stamps = crate::evidence::stamped_dates(line);
             let [(stamped, first)] = stamps.as_slice() else {
                 return None;
             };
-            (extract_stated_dates(line)
-                .iter()
-                .all(|other| other == stamped)
+            let above = if at == 0 { over } else { Some(lines[at - 1]) };
+            let receipt = labels_receipt(line) || above.is_some_and(labels_receipt);
+            (!receipt
+                && extract_stated_dates(line)
+                    .iter()
+                    .all(|other| other == stamped)
                 && stamped.starts_with(&format!("{year_month}-"))
                 && *first == day)
                 .then(|| stamped.clone())
@@ -12447,6 +12467,28 @@ Rickmansworth,
             assert!(
                 outcome.reasons.contains(&ReviewReason::DateUnsupported),
                 "{replied}"
+            );
+        }
+        // A receipt's stamp dates the copy's arrival: it repairs no date.
+        for (stamp, repaired) in [
+            ("SEP 1 8 2015", true),
+            ("RECEIVED\nSEP 1 8 2015", false),
+            ("RECEIVED SEP 1 8 2015", false),
+        ] {
+            let letter = format!(
+                "ARP INDUSTRIES\n\n{stamp}\n\nMr. Alfred Puccinelli\n\nDear Mr. Puccinelli:\n\n\
+                 This is in response to your letter."
+            );
+            let (outcome, _) = facts_for(&letter, |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some("2015-09-01".into()),
+                date_evidence: vec![id_of(index, "SEP 1 8")],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.document_date.as_deref() == Some("2015-09-18"),
+                repaired,
+                "{stamp}"
             );
         }
     }
