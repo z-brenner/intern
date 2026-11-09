@@ -281,4 +281,53 @@ describe('the server speed battery', () => {
     }
     expect(script).toContain('add_header("Authorization", f"Bearer {key}")');
   });
+
+  // The OCR comparison runs on a runner of its own, both workers built here
+  // from source with the shipped features, alternated, every reading kept.
+  it('times this commit\'s parser worker against the base\'s on one runner', async () => {
+    const workflow = await readFile('.github/workflows/speed-battery.yml', 'utf8');
+    const job = jobOf(workflow, 'ocr-pages');
+    expect(job).toContain('if: inputs.ocr_pages');
+    expect(job).toContain('fetch-depth: 0');
+    const steps = stepsOf(job);
+    const at = (name: string) => steps.findIndex((step) => step.includes(`name: ${name}`));
+    const head = at("Build this commit's parser worker");
+    const stage = at('Stage the runtime as the package lays it out');
+    const base = at("Build the base's parser worker");
+    const time = at('Time the two workers, alternated');
+    expect(head).toBeGreaterThan(-1);
+    expect(stage).toBeGreaterThan(head);
+    expect(base).toBeGreaterThan(stage);
+    expect(time).toBeGreaterThan(base);
+    for (const index of [head, base]) {
+      expect(steps[index]).toContain('cargo build --locked --release -p intern-worker --features windows-native');
+    }
+    expect(steps[base]).toContain('git worktree add --detach "$LAB/base"');
+    expect(steps[base]).toContain('--target-dir "$GITHUB_WORKSPACE/target"');
+    expect(steps[time]).toContain('INTERN_RUNTIME_DIR: ${{ runner.temp }}/ocr-pages/stage/runtime');
+    expect(steps[time]).toContain('scripts/bonsai-eval/ocr-pages.py --base "$LAB/worker-base" --head "$LAB/worker-head"');
+    expect(steps[time]).toContain('--rounds 3');
+    expect(steps.find((step) => step.includes('actions/upload-artifact@'))).toContain('ocr-pages/out/');
+    const script = await readFile('scripts/bonsai-eval/ocr-pages.py', 'utf8');
+    expect(script).toContain('PROTOCOL_VERSION = 1');
+    expect(script).toContain('VmHWM');
+  });
+
+  // The app's own launch and slot code against the real server: the test
+  // the workflow names must exist, and a run that did not pass it fails.
+  it('runs the app\'s live slot test on the pinned server, and fails when it does', async () => {
+    const workflow = await readFile('.github/workflows/speed-battery.yml', 'utf8');
+    expect(jobOf(workflow, 'battery')).toContain('if: inputs.battery');
+    const job = jobOf(workflow, 'live-slots');
+    expect(job).toContain('if: inputs.live_slots');
+    const steps = stepsOf(job);
+    const fetch = steps.find((step) => step.includes('name: Fetch and verify llama-server'))!;
+    expect(fetch).toContain('echo "$LLAMA_UPSTREAM_SHA256  $LAB/llama/$archive" | sha256sum --check --strict');
+    const run = steps.find((step) => step.includes('name: Run the live slot-restore test'))!;
+    const test = /cargo test --locked -p intern-app --lib (\w+)/.exec(run)![1];
+    expect(await readFile('src-tauri/src/commands.rs', 'utf8')).toContain(`fn ${test}`);
+    expect(run).toContain('INTERN_LIVE_LLAMA_SERVER="$LLAMA_SERVER" INTERN_LIVE_MODEL="$MODEL"');
+    expect(run).toContain("grep -q 'test result: ok. 1 passed'");
+    expect(steps.find((step) => step.includes('actions/upload-artifact@'))).toContain('live-slots/out/');
+  });
 });
