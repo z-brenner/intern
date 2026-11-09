@@ -1648,15 +1648,20 @@ fn is_dotted_abbreviation(word: &str) -> bool {
 
 /// Public bodies named head first: a capitalized head word ("City",
 /// "Borough", "Department"), "of", maybe "the", and the capitalized words
-/// of the place or the remit - "and", "&" and "of" may join them - up to
-/// the punctuation or lower-case word that ends the name. Up to three
-/// capitalized words before the head belong to the name ("Royal Borough
-/// of Greenwich", "U.S. Department of Justice"). "To the Inhabitants of
-/// the Parish of Clerkenwell" reads `Parish of Clerkenwell`.
+/// of the place or the remit - "and", "&" and "of" may join them, in any
+/// case - up to the punctuation, lower-case word or "the" that ends the
+/// name. Up to three capitalized words before the head belong to the name
+/// ("Royal Borough of Greenwich", "U.S. Department of Justice"). "To the
+/// Inhabitants of the Parish of Clerkenwell" reads `Parish of
+/// Clerkenwell`. A heading that runs on into the document's title stops
+/// where the title starts, at a kind of document followed by "of":
+/// "DEPARTMENT OF ENVIRONMENTAL QUALITY NOTICE OF CIVIL PENALTY" reads
+/// `Department of Environmental Quality`.
 fn public_bodies(text: &str) -> Vec<String> {
     let words = words_of(text);
     let is_of = |word: &str| matches!(word, "of" | "Of" | "OF");
     let is_the = |word: &str| matches!(word, "the" | "The" | "THE");
+    let joins = |core: &str| matches!(core, "&" | "and" | "And" | "AND" | "of" | "Of" | "OF");
     let ends_name = |word: &str| word.ends_with([',', '.', ';', ':', ')', '"']);
     let mut found: Vec<String> = Vec::new();
     for (index, head) in words.iter().enumerate() {
@@ -1675,22 +1680,34 @@ fn public_bodies(text: &str) -> Vec<String> {
         let mut taken = 0;
         while let Some(word) = words.get(end) {
             let core = bare(word);
-            if is_capitalized(word) && core.chars().any(char::is_alphabetic) && core != "&" {
+            let next = words.get(end + 1);
+            if joins(core) {
+                // A joining word, upper-case in a heading too, is part of
+                // the name only between two of its words.
+                if ends_name(word)
+                    || !next.is_some_and(|next| {
+                        let next = bare(next);
+                        is_capitalized(next) && !joins(next) && !is_the(next)
+                    })
+                {
+                    break;
+                }
+                end += 1;
+            } else if is_the(core)
+                || !is_capitalized(word)
+                || !core.chars().any(char::is_alphabetic)
+                || (last.is_some()
+                    && TYPE_NOUNS.contains(&folded_form(word).as_str())
+                    && next.is_some_and(|next| is_of(next)))
+            {
+                break;
+            } else {
                 taken += 1;
                 last = Some(end);
                 end += 1;
                 if ends_name(word) || taken >= PUBLIC_BODY_WORDS {
                     break;
                 }
-            } else if matches!(core, "&" | "and" | "of")
-                && !ends_name(word)
-                && words.get(end + 1).is_some_and(|next| {
-                    is_capitalized(next) && !matches!(bare(next), "&" | "The" | "THE")
-                })
-            {
-                end += 1;
-            } else {
-                break;
             }
         }
         let Some(last) = last else {
@@ -2361,6 +2378,44 @@ mod tests {
         assert_eq!(read, vec![("2024-01-28", true)], "{read:?}");
     }
 
+    /// The stacked label reaches only so far: not across a page, not more
+    /// than five units up, and not past a unit that states a date of its
+    /// own. Without it a value line's two-digit year is not read at all.
+    #[test]
+    fn a_stacked_issue_date_label_does_not_reach_too_far() {
+        let read = |source: DocumentSource| {
+            EvidenceIndex::build(&source)
+                .units()
+                .iter()
+                .flat_map(|unit| &unit.features.dates)
+                .map(|mention| (mention.iso.clone(), mention.column_issue))
+                .collect::<Vec<_>>()
+        };
+        let values = "1327345-1 01/28/24 January 2024 01/01/24 - 01/21/24";
+        let across_pages = DocumentSource::from_pages(vec![
+            page(1, "WTTG\n\nInvoice Date Invoice Month Invoice Period"),
+            page(2, values),
+        ]);
+        assert_eq!(read(across_pages), vec![]);
+        let too_far = source_from_text(format!(
+            "WTTG\n\nInvoice Date Invoice Month Invoice Period\n\nOrder #\n\nAlt Order #\n\nDeal #\n\nOrder Flight\n\nAgency Code\n\n{values}"
+        ));
+        assert_eq!(read(too_far), vec![]);
+        let dated_between = source_from_text(format!(
+            "WTTG\n\nInvoice Date Invoice Month Invoice Period\n\nPrinted March 2, 2024\n\n{values}"
+        ));
+        assert!(
+            read(dated_between)
+                .iter()
+                .all(|(iso, _)| iso != "2024-01-28"),
+            "a dated unit between stops the label"
+        );
+        let within_reach = source_from_text(format!(
+            "WTTG\n\nInvoice Date Invoice Month Invoice Period\n\nOrder #\n\nAlt Order #\n\nDeal #\n\nAgency Code\n\n{values}"
+        ));
+        assert_eq!(read(within_reach), vec![("2024-01-28".to_owned(), true)]);
+    }
+
     /// Public bodies named head first are names a party's line carries,
     /// beside the organizations, which a name's last word decides; a
     /// governing law's state and a court's district are not.
@@ -2391,6 +2446,34 @@ mod tests {
                 "Office of the Chief Signal Officer",
                 vec!["office of the chief signal officer"],
             ),
+            (
+                "Office of Management and Budget",
+                vec!["office of management and budget"],
+            ),
+            // A heading's upper-case "OF", "AND" and "THE" join or end the
+            // name as their lower-case forms do, and a title that follows
+            // the body's name on its line is not part of it.
+            (
+                "DEPARTMENT OF HEALTH AND SOCIAL CARE",
+                vec!["department of health and social care"],
+            ),
+            (
+                "OFFICE OF THE COMPTROLLER OF THE CURRENCY",
+                vec!["office of the comptroller"],
+            ),
+            (
+                "OFFICE OF FAIR TRADING THE REGISTRAR",
+                vec!["office of fair trading"],
+            ),
+            (
+                "DEPARTMENT OF ENVIRONMENTAL QUALITY NOTICE OF CIVIL PENALTY ASSESSMENT AND ORDER",
+                vec!["department of environmental quality"],
+            ),
+            (
+                "Department of Environmental Quality Notice of Civil Penalty Assessment and Order",
+                vec!["department of environmental quality"],
+            ),
+            ("CITY OF OF OF VENDOR/ORGANIZATION/COMPANY", vec![]),
             ("governed by the laws of the State of Delaware", vec![]),
             (
                 "UNITED STATES DISTRICT COURT SOUTHERN DISTRICT OF NEW YORK",
