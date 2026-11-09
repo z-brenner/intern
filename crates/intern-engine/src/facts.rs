@@ -68,9 +68,10 @@ use crate::phrases::{
 };
 use crate::retrieve::EvidenceContext;
 use crate::validate::{
-    DateField, GENERIC_CAPITALS, READY_CONFIDENCE, current_year, date_fields, date_is_tainted,
-    deadline_fires, effective_alternates, first_unsupported_claim, issue_date_alternates, push,
-    reading_is_unsettled, validate_description, year_is_plausible,
+    DateField, DatePositions, GENERIC_CAPITALS, READY_CONFIDENCE, current_year, date_fields,
+    date_is_tainted, date_is_tainted_as, deadline_fires, deadline_fires_as, effective_alternates,
+    first_unsupported_claim, issue_date_alternates, push, reading_is_unsettled,
+    validate_description, year_is_plausible,
 };
 
 /// Share of a subject's distinct significant words its cited units must
@@ -701,10 +702,14 @@ pub fn validate_facts_at(
         // name waits for a person. A reply that took the stamp's first
         // figure for the day ("2015-09-01") cited the stamp for a date it
         // does not state; the stamp's own date stands in, when the cited
-        // line states that one date only.
+        // line states that one date only. A receipt's stamp dates a copy's
+        // arrival, not the document: it is neither read loosely nor
+        // repaired.
         if found.support == Support::Unsupported {
             let loose = found_at(replied, true);
-            if loose.support != Support::Unsupported {
+            if loose.support != Support::Unsupported
+                && !read_only_on_a_receipt_stamp(scope, loose.unit, replied)
+            {
                 found = loose;
                 read_loosely = Some(date.clone());
             } else if let Some(stamped) = stamp_date_cited(scope, &facts.date_evidence, replied) {
@@ -726,9 +731,13 @@ pub fn validate_facts_at(
             document_date = Some(date.to_owned());
             date_line = found.line.clone();
             remember(&found, &mut references);
-            // Another document's date: tainted in either view.
-            let tainted_context = date_is_tainted(context, date, document_type.as_deref());
-            let tainted_document = date_is_tainted(document, date, document_type.as_deref());
+            // Another document's date: tainted in either view. A date read
+            // only loosely is judged by the statements it was read from.
+            let positions = date_positions(read_loosely.as_deref(), date);
+            let tainted_context =
+                date_is_tainted_as(context, date, document_type.as_deref(), positions);
+            let tainted_document =
+                date_is_tainted_as(document, date, document_type.as_deref(), positions);
             if tainted_context || tainted_document {
                 support.guard_scope = Some(scope_name(tainted_context, tainted_document));
                 match single_agreed(
@@ -755,10 +764,14 @@ pub fn validate_facts_at(
     if !date_supported {
         push(&mut reasons, ReviewReason::DateUnsupported);
     }
-    // A deadline: labeled as one in either view.
+    // A deadline: labeled as one in either view, however loosely written.
+    // Its replacement is a date written out: a loosely written issue date
+    // ("Invoice Date: 02-Jun-17") is never offered on its own, so the
+    // deadline is then withheld.
     if !replaced && let Some(date) = document_date.clone() {
-        let fires_context = deadline_fires(context, &date);
-        let fires_document = deadline_fires(document, &date);
+        let positions = date_positions(read_loosely.as_deref(), &date);
+        let fires_context = deadline_fires_as(context, &date, positions);
+        let fires_document = deadline_fires_as(document, &date, positions);
         if fires_context || fires_document {
             push(&mut reasons, ReviewReason::DateIsDeadline);
             support.guard_scope = Some(scope_name(fires_context, fires_document));
@@ -1954,12 +1967,23 @@ pub fn validate_facts_at(
     }
 }
 
+/// How the guards find the statements of the date validation settled on:
+/// as [`date_match_positions`] finds them, or, when that date was read only
+/// loosely (`read_loosely` holds it), as [`read_date_positions`] reads them,
+/// so the guards judge the statements the date was read from.
+fn date_positions(read_loosely: Option<&str>, date: &str) -> DatePositions {
+    if read_loosely == Some(date) {
+        read_date_positions
+    } else {
+        date_match_positions
+    }
+}
+
 /// The date of a rubber stamp a reply cited for `replied` and misread: the
 /// cited line states one date only, a stamp's with its day's figures set
 /// apart, in `replied`'s month and year, and `replied`'s day is the stamp
-/// day's first figure ("SEP 1 8 2015" read as 2015-09-01). A stamp a
-/// "RECEIVED" or "FILED" label stands on, or right over, dates a copy's
-/// arrival, not the document, and repairs nothing.
+/// day's first figure ("SEP 1 8 2015" read as 2015-09-01). A receipt's
+/// stamp ([`under_a_receipt_label`]) repairs nothing.
 fn stamp_date_cited(
     scope: &ValidationScope<'_>,
     cited: &[String],
@@ -1967,30 +1991,13 @@ fn stamp_date_cited(
 ) -> Option<String> {
     let (year_month, day) = replied.rsplit_once('-')?;
     let day = day.parse::<u32>().ok()?;
-    let labels_receipt = |line: &str| {
-        words(line)
-            .iter()
-            .any(|word| matches!(word.as_str(), "received" | "recd" | "filed"))
-    };
     scope.cited_units(cited).into_iter().find_map(|unit| {
-        let lines = unit.text.lines().collect::<Vec<_>>();
-        // The line over the unit's first: the last of the unit before it,
-        // where the index set a stamp's label apart as a heading.
-        let over = scope
-            .index
-            .units()
-            .iter()
-            .filter(|other| other.page == unit.page && other.ordinal < unit.ordinal)
-            .max_by_key(|other| other.ordinal)
-            .and_then(|other| other.text.lines().last());
-        lines.iter().enumerate().find_map(|(at, line)| {
+        unit.text.lines().enumerate().find_map(|(at, line)| {
             let stamps = crate::evidence::stamped_dates(line);
             let [(stamped, first)] = stamps.as_slice() else {
                 return None;
             };
-            let above = if at == 0 { over } else { Some(lines[at - 1]) };
-            let receipt = labels_receipt(line) || above.is_some_and(labels_receipt);
-            (!receipt
+            (!under_a_receipt_label(scope, unit, at)
                 && extract_stated_dates(line)
                     .iter()
                     .all(|other| other == stamped)
@@ -1999,6 +2006,61 @@ fn stamp_date_cited(
                 .then(|| stamped.clone())
         })
     })
+}
+
+/// Whether the line at `at` of `unit` stands under a receipt's label: a
+/// "RECEIVED" or "FILED" on the line itself or on the line right over it
+/// (the last line of the unit before, where the index set the label apart
+/// as a heading). A stamp there dates a copy's arrival, not the document.
+fn under_a_receipt_label(scope: &ValidationScope<'_>, unit: &EvidenceUnit, at: usize) -> bool {
+    let labels_receipt = |line: &str| {
+        words(line)
+            .iter()
+            .any(|word| matches!(word.as_str(), "received" | "recd" | "filed"))
+    };
+    let lines = unit.text.lines().collect::<Vec<_>>();
+    let Some(line) = lines.get(at) else {
+        return false;
+    };
+    let above = match at.checked_sub(1) {
+        Some(before) => lines.get(before).copied(),
+        None => scope
+            .index
+            .units()
+            .iter()
+            .filter(|other| other.page == unit.page && other.ordinal < unit.ordinal)
+            .max_by_key(|other| other.ordinal)
+            .and_then(|other| other.text.lines().last()),
+    };
+    labels_receipt(line) || above.is_some_and(labels_receipt)
+}
+
+/// Whether the unit a loose reading of `date` was found in reads it only
+/// on receipts' stamps: each of its lines that states `date` as
+/// [`read_date_positions`] reads it is a stamp of that date
+/// ([`stamped_dates`](crate::evidence::stamped_dates)) under a receipt's
+/// label.
+fn read_only_on_a_receipt_stamp(
+    scope: &ValidationScope<'_>,
+    unit: Option<&EvidenceUnit>,
+    date: &str,
+) -> bool {
+    let Some(unit) = unit else {
+        return false;
+    };
+    let mut reading = unit
+        .text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !read_date_positions(date, &normalize(line)).is_empty())
+        .peekable();
+    reading.peek().is_some()
+        && reading.all(|(at, line)| {
+            crate::evidence::stamped_dates(line)
+                .iter()
+                .any(|(stamped, _)| stamped == date)
+                && under_a_receipt_label(scope, unit, at)
+        })
 }
 
 /// Whether a type names no class a letter could carry of its own - a
@@ -12502,6 +12564,90 @@ Rickmansworth,
             assert_eq!(
                 outcome.proposal.document_date.as_deref() == Some("2015-09-18"),
                 repaired,
+                "{stamp}"
+            );
+        }
+    }
+
+    /// A date read only loosely meets the guards a date written out meets:
+    /// a due date is a deadline and another agreement's date is that
+    /// agreement's, however the scan left them, and a receipt's stamp dates
+    /// no document.
+    #[test]
+    fn a_date_read_loosely_meets_the_guards_of_one_written_out() {
+        let invoice = |issued: &str, due: &str| {
+            format!(
+                "NORTHWIND SUPPLY CO.\n\nINVOICE\n\nInvoice No. 4471\nInvoice Date: {issued}\n\n\
+                 Bill To: Contoso Ltd.\n\nWidgets 10 x $160.00 $1,600.00\n\n\
+                 Payment due by {due}"
+            )
+        };
+        // The issue date written out replaces the due date; one written
+        // loosely is never offered, and the due date is withheld.
+        for (issued, due, expected) in [
+            ("June 2, 2017", "July 2, 2017", Some("2017-06-02")),
+            ("June 2, 2017", "July 2,2017", Some("2017-06-02")),
+            ("June 2,2017", "July 2,2017", None),
+            ("02-Jun-17", "02-Jul-17", None),
+        ] {
+            let (outcome, _) = facts_for(&invoice(issued, due), |index| ModelFacts {
+                document_type: Some("Invoice".into()),
+                document_date: Some("2017-07-02".into()),
+                date_evidence: vec![id_of(index, "Payment due")],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.document_date.as_deref(),
+                expected,
+                "{issued} / {due}"
+            );
+            assert!(
+                outcome.reasons.contains(&ReviewReason::DateIsDeadline),
+                "{issued} / {due}: {:?}",
+                outcome.reasons
+            );
+        }
+        for dated in ["November 22, 1923", "November 22,1923"] {
+            let letter = format!(
+                "Dear Mr. Lee:\n\nWe write about the agreement dated {dated} between your \
+                 company and ours.\n\nSincerely,\n\nRuth Abbott"
+            );
+            let (outcome, _) = facts_for(&letter, |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some("1923-11-22".into()),
+                date_evidence: vec![id_of(index, "agreement dated")],
+                ..ModelFacts::default()
+            });
+            assert_eq!(outcome.proposal.document_date, None, "{dated}");
+            assert!(
+                outcome.reasons.contains(&ReviewReason::DateUnsupported),
+                "{dated}"
+            );
+        }
+        // A receipt's stamp is not read loosely, as it repairs nothing.
+        for (stamp, read) in [
+            ("SEP 1 8 2015", true),
+            ("RECEIVED\nSEP 1 8 2015", false),
+            ("RECEIVED SEP 1 8 2015", false),
+            ("FILED SEP 1 8 2015", false),
+        ] {
+            let letter = format!(
+                "ARP INDUSTRIES\n\n{stamp}\n\nMr. Alfred Puccinelli\n\nDear Mr. Puccinelli:\n\n\
+                 This is in response to your letter."
+            );
+            let (outcome, _) = facts_for(&letter, |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some("2015-09-18".into()),
+                date_evidence: vec![id_of(index, "SEP 1 8")],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.document_date.as_deref() == Some("2015-09-18"),
+                read,
+                "{stamp}"
+            );
+            assert!(
+                outcome.reasons.contains(&ReviewReason::DateUnsupported),
                 "{stamp}"
             );
         }
