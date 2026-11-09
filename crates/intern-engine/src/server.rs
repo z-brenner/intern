@@ -744,6 +744,38 @@ mod tests {
         ));
     }
 
+    /// The same on Windows, where the check runs with the sidecar creation
+    /// flags: batch files under the server's name stand in for it, one that
+    /// exits cleanly and one that exits with an error.
+    #[cfg(windows)]
+    #[test]
+    fn a_slot_folder_is_used_only_when_the_server_takes_it_on_windows() {
+        let directory = tempfile::tempdir().unwrap();
+        let accepts = directory.path().join("accepts");
+        let refuses = directory.path().join("refuses");
+        for (folder, code) in [(&accepts, 0), (&refuses, 1)] {
+            std::fs::create_dir_all(folder).unwrap();
+            std::fs::write(
+                folder.join("llama-server.cmd"),
+                format!("@exit /b {code}\r\n"),
+            )
+            .unwrap();
+        }
+        let slots = directory.path();
+        assert!(LlamaServer::accepts_slot_directory(
+            &accepts.join("llama-server.cmd"),
+            slots
+        ));
+        assert!(!LlamaServer::accepts_slot_directory(
+            &refuses.join("llama-server.cmd"),
+            slots
+        ));
+        assert!(!LlamaServer::accepts_slot_directory(
+            &directory.path().join("missing").join("llama-server.exe"),
+            slots
+        ));
+    }
+
     #[test]
     fn a_text_only_launch_refuses_to_load_a_projector() {
         let arguments =
