@@ -4649,6 +4649,12 @@ const COURTESY_TITLES: &[&[&str]] = &[
     &["professor"],
 ];
 
+/// Honours written after a titled person's name: a member of a
+/// parliament, a King's or Queen's Counsel, an order.
+const HONOURS: &[&str] = &[
+    "mp", "msp", "ms", "am", "kc", "qc", "obe", "cbe", "mbe", "kcb", "dbe", "kbe", "ch",
+];
+
 /// A person's name without the courtesy title written before it, when
 /// what follows is a person's whole name: two or three words, none of
 /// them an organization's or a figure ("Dr. Ing. h.c. F. Porsche AG" keeps
@@ -4665,7 +4671,16 @@ fn without_courtesy_title(name: &str) -> String {
         {
             continue;
         }
-        let rest = &tokens[title.len()..];
+        // The honours after a titled name go with the title: "The Rt Hon
+        // Alex Chalk KC MP" is Alex Chalk.
+        let mut rest = &tokens[title.len()..];
+        while let [kept @ .., last] = rest
+            && words(last)
+                .first()
+                .is_some_and(|word| HONOURS.contains(&word.as_str()))
+        {
+            rest = kept;
+        }
         let rest_name = rest.join(" ");
         if (2..=3).contains(&rest.len())
             && !is_organization_name(&rest_name)
@@ -12485,6 +12500,8 @@ Rickmansworth,
             ("Dr. Smith Dental Group", "Dr. Smith Dental Group"),
             ("Mr.", "Mr."),
             ("Dr. Smith", "Dr. Smith"),
+            ("The Rt Hon Alex Chalk KC MP", "Alex Chalk"),
+            ("John Mann MP", "John Mann MP"),
         ] {
             assert_eq!(without_courtesy_title(written), name, "{written}");
         }
