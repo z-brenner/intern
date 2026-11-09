@@ -132,6 +132,9 @@ const MORE_KINDS: &[&str] = &[
     "deck",
     "presentation",
     "certification",
+    // What a minister or a regulator directs a body with: "Direction to
+    // Ofcom to Impose a Notification Condition".
+    "direction",
 ];
 
 /// Whether `word` names a kind of document.
@@ -1201,5 +1204,23 @@ mod tests {
         assert_eq!(subject_value("display shelving"), Some("display shelving"));
         assert!(opens_with_party_label("Bill to Atlas Threadworks LLC"));
         assert!(!opens_with_party_label("billing services"));
+    }
+
+    /// A direction is a kind of document a title can name: "Direction to
+    /// Ofcom to Impose a Notification Condition".
+    #[test]
+    fn a_direction_is_a_kind() {
+        assert!(names_a_kind("direction"));
+        assert_eq!(
+            title_phrase(
+                "DIRECTION TO OFCOM TO IMPOSE A NOTIFICATION CONDITION",
+                "direction"
+            )
+            .as_deref()
+            .map(str::to_lowercase)
+            .as_deref()
+            .map(|phrase| phrase.starts_with("direction")),
+            Some(true)
+        );
     }
 }
