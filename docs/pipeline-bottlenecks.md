@@ -165,7 +165,13 @@ context size.
    cannot find. But a scan that turns `2024` into `24h24` can never be dated
    from its own text. OCR fidelity on digits and names caps accuracy on
    scans. InternBench measures it separately: date, name and identifier
-   accuracy.
+   accuracy. Validation does read the looser forms a scan or a stamp leaves
+   (`read_date_positions` in `evidence.rs`): a stamp's day with its figures
+   apart ("SEP 1 8 2015"), a long month misread by one letter
+   ("Decenber"), a comma that lost its space, an invoice's two-figure year
+   after a month in words. A date read that way keeps `DATE_UNSUPPORTED`,
+   so the name waits for a person, and the index and the prompt read dates
+   as before.
 5. **Tables and layout.** A date in a table cell and parties identified only
    by layout (letterhead, "Bill To" blocks, form boxes) depend on how the
    reader linearizes the page. PDFium gives no table structure, so a header
