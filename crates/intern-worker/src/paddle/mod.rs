@@ -266,11 +266,24 @@ const INTRA_THREADS: usize = 2;
 /// than a machine running the local model can spare.
 const MAX_WORKERS: usize = 2;
 
-/// The OCR thread budget for a machine with `logical_cores`: at most half
-/// of them, so Windows and the model server stay responsive, in workers of
-/// [`INTRA_THREADS`] threads each, never more than [`MAX_WORKERS`] and
-/// never fewer than one.
+/// The OCR thread budget for a machine with `logical_cores`.
+///
+/// From four logical processors up, two pages at once on two threads each:
+/// the queue extracts a document and only then asks the model about it, so
+/// while pages are read the model server is idle and its processors are
+/// free. On a 4-core machine that reads InternBench's scans in 42.8 s
+/// rather than 77.0 s, with the same text (docs/ocr.md). Below four, at
+/// most half of them, so Windows stays responsive, in workers of
+/// [`INTRA_THREADS`] threads each and never fewer than one. Were extraction
+/// ever to overlap the model's reading of another document, this would
+/// have to go back to half the machine.
 pub fn thread_budget(logical_cores: usize) -> ThreadBudget {
+    if logical_cores >= MAX_WORKERS * INTRA_THREADS {
+        return ThreadBudget {
+            workers: MAX_WORKERS,
+            intra_threads: INTRA_THREADS,
+        };
+    }
     let budget = (logical_cores / 2).max(1);
     let intra_threads = INTRA_THREADS.min(budget);
     ThreadBudget {
@@ -469,15 +482,22 @@ mod tests {
         assert_eq!(dictionary.classes(), 438);
     }
 
+    /// Two pages at once on two threads each from four logical processors
+    /// up - the model server is idle while a document is extracted - and
+    /// never more: memory, not threads, is what runs out first. Below four,
+    /// half the machine.
     #[test]
-    fn ocr_threads_stay_within_half_the_machine() {
-        assert_eq!(
-            thread_budget(4),
-            ThreadBudget {
-                workers: 1,
-                intra_threads: 2
-            }
-        );
+    fn ocr_reads_two_pages_at_once_from_four_logical_processors() {
+        for cores in [4, 5, 6] {
+            assert_eq!(
+                thread_budget(cores),
+                ThreadBudget {
+                    workers: 2,
+                    intra_threads: 2
+                },
+                "{cores}"
+            );
+        }
         assert_eq!(
             thread_budget(8),
             ThreadBudget {
@@ -499,8 +519,13 @@ mod tests {
                 intra_threads: 1
             }
         );
-        // A big machine reads two pages at once, not eight: memory, not
-        // threads, is what runs out first.
+        assert_eq!(
+            thread_budget(3),
+            ThreadBudget {
+                workers: 1,
+                intra_threads: 1
+            }
+        );
         assert_eq!(
             thread_budget(32),
             ThreadBudget {
@@ -510,10 +535,12 @@ mod tests {
         );
         for cores in 1..64 {
             let budget = thread_budget(cores);
-            assert!(
-                budget.workers * budget.intra_threads <= (cores / 2).max(1),
-                "{cores}"
-            );
+            let threads = budget.workers * budget.intra_threads;
+            if cores < 4 {
+                assert!(threads <= (cores / 2).max(1), "{cores}");
+            } else {
+                assert!(threads <= cores.min(4), "{cores}");
+            }
             assert!((1..=MAX_WORKERS).contains(&budget.workers), "{cores}");
         }
     }

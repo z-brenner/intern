@@ -80,6 +80,13 @@ const MIB: u64 = 1024 * 1024;
 /// The parser worker's peak while it reads a document: 0.71 GB on a 25-page
 /// scan through PP-OCR, the most any InternBench document needed. It runs
 /// beside the model, so a model is judged to fit only with room for it too.
+///
+/// One page at a time. From four logical processors the worker reads two
+/// pages at once, and over all of InternBench its peak was 1.4 GB against
+/// 0.79 GB one page at a time (docs/ocr.md, measured on Linux). That second
+/// set of sessions lives only while a document is extracted, when the model
+/// is loaded but idle, and is dropped with the document; it is not counted
+/// here, which would raise the accurate model's floor by about 0.6 GiB.
 pub const WORKER_PEAK: u64 = 680 * MIB;
 
 /// What is left for the person's own work once a model and the worker are

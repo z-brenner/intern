@@ -88,10 +88,13 @@ score, the mean over every character, crowds every real reading into
 98-100 and could not tell them apart.
 
 **Threads and memory.** Each page's networks use two intra-op threads. On a
-machine with eight or more logical cores a second page can be read at the
-same time, with its own sessions, so OCR never uses more than half the
-cores and never more than two pages' worth of memory - about 570 MB each
-at their peak. A page that arrives while every set of sessions is busy
+machine with four or more logical processors a second page is read at the
+same time, with its own sessions; below four, OCR uses at most half of
+them. Never more than two pages' worth of memory - about 570 MB each at
+their peak. Four threads on a 4-core machine is the whole machine, which
+is free while a document is extracted: the queue extracts a document and
+only then sends it to the model, so the model server is idle while its
+pages are read (below). A page that arrives while every set of sessions is busy
 waits for one. A document's pages share their sessions, and ONNX Runtime's
 arena keeps each page's buffers for the next run instead of allocating them
 again. When the document has been read, the worker drops the sessions,
@@ -320,9 +323,35 @@ time. Two pages at once on one thread each are only 10% quicker over the
 set than one page at a time on two, take as long again over each page, and
 double the memory: each set of sessions peaks at about 570 MB, on a batch
 of full-width lines from a 300 DPI page. So each page gets two threads,
-and a machine reads as many pages at once as half its cores allow, but
-never more than two: on a 4-core machine one page at a time, on 8 or more
-two. The output is the same in every row.
+and never more than two pages are read at once. The output is the same in
+every row.
+
+Until alpha.15 a machine read as many pages at once as half its logical
+processors allowed, so a 4-core machine read one page at a time, on half
+its processors, while the model server beside it sat idle: the queue
+extracts a document and only then asks the model about it. From four
+logical processors it now reads two pages at once on two threads each
+(`paddle::thread_budget`). Measured with `intern-bench run --extract-only`
+over all of InternBench on the 4-core Xeon these reports use (shared with
+other work, load 2-6), the build of alpha.14 against this one, alternated
+over two rounds, and each worker's text dumped for every file:
+
+| Build | Whole set, wall | The 20 documents with OCR (56 pages) | `scan-lease-25p` | `scan-agreement-10p` | Worker peak resident |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 page x 2 threads (alpha.14) | 142.7 s, 137.2 s | 134.7 s, 131.4 s | 59.0 s | 26.5 s, 26.3 s | 790 MB |
+| 2 pages x 2 threads | 99.8 s, 97.4 s | 94.3 s, 91.9 s | 33.4 s, 31.5 s | 15.0 s, 15.1 s | 1,400 MB |
+
+The documents with OCR are read 30% faster and a 25-page scan 45%
+faster; every page's text, source and confidence, and every document's
+warnings, are byte for byte the same for all 78 files, and so are the OCR
+scores (CER 1.81%, WER 1.86%, every date, name and identifier found). The
+worker's peak resident memory rises from 790 MB to 1.4 GB while two pages
+are read (`VmHWM` over the whole corpus); it falls back when the document
+is done, since the sessions are dropped then. That peak sits beside a
+loaded model only between its documents, never during a reading, and on a
+16 GB machine running the 9B (about 8.3 GB resident) it leaves room. On 8
+or more logical processors nothing changes: they already read two pages
+at once.
 
 ### Model bytes
 
@@ -364,7 +393,7 @@ The shipped configuration:
 | orientation | classifier first, then the search | one pass for a turned page instead of two to four |
 | leveling | past 10 degrees only | lines are cut along their own slopes; leveling bought nothing up to 10 |
 | second reading | binarized, least certain character under 0.9, at most 12 lines a page | most dates for the time; +20% |
-| threads | 2 a page; pages at once up to half the cores, at most 2 | 1.8 times as fast as one thread; memory caps the pages at once |
+| threads | 2 a page; 2 pages at once from 4 logical processors, else 1 | 1.8 times as fast as one thread; the model server is idle while pages are read; memory caps the pages at once |
 | recognition batch | 6 lines | reading lines one at a time drops trailing periods and commas at the end of long lines |
 
 Shipped together: InternBench CER 0.49%, WER 1.78%, dates 29/30, names
