@@ -451,8 +451,7 @@ impl ModelClient {
         let _ = started;
         let completion: ChatCompletion = serde_json::from_slice(&bytes)
             .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
-        let token_confidence = completion.token_confidence();
-        let token_probabilities = completion.token_probabilities();
+        let (token_confidence, token_probabilities) = completion.token_readings();
         let timings = completion.model_timings();
         decode(completion, request.evidence.as_ref()).map(|proposal| ProposerReply {
             proposal,
@@ -494,10 +493,12 @@ impl ModelClient {
             body["seed"] = json!(seed);
         }
         if self.token_confidence {
-            // One alternative is the least llama-server accepts; only the
-            // chosen token's own probability is read.
+            // The review gate reads only the chosen token's own probability.
+            // Two alternatives keep the runner-up beside the model's first
+            // choice in a recording, so a margin can be read offline; the
+            // server sorts the same logits either way and samples as before.
             body["logprobs"] = json!(true);
-            body["top_logprobs"] = json!(1);
+            body["top_logprobs"] = json!(2);
         }
         body
     }
@@ -1002,22 +1003,21 @@ pub(crate) struct ChatCompletion {
 }
 
 impl ChatCompletion {
-    /// The first choice's [`TokenConfidence`], when the server reported
-    /// token probabilities in a shape this can read. A shape it cannot read
-    /// costs the signal, never the reply.
-    pub(crate) fn token_confidence(&self) -> Option<TokenConfidence> {
-        token_confidence(&self.token_logprobs()?)
-    }
-
-    /// The first choice's tokens with their probabilities, in the shape a
-    /// recording keeps them; empty when the server reported none or in a
-    /// shape this cannot read.
-    pub(crate) fn token_probabilities(&self) -> Vec<TokenProbability> {
-        self.token_logprobs()
-            .unwrap_or_default()
+    /// The first choice's token probabilities, read once: the
+    /// [`TokenConfidence`] the review gate reads, and every token with its
+    /// probability and alternatives in the shape a recording keeps them.
+    /// When the server reported none, or in a shape this cannot read, both
+    /// are empty: that costs the signal, never the reply.
+    pub(crate) fn token_readings(&self) -> (Option<TokenConfidence>, Vec<TokenProbability>) {
+        let Some(tokens) = self.token_logprobs() else {
+            return (None, Vec::new());
+        };
+        let confidence = token_confidence(&tokens);
+        let probabilities = tokens
             .into_iter()
             .map(TokenLogprob::into_probability)
-            .collect()
+            .collect();
+        (confidence, probabilities)
     }
 
     fn token_logprobs(&self) -> Option<Vec<TokenLogprob>> {
@@ -1077,9 +1077,12 @@ pub(crate) struct TokenLogprob {
     #[serde(default)]
     bytes: Option<Vec<u8>>,
     logprob: f64,
-    /// The alternatives the server listed at this position.
+    /// The alternatives the server listed at this position, kept unparsed
+    /// until a recording reads them: the review gate reads only the chosen
+    /// token, so an alternatives list in a shape this cannot read costs the
+    /// alternatives, never the token or the gate's signal.
     #[serde(default)]
-    top_logprobs: Vec<TopLogprob>,
+    top_logprobs: Value,
 }
 
 /// One alternative the server listed for a position.
@@ -1100,8 +1103,8 @@ impl TokenLogprob {
             token: self.token,
             logprob: self.logprob as f32,
             bytes,
-            top: self
-                .top_logprobs
+            top: serde_json::from_value::<Vec<TopLogprob>>(self.top_logprobs)
+                .unwrap_or_default()
                 .into_iter()
                 .map(|alternative| (alternative.token, alternative.logprob as f32))
                 .collect(),
@@ -1753,7 +1756,7 @@ mod tests {
             .with_token_confidence(true);
         let mut scored_body = scored.completion_request(&request);
         assert_eq!(scored_body["logprobs"], serde_json::json!(true));
-        assert_eq!(scored_body["top_logprobs"], serde_json::json!(1));
+        assert_eq!(scored_body["top_logprobs"], serde_json::json!(2));
         let fields = scored_body.as_object_mut().unwrap();
         fields.remove("logprobs");
         fields.remove("top_logprobs");
@@ -1767,7 +1770,7 @@ mod tests {
                 token: (*text).to_owned(),
                 bytes: Some(text.as_bytes().to_vec()),
                 logprob: probability.ln(),
-                top_logprobs: Vec::new(),
+                top_logprobs: Value::Null,
             })
             .collect()
     }
@@ -1862,7 +1865,7 @@ mod tests {
             }]
         }))
         .unwrap();
-        let tokens = completion.token_probabilities();
+        let (_, tokens) = completion.token_readings();
         assert_eq!(tokens.len(), 2);
         assert_eq!(tokens[0].token, "{\"");
         assert_eq!(tokens[0].logprob, -0.5);
@@ -1881,7 +1884,42 @@ mod tests {
             "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}]
         }))
         .unwrap();
-        assert!(without.token_probabilities().is_empty());
+        assert_eq!(without.token_readings(), (None, Vec::new()));
+    }
+
+    /// The alternatives are read only for a recording. A server that lists
+    /// them in a shape this cannot read - a map of token to log-probability,
+    /// say - costs the alternatives; the token, its probability and the
+    /// review gate's signal are read as before.
+    #[test]
+    fn alternatives_in_another_shape_cost_only_the_alternatives() {
+        let completion: ChatCompletion = serde_json::from_value(json!({
+            "choices": [{
+                "message": {"content": "{\"document_date\":\"2025-02-14\"}"},
+                "finish_reason": "stop",
+                "logprobs": {"content": [
+                    {"token": "{\"document_date\":\"", "logprob": -14.2,
+                     "top_logprobs": {"{\"": -0.1}},
+                    {"token": "2025-02-14", "logprob": -0.01,
+                     "top_logprobs": [-0.01, -4.6]},
+                    {"token": "\"}", "logprob": -0.4,
+                     "top_logprobs": [{"token": "\"}", "logprob": -0.4},
+                                      {"token": "\",", "logprob": -1.2}]}
+                ]}
+            }]
+        }))
+        .unwrap();
+        let (confidence, tokens) = completion.token_readings();
+        let confidence = confidence.expect("the gate's signal survives");
+        assert_eq!(confidence.tokens, 1);
+        assert!(close(confidence.min, (-0.01_f32).exp()));
+        assert_eq!(tokens.len(), 3);
+        assert!(tokens[0].top.is_empty() && tokens[1].top.is_empty());
+        assert_eq!(tokens[1].logprob, -0.01);
+        assert_eq!(
+            tokens[2].top,
+            vec![("\"}".to_owned(), -0.4), ("\",".to_owned(), -1.2)]
+        );
     }
 
     #[test]
@@ -1890,7 +1928,7 @@ mod tests {
             r#"{"choices":[{"message":{"content":"{}"},"finish_reason":"stop"}]}"#,
         )
         .unwrap();
-        assert!(completion.token_confidence().is_none());
+        assert!(completion.token_readings().0.is_none());
         assert!(token_confidence(&[]).is_none());
     }
 
@@ -1905,7 +1943,7 @@ mod tests {
                  {"id":3,"token":"\"}","bytes":[34,125],"logprob":-0.4,"top_logprobs":[]}]}}]}"#,
         )
         .unwrap();
-        let confidence = completion.token_confidence().unwrap();
+        let confidence = completion.token_readings().0.unwrap();
         assert_eq!(confidence.tokens, 1);
         assert!(close(confidence.min, (-0.01_f32).exp()));
     }

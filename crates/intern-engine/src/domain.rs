@@ -619,10 +619,13 @@ pub struct TokenConfidence {
 
 /// One generated token as the local server reported it: its text, the
 /// model's log-probability for it before the grammar masked anything, and
-/// the alternatives the server listed beside it (`top_logprobs`). A
-/// recording keeps the whole reply's list so that another reading of it -
-/// the first token, the margin to the runner-up, the type's tokens - can be
-/// swept offline; [`TokenConfidence`] is the one the review gate reads.
+/// the alternatives the server listed beside it (`top_logprobs`: the two
+/// tokens the model found most probable, whether or not the grammar let it
+/// write them). A recording keeps the whole reply's list so that another
+/// reading of it - the first token, the margin to the runner-up, the type's
+/// tokens - can be swept offline; [`TokenConfidence`] is the one the review
+/// gate reads. A recording made before the client asked for two
+/// alternatives (November 2026) lists one, the model's own first choice.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct TokenProbability {
     pub token: String,
@@ -632,7 +635,8 @@ pub struct TokenProbability {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes: Option<Vec<u8>>,
     /// The most probable tokens at this position, with their
-    /// log-probabilities, most probable first.
+    /// log-probabilities, most probable first; empty when the server listed
+    /// none or in a shape the client could not read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub top: Vec<(String, f32)>,
 }
