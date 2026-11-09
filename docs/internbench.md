@@ -251,7 +251,8 @@ Inputs: `model_url` and `model_sha256` (as for a candidate above);
 the app's (a repeated flag's last value wins, so `--threads-batch 4`
 replaces the app's); `threads` (default 2, the app's rule on a 4-processor
 runner); `every` (default 2: every second recorded request, 13 of 26);
-`llama_release` (optional); `cold_start` and `cpu_variant` (below).
+`llama_release` (optional); `cold_start`, `cpu_variant`, `battery`,
+`ocr_pages`, `ocr_base` and `live_slots` (below).
 
 The battery warms every slot before it times anything, so the first
 document of a server lifetime - what a person waits on after sign-in and
@@ -278,10 +279,31 @@ server of the job on that backend alone. ggml loads the best
 resolves to, so a folder of symbolic links still loads the release's own
 best; the job hard-links the release into a folder that holds only the
 named backend instead. A runner without the backend's instructions then
-has no CPU backend and the job fails; the summary quotes what the loaded
-backend was built for from the server's `system_info` line. Without it a
-runner loads its own AVX-512 or AMX build, a path no laptop class without
-those instructions runs.
+has no CPU backend and the job fails. Every job records which backend the
+server loads - the `load_backend` lines of `llama-server -lv 4
+--list-devices`, kept as `cpu-backend.txt` - and the summary names the
+library (`libggml-cpu-haswell.so`, say), so a pin that did not take shows.
+Without `cpu_variant` a runner loads its own AVX-512 or AMX build, a path no
+laptop class without those instructions runs.
+
+Two more jobs run on runners of their own, and `battery: false` runs only
+them. `ocr_pages` times this commit's parser worker against `ocr_base`'s
+(default `main`) over InternBench: both are built on the runner from source
+with the features the package ships, the Linux runtime is staged as the
+package lays it out, and `scripts/bonsai-eval/ocr-pages.py` sends every
+document to each worker over the worker's own protocol, alternating base,
+head, head, base, base, head. The summary gives the whole set's time, the
+documents with OCR, the longest scans, and each worker's peak resident
+memory per run, and says whether every document was read the same by every
+run (a hash of each page's text, source and OCR confidence and of the
+document's warnings); `ocr-pages.json` and each run's timings are in the
+artifact (docs/ocr.md, "OCR concurrency"). `live_slots` builds the desktop
+crate's tests and runs the env-gated live test
+`live_the_first_document_after_a_restart_finds_the_instructions_restored`
+against the pinned `llama-server` and the model given, which must then be
+the pinned fast model; the job fails unless the test passed, and its log,
+with the line the test prints, is the artifact (docs/architecture.md, "The
+instructions across a restart").
 
 Inputs:
 

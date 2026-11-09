@@ -1,7 +1,7 @@
 # The first document after a model load: what was measured, November 2026
 
-Status: measured on 2026-11-09 on GitHub-hosted runners and on one 4-core
-Linux box. The questions were: how long the first document after a model
+Status: measured on 2026-11-09 on GitHub-hosted runners, the first
+mechanism check also on one 4-core Linux box. The questions were: how long the first document after a model
 load waits for the system turn, how much restoring the server's slot from a
 file saves, and whether a restore can change a reply. The answer to the
 last one changed the design: only a state the instructions were computed
@@ -89,32 +89,48 @@ replies of a lifetime depended on how long its first document was.
 So the app (`SlotKeeper::save_once`) saves only when the document that
 triggers the save was the lifetime's first request and was at least the
 instructions plus 260 tokens long, and the restored state is then exactly
-the one such a document computes. Most documents are that long
+the one such a document computes. That is not the state the live accuracy
+runs were recorded in: `intern-bench` starts every live run with its
+warm-up document, the notice that is request `0000` here (637 tokens), so
+every recorded reply of InternBench and the real-document sets came from
+instructions computed in pieces. A restored app computes them in one
+piece, as an app already did in any lifetime whose first document was
+long; on the purchase order above the two states give different replies.
+No live accuracy run has yet been made in the even state. Most documents are that long
 (InternBench's median prompt is 1,347 tokens). Before saving, it sends the
 instructions-only request (the same turns, then "JSON only.", one token of
 reply), so the file holds the instructions and none of the document.
 `cold-start.py` now does the same and saves after request `0016`
 (1,094 tokens).
 
-## On the 4-core box, through the app's own code
+## On a runner, through the app's own code
 
 `live_the_first_document_after_a_restart_finds_the_instructions_restored`
-(`src-tauri/src/commands.rs`, run with `INTERN_LIVE_LLAMA_SERVER` and
-`INTERN_LIVE_MODEL`): the pinned Qwen3.5-4B on the `haswell` backend, four
-threads, the box shared with other work (load 4-7), four launches of the
-real `RuntimeModel`:
+(`src-tauri/src/commands.rs`) drives the real `RuntimeModel` and
+`LlamaLauncher` through four launches of the real server: the speed
+battery's `live_slots` job, run 42613236166 at d24fc11, the pinned
+Qwen3.5-4B and the pinned `b11946` server on an AMD EPYC 9V74 runner (4
+logical processors, the `zen4` backend), four threads as the app chooses
+them. What the test printed is in [`live-slots.txt`](live-slots.txt):
 
 - The first launch reads the self-test's probes first: nothing is saved.
 - The second launch's first request is a 928-token agreement, processed
-  from nothing in 30.1 s; the instructions are saved: 174,210,604 bytes,
-  492 tokens (the instructions and the instructions-only request), in
-  64 ms.
-- The third launch restores the file in 107 ms (start to ready 3.7 s) and
-  reads the agreement with 477 tokens cached, 451 processed, in 11.6 s;
-  read again after another document, 477 cached, 12.6 s.
-- The agreement's reply - type, date, parties, subject, file name and
-  description - is the same in all three readings: first with nothing
-  restored, first after the restore, and later in the lifetime.
+  from nothing in 20.8 s; the instructions are saved: 174,210,604 bytes,
+  492 tokens (the instructions-only request's 477 cached and 15
+  processed), in 36 ms.
+- The third launch restores the file in 60 ms (3.0 s from launch to
+  ready) and reads the agreement with 477 tokens cached and 451 processed
+  in 10.3 s; read again after another document, 477 cached, 10.4 s.
+- The agreement's reply - proposal, file name and description - is the
+  same in all three readings: first with nothing restored, first after the
+  restore, and later in the lifetime. And the restored lifetime's first
+  reading of the agreement found only the instructions cached, not the
+  agreement the file was saved after.
+
+An earlier run of the same test on the shared 4-core box gave the same
+outcome (30.1 s against 11.6 s); its log was not kept, and review could
+not reproduce it on that box under load from other work, so it is not
+counted here.
 
 The first measurement of the mechanism, with `cold-start.py` and the 2B on
 this box's AMX build (the slot saved after `0000`, before the even-state

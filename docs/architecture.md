@@ -868,13 +868,23 @@ instructions-only request (`client::instructions_only_request`: the same turns
 before the document, then "JSON only.", one token of reply), which reuses the
 instructions' state and replaces the document's tokens, and then has the
 server save its slot (`POST /slots/0?action=save`). The file therefore holds
-the instructions and no word of anything filed. Every later launch of the same
-configuration restores it (`POST /slots/0?action=restore`) after the health
-check and before the server is handed to anything that sends it a document, so
-the restore never races one. Both calls carry the server's key, as every other
-call does. The save runs on the queue's thread while the model is held for
-reading, so an idle unload cannot stop the server under it; it delays that one
-document by the save, once per configuration.
+the instructions and no word of anything filed. That rests on how b11946 keeps
+a slot: a request that reuses only part of the cached prompt drops the rest,
+its tokens and its checkpoints. So it is checked on every save: the server
+says how many tokens it saved, and a file holding more than the
+instructions-only request's prompt and the one token it generated is deleted
+before it is renamed into place (`Save::HeldMore`), so a runtime that kept
+more would leave nothing of a document on disk. On the runners the 9B saved
+492 tokens, the request's 477 cached and 15 processed. Every later launch of
+the same configuration restores the file (`POST /slots/0?action=restore`)
+after the health check and before the server is handed to anything that
+sends it a document, so the restore never races one. Both calls carry the
+server's key, as every other call does. The save runs on the thread that sent
+the document to the model (`intern-model-request`), inside the read, while
+the engine is held for reading, so an idle unload cannot stop the server
+under it. It delays that document's result by the instructions-only request
+and the save (1.1-1.5 s and 35-64 ms on the runners), once per server
+lifetime that saves.
 
 Only an even state is saved. llama-server processes a prompt it starts from
 nothing in micro-batches and breaks the batch where the last user turn starts
@@ -890,8 +900,22 @@ document that triggers it was the lifetime's first request and long enough to
 process the instructions in one piece, which most documents are (InternBench's
 median prompt is 1,347 tokens); a lifetime whose first request was the
 self-test or a short document saves nothing, and the next one tries again.
-Restored, the file gives every lifetime the instructions such a document gives
-them, whatever is read first.
+The instructions' length is what the instructions-only request finds cached,
+so the first lifetime of a configuration in a session whose first document is
+short still sends that request (1.1-1.5 s) before it saves nothing; the length
+is then kept for the session (`slots::KnownInstructions`), and a later
+lifetime with a short first document sends nothing. Restored, the file gives
+every lifetime the instructions such a document gives them, whatever is read
+first.
+
+That is a change for what was measured, too. Every live run of InternBench
+and the real-document sets starts with the benchmark's warm-up document, a
+short notice whose prompt is 637 tokens, so the instructions of every
+recorded reply were computed in pieces, the uneven way; the app, restored,
+computes them the even way, as it already did in any lifetime whose first
+document was long. The two give different replies to some documents: the
+purchase order above is one. No live run has yet been made in the even state,
+so the recorded accuracy figures describe the uneven one.
 
 Measured on runners ([`bench/reports/cold-start-linux-cpu-2026-11-09`](../bench/reports/cold-start-linux-cpu-2026-11-09/README.md);
 the 9B on the AVX2 `haswell` backend, four threads, saved as the app saves):
@@ -901,10 +925,14 @@ AMD EPYC 9V45 and 54.0 s on a 9V74 with nothing restored, and 453 in 19.3 s and
 request fell from 50.6 to 30.1 s and from 68.5 to 41.1 s, and its reply was the
 steady-state reply byte for byte in every case. An earlier run on two EPYC 7763
 runners measured the same saving, 32.8 s of an 80-82 s first request. The
-file is 174 MB for either pinned model and is restored in 44-107 ms; on the
-4-core box the app's own code restored the 4B's in 107 ms, and its first
-document then read 451 tokens in 11.6 s against 928 in 30.1 s with nothing
-restored, with the same reply.
+file is 174 MB for either pinned model and is restored in 44-60 ms. The app's
+own code was run the same way: the env-gated live test drives `RuntimeModel`
+and `LlamaLauncher` through four launches of the real server, and on a runner
+(the speed battery's `live_slots` job, the pinned 4B, an EPYC 9V74) the
+third launch restored the 4B's file in 60 ms and read a 928-token agreement
+with 477 tokens cached and 451 processed in 10.3 s, against 20.8 s from
+nothing; the reply was the same in every reading, and a restored lifetime's
+first reading of the agreement found only the instructions cached.
 
 The file's name is the tier and a hash of everything the saved state depends
 on: the model's SHA-256, the server's build as `/props` reports it, the turns
@@ -917,11 +945,16 @@ would have got as the second. A launch removes its tier's files for any other
 configuration, and any save a stopped server left unfinished (saves are
 written as `.part` and renamed), so there is at most one file per tier. Every
 failure costs only the speed-up: a restore that fails removes the file and the
-next document saves a new one; a save is skipped with less than 2 GiB free; a
-folder llama-server cannot name (on Windows, a path outside ASCII: the server
-checks the folder with `std::filesystem` from UTF-8 text, which Windows' C++
-library reads in the ANSI code page) or a server that will not start with the
-flag is started without it.
+next document saves a new one; a save is skipped with less than 2 GiB free.
+On Windows a folder outside ASCII is never passed (the server checks the
+folder with `std::filesystem` from UTF-8 text, which Windows' C++ library
+reads in the ANSI code page). And before every launch the server itself is
+asked whether it takes the folder: `llama-server --slot-save-path DIR
+--version` checks the folder while it reads its arguments and exits, without
+a model, in milliseconds (13 ms for b11946 on the 4-core box; a missing
+folder exits 1). A folder it refuses is not passed, so a server that will not
+start, for whatever reason, fails on its three tries as it would without a
+slot folder (`LlamaServer::accepts_slot_directory`).
 
 A new install downloads the quick model first and opens the queue as soon as it
 has passed its digest and its semantic self-test. The accurate model downloads
