@@ -17,7 +17,9 @@ default_threads) and samples:
     and its private working set from the performance counters;
 
 before the load, after /health, after one recorded request, after IdleSeconds
-idle, and 3 s and 15 s after the server exits. Then it applies plan()'s
+idle, and 3 s and 15 s after the server exits. With BalloonMiB, a process that
+holds that much memory in its working set (a browser's share, say) runs
+throughout, so the machine starts with less available. Then it applies plan()'s
 arithmetic (src-tauri/src/commands.rs) with the constants in tiers.rs, read from
 the source so the probe judges what the code ships: with a model loaded, the plan
 sees ullAvailPhys plus tiers::unload_gives_back(tier, file size), and the
@@ -32,6 +34,7 @@ param(
     [Parameter(Mandatory = $true)] [string]$Out,
     [string]$Request = "0001",
     [int]$IdleSeconds = 60,
+    [int]$BalloonMiB = 0,
     [int]$Port = 18300
 )
 
@@ -174,6 +177,36 @@ function Get-Sample([string]$Tier, [string]$Stage, $Process) {
     $Sample
 }
 
+# Another program's memory: BalloonMiB allocated and touched, page by page, in
+# a process of its own, so it sits in that process's working set as an open
+# browser's does. Chunks of 256 MiB, since a .NET array stops short of 2 GiB.
+$Balloon = $null
+if ($BalloonMiB -gt 0) {
+    $BalloonScript = @'
+$Chunks = [System.Collections.Generic.List[byte[]]]::new()
+for ($Held = 0; $Held -lt SIZE; $Held += 256) {
+    $Length = [Math]::Min(256, SIZE - $Held) * 1MB
+    $Chunk = [byte[]]::new($Length)
+    for ($i = 0; $i -lt $Length; $i += 4096) { $Chunk[$i] = 1 }
+    $Chunks.Add($Chunk)
+}
+Start-Sleep -Seconds 7200
+'@
+    $BalloonScript = $BalloonScript.Replace("SIZE", [string]$BalloonMiB)
+    $Encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($BalloonScript))
+    $Balloon = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList @("-NoProfile", "-NonInteractive", "-EncodedCommand", $Encoded) `
+        -PassThru -NoNewWindow
+    $Deadline = (Get-Date).AddMinutes(3)
+    while ($true) {
+        $Balloon.Refresh()
+        if ($Balloon.HasExited) { throw "The balloon process exited" }
+        if ($Balloon.WorkingSet64 -ge [int64]$BalloonMiB * 1MB) { break }
+        if ((Get-Date) -gt $Deadline) { throw "The balloon did not fill in time" }
+        Start-Sleep -Seconds 1
+    }
+    Write-Host ("Balloon of {0} MiB holds a working set of {1} MiB" -f $BalloonMiB, (ConvertTo-MiB $Balloon.WorkingSet64))
+}
+
 $Samples = [System.Collections.Generic.List[object]]::new()
 $Replies = [System.Collections.Generic.List[object]]::new()
 $Models = [ordered]@{ accurate = (Resolve-Path $Accurate).Path; fast = (Resolve-Path $Fast).Path }
@@ -182,6 +215,7 @@ $WireBody = [IO.File]::ReadAllBytes((Join-Path $Requests "$Request-model-wire.js
 $ServerPath = (Resolve-Path $Server).Path
 
 $Samples.Add((Get-Sample "none" "start" $null))
+try {
 foreach ($Tier in $Models.Keys) {
     $Model = $Models[$Tier]
     $FileMiB[$Tier] = ConvertTo-MiB (Get-Item -LiteralPath $Model).Length
@@ -241,6 +275,9 @@ foreach ($Tier in $Models.Keys) {
     Start-Sleep -Seconds 12
     $Samples.Add((Get-Sample $Tier "exit+15s" $null))
 }
+} finally {
+    if ($null -ne $Balloon -and -not $Balloon.HasExited) { Stop-Process -Id $Balloon.Id -Force }
+}
 
 function Find-Sample([string]$Tier, [string]$Stage) {
     $Samples | Where-Object { $_.tier -eq $Tier -and $_.stage -eq $Stage } | Select-Object -First 1
@@ -252,7 +289,8 @@ function Find-Sample([string]$Tier, [string]$Stage) {
 $Verdicts = [System.Collections.Generic.List[object]]::new()
 $Lines = [System.Collections.Generic.List[string]]::new()
 $Lines.Add("Windows memory probe: $([Environment]::ProcessorCount) logical processors, $Threads server threads, " +
-    "$((Find-Sample 'none' 'start').total_phys_mib) MiB physical; MIN_AVAILABLE_FOR_ACCURATE $Floor MiB.")
+    "$((Find-Sample 'none' 'start').total_phys_mib) MiB physical, a balloon of $BalloonMiB MiB; " +
+    "MIN_AVAILABLE_FOR_ACCURATE $Floor MiB.")
 $Lines.Add("")
 $Lines.Add("| Loaded | Stage | Available | Working set | Shipped credit | Plan sees | Accurate model | Credit = working set | Plan sees | Accurate model |")
 $Lines.Add("| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | --- |")
@@ -326,6 +364,7 @@ $Report = [ordered]@{
     logical          = [Environment]::ProcessorCount
     request          = $Request
     idle_seconds     = $IdleSeconds
+    balloon_mib      = $BalloonMiB
     floor_mib        = $Floor
     resident_mib     = $Resident
     file_mib         = $FileMiB

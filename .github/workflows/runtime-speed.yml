@@ -16,7 +16,7 @@ name: Runtime speed on Windows
 
 # Run by hand (Actions > Runtime speed on Windows > Run workflow): the speed
 # run takes about 70 minutes of a Windows runner and the memory probe about
-# 20, so no push or pull request starts either.
+# 15, so no push or pull request starts either.
 on:
   workflow_dispatch:
     inputs:
@@ -180,16 +180,26 @@ jobs:
           Expand-Archive lab\upstream.zip lab\upstream
           Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfCores, NumberOfLogicalProcessors | Format-List
           Get-CimInstance Win32_PageFileUsage | Select-Object Name, AllocatedBaseSize, CurrentUsage | Format-List
+      # Twice: on the runner as it comes, and with 2 GiB held by another
+      # process, as a laptop with a browser open has less available.
       - name: Probe memory (accurate, then fast)
         shell: pwsh
         run: |
           $Server = @(Get-ChildItem -LiteralPath lab\upstream -Recurse -File -Filter "llama-server.exe")[0].FullName
           ./scripts/probe-windows-memory.ps1 -Server $Server -Accurate lab\accurate.gguf -Fast lab\fast.gguf `
             -Requests $env:REQUESTS -Tiers crates/intern-engine/src/tiers.rs -Out lab\memory
+      - name: Probe memory with 2 GiB held by another process
+        shell: pwsh
+        run: |
+          $Server = @(Get-ChildItem -LiteralPath lab\upstream -Recurse -File -Filter "llama-server.exe")[0].FullName
+          ./scripts/probe-windows-memory.ps1 -Server $Server -Accurate lab\accurate.gguf -Fast lab\fast.gguf `
+            -Requests $env:REQUESTS -Tiers crates/intern-engine/src/tiers.rs -Out lab\memory-balloon -BalloonMiB 2048
       - name: Upload the measurements
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-memory-probe
-          path: lab/memory/
+          path: |
+            lab/memory/
+            lab/memory-balloon/
           retention-days: 30
