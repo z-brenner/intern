@@ -62,8 +62,8 @@ use crate::evidence::{
 use crate::index::{EvidenceIndex, EvidenceUnit, UnitKind};
 use crate::infer::{infer_date_role, reads_as_signature_date, repair_issued_relation};
 use crate::phrases::{
-    has_a_kind, head_noun, is_form_code, is_placeholder, is_reference, label_and_value,
-    names_a_kind, opens_a_sentence, opens_with_party_label, phrase_positions, possessive_side,
+    gives_notice, has_a_kind, head_noun, is_form_code, is_placeholder, is_reference,
+    label_and_value, names_a_kind, opens_with_party_label, phrase_positions, possessive_side,
     same_word, subject_value, tidy_case, title_phrase, trim_name, without_identifier, words,
 };
 use crate::retrieve::EvidenceContext;
@@ -2400,7 +2400,11 @@ fn read_type_words<'a>(
 /// Whether a reply's type is a title phrase with only what a title stops
 /// at around it: a side's possessive before it ("PLAINTIFF'S Notice of
 /// Voluntary Dismissal"), or the sentence it opens after it ("NOTICE is
-/// hereby given"). The title phrase is then the type.
+/// hereby given"). The title phrase is then the type. Only a sentence that
+/// gives the notice "hereby" opens on a title: a body's sentence that opens
+/// on a kind ("Receipt is acknowledged of the Letter of Notification",
+/// "Invoice is attached for services rendered") is no heading, and its
+/// first word is no type.
 fn reads_past_title(value: &str, value_words: &[String], phrase: &str) -> bool {
     let phrase_words = words(phrase);
     let Some(at) = phrase_positions(value_words, &phrase_words)
@@ -2416,7 +2420,7 @@ fn reads_past_title(value: &str, value_words: &[String], phrase: &str) -> bool {
         .next()
         .is_some_and(|token| possessive_side(token) && words(token) == before);
     (before.is_empty() || possessive)
-        && after.first().is_none_or(|word| opens_a_sentence(word))
+        && (after.is_empty() || gives_notice(after, 0))
         && !(before.is_empty() && after.is_empty())
 }
 
@@ -12602,6 +12606,35 @@ Rickmansworth,
             &words("Notice of Default"),
             "Notice of Default"
         ));
+        assert!(reads_past_title(
+            "Notice IS Hereby Given for MR. William Dew",
+            &words("Notice IS Hereby Given for MR. William Dew"),
+            "Notice"
+        ));
+        assert!(reads_past_title(
+            "NOTICE HEREBY GIVEN",
+            &words("NOTICE HEREBY GIVEN"),
+            "NOTICE"
+        ));
+        // A body's sentence that opens on a kind of document is no title:
+        // its first word is not the type.
+        assert!(!reads_past_title(
+            "Receipt is acknowledged of the Letter of Notification of PPL Electric Utilities",
+            &words(
+                "Receipt is acknowledged of the Letter of Notification of PPL Electric Utilities"
+            ),
+            "Receipt"
+        ));
+        assert!(!reads_past_title(
+            "Invoice is attached for services rendered",
+            &words("Invoice is attached for services rendered"),
+            "Invoice"
+        ));
+        assert!(!reads_past_title(
+            "Notice is",
+            &words("Notice is"),
+            "Notice"
+        ));
         let (outcome, _) = facts_for(
             "IN THE UNITED STATES DISTRICT COURT\n\nPA ADVISORS, LLC,\nPlaintiff,\nv.\n\
              GOOGLE INC., et al.,\nDefendants.\n\n\
@@ -12638,6 +12671,44 @@ Rickmansworth,
                 .as_deref(),
             Some("notice of voluntary dismissal")
         );
+        // A reply that copied a body's sentence opening on a kind of
+        // document is not typed by its first word.
+        for (sentence, cited) in [
+            (
+                "Invoice is attached for services rendered",
+                "Invoice is attached",
+            ),
+            (
+                "Receipt is acknowledged of the Letter of Notification of Acme Utilities",
+                "Receipt is acknowledged",
+            ),
+        ] {
+            let (outcome, _) = facts_for(
+                &format!(
+                    "Acme Utilities Corporation\n12 High Street\n\n3 March 2024\n\n\
+                     {sentence} in February.\n\nAcme Utilities Corporation"
+                ),
+                |index| ModelFacts {
+                    document_type: Some(sentence.into()),
+                    type_evidence: vec![id_of(index, cited)],
+                    document_date: Some("2024-03-03".into()),
+                    date_evidence: vec![id_of(index, "3 March 2024")],
+                    parties: vec![party(
+                        "Acme Utilities Corporation",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "12 High Street")],
+                    )],
+                    ..ModelFacts::default()
+                },
+            );
+            let head = sentence.split_whitespace().next().expect("word");
+            assert_ne!(
+                outcome.proposal.document_type.as_deref(),
+                Some(head),
+                "{:?}",
+                outcome.proposal
+            );
+        }
     }
 
     /// A courtesy title is no part of a person's name in a filename; a

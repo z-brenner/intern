@@ -74,10 +74,19 @@ const CONNECTORS: &[&str] = &["of", "to", "for", "and", "on", "under"];
 /// Words after which a title stops to its right: a sentence has begun.
 const RIGHT_STOPS: &[&str] = &["is", "are", "was", "were", "hereby", "will", "shall"];
 
-/// Whether a word opens a sentence after a title: "NOTICE *IS* HEREBY
-/// GIVEN".
-pub(crate) fn opens_a_sentence(word: &str) -> bool {
-    RIGHT_STOPS.contains(&word)
+/// Whether the words from `at` open the sentence a notice is given by,
+/// after its title: "NOTICE *IS HEREBY* GIVEN", "Notice *hereby* given".
+/// A body's sentence that opens on a kind of document ("Receipt *is*
+/// acknowledged of the Letter of Notification", "Invoice *is* attached")
+/// gives no notice: its kind word is no title.
+pub(crate) fn gives_notice(words: &[String], at: usize) -> bool {
+    match words.get(at).map(String::as_str) {
+        Some("hereby") => true,
+        Some(word) if RIGHT_STOPS.contains(&word) => {
+            words.get(at + 1).is_some_and(|next| next == "hereby")
+        }
+        _ => false,
+    }
 }
 
 /// Whether a token is the possessive of a side of a case - "Plaintiff's",
@@ -153,14 +162,15 @@ pub(crate) fn names_a_kind(word: &str) -> bool {
 /// Default", "First *Amendment* to Lease", "Seed Production and Supply
 /// *Agreement*", "Order *Form*", "*NOTICE* IS HEREBY GIVEN" - or, when no
 /// word names a kind, the word before its first connector, else its last
-/// word.
+/// word. A kind before a body's sentence is no head: "Receipt is
+/// acknowledged of the *Letter* of Notification".
 pub(crate) fn head_noun(words: &[String]) -> Option<&str> {
     let by_kind = words.iter().enumerate().find(|(at, word)| {
         names_a_kind(word)
             && words.get(at + 1).is_none_or(|next| {
                 CONNECTORS.contains(&next.as_str())
                     || TITLE_STOPS.contains(&next.as_str())
-                    || RIGHT_STOPS.contains(&next.as_str())
+                    || gives_notice(words, at + 1)
                     || next.chars().any(|character| character.is_ascii_digit())
             })
     });
@@ -1097,6 +1107,14 @@ mod tests {
         );
         assert_eq!(head_noun(&w("Credit Union Merger Notice")), Some("notice"));
         assert_eq!(head_noun(&w("Invoice")), Some("invoice"));
+        assert_eq!(head_noun(&w("NOTICE IS HEREBY GIVEN")), Some("notice"));
+        assert_eq!(head_noun(&w("Notice hereby given")), Some("notice"));
+        assert_eq!(
+            head_noun(&w(
+                "Receipt is acknowledged of the Letter of Notification of PPL Electric Utilities"
+            )),
+            Some("letter")
+        );
         assert_eq!(
             head_noun(&w("Seed Production and Supply Agreement")),
             Some("agreement")
