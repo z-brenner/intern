@@ -93,11 +93,20 @@ pub fn run(
     );
     #[cfg(feature = "benchmark-transport")]
     let client = match &options.benchmark_transport {
-        Some((profile, output)) => client
-            .with_benchmark_transport(
-                intern_engine::benchmark_transport::BenchmarkTransport::load(profile, output)?,
-            )
-            .map_err(|e| format!("benchmark transport: {e}"))?,
+        Some((profile, output)) => {
+            let transport =
+                intern_engine::benchmark_transport::BenchmarkTransport::load(profile, output)?;
+            if transport.is_nuextract()
+                && (settings.pipeline != intern_engine::Pipeline::Evidence
+                    || settings.min_token_confidence.is_some()
+                    || settings.profile.is_some())
+            {
+                return Err("nuextract3 requires evidence and its native prompt, without a token-confidence gate".into());
+            }
+            client
+                .with_benchmark_transport(transport)
+                .map_err(|e| format!("benchmark transport: {e}"))?
+        }
         None => client,
     };
     let log = ExchangeLog::default();

@@ -2,10 +2,12 @@
 //! Not enabled by the desktop application. No code loading or network listener.
 use serde_json::Value;
 
+pub(crate) mod nuextract;
+
 pub fn transform(original: &Value, profile: &Value) -> Result<Value, String> {
     let p = profile.as_object().ok_or("profile must be an object")?;
     if p.keys()
-        .any(|k| !["settings", "prompt"].contains(&k.as_str()))
+        .any(|k| !["settings", "prompt", "format"].contains(&k.as_str()))
     {
         return Err("unknown benchmark profile field".into());
     }
@@ -13,6 +15,13 @@ pub fn transform(original: &Value, profile: &Value) -> Result<Value, String> {
         .get("settings")
         .and_then(Value::as_object)
         .ok_or("settings must be an object")?;
+    if let Some(format) = p.get("format") {
+        if format.as_str() != Some("nuextract3") || !settings.is_empty() || p.contains_key("prompt")
+        {
+            return Err("nuextract3 requires empty settings and its native prompt".into());
+        }
+        return nuextract::request(original);
+    }
     let mut body = original.clone();
     for (key, value) in settings {
         if ![
@@ -173,6 +182,11 @@ pub struct BenchmarkTransport {
     sequence: AtomicU64,
 }
 impl BenchmarkTransport {
+    /// Whether this profile uses NuExtract's native reply and no token confidence.
+    pub fn is_nuextract(&self) -> bool {
+        self.profile["format"].as_str() == Some("nuextract3")
+    }
+
     pub fn load(profile: &Path, output: &Path) -> Result<Self, String> {
         let mut bytes = Vec::new();
         std::fs::File::open(profile)
@@ -185,7 +199,7 @@ impl BenchmarkTransport {
         }
         let profile: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
         transform(
-            &serde_json::json!({"messages":[{"role":"user","content":"validation"}],"grammar":"root ::= \"x\""}),
+            &serde_json::json!({"messages":[{"role":"user","content":"--- BEGIN EVIDENCE ---\nvalidation\n--- END EVIDENCE ---"}],"grammar":"root ::= \"x\""}),
             &profile,
         )?;
         std::fs::create_dir(output).map_err(|e| format!("capture directory must be new: {e}"))?;
