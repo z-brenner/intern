@@ -35,7 +35,8 @@ Four cleared documents are not committed because the runner never fetched them (
 403 to two, archive.org 500 to one, tile.loc.gov 429 to one). The committed documents are a
 harder half than the whole sets: the same recordings name 92 of 219 scored documents right
 across all four sets, 41 of 107 here. Replaying a set takes under 5 s in a release build: 0.7 to
-1.7 s each on a GitHub runner (CI run 42578520445), 2.0 to 4.4 s on a loaded 4-core box.
+3.0 s each on GitHub runners (CI runs 42578520445 and 42594755612: 1.4, 1.4, 0.7 and 1.7 s, then
+2.2, 2.5, 1.3 and 3.0 s), 2.0 to 4.4 s on a loaded 4-core box.
 
 ## How CI runs it
 

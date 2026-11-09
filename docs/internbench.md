@@ -740,7 +740,7 @@ for real2 to real4.) `--recording` keeps the gold to the documents the
 recording holds, so the run scores all of them, and a baseline document the
 recording lost fails as missing. The corpus directory does not exist; a
 replay needs only the recorded text. Each set replays in under 5 s in a
-release build, 0.7 to 1.7 s on a GitHub runner. What a document gets wrong
+release build, 0.7 to 3.0 s on GitHub runners. What a document gets wrong
 or right, and its evidence recalls, are held as InternBench's are
 ([Gates](#gates)); add
 `--write-baseline bench/realdocs/baseline-real1.json` to accept a new
