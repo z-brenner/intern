@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "status": "pending",
-  "release_inputs_sha256": "pending",
+  "status": "accepted",
+  "release_inputs_sha256": "93a0d6399cd29afac4809ee548c8aa89f6b3f0c1b4f9d3ef91fb2b8fdc7a1c9f",
   "screenshot_path": "docs/qa/latest-implementation.png",
-  "screenshot_sha256": "pending",
-  "reviewer": "pending",
-  "reviewed_at": "pending",
-  "notes": "Alpha.15 preparation: alpha.14 evidence is historical. Awaiting whole-product QA on the final release inputs and a fresh capture review."
+  "screenshot_sha256": "c37dbd5cffe9951863dfbd7fb24834f96997d7f4032c670b2dcecf15bb402797",
+  "reviewer": "Zachary Brenner",
+  "reviewed_at": "2026-11-09T19:59:34Z",
+  "notes": "Zachary Brenner explicitly confirmed in this session: \"I looked at it and I accept\", in response to the fresh alpha.15 capture acceptance request. This is the exact capture from Whole-product QA evidence run 42665012237, attempt 1, on main commit a70010d9b016b01bd5319bb985d50c2bd9abcac8. Codex inspected the full-resolution capture and prepared the record; Zachary Brenner looked at the presented capture and accepted it. Assistant inspection checked the distinct queue/toolbar/review planes, privacy header, date-first filenames, right-aligned confidence, statuses differentiated by icons and color, attributed evidence, visible action buttons and keyboard shortcuts, focus/selection clarity, and absence of unintended clipping or collisions. Additional review-panel evidence below the fold remains accessible by scrolling, as in the prior accepted layout. Acceptance is bound only to the exact release-input digest and screenshot hash above; no alpha.14 approval is reused."
 }

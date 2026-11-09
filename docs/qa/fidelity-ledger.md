@@ -578,3 +578,36 @@ requires a new QA capture and review. The remaining release work is not a
 fidelity discrepancy: exact-main validation and the deliberately dispatched
 release workflow must still reproduce and accept their own evidence before a
 tag or publication is allowed.
+
+## Alpha.15 fresh capture — accepted by Zachary Brenner
+
+Whole-product QA run `42665012237`, attempt `1`, produced the fresh 1536x1024
+capture on main commit `a70010d9b016b01bd5319bb985d50c2bd9abcac8`.
+Its release-input digest is
+`93a0d6399cd29afac4809ee548c8aa89f6b3f0c1b4f9d3ef91fb2b8fdc7a1c9f`;
+the capture SHA-256 is
+`c37dbd5cffe9951863dfbd7fb24834f96997d7f4032c670b2dcecf15bb402797`.
+The downloaded evidence manifest and model report were independently validated
+locally; model evaluation and installed-core smoke are accepted. The original
+artifact correctly recorded rendered fidelity as pending at upload time.
+
+Codex opened this exact artifact capture at full resolution. The queue and
+status/toolbar plane and review panel remain distinct. The header states
+“Private · On this device”. Proposed filenames are date-first; the selected
+filename has a clear focus ring and the row a separate selection tint.
+Confidence is right-aligned beside its track. Ready, Needs review, Proposing
+a name and Waiting use different icons as well as color. “What to check”
+explains review, the evidence block attributes its date/type text, and the
+approve/keep buttons remain visible with shortcuts. No unintended collisions,
+clipping or illegible text were observed. Long table text uses ellipsis;
+additional review-panel evidence below the fold remains reachable by scrolling,
+as in the previous accepted layout. This inspection does not claim every
+native window or interactive state is visible in one frame; automated browser
+and installed-core checks supply that separate evidence.
+
+Zachary Brenner subsequently confirmed in this session: “I looked at it and I
+accept”, responding to the request to review this exact fresh capture. His
+acceptance was recorded at `2026-11-09T19:59:34Z`. Codex inspected the frame and prepared
+the record; Zachary Brenner looked and accepted. The rendered-fidelity sign-off
+is accepted for the exact digest and screenshot hash above. Alpha.14
+acceptance has not been carried forward.
