@@ -29,7 +29,7 @@ on:
         description: >-
           Comma-separated: internbench (the synthetic corpus), real1
           (sample.json), real2 (sample-heldout.json), real3 (sample-heldout2.json),
-          real4 (sample-heldout3.json)
+          real4 (sample-heldout3.json), real5 (sample-heldout4.json)
         required: false
         default: internbench
         type: string
@@ -61,7 +61,7 @@ jobs:
   # The inputs become a matrix of candidate x set, after every value is
   # checked: a label is a slug because it names the job, the output directory
   # and the artifact; a URL is https; a SHA-256 is 64 hex digits; a set is
-  # one of the four. Nothing from the inputs is spliced into a shell line
+  # one of the sets below. Nothing from the inputs is spliced into a shell line
   # anywhere in this workflow: every step reads them from the environment.
   plan:
     name: Plan the matrix
@@ -88,6 +88,7 @@ jobs:
               "real2": "sample-heldout.json",
               "real3": "sample-heldout2.json",
               "real4": "sample-heldout3.json",
+              "real5": "sample-heldout4.json",
           }
           problems = []
           try:
