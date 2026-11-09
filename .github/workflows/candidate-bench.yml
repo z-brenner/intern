@@ -309,6 +309,9 @@ jobs:
           LLAMA_SERVER_ARGS: ${{ inputs.extra_server_args }}
           SERVER_MEMORY_FILE: ${{ runner.temp }}/candidate-bench/out/server-memory.txt
           NOTE: commit ${{ github.sha }} on a GitHub runner
+          # A candidate is by definition not yet the pinned model; the
+          # script then says so in the recording's note.
+          ALLOW_UNPINNED: "1"
         run: |
           started=$(date +%s)
           status=0
@@ -326,7 +329,7 @@ jobs:
         run: |
           lscpu > "$OUT/lscpu.txt" || true
           python3 -I - <<'EOF'
-          import os, re
+          import json, os, re
 
           out = os.environ["OUT"]
 
@@ -337,8 +340,28 @@ jobs:
               except OSError:
                   return ""
 
-          headline = [line for line in read("run.log").splitlines()
-                      if re.match(r"(filename |unsafe ready |total per document)", line)]
+          def fixtures_headline():
+              # intern-evaluate prints no headline lines; its report's
+              # summary and records give the same three.
+              try:
+                  report = json.loads(read("report.json"))
+                  summary, records = report["summary"], report["records"]
+                  names = summary["filename_correct"]
+                  wrong_ready = sum(1 for record in records
+                                    if record.get("readiness") == "ready"
+                                    and not (record.get("scores") or {}).get("filename_correct"))
+                  per_fixture = summary["total_millis"]["median"] / 1000
+              except (ValueError, KeyError, TypeError):
+                  return []
+              return [f"filename {names['correct']}/{names['total']} right",
+                      f"unsafe ready {wrong_ready} (filed ready with a wrong name)",
+                      f"total per document median {per_fixture:.1f} s"]
+
+          if os.environ["SET"] == "fixtures":
+              headline = fixtures_headline()
+          else:
+              headline = [line for line in read("run.log").splitlines()
+                          if re.match(r"(filename |unsafe ready |total per document)", line)]
           hwm = re.search(r"^VmHWM:\s*(\d+) kB", read("server-memory.txt"), re.M)
           peak = f"{int(hwm.group(1)) / 1024:.0f} MiB" if hwm else "not captured"
           wall = read("wall-seconds.txt").strip()
@@ -353,7 +376,8 @@ jobs:
               f"### {os.environ['LABEL']} on {os.environ['SET']}",
               "",
               *(f"- `{line}`" for line in headline),
-              *(["- headline lines not found in run.log: the run did not finish"] if not headline else []),
+              *([("- no summary in report.json" if os.environ["SET"] == "fixtures" else "- headline lines not found in run.log")
+                 + ": the run did not finish"] if not headline else []),
               f"- peak server RSS (VmHWM): {peak}",
               f"- wall time (model load and corpus included): {wall}",
               f"- runner CPU: {cpu.group(1).strip() if cpu else 'unknown'}; {os.environ['THREADS']} threads",

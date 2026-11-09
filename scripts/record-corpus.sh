@@ -26,11 +26,16 @@
 #   SERVER_MEMORY_FILE  if set, the server's VmHWM and VmRSS lines are written there
 #   OUT_DIR             where corpus-recording.json, corpus-baseline.json,
 #                       report.json and the server log go (default: target/corpus-recording)
+#   ALLOW_UNPINNED      set to 1 to record a model src-tauri/resources/model-manifest.json
+#                       does not pin (a candidate, in the lab); the recording's note
+#                       then says it is not the shipped model
 #
 # The fixtures are generated again first (npm run fixtures), so what is
 # recorded is what fixtures/manifest.json describes. Commit the recording and
-# the baseline only from a run of the pinned model; the server's API key is
-# generated here and never printed.
+# the baseline only from a run of the pinned model: like record-corpus.ps1,
+# the script refuses any other unless ALLOW_UNPINNED=1, since a recording of
+# another model would be scored as if it were the shipped one. The server's
+# API key is generated here and never printed.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,6 +54,25 @@ fi
 [ -f "$MODEL" ] || { echo "no model at $MODEL" >&2; exit 1; }
 [ -x "$LLAMA_SERVER" ] || { echo "no llama-server at $LLAMA_SERVER" >&2; exit 1; }
 [ -x "$WORKER" ] || { echo "no worker at $WORKER (cargo build --release --locked -p intern-worker --features windows-native)" >&2; exit 1; }
+
+MODEL_SHA256="$(sha256sum "$MODEL" | cut -d' ' -f1)"
+PINNED="$(python3 -I - "$REPO/src-tauri/resources/model-manifest.json" "$MODEL_SHA256" <<'PY'
+import json, sys
+manifest, digest = sys.argv[1], sys.argv[2]
+with open(manifest, encoding="utf-8") as file:
+    names = [entry["name"] for model in json.load(file)["models"]
+             for entry in model["files"] if entry["sha256"].lower() == digest]
+print(names[0] if names else "")
+PY
+)"
+if [ -n "$PINNED" ]; then
+  MODEL_NAME="$PINNED (manifest sha256 ${MODEL_SHA256:0:8})"
+elif [ "${ALLOW_UNPINNED:-}" = "1" ]; then
+  MODEL_NAME="$(basename "$MODEL") (sha256 ${MODEL_SHA256:0:8}, not a model model-manifest.json pins: do not commit as the shipped model's recording)"
+else
+  echo "the model at $MODEL is not one src-tauri/resources/model-manifest.json pins; a recording of another model would be scored as if it were the shipped one (set ALLOW_UNPINNED=1 to record it anyway, for the lab)" >&2
+  exit 1
+fi
 
 if [ -z "${INTERN_EVALUATE:-}" ]; then
   (cd "$REPO" && cargo build --release --locked -p intern-engine --bin intern-evaluate)
@@ -77,7 +101,7 @@ for _ in $(seq 1 90); do
 done
 curl -sf "http://127.0.0.1:$PORT/health" | grep -q '"ok"' || { echo "llama-server not healthy on port $PORT" >&2; exit 1; }
 
-DESCRIPTION="$(basename "$MODEL") (sha256 $(sha256sum "$MODEL" | cut -c1-8)), llama-server $THREADS threads, 8192 context${LLAMA_SERVER_ARGS:+, $LLAMA_SERVER_ARGS}, $(uname -sm); routing worker; evidence pipeline, recorded with --token-confidence${NOTE:+; $NOTE}"
+DESCRIPTION="$MODEL_NAME, llama-server $THREADS threads, 8192 context${LLAMA_SERVER_ARGS:+, $LLAMA_SERVER_ARGS}, $(uname -sm); routing worker; evidence pipeline, recorded with --token-confidence${NOTE:+; $NOTE}"
 status=0
 (cd "$REPO" && "$INTERN_EVALUATE" \
   --fixtures fixtures/generated --expected fixtures/expected.json \
