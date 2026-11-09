@@ -4659,6 +4659,8 @@ const HONOURS: &[&str] = &[
 /// what follows is a person's whole name: two or three words, none of
 /// them an organization's or a figure ("Dr. Ing. h.c. F. Porsche AG" keeps
 /// its "Dr.", and "Dr. Smith" its title, a surname alone being no name).
+/// A title that addresses two people at once ("Mr and Mrs Smith", "Mr &
+/// Mrs Smith") stays: what follows it is no one's name.
 fn without_courtesy_title(name: &str) -> String {
     let tokens = name.split_whitespace().collect::<Vec<_>>();
     let token_words = tokens.iter().map(|token| words(token)).collect::<Vec<_>>();
@@ -4682,7 +4684,18 @@ fn without_courtesy_title(name: &str) -> String {
             rest = kept;
         }
         let rest_name = rest.join(" ");
+        let joint = rest.first().is_some_and(|first| {
+            words(first)
+                .first()
+                .is_none_or(|word| matches!(word.as_str(), "and" | "or"))
+        }) || rest.iter().any(|token| {
+            let token_words = words(token);
+            COURTESY_TITLES
+                .iter()
+                .any(|title| title.len() == 1 && token_words == [title[0]])
+        });
         if (2..=3).contains(&rest.len())
+            && !joint
             && !is_organization_name(&rest_name)
             && !rest_name.chars().any(|c| c.is_ascii_digit())
             && !words(&rest_name).iter().any(|word| {
@@ -12502,9 +12515,39 @@ Rickmansworth,
             ("Dr. Smith", "Dr. Smith"),
             ("The Rt Hon Alex Chalk KC MP", "Alex Chalk"),
             ("John Mann MP", "John Mann MP"),
+            // Two people addressed together keep their titles.
+            ("Mr and Mrs Smith", "Mr and Mrs Smith"),
+            ("Mr & Mrs Smith", "Mr & Mrs Smith"),
+            ("Mr. and Mrs. Smith", "Mr. and Mrs. Smith"),
+            ("Dr Jane and Mr Smith", "Dr Jane and Mr Smith"),
+            ("Mr & Mrs J Smith", "Mr & Mrs J Smith"),
         ] {
             assert_eq!(without_courtesy_title(written), name, "{written}");
         }
+    }
+
+    /// A notice to two people addressed together is to both of them: the
+    /// title before the first is no part of a name to cut.
+    #[test]
+    fn a_joint_addressee_keeps_the_title() {
+        let (outcome, _) = facts_for(
+            "NOTICE OF RENT INCREASE\n\nTo: Mr and Mrs Smith\n12 High Street\nNorthtown NT2 2BB\n\n\
+             Date: 3 March 2024\n\nYour rent for 12 High Street will rise from 1 April 2024 to \
+             650 pounds a month.\n\nNorthshire Council Housing Team",
+            |index| ModelFacts {
+                document_type: Some("Notice of Rent Increase".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF RENT")],
+                document_date: Some("2024-03-03".into()),
+                date_evidence: vec![id_of(index, "3 March 2024")],
+                parties: vec![party(
+                    "Mr and Mrs Smith",
+                    Some(PartyRole::Tenant),
+                    &[id_of(index, "To: Mr and Mrs Smith")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(outcome.proposal.parties, vec!["Mr and Mrs Smith"]);
     }
 
     /// A redaction's marker names no one; a name with the word in it is
