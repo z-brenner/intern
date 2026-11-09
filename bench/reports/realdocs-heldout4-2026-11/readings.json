@@ -1,0 +1,1457 @@
+{
+ "set": "real5 (scripts/realdocs-eval/sample-heldout4.json)",
+ "model": "Qwen3.5 9B Q4_K_M (sha256 03b74727...)",
+ "recording": "candidate-bench run 42577779669, commit d21399c (main ebc5d8f's engine)",
+ "replayed_with": "intern-bench of main ebc5d8f, --min-token-confidence 0.7 (and 0.5 for readiness_at_0_5)",
+ "readings": [
+  {
+   "id": "real5-letter-01",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2017-05-08 Letter.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "TYPE_INFERRED",
+    "TYPE_MISSING",
+    "PARTY_UNSUPPORTED"
+   ],
+   "token_confidence_min": 0.8599488735198975,
+   "gold_filename": "2017-05-08 Warning Letter to Inghams Enterprises (NZ) Pty Limited.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.5,
+   "classes": [
+    "no party named"
+   ]
+  },
+  {
+   "id": "real5-letter-02",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2018-08-31 Letter to Slingshot Communications Limited.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "TYPE_INFERRED",
+    "TYPE_MISSING",
+    "PARTY_UNSUPPORTED"
+   ],
+   "token_confidence_min": 0.7073750495910645,
+   "gold_filename": "2018-08-31 Warning Letter to Slingshot Communications Limited.pdf",
+   "expected_readiness": "ready",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": []
+  },
+  {
+   "id": "real5-letter-03",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2015-12-16 Letter to Coast to Coast Limited.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "PARTY_UNSUPPORTED"
+   ],
+   "token_confidence_min": 0.8817077279090881,
+   "gold_filename": "2015-12-16 Warning Letter to Coast to Coast Limited.pdf",
+   "expected_readiness": "ready",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": []
+  },
+  {
+   "id": "real5-letter-04",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2024-08-28 Letter to Mr. Vinn White.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.5397974252700806,
+   "gold_filename": "2024-08-28 Safety Recommendation Letter to Federal Motor Carrier Safety Administration.pdf",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "a person named instead of the organization",
+    "type generic: a bare Letter"
+   ]
+  },
+  {
+   "id": "real5-letter-05",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-09-23 Letter to Federal Aviation Administration.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "PARTY_UNSUPPORTED"
+   ],
+   "token_confidence_min": 0.7196570038795471,
+   "gold_filename": "2025-09-23 Safety Recommendation Letter to Federal Aviation Administration.pdf",
+   "expected_readiness": "either",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": []
+  },
+  {
+   "id": "real5-letter-06",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2026-09-17 CFTC Letter from CFTC.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.42974141240119934,
+   "gold_filename": "2026-09-17 No-Action Letter to Eurex Clearing AG.pdf",
+   "expected_readiness": "ready",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": []
+  },
+  {
+   "id": "real5-letter-07",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2026-08-10 Letter to Division of Clearing and Risk.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.4097355604171753,
+   "gold_filename": "2026-08-10 Request for No-Action Relief from Eurex Clearing AG.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "relation reversed: the sender named as recipient's office",
+    "type generic: a bare Letter"
+   ]
+  },
+  {
+   "id": "real5-letter-08",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2026-07-24 CFTC Letter from Commodity Futures Trading Commission.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.35855305194854736,
+   "gold_filename": "2026-07-24 No-Action Letter to Kraken Derivatives Exchange Inc.pdf",
+   "expected_readiness": "ready",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": []
+  },
+  {
+   "id": "real5-letter-09",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-06-23 Letter from Centers for Medicare & Medicaid Services.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.47952011227607727,
+   "gold_filename": "2025-06-23 Approval Letter to Maryland Department of Health.pdf",
+   "expected_readiness": "ready",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": []
+  },
+  {
+   "id": "real5-letter-10",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2026-07-21 Letter to Delaware Health and Social Services.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "TYPE_INFERRED",
+    "TYPE_MISSING",
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.45215916633605957,
+   "gold_filename": "2026-07-21 Approval Letter to Delaware Health and Social Services.pdf",
+   "expected_readiness": "ready",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": []
+  },
+  {
+   "id": "real5-letter-11",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2026-06-02 Letter to Oklahoma Health Care Authority.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.42393729090690613,
+   "gold_filename": "2026-06-02 Approval Letter to Oklahoma Health Care Authority.pdf",
+   "expected_readiness": "ready",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": []
+  },
+  {
+   "id": "real5-letter-12",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2024-02-14 Letter from Welsh Government.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "TYPE_INFERRED",
+    "TYPE_MISSING",
+    "PARTY_UNSUPPORTED"
+   ],
+   "token_confidence_min": 0.9806894659996033,
+   "gold_filename": "2024-02-14 Freedom of Information Response from Welsh Government.pdf",
+   "expected_readiness": "either",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": []
+  },
+  {
+   "id": "real5-letter-13",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2026-02-25 Letter from Welsh Government.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "TYPE_INFERRED",
+    "TYPE_MISSING",
+    "PARTY_UNSUPPORTED"
+   ],
+   "token_confidence_min": 0.8950747847557068,
+   "gold_filename": "2026-02-25 Freedom of Information Response from Welsh Government.pdf",
+   "expected_readiness": "either",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": []
+  },
+  {
+   "id": "real5-letter-14",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-03-03 Letter to Directorate General Financial Services.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.3193245530128479,
+   "gold_filename": "2025-03-03 Letter to European Commission.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "party shortened beyond its legal form (the Directorate-General's name cut)"
+   ]
+  },
+  {
+   "id": "real5-letter-15",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2026-04-20 Letter from European Commission.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "TYPE_INFERRED",
+    "TYPE_MISSING",
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.39498472213745117,
+   "gold_filename": "2026-04-20 Letter to European Commission.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "relation reversed: the addressee named as sender"
+   ]
+  },
+  {
+   "id": "real5-letter-16",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-05-05 Letter to Mr. Moritz Körner.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "TYPE_INFERRED",
+    "TYPE_MISSING",
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.4368520975112915,
+   "gold_filename": "2025-05-05 Response Letter to Moritz Körner.pdf",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "a person named with an honorific (Mr.); otherwise right"
+   ]
+  },
+  {
+   "id": "real5-letter-17",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "Letter to Island Air Charters.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "TYPE_INFERRED",
+    "TYPE_MISSING",
+    "DATE_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.25979772210121155,
+   "gold_filename": "2017-02-16 Letter to Island Air Charters.pdf",
+   "expected_readiness": "needs_review",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.5,
+   "classes": [
+    "no date read (a smudged date stamp)"
+   ]
+  },
+  {
+   "id": "real5-letter-18",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2021-07-23 Tax Invoice from Thought Partners Ltd.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "TYPE_INFERRED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.4542969763278961,
+   "gold_filename": "2021-07-23 Official Information Act Response from Climate Change Commission.pdf",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "an attachment named instead of the document (an attached invoice)"
+   ]
+  },
+  {
+   "id": "real5-letter-19",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2024-11-15 Letter to Ministry for Regulation.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "TYPE_INFERRED",
+    "TYPE_MISSING",
+    "PARTY_UNSUPPORTED"
+   ],
+   "token_confidence_min": 0.8405925631523132,
+   "gold_filename": "2024-11-15 Official Information Act Response from Ministry for Regulation.pdf",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "relation reversed: the issuer named as recipient",
+    "type generic: a bare Letter"
+   ]
+  },
+  {
+   "id": "real5-letter-20",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2022-08-26 Letter to Tatou NZ Ltd.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.15600278973579407,
+   "gold_filename": "2022-08-26 Official Information Act Response from Ministry of Foreign Affairs and Trade.pdf",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.5,
+   "classes": [
+    "a party the document only mentions (the request's subject)",
+    "type generic: a bare Letter"
+   ]
+  },
+  {
+   "id": "real5-letter-21",
+   "kind": "letter",
+   "format": "jpg",
+   "text_layer": "image",
+   "filename": "Document - Albert E. Schreiber & Co.jpg",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "DATE_UNSUPPORTED",
+    "PARTY_UNSUPPORTED",
+    "PARSER_WARNING",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.26574286818504333,
+   "gold_filename": "1883-09-20 Letter from Albert E. Schreiber & Co.jpg",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.5,
+   "classes": [
+    "OCR: a historic hand",
+    "no date read",
+    "type generic: Document"
+   ]
+  },
+  {
+   "id": "real5-letter-22",
+   "kind": "email",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2026-01-19 Email - Kaymac Marine & Civil Engineering Ltd.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.27767667174339294,
+   "gold_filename": "2026-01-19 Email from Neath Port Talbot Council.pdf",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.5,
+   "classes": [
+    "a party the document only mentions (an attachment's issuer)"
+   ]
+  },
+  {
+   "id": "real5-letter-23",
+   "kind": "letter",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2026-08-12 Letter from Commodity Futures Trading Commission.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "TYPE_INFERRED",
+    "TYPE_MISSING",
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.4513011574745178,
+   "gold_filename": "2026-08-12 Request for No-Action Relief from Electron Exchange DCM, LLC.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "relation reversed: the addressee named as sender",
+    "type generic: a bare Letter"
+   ]
+  },
+  {
+   "id": "real5-notice-01",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-10-01 Notice of Intention to Remove Company for RS2022 LIMITED.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "PARTY_UNSUPPORTED"
+   ],
+   "token_confidence_min": 0.7501487731933594,
+   "gold_filename": "2025-10-01 Notice of Intention to Remove Company From the Register for RS2022 Limited.pdf",
+   "expected_readiness": "ready",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": []
+  },
+  {
+   "id": "real5-notice-02",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2026-05-07 Notice of Intention to Remove Companies for Kieran Jones.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "DATE_AMBIGUOUS",
+    "PARTY_UNSUPPORTED"
+   ],
+   "token_confidence_min": 0.8061015605926514,
+   "gold_filename": "2026-05-07 Notice of Intention to Remove Companies From the Register from Khov Jones Limited.pdf",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.5,
+   "classes": [
+    "a person named instead of the organization"
+   ]
+  },
+  {
+   "id": "real5-notice-03",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2026-11-03 Document from Environmental Protection Authority.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "PARTY_UNSUPPORTED"
+   ],
+   "token_confidence_min": 0.9192812442779541,
+   "gold_filename": "2026-11-03 Determination of a New Organism from Environmental Protection Authority.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "type generic: Document"
+   ]
+  },
+  {
+   "id": "real5-notice-04",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2026-10-30 Advertisement of Application for Putting Company into Liquidation for Rogan Construction Limited.pdf",
+   "status": "completed",
+   "readiness": "ready",
+   "readiness_at_0_5": "ready",
+   "review_reasons": [],
+   "token_confidence_min": 0.8250852823257446,
+   "gold_filename": "2026-10-30 Advertisement of Application for Putting Company into Liquidation with Commissioner of Inland Revenue.pdf",
+   "expected_readiness": "ready",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": []
+  },
+  {
+   "id": "real5-notice-05",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-03-03 Public Notice for Edward Friedland.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.32237720489501953,
+   "gold_filename": "2025-03-03 Public Notice from United States District Court for the Southern District of New York.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.5,
+   "classes": [
+    "a person named instead of the organization"
+   ]
+  },
+  {
+   "id": "real5-notice-06",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": null,
+   "status": "unrecorded",
+   "readiness": null,
+   "readiness_at_0_5": null,
+   "review_reasons": [],
+   "token_confidence_min": null,
+   "gold_filename": "2025-04-16 Public Notice from United States District Court for the Northern District of Texas.pdf",
+   "expected_readiness": "ready",
+   "scorer": null,
+   "adjudicated": null,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": null,
+   "classes": []
+  },
+  {
+   "id": "real5-notice-07",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2026-09-18 Public Notice for Tu M. Pham.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.4656273424625397,
+   "gold_filename": null,
+   "expected_readiness": "needs_review",
+   "scorer": null,
+   "adjudicated": null,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "a date the document mentions, not its own (no own date: review expected)",
+    "a person named"
+   ]
+  },
+  {
+   "id": "real5-notice-08",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-09-02 Notice of Intent to Reappoint Incumbent United States Magistrate Judges and.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.4809698760509491,
+   "gold_filename": null,
+   "expected_readiness": "needs_review",
+   "scorer": null,
+   "adjudicated": null,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.0,
+   "classes": [
+    "a date the document mentions, not its own (no own date: review expected)",
+    "no party named"
+   ]
+  },
+  {
+   "id": "real5-notice-09",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-07-15 Enforcement Release July 15, 2025 with Interactive Brokers LLC.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "PARTY_UNSUPPORTED",
+    "PARTY_MISSING",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.39365866780281067,
+   "gold_filename": "2025-07-15 Enforcement Release for Interactive Brokers LLC.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "type copies a heading with its date ('Enforcement Release July 15, 2025')"
+   ]
+  },
+  {
+   "id": "real5-notice-10",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-09-22 Enforcement Release September 22, 2025 between U.S. Department of the Treasury and ShapeShift AG.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "ready",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.6925774812698364,
+   "gold_filename": "2025-09-22 Enforcement Release for ShapeShift AG.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": true,
+   "prompt_recall": 1.0,
+   "classes": [
+    "type copies a heading with its date",
+    "parties: the Treasury and the subject, between"
+   ]
+  },
+  {
+   "id": "real5-notice-11",
+   "kind": "notice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-12-04 Enforcement Release December 4, 2025 between U.S. Department of the Treasury and Gracetown, Inc.pdf",
+   "status": "completed",
+   "readiness": "ready",
+   "readiness_at_0_5": "ready",
+   "review_reasons": [],
+   "token_confidence_min": 0.7013838291168213,
+   "gold_filename": "2025-12-04 Enforcement Release for Gracetown, Inc.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": true,
+   "unsafe_ready_at_0_5": true,
+   "prompt_recall": 1.0,
+   "classes": [
+    "type copies a heading with its date",
+    "parties: the Treasury and the subject, between"
+   ]
+  },
+  {
+   "id": "real5-invoice-01",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "filename": "Document - Sternberg Brothers.jpg",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "DATE_UNSUPPORTED",
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.30304136872291565,
+   "gold_filename": "1896-10-20 Bill from Sternberg Brothers.jpg",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.5,
+   "classes": [
+    "OCR: a historic hand",
+    "no date read",
+    "type generic: Document"
+   ]
+  },
+  {
+   "id": "real5-invoice-02",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "filename": "Document - S. F. & A. ROTHSCHILD.jpg",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "DATE_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.19513343274593353,
+   "gold_filename": "1887-11-23 Bill from S. F. & A. Rothschild.jpg",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.5,
+   "classes": [
+    "OCR: a historic hand",
+    "no date read",
+    "type generic: Document"
+   ]
+  },
+  {
+   "id": "real5-invoice-03",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "filename": "Document.jpg",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "DATE_MISSING",
+    "DESCRIPTION_UNSUPPORTED",
+    "DESCRIPTION_INVALID",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.29281309247016907,
+   "gold_filename": "1885-05-02 Bill from Blun & Co.jpg",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.5,
+   "classes": [
+    "OCR: a historic hand",
+    "no date read",
+    "type generic: Document",
+    "no party named"
+   ]
+  },
+  {
+   "id": "real5-invoice-04",
+   "kind": "invoice",
+   "format": "jpg",
+   "text_layer": "image",
+   "filename": "Document between D. CREHANGE and Shipe HWHOLESALE CLOTHIERS.jpg",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "DATE_UNSUPPORTED",
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.522196352481842,
+   "gold_filename": "1882-03-30 Bill from D. Crehange.jpg",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.5,
+   "classes": [
+    "OCR: a historic hand",
+    "no date read",
+    "type generic: Document",
+    "OCR noise read as a party"
+   ]
+  },
+  {
+   "id": "real5-invoice-05",
+   "kind": "receipt",
+   "format": "jpg",
+   "text_layer": "image",
+   "filename": "Document from Soyg New York 189.jpg",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_MISSING",
+    "DATE_UNSUPPORTED",
+    "PARSER_WARNING",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.13333962857723236,
+   "gold_filename": "1891-07-12 Receipt from Rosenthal Bros.jpg",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.0,
+   "classes": [
+    "OCR: a historic hand",
+    "no date read",
+    "type generic: Document",
+    "OCR noise read as a party"
+   ]
+  },
+  {
+   "id": "real5-invoice-06",
+   "kind": "invoice",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-09-09 Tax Invoice from Neath Port Talbot County Borough Council.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "ready",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.5964763760566711,
+   "gold_filename": "2025-09-09 Tax Invoice from Ian Davies Plant Limited.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": true,
+   "prompt_recall": 1.0,
+   "classes": [
+    "an invoice's customer named as its issuer"
+   ]
+  },
+  {
+   "id": "real5-invoice-07",
+   "kind": "statement",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-09-30 Activity Report.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "PARTY_UNSUPPORTED",
+    "DESCRIPTION_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.4180182218551636,
+   "gold_filename": "2025-09-30 Debt Position and Activity Report.pdf",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "type cut short ('Activity Report')"
+   ]
+  },
+  {
+   "id": "real5-form-01",
+   "kind": "form",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "Document - National Archives and Records Service.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "DATE_UNSUPPORTED",
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.29873552918434143,
+   "gold_filename": "1990-06-11 Request for Records Disposition Authority from Agricultural Research Service.pdf",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.0,
+   "classes": [
+    "OCR: a scanned form",
+    "no date read",
+    "type generic: Document",
+    "the form's addressee named"
+   ]
+  },
+  {
+   "id": "real5-form-02",
+   "kind": "form",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "Document.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "DATE_UNSUPPORTED",
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.4715360403060913,
+   "gold_filename": "1982-03-02 Request for Records Disposition Authority from Internal Revenue Service.pdf",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.0,
+   "classes": [
+    "OCR: a scanned form",
+    "no date read",
+    "type generic: Document",
+    "no party named"
+   ]
+  },
+  {
+   "id": "real5-memo-01",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-02-14 General Counsel Memorandum to Regional Directors, Officers-in-Charge, and Resident Officers.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "ready",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.5168190002441406,
+   "gold_filename": "2025-02-14 Memorandum from National Labor Relations Board.pdf",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": true,
+   "prompt_recall": 0.5,
+   "classes": [
+    "a memo's addressee group named instead of its issuer"
+   ]
+  },
+  {
+   "id": "real5-memo-02",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-05-16 General Counsel Memorandum to All Regional Directors, Officers-in-Charge, and Resident Officers.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "ready",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.6346117854118347,
+   "gold_filename": "2025-05-16 Memorandum from National Labor Relations Board.pdf",
+   "expected_readiness": "either",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": true,
+   "prompt_recall": 0.5,
+   "classes": [
+    "a memo's addressee group named instead of its issuer"
+   ]
+  },
+  {
+   "id": "real5-memo-03",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-01-29 Memorandum for Heads of Executive Departments and Agencies.pdf",
+   "status": "completed",
+   "readiness": "ready",
+   "readiness_at_0_5": "ready",
+   "review_reasons": [],
+   "token_confidence_min": 0.7499694228172302,
+   "gold_filename": "2025-01-29 Memorandum from Office of Management and Budget.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": true,
+   "unsafe_ready_at_0_5": true,
+   "prompt_recall": 1.0,
+   "classes": [
+    "a memo's addressee group named instead of its issuer"
+   ]
+  },
+  {
+   "id": "real5-memo-04",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "scan",
+   "filename": "2025-04-03 Memorandum for the Heads of Executive Departments and Agencies from Executive Office of the President.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.2920931577682495,
+   "gold_filename": "2025-04-03 Memorandum from Office of Management and Budget.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.5,
+   "classes": [
+    "a memo's addressee group named instead of its issuer",
+    "the parent office named (Executive Office of the President)"
+   ]
+  },
+  {
+   "id": "real5-memo-05",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-06-03 Mortgagee Letter to All Fha-Approved Mortgagees.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.364300400018692,
+   "gold_filename": "2025-06-03 Mortgagee Letter from U.S. Department of Housing and Urban Development.pdf",
+   "expected_readiness": "ready",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.5,
+   "classes": []
+  },
+  {
+   "id": "real5-memo-06",
+   "kind": "memo",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-06-27 Mortgagee Letter to All Fha-Approved Mortgagees.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "DESCRIPTION_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.564293622970581,
+   "gold_filename": "2025-06-27 Mortgagee Letter from U.S. Department of Housing and Urban Development.pdf",
+   "expected_readiness": "ready",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 0.5,
+   "classes": []
+  },
+  {
+   "id": "real5-memo-07",
+   "kind": "minutes",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-02-25 Minutes of the Meeting of the Board Members from Federal Retirement Thrift Investment Board.pdf",
+   "status": "completed",
+   "readiness": "ready",
+   "readiness_at_0_5": "ready",
+   "review_reasons": [],
+   "token_confidence_min": 0.9255683422088623,
+   "gold_filename": "2025-02-25 Board Meeting Minutes for Federal Retirement Thrift Investment Board.pdf",
+   "expected_readiness": "ready",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": []
+  },
+  {
+   "id": "real5-memo-08",
+   "kind": "minutes",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2025-05-29 Document from Federal Retirement Thrift Investment Board.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.2958022356033325,
+   "gold_filename": "2025-05-29 Board Meeting Minutes for Federal Retirement Thrift Investment Board.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "type generic: Document"
+   ]
+  },
+  {
+   "id": "real5-memo-09",
+   "kind": "minutes",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2024-10-29 Minutes of the Tuesday for NIST.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "ready",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.556221067905426,
+   "gold_filename": "2024-10-29 Meeting Minutes for Visiting Committee on Advanced Technology.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": true,
+   "prompt_recall": 1.0,
+   "classes": [
+    "type copies a heading with its weekday ('Minutes of the Tuesday')",
+    "parent agency named (NIST)"
+   ]
+  },
+  {
+   "id": "real5-memo-10",
+   "kind": "minutes",
+   "format": "pdf",
+   "text_layer": "native",
+   "filename": "2024-02-14 Minutes of the Wednesday for Visiting Committee on Advanced Technology.pdf",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.3759947419166565,
+   "gold_filename": "2024-02-14 Meeting Minutes for Visiting Committee on Advanced Technology.pdf",
+   "expected_readiness": "ready",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "type copies a heading with its weekday ('Minutes of the Wednesday')"
+   ]
+  },
+  {
+   "id": "real5-office-01",
+   "kind": "minutes",
+   "format": "docx",
+   "text_layer": "office",
+   "filename": "2018-06-14 Minutes.docx",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.3951696455478668,
+   "gold_filename": "2018-06-14 Minutes.docx",
+   "expected_readiness": "either",
+   "scorer": true,
+   "adjudicated": true,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": []
+  },
+  {
+   "id": "real5-office-02",
+   "kind": "report",
+   "format": "docx",
+   "text_layer": "office",
+   "filename": "2026-09-09 Energy Strategy E-Bulletin from Department for the Economy.docx",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.4246639013290405,
+   "gold_filename": null,
+   "expected_readiness": "needs_review",
+   "scorer": null,
+   "adjudicated": null,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "a date the document mentions (month-only issue: review expected)"
+   ]
+  },
+  {
+   "id": "real5-office-03",
+   "kind": "form",
+   "format": "docx",
+   "text_layer": "office",
+   "filename": "Declaration from Council.docx",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "TYPE_INFERRED",
+    "DATE_UNSUPPORTED",
+    "PARTY_UNSUPPORTED",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.20764070749282837,
+   "gold_filename": null,
+   "expected_readiness": "needs_review",
+   "scorer": null,
+   "adjudicated": null,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": null,
+   "classes": [
+    "a placeholder read as a party ('Council'; blank template: review expected)"
+   ]
+  },
+  {
+   "id": "real5-office-04",
+   "kind": "statement",
+   "format": "xlsx",
+   "text_layer": "office",
+   "filename": "2023-09-30 Document from RD&S.xlsx",
+   "status": "completed",
+   "readiness": "needs_review",
+   "readiness_at_0_5": "needs_review",
+   "review_reasons": [
+    "TYPE_UNSUPPORTED",
+    "PARTY_UNSUPPORTED",
+    "DESCRIPTION_INVALID",
+    "LOW_CONFIDENCE"
+   ],
+   "token_confidence_min": 0.5891643762588501,
+   "gold_filename": "2023-09-30 Allocation, Spend and Commitment Statement.xlsx",
+   "expected_readiness": "needs_review",
+   "scorer": false,
+   "adjudicated": false,
+   "unsafe_ready": false,
+   "unsafe_ready_at_0_5": false,
+   "prompt_recall": 1.0,
+   "classes": [
+    "type generic: Document",
+    "a source code read as a party ('RD&S')"
+   ]
+  }
+ ]
+}
