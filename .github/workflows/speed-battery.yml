@@ -203,6 +203,11 @@ jobs:
           ls "$pinned" | grep '^libggml-cpu-' | tee "$OUT/cpu-backends.txt"
           [ "$(grep -c . "$OUT/cpu-backends.txt")" = 1 ]
           echo "LLAMA_SERVER=$pinned/$(basename "$LLAMA_SERVER")" >> "$GITHUB_ENV"
+      # At the app's log level the server does not say which backend it
+      # loaded; at debug level, listing the devices does.
+      - name: Record the CPU backend
+        run: |
+          "$LLAMA_SERVER" -lv 4 --list-devices 2>&1 | grep 'load_backend' | tee "$OUT/cpu-backend.txt"
       - name: Fetch and verify the model
         env:
           MODEL_URL: ${{ inputs.model_url }}
@@ -257,7 +262,7 @@ jobs:
           CPU_VARIANT: ${{ inputs.cpu_variant }}
         run: |
           python3 -I - <<'EOF3'
-          import glob, json, os, re, statistics
+          import json, os, re, statistics
 
           out = os.environ["OUT"]
           rows = []
@@ -300,17 +305,15 @@ jobs:
               cpu = None
           lines.append(f"- runner CPU: {cpu.group(1).strip() if cpu else 'unknown'}")
           lines.append(f"- llama-server: {os.environ['LLAMA_RELEASE'] or 'the pinned upstream build'}")
-          # What the loaded backend was built for, from the server's own
-          # system_info line: the proof that cpu_variant took.
-          features = None
-          for log in sorted(glob.glob(os.path.join(out, "*", "llama-server.log")) + glob.glob(os.path.join(out, "*", "*", "llama-server.log"))):
-              with open(log, encoding="utf-8", errors="replace") as file:
-                  found = re.search(r"system_info:.*?\| (CPU : .*)$", file.read(), re.M)
-              if found:
-                  features = found.group(1).strip()
-                  break
+          # The backend the server loads, as it says at debug level: the
+          # proof that cpu_variant took.
+          try:
+              with open(os.path.join(out, "cpu-backend.txt"), encoding="utf-8") as file:
+                  loaded = re.search(r"loaded CPU backend from \S*?(libggml-cpu-[A-Za-z0-9_]+\.so)", file.read())
+          except OSError:
+              loaded = None
           variant = os.environ["CPU_VARIANT"]
-          lines.append(f"- CPU backend: {'libggml-cpu-' + variant + '.so only' if variant else 'the runner CPU picks'}; built for `{features or 'not logged'}`")
+          lines.append(f"- CPU backend: {loaded.group(1) if loaded else 'not recorded'} ({'pinned by cpu_variant' if variant else 'the runner CPU picks'})")
           try:
               with open(os.path.join(out, "cold-start", "cold-start.json"), encoding="utf-8") as file:
                   cold = json.load(file)["summary"]
@@ -353,4 +356,5 @@ jobs:
             ${{ runner.temp }}/speed-battery/out/cold-start/cold-start.json
             ${{ runner.temp }}/speed-battery/out/lscpu.txt
             ${{ runner.temp }}/speed-battery/out/cpu-backends.txt
+            ${{ runner.temp }}/speed-battery/out/cpu-backend.txt
             ${{ runner.temp }}/speed-battery/out/llama-release.sha256

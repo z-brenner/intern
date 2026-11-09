@@ -254,9 +254,12 @@ describe('the server speed battery', () => {
     for (const name of ['Measure the cold start', 'Run the battery']) {
       expect(steps.findIndex((s) => s.includes(`name: ${name}`)), name).toBeGreaterThan(pin);
     }
-    // The summary reads what the loaded backend was built for from the
-    // server's own log, so a pin that did not take is visible.
-    expect(steps.find((s) => s.includes('name: Summarize'))).toContain('system_info:');
+    // The backend the server loads is recorded, before any server starts,
+    // and the summary names it, so a pin that did not take is visible.
+    const record = steps.findIndex((s) => s.includes('name: Record the CPU backend'));
+    expect(record).toBeGreaterThan(pin);
+    expect(steps[record]).toContain('"$LLAMA_SERVER" -lv 4 --list-devices');
+    expect(steps.find((s) => s.includes('name: Summarize'))).toContain('loaded CPU backend from');
   });
 
   // The battery warms every slot before it times anything, so the first

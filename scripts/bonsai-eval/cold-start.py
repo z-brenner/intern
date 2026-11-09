@@ -1,6 +1,6 @@
 """Measure the first request a freshly started llama-server answers, with and without the
 system-turn state restored from a slot file, as the app restores it at every model load
-(docs/architecture.md, "The model server").
+(docs/architecture.md, "The instructions across a restart").
 
 A fresh server has nothing cached, so its first document prefills the fixed system turn (477
 tokens for Intern's evidence request) before the document's own text; every later document finds
@@ -8,20 +8,28 @@ that state in the context checkpoint the server takes at the start of the user t
 saved after one document and restored into the next fresh server carries that checkpoint across
 the restart. This script runs the whole sequence on one machine:
 
-1. a fresh server reads the --save-with request unwarmed, and its slot is saved to a file;
+1. a fresh server reads the --save-with request unwarmed, then the request the app sends before
+   it saves (the same turns before the document, then "JSON only.", one token of reply, so the
+   file holds the instructions and no document: client.rs instructions_only_request), and its
+   slot is saved to a file;
 2. each round, a fresh server reads the --measure request unwarmed (no restore), and another
    fresh server restores the file and then reads the same request;
 3. in round 1 the unrestored server then reads --between and --measure again: the steady-state
    reply every later document of a server lifetime gets.
 
 The restored reply must equal the steady-state one byte for byte: the restore only puts back
-the state the server would otherwise compute again. Every server runs with the app's flags
+the state the server would otherwise compute again. That holds only for a state computed the way
+a long first request computes it: llama-server breaks a prompt it processes from nothing 4 and
+4 + -ub tokens before its end, so a first request shorter than the instructions plus 260 tokens
+splits the instructions differently, and they come out a little different (enough to change a
+9B reply). The app saves only after a long enough first request (slots.rs save_once), and so
+does this script: --save-with must be such a request. Every server runs with the app's flags
 (crates/intern-engine/src/server.rs) plus --slot-save-path and an API key, which the slot
 endpoints need like every other one.
 
 Laboratory tooling; the app does not call it. Standard library only.
   python3 -I cold-start.py --server-bin PATH --model PATH --wire DIR --out DIR [--threads N]
-      [--save-with 0000] [--measure 0015] [--between 0016] [--rounds 2] [--port 18130]
+      [--save-with 0016] [--measure 0015] [--between 0000] [--rounds 2] [--port 18130]
 """
 import argparse
 import json
@@ -109,6 +117,18 @@ class Server:
             "error": reply.get("error"),
         }
 
+    def instructions_only(self, path):
+        """The app's request before a save: every turn before the document, then two fixed words."""
+        body = json.load(open(path, encoding="utf-8"))
+        for key in ("grammar", "logprobs", "top_logprobs"):
+            body.pop(key, None)
+        body["messages"] = body["messages"][:-1] + [{"role": "user", "content": "JSON only."}]
+        body["max_tokens"] = 1
+        reply, status, latency = call(self.port, self.key, "/v1/chat/completions", body)
+        timings = reply.get("timings") or {}
+        return {"status": status, "latency_s": round(latency, 2), "cache_n": timings.get("cache_n"),
+                "prompt_n": timings.get("prompt_n")}
+
     def slot(self, action):
         reply, status, latency = call(self.port, self.key, f"/slots/0?action={action}", {"filename": SLOT_FILE})
         return {"status": status, "wall_ms": round(latency * 1000, 1), **reply}
@@ -137,9 +157,9 @@ def main():
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--ctx", type=int, default=8192)
     parser.add_argument("--port", type=int, default=18130)
-    parser.add_argument("--save-with", default="0000")
+    parser.add_argument("--save-with", default="0016")
     parser.add_argument("--measure", default="0015")
-    parser.add_argument("--between", default="0016")
+    parser.add_argument("--between", default="0000")
     parser.add_argument("--rounds", type=int, default=2)
     args = parser.parse_args()
     # The server runs in its own folder, as the app starts it, so every path it is given is absolute.
@@ -158,6 +178,10 @@ def main():
     server = Server(args, "save", key)
     try:
         result["save_first_read"] = server.read(args.save_with, request[args.save_with])
+        result["instructions_only"] = server.instructions_only(request[args.save_with])
+        instructions = result["instructions_only"].get("cache_n") or 0
+        if (result["save_first_read"].get("prompt_n") or 0) < instructions + 4 + 256:
+            raise SystemExit(f"--save-with {args.save_with} is shorter than the instructions plus 260 tokens")
         result["save"] = server.slot("save")
         result["save"]["file_bytes"] = os.path.getsize(os.path.join(args.slots, SLOT_FILE))
         result["save"]["load_s"] = server.load_s
@@ -193,6 +217,7 @@ def main():
     restored_prompt = mean(read["prompt_ms"] for read in restored)
     restore_ms = mean(entry.get("wall_ms") for entry in restores)
     summary = {
+        "instructions_only_cache_n": result["instructions_only"].get("cache_n"),
         "slot_file_bytes": result["save"].get("file_bytes"),
         "saved_tokens": result["save"].get("n_saved"),
         "save_ms": (result["save"].get("timings") or {}).get("save_ms"),

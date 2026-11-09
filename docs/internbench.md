@@ -251,7 +251,35 @@ Inputs: `model_url` and `model_sha256` (as for a candidate above);
 the app's (a repeated flag's last value wins, so `--threads-batch 4`
 replaces the app's); `threads` (default 2, the app's rule on a 4-processor
 runner); `every` (default 2: every second recorded request, 13 of 26);
-`llama_release` (optional).
+`llama_release` (optional); `cold_start` and `cpu_variant` (below).
+
+The battery warms every slot before it times anything, so the first
+document of a server lifetime - what a person waits on after sign-in and
+after every idle unload - is not in its numbers. `cold_start` adds that
+measurement before the battery, on fresh servers with the app's flags, an
+API key and a slot folder (`scripts/bonsai-eval/cold-start.py`): one server
+reads a recorded request unwarmed and its slot is saved; then, twice over,
+a fresh server reads another request unwarmed, and a fresh server restores
+the saved slot and reads the same request; in the first round the
+unrestored server then reads a third request and the measured one again,
+the steady state. The summary gives `cache_n`, prompt tokens and prompt
+time for the unwarmed, restored and steady-state reads, the slot file's
+size, the save and restore times, whether the restored and unwarmed
+replies equal the steady-state reply, and the first-document saving (prompt
+time without the restore, less prompt time with it, less the restore).
+`cold-start.json` is in the artifact.
+
+`cpu_variant` (one of the release's x86 backends: `haswell` for AVX2,
+`alderlake` for AVX2 with AVX-VNNI, `icelake`, `zen4`, ...) runs every
+server of the job on that backend alone. ggml loads the best
+`libggml-cpu-*.so` it finds beside the executable that `/proc/self/exe`
+resolves to, so a folder of symbolic links still loads the release's own
+best; the job hard-links the release into a folder that holds only the
+named backend instead. A runner without the backend's instructions then
+has no CPU backend and the job fails; the summary quotes what the loaded
+backend was built for from the server's `system_info` line. Without it a
+runner loads its own AVX-512 or AMX build, a path no laptop class without
+those instructions runs.
 
 Inputs:
 
