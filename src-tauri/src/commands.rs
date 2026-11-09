@@ -354,7 +354,16 @@ trait RuntimeLauncher: Send + Sync {
 struct LaunchedRuntime {
     process: Box<dyn RuntimeProcess>,
     engine: Engine,
+    /// Run after every document the runtime reads: in production, the save
+    /// of the server's slot that the next launch restores
+    /// ([`LlamaLauncher::keep_system_turn`]). `None` when the server keeps
+    /// nothing.
+    after_read: Option<AfterRead>,
 }
+
+/// What a runtime does once a document has been read, given the reading,
+/// on the thread that read it, while the model is still held for reading.
+type AfterRead = Arc<dyn Fn(&DocumentAnalysis) + Send + Sync>;
 
 /// The process behind a running runtime.
 trait RuntimeProcess: Send {
@@ -413,6 +422,9 @@ impl ServerExecutables {
 struct LlamaLauncher {
     servers: ServerExecutables,
     model_directory: PathBuf,
+    /// Where each tier's server keeps its system turn's state between
+    /// launches ([`intern_engine::slots`]); `None` keeps nothing.
+    slot_directory: Option<PathBuf>,
 }
 
 impl RuntimeLauncher for LlamaLauncher {
@@ -432,12 +444,52 @@ impl RuntimeLauncher for LlamaLauncher {
     ) -> Result<LaunchedRuntime, CommandError> {
         let pinned = manifest.tier(tier).ok_or_else(manifest_names_no_model)?;
         let model = pinned.model().ok_or_else(manifest_names_no_model)?;
-        let server = LlamaServer::start(
-            self.servers.for_tier(tier),
-            &self.model_directory.join(&model.name),
-            None,
-            &tiers::server_options(tier),
-        )?;
+        let executable = self.servers.for_tier(tier);
+        let model_path = self.model_directory.join(&model.name);
+        let options = tiers::server_options(tier);
+        let slot_directory = self.slot_directory.as_deref().filter(|directory| {
+            intern_engine::slots::usable_directory(directory)
+                && std::fs::create_dir_all(directory).is_ok()
+        });
+        let (server, slot_directory) = match slot_directory {
+            Some(directory) => {
+                let with_slots = intern_engine::ServerOptions {
+                    slot_directory: Some(directory.to_path_buf()),
+                    ..options.clone()
+                };
+                match LlamaServer::start(executable, &model_path, None, &with_slots) {
+                    Ok(server) => (server, Some(directory)),
+                    // The folder is only a speed-up: a server that will not
+                    // start with it is started without it.
+                    Err(error) if error.code() == EngineErrorCode::ModelServerStartFailed => {
+                        eprintln!(
+                            "intern: the {} local model would not start with a slot folder; starting it without one",
+                            tier.as_str()
+                        );
+                        (
+                            LlamaServer::start(executable, &model_path, None, &options)?,
+                            None,
+                        )
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            None => (
+                LlamaServer::start(executable, &model_path, None, &options)?,
+                None,
+            ),
+        };
+        let after_read = slot_directory.and_then(|directory| {
+            Self::keep_system_turn(
+                &server,
+                directory,
+                tier,
+                model,
+                &manifest.served_model_name,
+                pinned.prompt_profile,
+                &options,
+            )
+        });
         let client = ModelClient::new(
             &server.completion_endpoint(),
             server.api_key().to_owned(),
@@ -451,7 +503,103 @@ impl RuntimeLauncher for LlamaLauncher {
         Ok(LaunchedRuntime {
             process: Box::new(server),
             engine,
+            after_read,
         })
+    }
+}
+
+impl LlamaLauncher {
+    /// Restores the system turn's state a server of this configuration
+    /// saved after an earlier launch's first document, and says how to save
+    /// it after this launch's first document when there was none.
+    ///
+    /// Runs after the health check and before the server is handed to
+    /// anything that sends it a document, so the restore never races one:
+    /// the first document finds the instructions cached, as every later one
+    /// does. Every failure here only costs that: the server processes the
+    /// instructions itself, as it did before slot files.
+    fn keep_system_turn(
+        server: &LlamaServer,
+        directory: &Path,
+        tier: ModelTier,
+        model: &ModelFile,
+        served_model_name: &str,
+        profile: Option<intern_engine::profile::PromptProfile>,
+        options: &intern_engine::ServerOptions,
+    ) -> Option<AfterRead> {
+        use intern_engine::slots::{Restore, SlotIdentity, SlotKeeper};
+        let build =
+            intern_engine::slots::runtime_build(server.endpoint(), server.api_key()).ok()?;
+        // Everything the launch decides apart from where things are and how
+        // they are reached: threads, context, batch size, every flag.
+        let arguments = LlamaServer::arguments_for(Path::new(""), None, 0, "", options);
+        let prefix = intern_engine::client::cached_prefix_identity(profile);
+        let cpu = intern_engine::slots::cpu_fingerprint();
+        let identity = SlotIdentity {
+            label: tier.as_str(),
+            model_sha256: &model.sha256,
+            runtime_build: &build,
+            prefix: &prefix,
+            arguments: &arguments,
+            cpu: &cpu,
+        };
+        let instructions_only =
+            intern_engine::client::instructions_only_request(served_model_name, profile);
+        let keeper = SlotKeeper::new(
+            server.endpoint(),
+            server.api_key(),
+            directory,
+            &identity,
+            instructions_only,
+            intern_engine::server::MICRO_BATCH_TOKENS,
+        )
+        .ok()?;
+        keeper.prune();
+        match keeper.restore() {
+            Restore::Restored {
+                tokens,
+                bytes,
+                millis,
+            } => eprintln!(
+                "intern: the {} local model's instructions were restored ({tokens} tokens, {bytes} bytes, {millis:.0} ms)",
+                tier.as_str()
+            ),
+            Restore::Failed => eprintln!(
+                "intern: the {} local model's saved instructions would not restore; the next document saves them again",
+                tier.as_str()
+            ),
+            Restore::NoFile => {}
+        }
+        // The document's prompt as the server processed it from nothing,
+        // when nothing was cached: it was this lifetime's first request.
+        Some(Arc::new(move |analysis: &DocumentAnalysis| {
+            let first_request_tokens = analysis
+                .telemetry
+                .model
+                .filter(|timings| timings.cached_tokens == 0)
+                .map(|timings| timings.prompt_tokens);
+            log_save(tier, keeper.save_once(first_request_tokens));
+        }))
+    }
+}
+
+/// Says in the log what a save did; a save that was not needed says nothing.
+fn log_save(tier: ModelTier, save: intern_engine::slots::Save) {
+    use intern_engine::slots::Save;
+    match save {
+        Save::Saved {
+            tokens,
+            bytes,
+            millis,
+        } => eprintln!(
+            "intern: the {} local model's instructions were saved for its next launch ({tokens} tokens, {bytes} bytes, {millis:.0} ms)",
+            tier.as_str()
+        ),
+        Save::Failed => eprintln!(
+            "intern: the {} local model's instructions could not be saved for its next launch",
+            tier.as_str()
+        ),
+        Save::Uneven | Save::NoRoom | Save::NotNeeded => {}
     }
 }
 
@@ -568,6 +716,7 @@ struct RunningEngine {
     engine: Engine,
     tier: ModelTier,
     generation: u64,
+    after_read: Option<AfterRead>,
 }
 
 /// What this session knows about one tier's model.
@@ -682,12 +831,14 @@ impl RuntimeModel {
     fn new(
         servers: ServerExecutables,
         model_directory: PathBuf,
+        slot_directory: Option<PathBuf>,
         manifest: ModelManifest,
         preference: Box<dyn Fn() -> ModelPreference + Send + Sync>,
     ) -> Self {
         let launcher = Arc::new(LlamaLauncher {
             servers: servers.clone(),
             model_directory: model_directory.clone(),
+            slot_directory,
         });
         Self::with_parts(
             servers,
@@ -1210,6 +1361,7 @@ impl RuntimeModel {
             engine: launched.engine,
             tier,
             generation: self.generation.load(Ordering::SeqCst),
+            after_read: launched.after_read,
         });
         *self
             .last_tier
@@ -1622,6 +1774,11 @@ impl RuntimeModel {
                                 running.generation,
                             ))
                         });
+                    // Still holding the engine for reading: nothing unloads
+                    // the model under a save of its slot.
+                    if let (Ok(analysis), Some(after_read)) = (&result, &running.after_read) {
+                        after_read(analysis);
+                    }
                     self.touch();
                     return result;
                 }
@@ -3211,6 +3368,7 @@ impl AppState {
         let runtime = Arc::new(RuntimeModel::new(
             ServerExecutables::in_sidecar_directory(&executable_directory),
             model_directory,
+            Some(data.join(intern_engine::slots::SLOT_FOLDER)),
             ModelManifest::embedded()?,
             Box::new(move || {
                 preference_settings
@@ -8465,6 +8623,9 @@ mod runtime_tests {
         refuse_launch: Mutex<Option<ModelTier>>,
         /// How many launches were refused that way.
         refused: AtomicUsize,
+        /// The tier of every document read to the end, in order, as the
+        /// runtime's after-read step saw them.
+        after_reads: Mutex<Vec<ModelTier>>,
     }
 
     impl Rig {
@@ -8484,6 +8645,7 @@ mod runtime_tests {
                 launch_gate: Mutex::new(None),
                 refuse_launch: Mutex::new(None),
                 refused: AtomicUsize::new(0),
+                after_reads: Mutex::new(Vec::new()),
             })
         }
 
@@ -8636,6 +8798,7 @@ mod runtime_tests {
             let alive = self.rig.alive.fetch_add(1, Ordering::SeqCst) + 1;
             self.rig.most_alive.fetch_max(alive, Ordering::SeqCst);
             let server = Arc::new(FakeServer::default());
+            let rig = Arc::clone(&self.rig);
             Ok(LaunchedRuntime {
                 process: Box::new(FakeProcess {
                     server: Arc::clone(&server),
@@ -8645,6 +8808,9 @@ mod runtime_tests {
                     server,
                     rig: Arc::clone(&self.rig),
                     tier,
+                })),
+                after_read: Some(Arc::new(move |_: &intern_engine::DocumentAnalysis| {
+                    rig.after_reads.lock().unwrap().push(tier);
                 })),
             })
         }
@@ -10303,6 +10469,42 @@ mod runtime_tests {
         assert_eq!(rig.alive.load(Ordering::SeqCst), 0);
     }
 
+    /// Every document read to the end is handed to the runtime's after-read
+    /// step - in production the save of the server's slot, which the step
+    /// makes once a server lifetime - before the reading is returned; a
+    /// failed read is not, and neither are the self-test's probes. A server
+    /// loaded again after an idle unload has a step of its own.
+    #[test]
+    fn a_document_read_to_the_end_is_handed_to_the_after_read_step() {
+        let install = Install::new("tier-after-read");
+        let rig = Rig::new();
+        let world = World::new();
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        verified(&runtime);
+        assert!(
+            rig.proposals.load(Ordering::SeqCst) > 0,
+            "the self-test ran"
+        );
+        assert_eq!(*rig.after_reads.lock().unwrap(), Vec::<ModelTier>::new());
+
+        runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        assert_eq!(*rig.after_reads.lock().unwrap(), [ModelTier::Fast]);
+
+        rig.reply(Reply::Fail(EngineErrorCode::ModelResponseInvalid));
+        assert!(runtime.analyze(&probe(), "pdf", &[]).is_err());
+        assert_eq!(*rig.after_reads.lock().unwrap(), [ModelTier::Fast]);
+
+        rig.reply(Reply::Calibration);
+        world.advance(IDLE_UNLOAD_AFTER);
+        assert!(runtime.unload_if_idle());
+        runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        assert_eq!(rig.launches(), 2);
+        assert_eq!(
+            *rig.after_reads.lock().unwrap(),
+            [ModelTier::Fast, ModelTier::Fast]
+        );
+    }
+
     /// Nothing asked for ten minutes: the model is unloaded, and the next
     /// document loads it again without reading the file. Never while a
     /// request is in flight, and never while a start holds the lifecycle.
@@ -10710,6 +10912,7 @@ mod runtime_tests {
         let launcher = || LlamaLauncher {
             servers: servers.clone(),
             model_directory: install.root.join("models"),
+            slot_directory: None,
         };
         let Err(upstream_missing) = launcher().launch(&manifest(), ModelTier::Accurate) else {
             panic!("a missing upstream server started");
@@ -10787,6 +10990,7 @@ mod runtime_tests {
         let launcher = LlamaLauncher {
             servers: servers.clone(),
             model_directory: install.root.join("models"),
+            slot_directory: None,
         };
         let root = install.root.canonicalize().unwrap();
 
@@ -10847,6 +11051,7 @@ mod runtime_tests {
                 upstream: PathBuf::from(&server),
             },
             directory.clone(),
+            None,
             manifest,
             Box::new(|| ModelPreference::Fast),
         ));
@@ -10930,6 +11135,140 @@ mod runtime_tests {
 
         runtime.shutdown().unwrap();
         assert_eq!(servers(), Vec::<u32>::new(), "after shutdown");
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// The real llama-server across restarts. A lifetime whose first request
+    /// is the self-test saves nothing; one whose first request is a document
+    /// long enough to process the instructions in one piece saves them; the
+    /// next lifetime restores them, and its first document gets the same
+    /// cached tokens and the same reply as when it is read later in that
+    /// lifetime - and as when it is the first document of a lifetime with
+    /// nothing restored. Runs only when INTERN_LIVE_LLAMA_SERVER and
+    /// INTERN_LIVE_MODEL name a server binary and the pinned fast model.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_the_first_document_after_a_restart_finds_the_instructions_restored() {
+        let (Some(server), Some(model)) = (
+            std::env::var_os("INTERN_LIVE_LLAMA_SERVER"),
+            std::env::var_os("INTERN_LIVE_MODEL"),
+        ) else {
+            eprintln!("skipped: INTERN_LIVE_LLAMA_SERVER and INTERN_LIVE_MODEL are not both set");
+            return;
+        };
+        let manifest = ModelManifest::embedded().unwrap();
+        let name = manifest
+            .tier(ModelTier::Fast)
+            .and_then(TierModel::model)
+            .unwrap()
+            .name
+            .clone();
+        let directory =
+            std::env::temp_dir().join(format!("intern-live-slots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::os::unix::fs::symlink(PathBuf::from(&model), directory.join(&name)).unwrap();
+        let slots = directory.join("slots");
+        let lifetime = || {
+            let runtime = Arc::new(RuntimeModel::new(
+                ServerExecutables {
+                    prism: PathBuf::from(&server),
+                    upstream: PathBuf::from(&server),
+                },
+                directory.clone(),
+                Some(slots.clone()),
+                manifest.clone(),
+                Box::new(|| ModelPreference::Fast),
+            ));
+            runtime
+                .start_verified(&CancellationToken::new())
+                .expect("the pinned model starts");
+            runtime
+        };
+        let slot_files = || {
+            let mut names = std::fs::read_dir(&slots)
+                .map(|entries| {
+                    entries
+                        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            names.sort();
+            names
+        };
+        let timings = |analysis: &intern_engine::DocumentAnalysis| {
+            analysis.telemetry.model.expect("the server's timings")
+        };
+        // Long enough that the instructions are processed in one piece:
+        // several hundred tokens of the document's own.
+        let agreement = intern_engine::distill::source_from_text(format!(
+            "SERVICES AGREEMENT\n\nThis agreement is made on April 12, 2024 between Harbor \
+             Point Logistics LLC and Northwind Freight Partners.\n\n{}",
+            "The provider shall perform the services described in each statement of work, \
+             and the customer shall pay the fees set out there within thirty days. "
+                .repeat(12)
+        ));
+        let lease = intern_engine::distill::source_from_text(format!(
+            "LEASE RENEWAL\n\nDated May 1, 2024\n\nBetween Alder Stone LLC, landlord, and \
+             Harbor Packing Ltd., tenant.\n\n{}",
+            "The tenant renews the lease of the warehouse at 12 Quay Street for a further \
+             year on the terms of the original lease, at the rent stated in the schedule. "
+                .repeat(12)
+        ));
+
+        // The model's first launch reads the self-test's probes first, so
+        // its instructions are whatever the first probe left: nothing saved.
+        let first = lifetime();
+        first
+            .analyze(&agreement, "pdf", &[])
+            .expect("a document is read");
+        first.shutdown().unwrap();
+        assert_eq!(slot_files(), Vec::<String>::new(), "after the self-test");
+
+        // Vouched for now, the next launch's first request is a document,
+        // long enough: its instructions are saved.
+        let second = lifetime();
+        let cold = second.analyze(&agreement, "pdf", &[]).expect("cold");
+        second.shutdown().unwrap();
+        let saved = slot_files();
+        assert_eq!(saved.len(), 1, "{saved:?}");
+        assert!(saved[0].starts_with("fast-") && saved[0].ends_with(".bin"));
+        let size = std::fs::metadata(slots.join(&saved[0])).unwrap().len();
+        assert_eq!(timings(&cold).cached_tokens, 0);
+
+        // A restart: the first document finds the instructions restored.
+        let started = std::time::Instant::now();
+        let third = lifetime();
+        let start = started.elapsed();
+        let restored = third.analyze(&agreement, "pdf", &[]).expect("restored");
+        third.analyze(&lease, "pdf", &[]).expect("another");
+        let steady = third.analyze(&agreement, "pdf", &[]).expect("steady");
+        third.shutdown().unwrap();
+        eprintln!(
+            "slot file {size} bytes; start with the restore {start:?}; the agreement: cold {} cached, \
+             {} processed, {} ms; restored {} cached, {} processed, {} ms; steady {} cached, {} ms",
+            timings(&cold).cached_tokens,
+            timings(&cold).prompt_tokens,
+            timings(&cold).prefill_micros / 1_000,
+            timings(&restored).cached_tokens,
+            timings(&restored).prompt_tokens,
+            timings(&restored).prefill_micros / 1_000,
+            timings(&steady).cached_tokens,
+            timings(&steady).prefill_micros / 1_000,
+        );
+        assert!(timings(&restored).cached_tokens > 0);
+        assert_eq!(
+            timings(&restored).cached_tokens,
+            timings(&steady).cached_tokens
+        );
+        for reading in [&cold, &steady] {
+            assert_eq!(restored.model_proposal, reading.model_proposal);
+            assert_eq!(
+                (&restored.filename, &restored.description),
+                (&reading.filename, &reading.description)
+            );
+        }
+        assert_eq!(slot_files(), saved, "a restored lifetime saves nothing");
         let _ = std::fs::remove_dir_all(directory);
     }
 
