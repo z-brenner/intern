@@ -50,7 +50,14 @@ jobs:
   # pipeline, which a hosted model reads, is replayed from its own.
   # InternBench is replayed the same way, from bench/recording.json against
   # bench/baseline.json, and needs no generated corpus: a document's bytes are
-  # checked against bench/manifest.json. See docs/internbench.md.
+  # checked against bench/manifest.json. See docs/internbench.md. So are the
+  # four real-document sets, from the accurate model's recordings of the
+  # documents whose licence lets their text be committed, against their own
+  # baselines; their gold is built from the committed samples and nothing is
+  # fetched. See bench/realdocs/README.md. Every replay also holds each
+  # document's evidence recalls: a gold date or party that stops reaching the
+  # prompt fails it. Release builds: the replays take seconds there, and a
+  # debug build spent over a minute on InternBench alone.
   corpus-replay:
     name: Corpus replay against the recorded baseline (Ubuntu)
     runs-on: ubuntu-latest
@@ -64,13 +71,17 @@ jobs:
         run: |
           rustup toolchain install 1.88.0 --profile minimal
           rustup default 1.88.0
+      # Named for the release profile, so an entry a debug build saved is never
+      # restored as an exact hit and kept. A Cargo.lock change restores the
+      # newest earlier entry and rebuilds only what changed.
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-replay-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-replay-release-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-replay-release-${{ runner.os }}-
       - run: npm ci
       - run: npm run fixtures
       # Every replay is scored with the accurate model's review gate, 0.7
@@ -78,7 +89,7 @@ jobs:
       # as the app reads: the baselines were written at that gate.
       - name: Replay the corpus and compare with the baseline
         run: >-
-          cargo run --locked -p intern-engine --bin intern-evaluate --
+          cargo run --release --locked -p intern-engine --bin intern-evaluate --
           --fixtures fixtures/generated --expected fixtures/expected.json
           --replay fixtures/corpus-recording.json --baseline fixtures/corpus-baseline.json
           --min-token-confidence 0.7 --output corpus-report.json
@@ -86,17 +97,60 @@ jobs:
       - name: Replay the corpus through the digest pipeline and compare with its baseline
         if: always()
         run: >-
-          cargo run --locked -p intern-engine --bin intern-evaluate --
+          cargo run --release --locked -p intern-engine --bin intern-evaluate --
           --fixtures fixtures/generated --expected fixtures/expected.json --pipeline digest
           --replay fixtures/corpus-recording-digest.json --baseline fixtures/corpus-baseline-digest.json
           --min-token-confidence 0.7 --output corpus-report-digest.json
       - name: Replay InternBench and compare with its baseline
         if: always()
         run: >-
-          cargo run --locked -p intern-bench --
+          cargo run --release --locked -p intern-bench --
           run --corpus bench/generated --gold bench/gold.json --manifest bench/manifest.json
           --replay bench/recording.json --baseline bench/baseline.json --min-token-confidence 0.7
           --output internbench-report.json --markdown internbench-report.md
+      # The four real-document sets, one step each. Each set's gold is built from
+      # its committed sample for the documents its recording holds, and nothing
+      # is fetched: the corpus directory does not exist, because a replay reads
+      # the recorded text. A prompt change makes the recorded replies stale and
+      # fails these steps by design: such a change carries re-recorded
+      # recordings and baselines (bench/realdocs/README.md); --allow-stale is
+      # never passed here.
+      - name: Replay the real-document set real1 and compare with its baseline
+        if: always()
+        run: |
+          python3 -I scripts/realdocs-eval/fetch.py --gold-only \
+            --recording bench/realdocs/recordings/real1-qwen35-9b.json "$RUNNER_TEMP/realdocs/real1" sample.json
+          cargo run --release --locked -p intern-bench -- \
+            run --corpus "$RUNNER_TEMP/realdocs/real1/corpus" --gold "$RUNNER_TEMP/realdocs/real1/gold.json" \
+            --replay bench/realdocs/recordings/real1-qwen35-9b.json --baseline bench/realdocs/baseline-real1.json \
+            --min-token-confidence 0.7 --output realdocs-real1-report.json --markdown realdocs-real1-report.md
+      - name: Replay the real-document set real2 and compare with its baseline
+        if: always()
+        run: |
+          python3 -I scripts/realdocs-eval/fetch.py --gold-only \
+            --recording bench/realdocs/recordings/real2-qwen35-9b.json "$RUNNER_TEMP/realdocs/real2" sample-heldout.json
+          cargo run --release --locked -p intern-bench -- \
+            run --corpus "$RUNNER_TEMP/realdocs/real2/corpus" --gold "$RUNNER_TEMP/realdocs/real2/gold.json" \
+            --replay bench/realdocs/recordings/real2-qwen35-9b.json --baseline bench/realdocs/baseline-real2.json \
+            --min-token-confidence 0.7 --output realdocs-real2-report.json --markdown realdocs-real2-report.md
+      - name: Replay the real-document set real3 and compare with its baseline
+        if: always()
+        run: |
+          python3 -I scripts/realdocs-eval/fetch.py --gold-only \
+            --recording bench/realdocs/recordings/real3-qwen35-9b.json "$RUNNER_TEMP/realdocs/real3" sample-heldout2.json
+          cargo run --release --locked -p intern-bench -- \
+            run --corpus "$RUNNER_TEMP/realdocs/real3/corpus" --gold "$RUNNER_TEMP/realdocs/real3/gold.json" \
+            --replay bench/realdocs/recordings/real3-qwen35-9b.json --baseline bench/realdocs/baseline-real3.json \
+            --min-token-confidence 0.7 --output realdocs-real3-report.json --markdown realdocs-real3-report.md
+      - name: Replay the real-document set real4 and compare with its baseline
+        if: always()
+        run: |
+          python3 -I scripts/realdocs-eval/fetch.py --gold-only \
+            --recording bench/realdocs/recordings/real4-qwen35-9b.json "$RUNNER_TEMP/realdocs/real4" sample-heldout3.json
+          cargo run --release --locked -p intern-bench -- \
+            run --corpus "$RUNNER_TEMP/realdocs/real4/corpus" --gold "$RUNNER_TEMP/realdocs/real4/gold.json" \
+            --replay bench/realdocs/recordings/real4-qwen35-9b.json --baseline bench/realdocs/baseline-real4.json \
+            --min-token-confidence 0.7 --output realdocs-real4-report.json --markdown realdocs-real4-report.md
       - name: Upload corpus reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -107,6 +161,8 @@ jobs:
             corpus-report-digest.json
             internbench-report.json
             internbench-report.md
+            realdocs-real*-report.json
+            realdocs-real*-report.md
           if-no-files-found: ignore
 
   # Rust feedback in minutes rather than the Windows job's half hour: format,

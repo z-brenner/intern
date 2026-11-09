@@ -65,6 +65,56 @@ describe('the runtime-asset cache in CI', () => {
   });
 });
 
+describe('the corpus replay job', () => {
+  const sets = [
+    ['real1', 'sample.json'],
+    ['real2', 'sample-heldout.json'],
+    ['real3', 'sample-heldout2.json'],
+    ['real4', 'sample-heldout3.json'],
+  ] as const;
+
+  it('replays in release builds', async () => {
+    const job = jobOf(await ci(), 'corpus-replay');
+    const runs = job.split('\n').filter((line) => line.includes('cargo run'));
+    expect(runs).toHaveLength(7);
+    for (const line of runs) expect(line).toContain('cargo run --release --locked -p ');
+    expect(job).toContain('key: cargo-replay-release-${{ runner.os }}-');
+  });
+
+  // The real sets are replayed from committed recordings against committed
+  // baselines, with gold built from the committed samples: nothing fetched.
+  it('holds each real-document set to its baseline, one step per set', async () => {
+    const workflow = await ci();
+    const steps = stepsOf(jobOf(workflow, 'corpus-replay'));
+    const bench = await readFile('.github/workflows/candidate-bench.yml', 'utf8');
+    for (const [set, sample] of sets) {
+      // The same sample the live benchmark fetches for the set.
+      expect(bench).toContain(`"${set}": "${sample}",`);
+      const step = steps.find((candidate) => candidate.includes(`name: Replay the real-document set ${set} `));
+      expect(step, set).toBeDefined();
+      expect(step).toContain('if: always()');
+      const recording = `bench/realdocs/recordings/${set}-qwen35-9b.json`;
+      expect(step).toContain(`python3 -I scripts/realdocs-eval/fetch.py --gold-only \\\n            --recording ${recording} "$RUNNER_TEMP/realdocs/${set}" ${sample}`);
+      expect(step).toContain(`run --corpus "$RUNNER_TEMP/realdocs/${set}/corpus" --gold "$RUNNER_TEMP/realdocs/${set}/gold.json"`);
+      expect(step).toContain(`--replay ${recording} --baseline bench/realdocs/baseline-${set}.json`);
+      expect(step).toContain(`--min-token-confidence 0.7 --output realdocs-${set}-report.json --markdown realdocs-${set}-report.md`);
+      await readFile(recording);
+      await readFile(`bench/realdocs/baseline-${set}.json`);
+    }
+    const upload = steps.find((step) => step.includes('actions/upload-artifact@'))!;
+    expect(upload).toContain('realdocs-real*-report.json');
+    expect(upload).toContain('realdocs-real*-report.md');
+  });
+
+  // A prompt change makes the recorded replies stale. That fails by design:
+  // the change carries re-recorded recordings and baselines.
+  it('never lets a stale reply through', async () => {
+    const job = jobOf(await ci(), 'corpus-replay')
+      .split('\n').filter((line) => !line.trimStart().startsWith('#')).join('\n');
+    expect(job).not.toContain('--allow-stale');
+  });
+});
+
 describe('the Rust (Ubuntu) job', () => {
   it('ubuntu_rust_job_runs_fmt_clippy_test with the pinned toolchain and the desktop libraries', async () => {
     const job = jobOf(await ci(), 'rust-ubuntu');
