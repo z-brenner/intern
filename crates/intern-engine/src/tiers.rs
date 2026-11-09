@@ -176,13 +176,49 @@ pub const fn working_set(tier: ModelTier) -> u64 {
 /// a process has in its working set, and the server keeps the weights it
 /// has touched there until it exits or the system trims them. Measured on a
 /// 16 GiB runner (`bench/reports/windows-memory-2026-11-09`): right after a
-/// document the 9B's working set was 8,108 MiB and the 4B's 4,513, against
-/// the 2,883 and 2,086 this credits. With 2 GiB held by another process,
-/// the plan's arithmetic on those numbers stands the loaded 9B down for the
-/// 4B before the next document, and the loaded 4B down for the 9B before
-/// the one after.
+/// document the 9B's working set was 8,107-8,110 MiB and the 4B's
+/// 4,513-4,514, against the 2,883 and 2,086 this credits. With 2 GiB held
+/// by another process, the plan's arithmetic on those numbers stands the
+/// loaded 9B down for the 4B before the next document, and the loaded 4B
+/// down for the 9B before the one after.
 pub const fn unload_gives_back(tier: ModelTier, model_file_bytes: u64) -> u64 {
     resident_estimate(tier).saturating_sub(model_file_bytes)
+}
+
+/// How much more than [`MIN_AVAILABLE_FOR_ACCURATE`] the plan asks for
+/// before it stands a loaded fast model down for the accurate one.
+///
+/// Credited what stopping it gives back, a loaded model leaves the plan
+/// judging the machine about as it would be with nothing loaded, but not
+/// exactly, and not alike for the two models. On a 16 GiB Windows runner
+/// (`bench/reports/windows-memory-2026-11-09`) the plan's figure ran from
+/// 110 MiB under to 1,098 MiB over the memory available before that model
+/// was loaded, and with 2 GiB held by another process it came out higher
+/// with the 4B loaded than with the 9B: by 404 MiB with each right after a
+/// document, by 917 MiB with the 4B a minute idle. Where the 4B's figure
+/// is the higher, a machine with the 9B loaded and just short of the floor
+/// is judged to have room once the 4B is loaded, and the two swap, the 9B
+/// each time onto a machine that cannot hold it: before every document of
+/// a queue, or at every pause. Asked for this much more,
+/// the 4B stays until the room is plainly there. The loaded 9B is still
+/// stood down at the floor itself: the margin keeps the smaller model
+/// longer, never the larger one. It also stops a machine whose memory
+/// drifts around the floor from swapping the models back and forth.
+pub const UPGRADE_MARGIN: u64 = 1_024 * MIB;
+
+/// The memory the plan judges the machine by: `available`, what the
+/// machine reports, plus, when a model is loaded, what stopping its server
+/// would give back (`loaded`: the tier and that amount), so the machine is
+/// judged as it would be once the model is unloaded; less
+/// [`UPGRADE_MARGIN`] while the fast model is the one loaded.
+pub const fn memory_for_plan(available: u64, loaded: Option<(ModelTier, u64)>) -> u64 {
+    match loaded {
+        None => available,
+        Some((ModelTier::Accurate, released)) => available.saturating_add(released),
+        Some((ModelTier::Fast, released)) => available
+            .saturating_add(released)
+            .saturating_sub(UPGRADE_MARGIN),
+    }
 }
 
 /// llama-server flags for one tier alone, added after the ones every launch
@@ -512,14 +548,19 @@ pub fn available_memory_bytes() -> Option<u64> {
 /// bytes, read from the live process; `None` when it cannot be read. Never
 /// panics.
 ///
-/// On Windows, the process's working set (`GetProcessMemoryInfo`): every
-/// page in it is on none of the lists the available physical memory counts,
-/// and every page in it goes back to one when the process exits - its
-/// private memory to the free list, the mapped weights it touched to the
-/// standby list. On a 16 GiB runner the available memory 3 s after the 9B or
-/// the 4B exited was the available memory before plus the working set
-/// before, to within 83 MiB in six stops
-/// (`bench/reports/windows-memory-2026-11-09`). On Linux, its anonymous
+/// On Windows, the process's working set (`GetProcessMemoryInfo`): nearly
+/// every page in it is on none of the lists the available physical memory
+/// counts, and goes back to one when the process exits - its private memory
+/// to the free list, the mapped weights it touched to the standby list. Not
+/// quite all: pages of system libraries that other processes map too are in
+/// the working set and stay where they are, and the server's own pages that
+/// the system has trimmed to the modified list are not in it, are not
+/// counted available, and are freed at the exit all the same. On a 16 GiB
+/// runner the available memory 3 s after the 9B or the 4B exited was the
+/// available memory before plus the working set before, to within 83 MiB in
+/// six stops (`bench/reports/windows-memory-2026-11-09`); under a squeeze,
+/// when the modified list holds more of the server, the figure could run
+/// short, which is not measured. On Linux, its anonymous
 /// resident memory (`RssAnon`): `MemAvailable` already counts the mapped
 /// weights, which are page cache, so only the rest comes back.
 pub fn memory_released_by(process: &std::process::Child) -> Option<u64> {
@@ -882,6 +923,90 @@ mod tests {
             resident_estimate(A) - 5_680_522_464
         );
         assert_eq!(unload_gives_back(F, u64::MAX), 0);
+    }
+
+    /// The memory the plan judges by: the machine's own figure with nothing
+    /// loaded, plus what the loaded server gives back, less the margin only
+    /// while the fast model is the one loaded. The loaded accurate model is
+    /// still stood down at the floor itself.
+    #[test]
+    fn only_a_loaded_fast_model_is_asked_for_the_margin() {
+        let released = 3 * GIB;
+        assert_eq!(memory_for_plan(5 * GIB, None), 5 * GIB);
+        assert_eq!(memory_for_plan(5 * GIB, Some((A, released))), 8 * GIB);
+        assert_eq!(
+            memory_for_plan(5 * GIB, Some((F, released))),
+            8 * GIB - UPGRADE_MARGIN
+        );
+        assert_eq!(memory_for_plan(0, Some((F, 0))), 0);
+        assert_eq!(memory_for_plan(u64::MAX, Some((A, released))), u64::MAX);
+
+        let first = |loaded| {
+            let memory = memory_for_plan(MIN_AVAILABLE_FOR_ACCURATE - released, loaded);
+            plan(Automatic, BOTH, Some(memory)).map(|plan| plan.first)
+        };
+        assert_eq!(first(Some((A, released))), Some(A));
+        assert_eq!(first(Some((A, released - 1))), Some(F));
+        assert_eq!(first(Some((F, released))), Some(F));
+        assert_eq!(first(Some((F, released + UPGRADE_MARGIN - 1))), Some(F));
+        assert_eq!(first(Some((F, released + UPGRADE_MARGIN))), Some(A));
+    }
+
+    /// Pass 3 of the Windows probe, with 2 GiB held by another process
+    /// (`bench/reports/windows-memory-2026-11-09`), carried to a machine
+    /// with `nothing` MiB available before any model is loaded, as the
+    /// report's bands carry it: each load takes from the available memory
+    /// what it took on the runner, and the server reports the working set it
+    /// reported. Credited that alone, a machine just short of the floor with
+    /// the 9B loaded is judged to have room once the 4B is loaded, and the
+    /// two swap, document after document or pause after pause. Asked for the
+    /// margin, the 4B stays.
+    #[test]
+    fn a_loaded_fast_model_makes_way_only_with_room_to_spare() {
+        // MiB: what the load took from the available memory, and the
+        // server's working set then. The 9B right after a document; the 4B
+        // right after a document, and after a minute idle.
+        const ACCURATE_AFTER_A_DOCUMENT: (u64, u64) = (7_926, 8_107);
+        const FAST_AFTER_A_DOCUMENT: (u64, u64) = (3_929, 4_514);
+        const FAST_AFTER_A_MINUTE_IDLE: (u64, u64) = (3_347, 4_445);
+        let first = |memory: u64| plan(Automatic, BOTH, Some(memory)).map(|plan| plan.first);
+        // A machine with less than the 9B took has nothing left available.
+        let available = |nothing: u64, takes: u64| nothing.saturating_sub(takes) * MIB;
+        let mut swaps_without_the_margin = [Vec::new(), Vec::new()];
+        for nothing in 7_000..10_000_u64 {
+            let (takes, holds) = ACCURATE_AFTER_A_DOCUMENT;
+            let with_accurate = memory_for_plan(available(nothing, takes), Some((A, holds * MIB)));
+            let stands_down = first(with_accurate) == Some(F);
+            assert_eq!(
+                stands_down,
+                (nothing + holds - takes) * MIB < MIN_AVAILABLE_FOR_ACCURATE,
+                "{nothing} MiB"
+            );
+            for (fast, swaps) in [FAST_AFTER_A_DOCUMENT, FAST_AFTER_A_MINUTE_IDLE]
+                .into_iter()
+                .zip(&mut swaps_without_the_margin)
+            {
+                let (takes, holds) = fast;
+                let with_fast = available(nothing, takes);
+                let comes_back = first(memory_for_plan(with_fast, Some((F, holds * MIB))));
+                assert!(
+                    !(stands_down && comes_back == Some(A)),
+                    "{nothing} MiB: the models swap"
+                );
+                if stands_down && first(with_fast + holds * MIB) == Some(A) {
+                    swaps.push(nothing);
+                }
+            }
+        }
+        let band = |swaps: &[u64]| (swaps.first().copied(), swaps.last().copied(), swaps.len());
+        assert_eq!(
+            band(&swaps_without_the_margin[0]),
+            (Some(7_607), Some(8_010), 404)
+        );
+        assert_eq!(
+            band(&swaps_without_the_margin[1]),
+            (Some(7_094), Some(8_010), 917)
+        );
     }
 
     #[test]

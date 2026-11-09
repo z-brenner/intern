@@ -962,12 +962,16 @@ impl RuntimeModel {
     /// unloaded: about the test a launch with nothing loaded makes, whichever
     /// model is loaded. Credited short, a loaded accurate model is judged not
     /// to fit beside itself and swapped for the quick one, and the quick one
-    /// swapped back for it, document after document.
+    /// swapped back for it, document after document. With the quick model
+    /// loaded, the accurate one is asked for [`tiers::UPGRADE_MARGIN`] more
+    /// ([`tiers::memory_for_plan`]): the two credits are not exactly alike,
+    /// and on a machine near the floor a small difference swapped them too.
     fn plan(&self) -> Option<TierPlan> {
         let available = (self.senses.available_memory)().map(|available| {
-            available.saturating_add(
+            tiers::memory_for_plan(
+                available,
                 self.loaded_tier()
-                    .map_or(0, |tier| self.unload_gives_back(tier)),
+                    .map(|tier| (tier, self.unload_gives_back(tier))),
             )
         });
         tiers::plan_with(
@@ -10107,16 +10111,17 @@ mod runtime_tests {
     const WINDOWS_NOTHING_LOADED: u64 = 11_461 * MIB;
     const WINDOWS_ACCURATE_LOADED: u64 = 3_534 * MIB;
     const WINDOWS_ACCURATE_WORKING_SET: u64 = 8_107 * MIB;
+    const WINDOWS_FAST_BEFORE: u64 = 12_162 * MIB;
     const WINDOWS_FAST_LOADED: u64 = 8_233 * MIB;
     const WINDOWS_FAST_WORKING_SET: u64 = 4_514 * MIB;
 
     /// What the probe found on Windows: credited only the estimate, the 9B
     /// loaded on a 16 GiB machine with a browser open is judged not to fit
     /// beside itself and gives way to the 4B, and the 4B loaded is judged to
-    /// leave room for the 9B, so the two swap before every document.
-    /// Credited the working set each server reports - what its exit gave
-    /// back - both judge the machine about as it would be with that server
-    /// stopped, and the 9B stays.
+    /// leave room for the 9B, even asked for the margin, so the two swap
+    /// before every document. Credited the working set each server reports,
+    /// which is what its exit gave back, both judge the machine about as it
+    /// would be with that server stopped, and the 9B stays.
     ///
     /// The first half, the plan's arithmetic with the pinned files' sizes,
     /// is what tells the two credits apart. The runtime half pins down that
@@ -10129,20 +10134,26 @@ mod runtime_tests {
         // loads the accurate model on the machine with nothing loaded, stands
         // it down once it is loaded, and brings it back from the quick one.
         let both = [ModelTier::Fast, ModelTier::Accurate];
-        let first = |available: u64| {
-            tiers::plan(ModelPreference::Automatic, &both, Some(available)).map(|plan| plan.first)
+        let first = |available: u64, loaded: Option<(ModelTier, u64)>| {
+            let memory = tiers::memory_for_plan(available, loaded);
+            tiers::plan(ModelPreference::Automatic, &both, Some(memory)).map(|plan| plan.first)
         };
-        assert_eq!(first(WINDOWS_NOTHING_LOADED), Some(ModelTier::Accurate));
+        assert_eq!(
+            first(WINDOWS_NOTHING_LOADED, None),
+            Some(ModelTier::Accurate)
+        );
+        let estimate = |tier, bytes| Some((tier, tiers::unload_gives_back(tier, bytes)));
         assert_eq!(
             first(
-                WINDOWS_ACCURATE_LOADED
-                    + tiers::unload_gives_back(ModelTier::Accurate, PINNED_ACCURATE_BYTES)
+                WINDOWS_ACCURATE_LOADED,
+                estimate(ModelTier::Accurate, PINNED_ACCURATE_BYTES)
             ),
             Some(ModelTier::Fast)
         );
         assert_eq!(
             first(
-                WINDOWS_FAST_LOADED + tiers::unload_gives_back(ModelTier::Fast, PINNED_FAST_BYTES)
+                WINDOWS_FAST_LOADED,
+                estimate(ModelTier::Fast, PINNED_FAST_BYTES)
             ),
             Some(ModelTier::Accurate)
         );
@@ -10237,10 +10248,75 @@ mod runtime_tests {
         assert_eq!(launched(&rig), [ModelTier::Accurate, ModelTier::Fast]);
     }
 
+    /// Pass 3's numbers carried to a machine just short of the floor with
+    /// nothing loaded (`bench/reports/windows-memory-2026-11-09`). Credited
+    /// what each server holds, the plan's figure there came out about
+    /// 400 MiB higher with the 4B loaded than with the 9B, so the 9B is stood
+    /// down and the loaded 4B, credited that alone, would make way for it
+    /// again before the next document. Asked for the margin, the 4B stays
+    /// through the queue, until the machine has the floor and the margin.
+    #[test]
+    fn a_machine_near_the_floor_keeps_the_quick_model_through_the_queue() {
+        let install = Install::new("tier-margin");
+        install.install_accurate();
+        let rig = Rig::new();
+        rig.server_holds(ModelTier::Accurate, Some(WINDOWS_ACCURATE_WORKING_SET));
+        rig.server_holds(ModelTier::Fast, Some(WINDOWS_FAST_WORKING_SET));
+        let world = World::new();
+        world.memory(Some(16 * 1024 * MIB));
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        verified(&runtime);
+        assert_eq!(launched(&rig), [ModelTier::Accurate]);
+
+        // What each load took from the available memory in pass 3. Carried
+        // to this machine, the 9B leaves 23 MiB available: the squeeze the
+        // floor is there to keep it out of.
+        let accurate_takes = WINDOWS_NOTHING_LOADED - WINDOWS_ACCURATE_LOADED;
+        let fast_takes = WINDOWS_FAST_BEFORE - WINDOWS_FAST_LOADED;
+        let nothing_loaded = 7_950 * MIB;
+        world.memory(Some(nothing_loaded - accurate_takes));
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
+        assert_eq!(launched(&rig), [ModelTier::Accurate, ModelTier::Fast]);
+
+        world.memory(Some(nothing_loaded - fast_takes));
+        assert!(
+            nothing_loaded - fast_takes + WINDOWS_FAST_WORKING_SET >= MIN_AVAILABLE_FOR_ACCURATE,
+            "credited the working set alone, the 4B would make way"
+        );
+        for _ in 0..3 {
+            let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+            assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
+        }
+        assert!(!runtime.take_provisional_upgrade(), "within the margin");
+        assert_eq!(
+            launched(&rig),
+            [ModelTier::Accurate, ModelTier::Fast],
+            "never swapped back"
+        );
+
+        let room = MIN_AVAILABLE_FOR_ACCURATE + tiers::UPGRADE_MARGIN - WINDOWS_FAST_WORKING_SET;
+        world.memory(Some(room - 1));
+        assert!(!runtime.take_provisional_upgrade(), "a byte short");
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
+        world.memory(Some(room));
+        assert!(runtime.take_provisional_upgrade());
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!(
+            (reading.tier, reading.provisional),
+            (ModelTier::Accurate, false)
+        );
+        assert_eq!(
+            launched(&rig),
+            [ModelTier::Accurate, ModelTier::Fast, ModelTier::Accurate]
+        );
+    }
+
     /// A server whose memory cannot be read is credited the estimate, as
-    /// every server was before: with the quick model loaded, the floor
-    /// exactly is room for the accurate one, a byte short is not. (The
-    /// fixture's accurate file is a few bytes, so its estimate alone is
+    /// every server was before: with the quick model loaded, the floor and
+    /// the margin exactly is room for the accurate one, a byte short is not.
+    /// (The fixture's accurate file is a few bytes, so its estimate alone is
     /// more than the floor; the quick one's is not.)
     #[test]
     fn a_server_that_cannot_say_what_it_holds_is_credited_the_estimate() {
@@ -10249,8 +10325,9 @@ mod runtime_tests {
         let rig = Rig::new();
         rig.server_holds(ModelTier::Fast, None);
         let estimate = tiers::unload_gives_back(ModelTier::Fast, MODEL_BYTES.len() as u64);
+        let room = MIN_AVAILABLE_FOR_ACCURATE + tiers::UPGRADE_MARGIN - estimate;
         let world = World::new();
-        world.memory(Some(MIN_AVAILABLE_FOR_ACCURATE - estimate - 1));
+        world.memory(Some(room - 1));
         let runtime = install.runtime_in(&rig, "1.0.0", &world);
         verified(&runtime);
         assert_eq!(launched(&rig), [ModelTier::Fast]);
@@ -10258,7 +10335,7 @@ mod runtime_tests {
 
         let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
         assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
-        world.memory(Some(MIN_AVAILABLE_FOR_ACCURATE - estimate));
+        world.memory(Some(room));
         let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
         assert_eq!(reading.tier, ModelTier::Accurate);
         assert_eq!(launched(&rig), [ModelTier::Fast, ModelTier::Accurate]);
