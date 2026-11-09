@@ -29,7 +29,8 @@ on:
         description: >-
           Comma-separated: internbench (the synthetic corpus), real1
           (sample.json), real2 (sample-heldout.json), real3 (sample-heldout2.json),
-          real4 (sample-heldout3.json)
+          real4 (sample-heldout3.json), fixtures (the fixture corpus, recorded
+          with intern-evaluate as fixtures/corpus-recording.json is)
         required: false
         default: internbench
         type: string
@@ -61,7 +62,7 @@ jobs:
   # The inputs become a matrix of candidate x set, after every value is
   # checked: a label is a slug because it names the job, the output directory
   # and the artifact; a URL is https; a SHA-256 is 64 hex digits; a set is
-  # one of the four. Nothing from the inputs is spliced into a shell line
+  # one of the six. Nothing from the inputs is spliced into a shell line
   # anywhere in this workflow: every step reads them from the environment.
   plan:
     name: Plan the matrix
@@ -88,6 +89,7 @@ jobs:
               "real2": "sample-heldout.json",
               "real3": "sample-heldout2.json",
               "real4": "sample-heldout3.json",
+              "fixtures": "",
           }
           problems = []
           try:
@@ -198,11 +200,11 @@ jobs:
           path: ${{ runner.temp }}/intern-linux-assets-cache
           key: linux-runtime-${{ runner.os }}-${{ hashFiles('scripts/fetch-linux-assets.sh', 'scripts/fetch-ocr-runtime.sh', 'src-tauri/resources/runtime-assets.json') }}
       - run: npm ci
-      # One build for both binaries. With two packages selected, cargo takes
-      # the feature as package/feature, and the native features belong to the
-      # worker alone.
+      # One build for every binary. With several packages selected, cargo
+      # takes the feature as package/feature, and the native features belong
+      # to the worker alone. The fixture corpus is recorded by intern-evaluate.
       - name: Build the parser worker and the benchmark
-        run: cargo build --locked --release -p intern-worker -p intern-bench --features intern-worker/windows-native
+        run: cargo build --locked --release -p intern-worker -p intern-bench -p intern-engine --features intern-worker/windows-native
       - name: Fetch and verify the pinned Linux runtime
         run: scripts/fetch-linux-assets.sh "${{ runner.temp }}/intern-linux-assets-cache"
       - name: Stage the runtime as the package lays it out
@@ -279,6 +281,7 @@ jobs:
       # (where the headline lines go) kept beside the report. The wall time
       # is the whole script: corpus generation and model load included.
       - name: Run InternBench live
+        if: matrix.set != 'fixtures'
         env:
           INTERN_RUNTIME_DIR: ${{ runner.temp }}/candidate-bench/stage/runtime
           INTERN_WORKER: ${{ github.workspace }}/target/release/intern-worker
@@ -290,6 +293,26 @@ jobs:
           started=$(date +%s)
           status=0
           scripts/run-internbench.sh "$OUT" -- --min-token-confidence 0.5 2>&1 | tee "$OUT/run.log" || status=$?
+          echo $(( $(date +%s) - started )) > "$OUT/wall-seconds.txt"
+          exit "$status"
+      # The fixture corpus, recorded the way docs/evaluation.md describes: the
+      # recording and the baseline at the accurate model's gate, which a
+      # person commits as fixtures/corpus-recording.json and
+      # fixtures/corpus-baseline.json after reading the report.
+      - name: Record the fixture corpus live
+        if: matrix.set == 'fixtures'
+        env:
+          INTERN_RUNTIME_DIR: ${{ runner.temp }}/candidate-bench/stage/runtime
+          INTERN_WORKER: ${{ github.workspace }}/target/release/intern-worker
+          INTERN_EVALUATE: ${{ github.workspace }}/target/release/intern-evaluate
+          THREADS: ${{ inputs.threads }}
+          LLAMA_SERVER_ARGS: ${{ inputs.extra_server_args }}
+          SERVER_MEMORY_FILE: ${{ runner.temp }}/candidate-bench/out/server-memory.txt
+          NOTE: commit ${{ github.sha }} on a GitHub runner
+        run: |
+          started=$(date +%s)
+          status=0
+          scripts/record-corpus.sh "$OUT" 2>&1 | tee "$OUT/run.log" || status=$?
           echo $(( $(date +%s) - started )) > "$OUT/wall-seconds.txt"
           exit "$status"
       - name: Summarize
@@ -355,6 +378,8 @@ jobs:
             ${{ runner.temp }}/candidate-bench/out/report.json
             ${{ runner.temp }}/candidate-bench/out/report.md
             ${{ runner.temp }}/candidate-bench/out/recording.json
+            ${{ runner.temp }}/candidate-bench/out/corpus-recording.json
+            ${{ runner.temp }}/candidate-bench/out/corpus-baseline.json
             ${{ runner.temp }}/candidate-bench/out/run.log
             ${{ runner.temp }}/candidate-bench/out/llama-server.log
             ${{ runner.temp }}/candidate-bench/out/server-memory.txt
