@@ -232,12 +232,22 @@ pub fn date_match_positions(iso_date: &str, normalized: &str) -> Vec<usize> {
 /// Byte offsets in `normalized` where `iso_date` is written as
 /// [`date_match_positions`] finds it, or in a looser form a scan or a stamp
 /// leaves: a rubber stamp's day with its figures set apart ("SEP 1 8
-/// 2015"). Validation reads the model's date this way, and only validation:
-/// the index and the prompt read dates as [`date_match_positions`] does, so
-/// a recorded reply is asked the same question.
+/// 2015"), a comma that lost its space ("November 22,1923"), an invoice's
+/// two-figure year after a month in words ("02-Jun-17"), a long month OCR
+/// misread by one letter ("Decenber 18, 1907"). Validation reads the
+/// model's date this way, and only validation: the index and the prompt
+/// read dates as [`date_match_positions`] does, so a recorded reply is
+/// asked the same question, and a two-figure year's century is the
+/// reply's, never offered on its own.
 pub(crate) fn read_date_positions(iso_date: &str, normalized: &str) -> Vec<usize> {
+    let loose = loose_spellings(iso_date);
     let mut positions = date_match_positions(iso_date, normalized);
-    positions.extend(spelled_at(&loose_spellings(iso_date), normalized));
+    positions.extend(spelled_at(&loose, normalized));
+    let mended = with_months_mended(normalized);
+    if mended != normalized {
+        positions.extend(date_match_positions(iso_date, &mended));
+        positions.extend(spelled_at(&loose, &mended));
+    }
     positions.sort_unstable();
     positions.dedup();
     positions
@@ -256,12 +266,18 @@ fn loose_spellings(iso_date: &str) -> Vec<String> {
     let Some((year, month, day)) = iso_parts(iso_date) else {
         return Vec::new();
     };
+    let short_year = &year[2..];
+    let day_unpadded = day.trim_start_matches('0');
     let mut spellings = Vec::new();
     for month_word in month_words(month) {
         if let [first, second] = day.as_bytes() {
             let (first, second) = (char::from(*first), char::from(*second));
             spellings.push(format!("{month_word} {first} {second} {year}"));
             spellings.push(format!("{first} {second} {month_word} {year}"));
+        }
+        for day_form in [day_unpadded, day] {
+            spellings.push(format!("{month_word} {day_form},{year}"));
+            spellings.push(format!("{day_form}-{month_word}-{short_year}"));
         }
     }
     spellings
@@ -375,6 +391,62 @@ pub(crate) fn date_statements(iso_date: &str, normalized: &str) -> Vec<(usize, D
         }
     }
     statements
+}
+
+/// The months a reading can misspell by one letter and still be read: the
+/// long ones, where one wrong letter leaves no other word ("Decenber").
+const LONG_MONTHS: [&str; 7] = [
+    "january",
+    "february",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+];
+
+/// The long month a word of the same length is, but for one letter OCR
+/// misread: "decenber" is "december". A month spelled right is not mended.
+fn misread_month(word: &str) -> Option<&'static str> {
+    LONG_MONTHS.iter().copied().find(|month| {
+        word.len() == month.len()
+            && word.is_ascii()
+            && word
+                .bytes()
+                .zip(month.bytes())
+                .filter(|(read, right)| read != right)
+                .count()
+                == 1
+    })
+}
+
+/// `normalized` with each long month OCR misread by one letter spelled
+/// right, when a day follows it: the same length, so every offset into it
+/// is an offset into the text as read.
+fn with_months_mended(normalized: &str) -> String {
+    if !normalized.is_ascii() {
+        return normalized.to_owned();
+    }
+    let mut mended = normalized.to_owned();
+    let mut start = None;
+    let bytes = normalized.as_bytes();
+    for at in 0..=bytes.len() {
+        let letter = bytes.get(at).is_some_and(u8::is_ascii_alphabetic);
+        match (start, letter) {
+            (None, true) => start = Some(at),
+            (Some(from), false) => {
+                start = None;
+                let followed_by_day = normalized[at..]
+                    .trim_start_matches([' ', '.'])
+                    .starts_with(|character: char| character.is_ascii_digit());
+                if followed_by_day && let Some(month) = misread_month(&normalized[from..at]) {
+                    mended.replace_range(from..at, month);
+                }
+            }
+            _ => {}
+        }
+    }
+    mended
 }
 
 /// The ordinary human spellings of an ISO date, each with how it is written.
@@ -669,6 +741,24 @@ mod tests {
             stamped_dates("SEP 1 8 2015 OFFICE OF"),
             vec![("2015-09-18".to_owned(), 1)]
         );
+    }
+
+    /// OCR misreads a long month by a letter ("Decenber") or loses the
+    /// space after a comma ("November 22,1923"); an invoice writes
+    /// "02-Jun-17". Validation reads each date, and the index's reading of
+    /// dates, which the prompt is built from, is unchanged. A misread month
+    /// with no day after it is no date.
+    #[test]
+    fn a_misread_or_run_together_date_is_read() {
+        let read = |iso: &str, text: &str| !read_date_positions(iso, &normalize(text)).is_empty();
+        assert!(read("1907-12-18", "DAYTON, OHIO Decenber 18, 1907."));
+        assert!(!read("1907-12-18", "a decenber of 18, 1907"));
+        assert!(read("1923-11-22", "Los Angeles, Cal.,_November 22,1923"));
+        assert!(read("2017-06-02", "Invoice Date: 02-JuN-17"));
+        assert!(!read("2017-06-02", "Lot 02-Jun-175"));
+        assert!(extract_stated_dates("DAYTON, OHIO Decenber 18, 1907.").is_empty());
+        assert!(extract_stated_dates("Invoice Date: 02-JuN-17").is_empty());
+        assert!(!date_matches_evidence("1923-11-22", "November 22,1923"));
     }
 
     /// Every spelling here came from a real document shape: forms that
