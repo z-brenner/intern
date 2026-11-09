@@ -84,8 +84,8 @@ cases could calibrate it. InternBench is that corpus.
 ### Calibrated on InternBench (October 2026)
 
 InternBench's 77 documents have many more ready-but-wrong readings than the
-fixture corpus. Below are two recorded Qwen3.5 2B runs on the packaged runtime (Prism b10826, 4
-threads, Linux). Run A was recorded on October 27, run B on October 29. Both are re-scored with the party and
+fixture corpus. Below are two recorded Qwen3.5 2B runs on the runtime packaged then (the
+PrismML fork's b10826, 4 threads, Linux). Run A was recorded on October 27, run B on October 29. Both are re-scored with the party and
 issuer rules of October 2026, with `--min-token-confidence` applied to their
 recorded probabilities. "Unsafe" counts wrong names marked ready; "lost" counts
 right names the gate sends to review.
@@ -121,7 +121,7 @@ kept none, so its CI baseline is unchanged.
 **Latency.** The first fixture-corpus run could not separate the cost from
 noise. Mean inference was 20.7 s without logprobs (first run, cold), 17.2 s with
 them, and 15.1 s for a repeat without them on a warm server. It was then measured
-on the packaged runtime (Prism b10826, 4 threads, Linux). The same 26 recorded
+on the runtime packaged then (the PrismML fork's b10826, 4 threads, Linux). The same 26 recorded
 InternBench requests were replayed against a warm server, once as recorded with
 `logprobs` and once with it stripped (`scripts/bonsai-eval/replay-requests.py
 --strip-logprobs`). They took 23.71 s and 23.72 s per request. Generation alone was

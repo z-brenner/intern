@@ -723,7 +723,7 @@ named as it was keeps whatever the reviewer had typed.
 | | |
 | --- | --- |
 | Models | Qwen3.5 9B, Q4_K_M GGUF (5.29 GiB), the accurate model; Qwen3.5 4B, Q4_K_M GGUF (2.55 GiB), the quick one, which stands in while memory is short and reads first on a new install. One loaded at a time |
-| Runtime | two llama.cpp builds, CPU only: upstream `b11946` runs both models; the PrismML fork, release `prism-b10826-c9c34bc`, is still packaged and runs nothing the manifest pins |
+| Runtime | llama.cpp `b11946` (ggml-org), CPU only, in `llama-upstream/` of the sidecar folder; both models run on it |
 | Context | 8,192 tokens |
 | Threads | every logical processor, at most 8, for generation and for prompt processing alike |
 | Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below) |
@@ -825,18 +825,28 @@ model reads; with no other model, setup reports the failure as it always has.
 A paused download stays paused across restarts (a `<model>.paused` marker
 beside its partial file).
 
-Both models run on the upstream runtime (`tiers::server_runtime`). Upstream
-llama.cpp `b11946` read Qwen3.5 2B 19% faster than Prism on Linux, at the same
-accuracy
+Both models run on upstream llama.cpp `b11946`, the one llama.cpp build the
+packages carry, in a `llama-upstream` folder inside the sidecar folder - the
+install root on Windows, the `runtime` folder on Linux
+(`tiers::UPSTREAM_RUNTIME_FOLDER`). It read Qwen3.5 2B 19% faster than the
+PrismML fork the packages also carried until alpha.14, at the same accuracy
 ([`bench/reports/speed-linux-cpu-2026-10-29`](../bench/reports/speed-linux-cpu-2026-10-29/README.md)),
-and 25% faster on Windows. Prism's llama-server, which only the Bonsai 2
-models' PQ2_0 weights needed, is still packaged where the one runtime always
-was, in the sidecar folder - the install root on Windows, the `runtime` folder
-on Linux - and upstream's is in a `llama-upstream` folder inside it. Both
-builds name their CPU backends `ggml-cpu-*`, and ggml loads them from the
-executable's folder and the current directory, so each server is started in
-its own folder. A runtime that is missing fails to start like any other
-server, and the tiers that run on it are set aside.
+and 25% faster on Windows; the fork, which only the Bonsai 2 models' PQ2_0
+weights needed, ran nothing the manifest pinned from alpha.13 on and was
+dropped from both packages in alpha.15 (43 MB of the Windows install, 40 MB
+of the Linux one). ggml loads its `ggml-cpu-*` backends from the executable's
+folder and the current directory, so the server is started in its own folder.
+A missing server fails to start like any other, and the tier that needed it
+is set aside.
+
+An update installs over the old files: the Windows updater runs the new
+installer with `/UPDATE`, and the NSIS template then skips its uninstall. The
+fork's 22 files at the install root would stay, and outlive an uninstall, so
+the installer's pre-install hook (`src-tauri/windows/hooks.nsh`) deletes them
+by name - the names the alpha.11 to alpha.14 runtime inventories list there
+as llama.cpp's - and only in a folder that already holds `Intern.exe`. A
+`.deb` upgrade needs nothing of the kind: dpkg removes the files the old
+package had and the new one does not.
 
 One llama-server runs at a time. A document planned onto the model that is not
 loaded unloads it and loads the other under the same `lifecycle` lock and

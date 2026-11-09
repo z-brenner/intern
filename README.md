@@ -549,11 +549,10 @@ results.
 
 ## Windows runtime assets and installer
 
-From PowerShell on Windows, fetch the exact llama.cpp builds (the PrismML fork's
-`prism-b10826-c9c34bc` release, which the fast model runs on, and upstream
-llama.cpp `b11946`, which the accurate model runs on), PDFium chromium/7881,
-Tesseract 5.5.2, tessdata, ONNX Runtime 1.30.0 and OCR model assets
-([OCR](docs/ocr.md) says which models and why):
+From PowerShell on Windows, fetch the exact llama.cpp build (upstream llama.cpp
+`b11946`, which both local models run on, installed in `llama-upstream\`),
+PDFium chromium/7881, Tesseract 5.5.2, tessdata, ONNX Runtime 1.30.0 and OCR
+model assets ([OCR](docs/ocr.md) says which models and why):
 
 ```powershell
 cargo build --locked -p intern-worker --release --features windows-native
