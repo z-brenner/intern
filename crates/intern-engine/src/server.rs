@@ -112,6 +112,12 @@ impl Default for ServerOptions {
 pub trait ProcessControl: Send {
     fn has_exited(&mut self) -> EngineResult<bool>;
     fn terminate_and_wait(&mut self) -> EngineResult<()>;
+    /// What stopping the process would add to the memory the machine reports
+    /// available ([`crate::tiers::memory_released_by`]), in bytes; `None`
+    /// when it cannot be read.
+    fn memory_released(&self) -> Option<u64> {
+        None
+    }
 }
 
 pub trait ProcessLauncher: Send + Sync {
@@ -314,6 +320,15 @@ impl LlamaServer {
             .map_err(|_| start_failed())?
             .terminate_and_wait()
     }
+
+    /// What stopping the server would give back to the memory the machine
+    /// reports available, read from the live process: on Windows its working
+    /// set, the model's touched weights included; on Linux its anonymous
+    /// memory ([`crate::tiers::memory_released_by`]). `None` when it cannot
+    /// be read, and the caller falls back to an estimate.
+    pub fn memory_released(&self) -> Option<u64> {
+        self.process.lock().ok()?.memory_released()
+    }
 }
 
 impl Drop for LlamaServer {
@@ -389,6 +404,10 @@ impl ProcessControl for StdChildProcess {
         }
         kill_result.map_err(|_| start_failed())?;
         Err(start_failed())
+    }
+
+    fn memory_released(&self) -> Option<u64> {
+        crate::tiers::memory_released_by(&self.0)
     }
 }
 

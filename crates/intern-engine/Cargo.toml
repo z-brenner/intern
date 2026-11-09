@@ -41,10 +41,12 @@ unicode-normalization = "=0.1.24"
 
 # A job object is the only way to make llama-server and the parser worker die
 # with Intern however Intern ends - `std::process::exit`, a panic, or a crash -
-# and there is no safe wrapper for it in the tree. Pinned exactly, and already
-# built as a transitive dependency of Tauri, so it costs no extra compilation.
+# and there is no safe wrapper for it in the tree. The tier plan reads the
+# machine's available memory and the loaded server's working set through it
+# too (`tiers.rs`). Pinned exactly, and already built as a transitive
+# dependency of Tauri, so it costs no extra compilation.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
 # The Linux counterpart: `prctl(PR_SET_PDEATHSIG)` in the child before it
 # runs, which std does not wrap. Pinned exactly, and already built for half the
