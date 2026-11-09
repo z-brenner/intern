@@ -9,21 +9,37 @@ name: Runtime speed on Windows
 # Laboratory measurement only: it gates nothing and publishes nothing. See
 # bench/reports/speed-linux-cpu-2026-10-29.
 
-# Run by hand (Actions > Runtime speed on Windows > Run workflow): it takes
-# about 70 minutes of a Windows runner, so no push or pull request starts it.
+# With probe set to memory it measures memory instead of speed: what each
+# tier's loaded server takes out of Windows' available physical memory, and
+# what stopping it gives back, set against the tier plan's arithmetic
+# (scripts/probe-windows-memory.ps1, bench/reports/windows-memory-2026-11-09).
+
+# Run by hand (Actions > Runtime speed on Windows > Run workflow): the speed
+# run takes about 70 minutes of a Windows runner and the memory probe about
+# 20, so no push or pull request starts either.
 on:
   workflow_dispatch:
+    inputs:
+      probe:
+        description: What to measure
+        required: false
+        default: speed
+        type: choice
+        options:
+          - speed
+          - memory
 
 permissions:
   contents: read
 
 concurrency:
-  group: runtime-speed-${{ github.ref }}
+  group: runtime-speed-${{ github.ref }}-${{ inputs.probe }}
   cancel-in-progress: true
 
 jobs:
   windows-runtime-speed:
     name: Windows runtime speed (Prism vs upstream llama.cpp, and the fast tier)
+    if: inputs.probe != 'memory'
     runs-on: windows-latest
     timeout-minutes: 180
     env:
@@ -131,4 +147,49 @@ jobs:
           path: |
             lab/*.json
             lab/*.log
+          retention-days: 30
+
+  windows-memory:
+    name: Windows memory probe (available memory against the loaded server's working set)
+    if: inputs.probe == 'memory'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      UPSTREAM_URL: https://github.com/ggml-org/llama.cpp/releases/download/b11946/llama-b11946-bin-win-cpu-x64.zip
+      UPSTREAM_SHA256: 8a702bb07c873b133c56eb3acd92a48d7c5c9ad339c6435eddc5185e46e1a043
+      REQUESTS: bench/reports/speed-linux-cpu-2026-10-29/requests
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Fetch both pinned models and the upstream runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          function Get-Pinned([string]$Url, [string]$Sha256, [string]$Path) {
+            Invoke-WebRequest -Uri $Url -OutFile $Path
+            $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+            if ($Actual -ne $Sha256) { throw "$Path has SHA-256 $Actual, not the pinned $Sha256" }
+          }
+          New-Item -ItemType Directory lab -Force | Out-Null
+          $Manifest = Get-Content src-tauri/resources/model-manifest.json -Raw | ConvertFrom-Json
+          foreach ($Tier in @("accurate", "fast")) {
+            $Model = ($Manifest.models | Where-Object tier -eq $Tier).files | Where-Object role -eq "model"
+            Get-Pinned $Model.url $Model.sha256 "lab\$Tier.gguf"
+          }
+          Get-Pinned $env:UPSTREAM_URL $env:UPSTREAM_SHA256 "lab\upstream.zip"
+          Expand-Archive lab\upstream.zip lab\upstream
+          Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfCores, NumberOfLogicalProcessors | Format-List
+          Get-CimInstance Win32_PageFileUsage | Select-Object Name, AllocatedBaseSize, CurrentUsage | Format-List
+      - name: Probe memory (accurate, then fast)
+        shell: pwsh
+        run: |
+          $Server = @(Get-ChildItem -LiteralPath lab\upstream -Recurse -File -Filter "llama-server.exe")[0].FullName
+          ./scripts/probe-windows-memory.ps1 -Server $Server -Accurate lab\accurate.gguf -Fast lab\fast.gguf `
+            -Requests $env:REQUESTS -Tiers crates/intern-engine/src/tiers.rs -Out lab\memory
+      - name: Upload the measurements
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-memory-probe
+          path: lab/memory/
           retention-days: 30
