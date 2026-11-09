@@ -6114,7 +6114,9 @@ fn organization_before_kind(line: &str) -> Option<String> {
 /// The words of a unit that read, loosely, as `loose`: the document's own
 /// spelling of a name the index found. A "The" that opens the name's line
 /// is the name's own ("THE MCGRAW-HILL COMPANIES, INC.,"), as a caption, a
-/// letterhead or an address writes it.
+/// letterhead or an address writes it: the name ends its line or its cell,
+/// or a comma closes it. A sentence that opens with the name ("The Acme
+/// Widget Company agrees ...") keeps its "The" to itself.
 fn written_span(unit: &EvidenceUnit, loose: &str) -> Option<String> {
     unit.text.lines().find_map(|line| {
         let tokens = line.split_whitespace().collect::<Vec<_>>();
@@ -6122,12 +6124,16 @@ fn written_span(unit: &EvidenceUnit, loose: &str) -> Option<String> {
             (start + 1..=tokens.len().min(start + 10)).find_map(|end| {
                 let span = tokens[start..end].join(" ");
                 (normalize_loosely(&span) == loose).then(|| {
+                    let closed = end == tokens.len()
+                        || tokens[end] == "|"
+                        || span.ends_with([',', ';', ':']);
                     let span = span.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '"'));
                     let opens_line = |at: usize| at == 0 || tokens[at - 1] == "|";
                     match start.checked_sub(1) {
                         Some(article)
                             if tokens[article].eq_ignore_ascii_case("the")
-                                && opens_line(article) =>
+                                && opens_line(article)
+                                && closed =>
                         {
                             format!("{} {span}", tokens[article])
                         }
@@ -12732,6 +12738,17 @@ Rickmansworth,
         );
         assert_eq!(
             written_span(unit("Acme"), "acme widget company").as_deref(),
+            Some("Acme Widget Company")
+        );
+        // A sentence that opens with the name keeps its "The".
+        let index = index_of("The Acme Widget Company agrees to pay the invoice in full.");
+        let sentence = index
+            .units()
+            .iter()
+            .find(|unit| unit.text.contains("Acme"))
+            .expect("unit");
+        assert_eq!(
+            written_span(sentence, "acme widget company").as_deref(),
             Some("Acme Widget Company")
         );
     }
