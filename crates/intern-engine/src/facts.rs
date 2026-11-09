@@ -56,8 +56,8 @@ use crate::domain::{
 };
 use crate::evidence::{
     Segments, contains_whole, date_match_positions, digest_contains, digest_contains_date,
-    digest_contains_loosely, extract_stated_dates, is_invisible, normalize, normalize_loosely,
-    numeric_date_order, numeric_dates, stated_dates,
+    digest_contains_loosely, digest_reads_date, extract_stated_dates, is_invisible, normalize,
+    normalize_loosely, numeric_date_order, numeric_dates, read_date_positions, stated_dates,
 };
 use crate::index::{EvidenceIndex, EvidenceUnit, UnitKind};
 use crate::infer::{infer_date_role, reads_as_signature_date, repair_issued_relation};
@@ -641,20 +641,58 @@ pub fn validate_facts_at(
     let mut date_supported = true;
     let mut replaced = false;
     let mut withheld_as_deadline = false;
-    if let Some(date) = present(facts.document_date.as_deref()) {
-        let found = if crate::evidence::is_valid_iso_date(date) {
+    let mut read_loosely: Option<String> = None;
+    if let Some(replied) = present(facts.document_date.as_deref()) {
+        let found_at = |date: &str, loosely: bool| {
+            if !crate::evidence::is_valid_iso_date(date) {
+                return Found {
+                    support: Support::Unsupported,
+                    ..Found::absent()
+                };
+            }
+            let positions = |line: &str| {
+                if loosely {
+                    read_date_positions(date, line)
+                } else {
+                    date_match_positions(date, line)
+                }
+            };
             find(
                 scope,
                 &facts.date_evidence,
-                |view| digest_contains_date(view, date),
-                |unit| line_where(unit, |line| !date_match_positions(date, line).is_empty()),
+                |view| {
+                    if loosely {
+                        digest_reads_date(view, date)
+                    } else {
+                        digest_contains_date(view, date)
+                    }
+                },
+                |unit| line_where(unit, |line| !positions(line).is_empty()),
             )
-        } else {
-            Found {
-                support: Support::Unsupported,
-                ..Found::absent()
-            }
         };
+        let mut found = found_at(replied, false);
+        let mut date = replied.to_owned();
+        // A date a stamp writes with its day's figures set apart ("SEP 1 8
+        // 2015") is read, though less surely than one written out: the
+        // name waits for a person. A reply that took the stamp's first
+        // figure for the day ("2015-09-01") cited the stamp for a date it
+        // does not state; the stamp's own date stands in, when the cited
+        // line states that one date only.
+        if found.support == Support::Unsupported {
+            let loose = found_at(replied, true);
+            if loose.support != Support::Unsupported {
+                found = loose;
+                read_loosely = Some(date.clone());
+            } else if let Some(stamped) = stamp_date_cited(scope, &facts.date_evidence, replied) {
+                let repaired = found_at(&stamped, true);
+                if repaired.support != Support::Unsupported {
+                    found = repaired;
+                    date = stamped;
+                    read_loosely = Some(date.clone());
+                }
+            }
+        }
+        let date = date.as_str();
         support.document_date = found.support;
         support.miscited_ids += found.miscited;
         if found.support == Support::Unsupported {
@@ -827,6 +865,11 @@ pub fn validate_facts_at(
     }
     if document_date.is_none() && date_supported && !withheld_as_deadline {
         push(&mut reasons, ReviewReason::DateMissing);
+    }
+    // A date read only loosely is not written out in the document as a
+    // date is: the name keeps it, and a person confirms it.
+    if read_loosely.is_some() && document_date == read_loosely {
+        push(&mut reasons, ReviewReason::DateUnsupported);
     }
     if let Some(date) = document_date.as_deref()
         && !year_is_plausible(date, current_year)
@@ -1879,6 +1922,33 @@ pub fn validate_facts_at(
             evidence: references,
         }),
     }
+}
+
+/// The date of a rubber stamp a reply cited for `replied` and misread: the
+/// cited line states one date only, a stamp's with its day's figures set
+/// apart, in `replied`'s month and year, and `replied`'s day is the stamp
+/// day's first figure ("SEP 1 8 2015" read as 2015-09-01).
+fn stamp_date_cited(
+    scope: &ValidationScope<'_>,
+    cited: &[String],
+    replied: &str,
+) -> Option<String> {
+    let (year_month, day) = replied.rsplit_once('-')?;
+    let day = day.parse::<u32>().ok()?;
+    scope.cited_units(cited).into_iter().find_map(|unit| {
+        unit.text.lines().find_map(|line| {
+            let stamps = crate::evidence::stamped_dates(line);
+            let [(stamped, first)] = stamps.as_slice() else {
+                return None;
+            };
+            (extract_stated_dates(line)
+                .iter()
+                .all(|other| other == stamped)
+                && stamped.starts_with(&format!("{year_month}-"))
+                && *first == day)
+                .then(|| stamped.clone())
+        })
+    })
 }
 
 /// Keeps the line that shows a found fact as evidence, once.
@@ -12026,5 +12096,41 @@ Rickmansworth,
             ),
             (PartyRelation::To, vec!["Nike, Inc.".to_owned()])
         );
+    }
+
+    /// A reply that read a stamp's "SEP 1 8 2015" as September 1 cited a
+    /// line that states September 18 only: the stamp's date stands in.
+    #[test]
+    fn a_stamp_date_misread_by_its_first_figure_is_repaired() {
+        let notice = "UNITED STATES ENVIRONMENTAL PROTECTION AGENCY\n\nSEP 1 8 2015 OFFICE OF\n\
+                      ENFORCEMENT\n\nVolkswagen AG\n\nRe: Notice of Violation\n\n\
+                      Dear Mr. Geanacopoulos:\n\nThe EPA has investigated Volkswagen AG.";
+        for (replied, expected) in [
+            ("2015-09-01", Some("2015-09-18")),
+            ("2015-09-18", Some("2015-09-18")),
+            ("2015-09-08", None),
+            ("2015-10-01", None),
+        ] {
+            let (outcome, _) = facts_for(notice, |index| ModelFacts {
+                document_type: Some("Notice of Violation".into()),
+                document_date: Some(replied.into()),
+                date_evidence: vec![id_of(index, "SEP 1 8")],
+                parties: vec![party(
+                    "Volkswagen AG",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Volkswagen AG")],
+                )],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.document_date.as_deref(),
+                expected,
+                "{replied}"
+            );
+            assert!(
+                outcome.reasons.contains(&ReviewReason::DateUnsupported),
+                "{replied}"
+            );
+        }
     }
 }

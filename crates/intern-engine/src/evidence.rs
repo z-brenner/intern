@@ -229,6 +229,109 @@ pub fn date_match_positions(iso_date: &str, normalized: &str) -> Vec<usize> {
     positions
 }
 
+/// Byte offsets in `normalized` where `iso_date` is written as
+/// [`date_match_positions`] finds it, or in a looser form a scan or a stamp
+/// leaves: a rubber stamp's day with its figures set apart ("SEP 1 8
+/// 2015"). Validation reads the model's date this way, and only validation:
+/// the index and the prompt read dates as [`date_match_positions`] does, so
+/// a recorded reply is asked the same question.
+pub(crate) fn read_date_positions(iso_date: &str, normalized: &str) -> Vec<usize> {
+    let mut positions = date_match_positions(iso_date, normalized);
+    positions.extend(spelled_at(&loose_spellings(iso_date), normalized));
+    positions.sort_unstable();
+    positions.dedup();
+    positions
+}
+
+/// Whether a digest writes `iso_date` as [`read_date_positions`] reads it.
+pub(crate) fn digest_reads_date(digest: &impl Segments, iso_date: &str) -> bool {
+    digest
+        .segments()
+        .iter()
+        .any(|segment| !read_date_positions(iso_date, &normalize(segment)).is_empty())
+}
+
+/// The looser spellings of an ISO date [`read_date_positions`] reads.
+fn loose_spellings(iso_date: &str) -> Vec<String> {
+    let Some((year, month, day)) = iso_parts(iso_date) else {
+        return Vec::new();
+    };
+    let mut spellings = Vec::new();
+    for month_word in month_words(month) {
+        if let [first, second] = day.as_bytes() {
+            let (first, second) = (char::from(*first), char::from(*second));
+            spellings.push(format!("{month_word} {first} {second} {year}"));
+            spellings.push(format!("{first} {second} {month_word} {year}"));
+        }
+    }
+    spellings
+}
+
+/// An ISO date's year, month number and two-figure day.
+fn iso_parts(iso_date: &str) -> Option<(&str, usize, &str)> {
+    if !is_valid_iso_date(iso_date) {
+        return None;
+    }
+    let month = iso_date[5..7].parse::<usize>().ok()?;
+    Some((&iso_date[0..4], month, &iso_date[8..10]))
+}
+
+/// A month's name as documents write it: whole, cut to three or four
+/// letters, with or without a stop.
+fn month_words(month: usize) -> Vec<String> {
+    let Some(name) = MONTH_NAMES.get(month.wrapping_sub(1)) else {
+        return Vec::new();
+    };
+    let mut words = vec![(*name).to_owned()];
+    for length in [3, 4] {
+        if length < name.len() {
+            let cut = &name[..length];
+            for word in [cut.to_owned(), format!("{cut}.")] {
+                if !words.contains(&word) {
+                    words.push(word);
+                }
+            }
+        }
+    }
+    words
+}
+
+const MONTH_NAMES: [&str; 12] = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+];
+
+/// Where any of `spellings` stands in `normalized` with no digit running
+/// into either end.
+fn spelled_at(spellings: &[String], normalized: &str) -> Vec<usize> {
+    let bytes = normalized.as_bytes();
+    let mut found = Vec::new();
+    for spelling in spellings {
+        let mut from = 0;
+        while let Some(at) = normalized[from..].find(spelling.as_str()) {
+            let position = from + at;
+            let end = position + spelling.len();
+            let digit_before = position > 0 && bytes[position - 1].is_ascii_digit();
+            let digit_after = bytes.get(end).is_some_and(u8::is_ascii_digit);
+            if !digit_before && !digit_after {
+                found.push(position);
+            }
+            from = position + spelling.chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    found
+}
+
 /// How one statement of a date is written, which decides whether a reader
 /// could take it for a different date.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -543,6 +646,29 @@ mod tests {
             "2026-04-01",
             "the term of this agreement"
         ));
+    }
+
+    /// A rubber stamp sets the day's figures apart ("SEP 1 8 2015"):
+    /// validation reads its date, and the index's reading of dates, which
+    /// the prompt is built from, is unchanged. A stray pair of figures in
+    /// prose is no date.
+    #[test]
+    fn a_stamps_date_with_its_figures_apart_is_read() {
+        let read = |iso: &str, text: &str| !read_date_positions(iso, &normalize(text)).is_empty();
+        assert!(read("2015-09-18", "SEP 1 8 2015 OFFICE OF"));
+        assert!(read("2007-04-24", "DATE APR 2 4 2007"));
+        assert!(read("1974-12-28", "RECEIVED 2 8 DEC 1974"));
+        assert!(read("2015-04-30", "APR. 3 0 2015"));
+        assert!(read("2026-04-01", "April 1, 2026"));
+        assert!(!read("2015-09-01", "SEP 1 8 2015"));
+        assert!(!read("2015-09-18", "SEP 1 8 20150"));
+        assert!(extract_stated_dates("SEP 1 8 2015 OFFICE OF").is_empty());
+        assert!(!date_matches_evidence("2015-09-18", "SEP 1 8 2015"));
+        assert!(stamped_dates("in March 1 2 copies were sent").is_empty());
+        assert_eq!(
+            stamped_dates("SEP 1 8 2015 OFFICE OF"),
+            vec![("2015-09-18".to_owned(), 1)]
+        );
     }
 
     /// Every spelling here came from a real document shape: forms that
@@ -904,6 +1030,67 @@ pub fn extract_stated_dates(line: &str) -> Vec<String> {
         }
     }
     found
+}
+
+/// The day and the year of a rubber stamp's date whose day is set as two
+/// figures apart, starting at `tokens[at]`: "1 8 2015" after "SEP" is the
+/// 18th. Each figure is one digit, and a four-digit year follows them.
+fn stamped_day(tokens: &[&str], at: usize) -> Option<(u32, u32)> {
+    let day = stamp_day(tokens.get(at)?, tokens.get(at + 1)?)?;
+    let year_token = tokens.get(at + 2)?.trim_end_matches('.');
+    let year = year_token.parse::<u32>().ok()?;
+    (year_token.len() == 4 && (1000..=2999).contains(&year)).then_some((day, year))
+}
+
+/// The day two single figures set apart make: "1" and "8" are the 18th.
+fn stamp_day(first: &str, second: &str) -> Option<u32> {
+    let digit = |token: &str| {
+        (token.len() == 1)
+            .then(|| token.chars().next()?.to_digit(10))
+            .flatten()
+    };
+    let day = digit(first)? * 10 + digit(second)?;
+    (1..=31).contains(&day).then_some(day)
+}
+
+/// The dates a line states as a rubber stamp does, with the day's figures
+/// set apart ("SEP 1 8 2015"), each with the first figure of its day: what
+/// a reader that took the figures apart reads as the day.
+pub(crate) fn stamped_dates(line: &str) -> Vec<(String, u32)> {
+    let normalized = normalize(line);
+    let tokens: Vec<&str> = normalized
+        .split_whitespace()
+        .map(|token| {
+            token.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '(' | ')' | '"' | '\''))
+        })
+        .collect();
+    let mut found = Vec::new();
+    for index in 0..tokens.len() {
+        let Some((day, year)) = stamped_day(&tokens, index + 1) else {
+            continue;
+        };
+        let Some(month) = written_month(tokens[index]) else {
+            continue;
+        };
+        let iso = format!("{year:04}-{month:02}-{day:02}");
+        if is_valid_iso_date(&iso) {
+            found.push((iso, day / 10));
+        }
+    }
+    found
+}
+
+/// The number of a month written out or abbreviated: "sep", "sept.",
+/// "september".
+fn written_month(token: &str) -> Option<usize> {
+    let token = token.trim_end_matches('.');
+    MONTH_NAMES
+        .iter()
+        .position(|month| {
+            *month == token
+                || (token.len() >= 3 && month.len() > token.len() && month.starts_with(token))
+        })
+        .map(|month| month + 1)
 }
 
 /// A token shaped like a numeric date - "04/30/2025", "30.04.2025",
