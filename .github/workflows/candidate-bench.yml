@@ -13,17 +13,26 @@ name: Candidate model benchmark on Linux
 # runner's CPU is whatever the fleet hands out, so compare runs on the same
 # CPU model (the summary names it), and treat the times as relative.
 
-# Run by hand (Actions > Candidate model benchmark on Linux > Run workflow).
-# No push or pull request starts it: a 2B model takes about an hour of a
-# runner per set, a 9B model several, and nothing here needs to run twice.
+# Run by hand (Actions > Candidate model benchmark on Linux > Run workflow),
+# and once a week on main: the manifest's accurate model on InternBench and
+# the four real-document sets, so a change merged to main is measured live
+# within a week, the real sets' recordings are made again before the last
+# ones expire, and a prompt change's re-recording is one download away
+# (bench/realdocs/README.md). No push or pull request starts it: a 2B model
+# takes about an hour of a runner per set, a 9B model several.
 on:
+  schedule:
+    - cron: "23 3 * * 0"
   workflow_dispatch:
     inputs:
       candidates:
         description: >-
           JSON array of {"label", "url", "sha256"}: a slug ([a-z0-9._-]), the
-          GGUF's https URL (pin a commit on Hugging Face), and its SHA-256
-        required: true
+          GGUF's https URL (pin a commit on Hugging Face), and its SHA-256;
+          empty for the accurate model src-tauri/resources/model-manifest.json
+          pins
+        required: false
+        default: ""
         type: string
       sets:
         description: >-
@@ -63,6 +72,8 @@ jobs:
   # and the artifact; a URL is https; a SHA-256 is 64 hex digits; a set is
   # one of the four. Nothing from the inputs is spliced into a shell line
   # anywhere in this workflow: every step reads them from the environment.
+  # A scheduled run has no inputs: it takes the dispatch defaults, with every
+  # set, and no candidates means the manifest's accurate model.
   plan:
     name: Plan the matrix
     runs-on: ubuntu-24.04
@@ -70,12 +81,16 @@ jobs:
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: src-tauri/resources/model-manifest.json
+          sparse-checkout-cone-mode: false
       - name: Check the inputs and lay out the matrix
         id: plan
         env:
           CANDIDATES: ${{ inputs.candidates }}
-          SETS: ${{ inputs.sets }}
-          THREADS: ${{ inputs.threads }}
+          SETS: ${{ inputs.sets || 'internbench,real1,real2,real3,real4' }}
+          THREADS: ${{ inputs.threads || '4' }}
           LLAMA_RELEASE: ${{ inputs.llama_release }}
           EXTRA_SERVER_ARGS: ${{ inputs.extra_server_args }}
         run: |
@@ -90,10 +105,20 @@ jobs:
               "real4": "sample-heldout3.json",
           }
           problems = []
-          try:
-              candidates = json.loads(os.environ["CANDIDATES"])
-          except ValueError as error:
-              sys.exit(f"candidates is not JSON: {error}")
+          if os.environ["CANDIDATES"].strip():
+              try:
+                  candidates = json.loads(os.environ["CANDIDATES"])
+              except ValueError as error:
+                  sys.exit(f"candidates is not JSON: {error}")
+          else:
+              # The model the app downloads for its accurate tier, as pinned.
+              with open("src-tauri/resources/model-manifest.json", encoding="utf-8") as file:
+                  models = json.load(file)["models"]
+              accurate = [model for model in models if model["tier"] == "accurate"]
+              files = [entry for model in accurate for entry in model["files"] if entry["role"] == "model"]
+              if len(accurate) != 1 or len(files) != 1:
+                  sys.exit("the manifest names no single accurate model file")
+              candidates = [{"label": accurate[0]["model_id"], "url": files[0]["url"], "sha256": files[0]["sha256"]}]
           if not isinstance(candidates, list) or not candidates:
               sys.exit("candidates must be a non-empty JSON array")
           labels = set()
@@ -283,7 +308,7 @@ jobs:
           INTERN_RUNTIME_DIR: ${{ runner.temp }}/candidate-bench/stage/runtime
           INTERN_WORKER: ${{ github.workspace }}/target/release/intern-worker
           INTERN_BENCH: ${{ github.workspace }}/target/release/intern-bench
-          THREADS: ${{ inputs.threads }}
+          THREADS: ${{ inputs.threads || '4' }}
           LLAMA_SERVER_ARGS: ${{ inputs.extra_server_args }}
           SERVER_MEMORY_FILE: ${{ runner.temp }}/candidate-bench/out/server-memory.txt
         run: |
@@ -299,7 +324,7 @@ jobs:
           SET: ${{ matrix.set }}
           LLAMA_RELEASE: ${{ inputs.llama_release }}
           EXTRA_SERVER_ARGS: ${{ inputs.extra_server_args }}
-          THREADS: ${{ inputs.threads }}
+          THREADS: ${{ inputs.threads || '4' }}
         run: |
           lscpu > "$OUT/lscpu.txt" || true
           python3 -I - <<'EOF'
@@ -350,7 +375,9 @@ jobs:
         with:
           name: candidate-${{ matrix.label }}-${{ matrix.set }}-${{ github.run_id }}
           if-no-files-found: warn
-          retention-days: 14
+          # The longest a public repository keeps an artifact: the recordings
+          # are what a real set's gate is re-recorded from.
+          retention-days: 90
           path: |
             ${{ runner.temp }}/candidate-bench/out/report.json
             ${{ runner.temp }}/candidate-bench/out/report.md

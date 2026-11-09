@@ -147,6 +147,43 @@ describe('the corpus replay job', () => {
   });
 });
 
+describe('the candidate benchmark', () => {
+  const bench = () => readFile('.github/workflows/candidate-bench.yml', 'utf8');
+
+  // Once a week the shipped accurate model runs live on every set, so a change
+  // merged to main is measured within a week and the real sets' recordings are
+  // made again before the last ones expire.
+  it('runs the accurate model the app ships on every set once a week', async () => {
+    const workflow = await bench();
+    expect(workflow).toMatch(/^on:\n {2}schedule:\n {4}- cron: "\d+ \d+ \* \* \d"\n {2}workflow_dispatch:$/m);
+    // A scheduled run has no inputs: no candidates means the manifest's model.
+    expect(workflow).toMatch(/^ {6}candidates:\n(?: {8}.*\n)*? {8}required: false\n {8}default: ""$/m);
+    const plan = jobOf(workflow, 'plan');
+    expect(plan).toContain("SETS: ${{ inputs.sets || 'internbench,real1,real2,real3,real4' }}");
+    expect(plan).toContain('sparse-checkout: src-tauri/resources/model-manifest.json');
+    expect(plan).toContain('with open("src-tauri/resources/model-manifest.json", encoding="utf-8") as file:');
+    expect(plan).toContain('if model["tier"] == "accurate"');
+    // The file the engine embeds as its manifest, so the default is the model
+    // crates/intern-engine/src/manifest.rs downloads, not a copy of its pins.
+    const manifest = await readFile('crates/intern-engine/src/manifest.rs', 'utf8');
+    expect(manifest).toContain('include_str!("../../../src-tauri/resources/model-manifest.json")');
+    const pinned = JSON.parse(await readFile('src-tauri/resources/model-manifest.json', 'utf8'));
+    const accurate = pinned.models.filter((model: { tier: string }) => model.tier === 'accurate');
+    expect(accurate).toHaveLength(1);
+    expect(accurate[0].model_id).toMatch(/^[a-z0-9._-]+$/);
+    // Every step that reads the thread count has the dispatch default.
+    for (const line of workflow.split('\n').filter((text) => text.includes('THREADS: ${{'))) {
+      expect(line).toContain("THREADS: ${{ inputs.threads || '4' }}");
+    }
+  });
+
+  it('keeps its recordings as long as a public repository can', async () => {
+    const upload = stepsOf(jobOf(await bench(), 'bench')).find((step) => step.includes('actions/upload-artifact@'))!;
+    expect(upload).toMatch(/^ {10}retention-days: 90$/m);
+    expect(upload).toContain('/out/recording.json');
+  });
+});
+
 describe('the Rust (Ubuntu) job', () => {
   it('ubuntu_rust_job_runs_fmt_clippy_test with the pinned toolchain and the desktop libraries', async () => {
     const job = jobOf(await ci(), 'rust-ubuntu');
