@@ -56,21 +56,22 @@ use crate::domain::{
 };
 use crate::evidence::{
     Segments, contains_whole, date_match_positions, digest_contains, digest_contains_date,
-    digest_contains_loosely, extract_stated_dates, is_invisible, normalize, normalize_loosely,
-    numeric_date_order, numeric_dates, stated_dates,
+    digest_contains_loosely, digest_reads_date, extract_stated_dates, is_invisible, normalize,
+    normalize_loosely, numeric_date_order, numeric_dates, read_date_positions, stated_dates,
 };
 use crate::index::{EvidenceIndex, EvidenceUnit, UnitKind};
 use crate::infer::{infer_date_role, reads_as_signature_date, repair_issued_relation};
 use crate::phrases::{
-    has_a_kind, head_noun, is_form_code, is_placeholder, is_reference, label_and_value,
-    names_a_kind, opens_with_party_label, phrase_positions, same_word, subject_value, tidy_case,
-    title_phrase, trim_name, without_identifier, words,
+    gives_notice, has_a_kind, head_noun, is_form_code, is_placeholder, is_reference,
+    label_and_value, names_a_kind, opens_with_party_label, phrase_positions, possessive_side,
+    same_word, subject_value, tidy_case, title_phrase, trim_name, without_identifier, words,
 };
 use crate::retrieve::EvidenceContext;
 use crate::validate::{
-    DateField, GENERIC_CAPITALS, READY_CONFIDENCE, current_year, date_fields, date_is_tainted,
-    deadline_fires, effective_alternates, first_unsupported_claim, issue_date_alternates, push,
-    reading_is_unsettled, validate_description, year_is_plausible,
+    DateField, DatePositions, GENERIC_CAPITALS, READY_CONFIDENCE, current_year, date_fields,
+    date_is_tainted, date_is_tainted_as, deadline_fires, deadline_fires_as, effective_alternates,
+    first_unsupported_claim, issue_date_alternates, push, reading_is_unsettled,
+    validate_description, year_is_plausible,
 };
 
 /// Share of a subject's distinct significant words its cited units must
@@ -558,6 +559,7 @@ pub fn validate_facts_at(
             }
             TypeReading::Retitled { phrase, line } => {
                 support.document_type = Support::Unsupported;
+                type_unit = unit_holding(scope, &line).map(|unit| unit.ordinal);
                 type_line = Some(line);
                 type_title = Some(phrase.clone());
                 push(&mut reasons, ReviewReason::TypeInferred);
@@ -578,16 +580,32 @@ pub fn validate_facts_at(
     // statement it encloses - unless it is a kind of letter itself. The
     // name waits for a person.
     let layout = LetterLayout::of(scope);
+    // The reply may cite the body's mention of a type the heading above
+    // the salutation states too ("NOTICE OF TERMINATION" over "This notice
+    // of termination confirms ..."): the heading is the type.
+    let talking = |unit: &EvidenceUnit, line: &str, value: &str| {
+        layout.below_salutation(unit, line)
+            && !words(value).iter().any(|word| word == "letter")
+            && !layout.states_above_salutation(scope, value)
+    };
     if let Some(unit) = type_unit.and_then(|ordinal| scope.unit_at(ordinal))
         && let Some(value) = document_type.as_deref()
-        && layout.below_salutation(unit, type_line.as_deref().unwrap_or_default())
-        && !words(value).iter().any(|word| word == "letter")
-        // The reply may cite the body's mention of a type the heading above
-        // the salutation states too ("NOTICE OF TERMINATION" over "This
-        // notice of termination confirms ..."): the heading is the type.
-        && !layout.states_above_salutation(scope, value)
+        && talking(unit, type_line.as_deref().unwrap_or_default(), value)
     {
         push(&mut reasons, ReviewReason::TypeUnsupported);
+        // In a document laid out as a letter, what the letter talks about
+        // is no kind for it: "Letter" stands in, for a person to complete
+        // ("I am writing to provide you with advice", "the Order to Show
+        // Cause proceeding IS TERMINATED", a question about a "Strategic
+        // Plan"). A notice, an invoice or an agreement sent as a letter is
+        // still one, its heading under the greeting ("Dear Ms. Roe: /
+        // NOTICE OF RENT INCREASE").
+        if layout.laid_out_as_letter(scope) && no_kind_of_its_own(Some(value)) {
+            document_type = Some("Letter".to_owned());
+            type_title = None;
+            type_line = None;
+            push(&mut reasons, ReviewReason::TypeInferred);
+        }
     }
     // "Never 'Document', 'Agreement' or 'Letter' alone", as the prompt
     // says: a bare generic word that no title of the document completed
@@ -607,7 +625,14 @@ pub fn validate_facts_at(
         push(&mut reasons, ReviewReason::TypeMissing);
     }
     if document_type.is_none() {
-        match title_of(scope) {
+        // A title read below a letter's salutation is the letter talking,
+        // as above.
+        let inferred = title_of(scope).filter(|(inferred, line)| {
+            !(layout.laid_out_as_letter(scope)
+                && no_kind_of_its_own(Some(inferred))
+                && unit_holding(scope, line).is_some_and(|unit| talking(unit, line, inferred)))
+        });
+        match inferred {
             Some((inferred, line)) => {
                 type_line = Some(line);
                 type_title = Some(inferred.clone());
@@ -641,20 +666,62 @@ pub fn validate_facts_at(
     let mut date_supported = true;
     let mut replaced = false;
     let mut withheld_as_deadline = false;
-    if let Some(date) = present(facts.document_date.as_deref()) {
-        let found = if crate::evidence::is_valid_iso_date(date) {
+    let mut read_loosely: Option<String> = None;
+    if let Some(replied) = present(facts.document_date.as_deref()) {
+        let found_at = |date: &str, loosely: bool| {
+            if !crate::evidence::is_valid_iso_date(date) {
+                return Found {
+                    support: Support::Unsupported,
+                    ..Found::absent()
+                };
+            }
+            let positions = |line: &str| {
+                if loosely {
+                    read_date_positions(date, line)
+                } else {
+                    date_match_positions(date, line)
+                }
+            };
             find(
                 scope,
                 &facts.date_evidence,
-                |view| digest_contains_date(view, date),
-                |unit| line_where(unit, |line| !date_match_positions(date, line).is_empty()),
+                |view| {
+                    if loosely {
+                        digest_reads_date(view, date)
+                    } else {
+                        digest_contains_date(view, date)
+                    }
+                },
+                |unit| line_where(unit, |line| !positions(line).is_empty()),
             )
-        } else {
-            Found {
-                support: Support::Unsupported,
-                ..Found::absent()
-            }
         };
+        let mut found = found_at(replied, false);
+        let mut date = replied.to_owned();
+        // A date a stamp writes with its day's figures set apart ("SEP 1 8
+        // 2015") is read, though less surely than one written out: the
+        // name waits for a person. A reply that took the stamp's first
+        // figure for the day ("2015-09-01") cited the stamp for a date it
+        // does not state; the stamp's own date stands in, when the cited
+        // line states that one date only. A receipt's stamp dates a copy's
+        // arrival, not the document: it is neither read loosely nor
+        // repaired.
+        if found.support == Support::Unsupported {
+            let loose = found_at(replied, true);
+            if loose.support != Support::Unsupported
+                && !read_only_on_a_receipt_stamp(scope, loose.unit, replied)
+            {
+                found = loose;
+                read_loosely = Some(date.clone());
+            } else if let Some(stamped) = stamp_date_cited(scope, &facts.date_evidence, replied) {
+                let repaired = found_at(&stamped, true);
+                if repaired.support != Support::Unsupported {
+                    found = repaired;
+                    date = stamped;
+                    read_loosely = Some(date.clone());
+                }
+            }
+        }
+        let date = date.as_str();
         support.document_date = found.support;
         support.miscited_ids += found.miscited;
         if found.support == Support::Unsupported {
@@ -664,9 +731,13 @@ pub fn validate_facts_at(
             document_date = Some(date.to_owned());
             date_line = found.line.clone();
             remember(&found, &mut references);
-            // Another document's date: tainted in either view.
-            let tainted_context = date_is_tainted(context, date, document_type.as_deref());
-            let tainted_document = date_is_tainted(document, date, document_type.as_deref());
+            // Another document's date: tainted in either view. A date read
+            // only loosely is judged by the statements it was read from.
+            let positions = date_positions(read_loosely.as_deref(), date);
+            let tainted_context =
+                date_is_tainted_as(context, date, document_type.as_deref(), positions);
+            let tainted_document =
+                date_is_tainted_as(document, date, document_type.as_deref(), positions);
             if tainted_context || tainted_document {
                 support.guard_scope = Some(scope_name(tainted_context, tainted_document));
                 match single_agreed(
@@ -693,10 +764,14 @@ pub fn validate_facts_at(
     if !date_supported {
         push(&mut reasons, ReviewReason::DateUnsupported);
     }
-    // A deadline: labeled as one in either view.
+    // A deadline: labeled as one in either view, however loosely written.
+    // Its replacement is a date written out: a loosely written issue date
+    // ("Invoice Date: 02-Jun-17") is never offered on its own, so the
+    // deadline is then withheld.
     if !replaced && let Some(date) = document_date.clone() {
-        let fires_context = deadline_fires(context, &date);
-        let fires_document = deadline_fires(document, &date);
+        let positions = date_positions(read_loosely.as_deref(), &date);
+        let fires_context = deadline_fires_as(context, &date, positions);
+        let fires_document = deadline_fires_as(document, &date, positions);
         if fires_context || fires_document {
             push(&mut reasons, ReviewReason::DateIsDeadline);
             support.guard_scope = Some(scope_name(fires_context, fires_document));
@@ -828,6 +903,11 @@ pub fn validate_facts_at(
     if document_date.is_none() && date_supported && !withheld_as_deadline {
         push(&mut reasons, ReviewReason::DateMissing);
     }
+    // A date read only loosely is not written out in the document as a
+    // date is: the name keeps it, and a person confirms it.
+    if read_loosely.is_some() && document_date == read_loosely {
+        push(&mut reasons, ReviewReason::DateUnsupported);
+    }
     if let Some(date) = document_date.as_deref()
         && !year_is_plausible(date, current_year)
     {
@@ -862,12 +942,18 @@ pub fn validate_facts_at(
         };
         let trimmed = without_trading_name(&trim_name(written));
         let trimmed = completed_name(scope, &trimmed).unwrap_or(trimmed);
+        let trimmed = without_courtesy_title(&trimmed);
         let name = trimmed.as_str();
         // A first name on its own is never a party: one word, not an
         // initialism, with nothing that makes it an organization.
         if is_first_name_alone(name) {
             support.parties.push(Support::Unsupported);
             parties_supported = false;
+            continue;
+        }
+        // A redaction marks where a name was taken out of a published
+        // copy ("Dear [REDACTED]"): it names no one.
+        if is_redaction(name) {
             continue;
         }
         let loose = normalize_loosely(name);
@@ -950,7 +1036,7 @@ pub fn validate_facts_at(
     // and is no party of their own.
     let organizations = parties
         .iter()
-        .filter(|party| is_organization(&party.name))
+        .filter(|party| is_organization_name(&party.name))
         .map(|party| normalize_loosely(&party.name))
         .collect::<Vec<_>>();
     for party in &mut parties {
@@ -985,7 +1071,7 @@ pub fn validate_facts_at(
     let standing = parties
         .iter()
         .map(|party| {
-            if party.copied || party.signatory || is_organization(&party.name) {
+            if party.copied || party.signatory || is_organization_name(&party.name) {
                 Standing::Unknown
             } else if labeled_party(scope, &party.name, class) {
                 // A label that gives them a party's role ("Recipient:",
@@ -1016,9 +1102,9 @@ pub fn validate_facts_at(
         .zip(&standing)
         .filter(|(party, _)| !party.copied && !party.signatory)
         .collect::<Vec<_>>();
-    let only_people = left
-        .iter()
-        .all(|(party, standing)| !is_organization(&party.name) && **standing != Standing::Subject);
+    let only_people = left.iter().all(|(party, standing)| {
+        !is_organization_name(&party.name) && **standing != Standing::Subject
+    });
     if acting_for && only_people {
         let found = match class {
             DocumentClass::Issued => Vec::new(),
@@ -1238,7 +1324,32 @@ pub fn validate_facts_at(
                     .proposed_role
                     .is_some_and(|role| matches!(role, PartyRole::Sender | PartyRole::Issuer))
             };
-            if party.copied || is_organization(&party.name) || !addressed {
+            if party.copied || !addressed {
+                continue;
+            }
+            // An organization the reply named, which the letter's inside
+            // address names, receives the letter, whatever its support for
+            // the reply's role: "Robert L. Sacks / Kane Kessler, P.C." over
+            // "Dear Mr. Sacks" is to Kane Kessler, not from the agency whose
+            // letterhead heads the page. One addressee is enough.
+            if is_organization_name(&party.name) {
+                if class == DocumentClass::Letter
+                    && party.role != Some(PartyRole::Addressee)
+                    && !party
+                        .document_role
+                        .is_some_and(|role| matches!(role, PartyRole::Sender | PartyRole::Issuer))
+                    && layout.addresses(scope, &party.name)
+                    && !parties.iter().any(|other| {
+                        other.role == Some(PartyRole::Addressee) && other.name != party.name
+                    })
+                {
+                    let party = &mut parties[index];
+                    party.signatory = false;
+                    party.role = Some(PartyRole::Addressee);
+                    party.role_support = Support::Context;
+                    party.document_role = Some(PartyRole::Addressee);
+                    break;
+                }
                 continue;
             }
             let named = parties
@@ -1343,7 +1454,7 @@ pub fn validate_facts_at(
                     party.role,
                     Some(PartyRole::Addressee | PartyRole::Recipient)
                 )
-                || is_organization(&party.name)
+                || is_organization_name(&party.name)
                 || named_as_an_organization(scope, &party.name)
                 || !named_as_a_person(scope, &party.name)
                 || !party
@@ -1856,6 +1967,139 @@ pub fn validate_facts_at(
     }
 }
 
+/// How the guards find the statements of the date validation settled on:
+/// as [`date_match_positions`] finds them, or, when that date was read only
+/// loosely (`read_loosely` holds it), as [`read_date_positions`] reads them,
+/// so the guards judge the statements the date was read from.
+fn date_positions(read_loosely: Option<&str>, date: &str) -> DatePositions {
+    if read_loosely == Some(date) {
+        read_date_positions
+    } else {
+        date_match_positions
+    }
+}
+
+/// The date of a rubber stamp a reply cited for `replied` and misread: the
+/// cited line states one date only, a stamp's with its day's figures set
+/// apart, in `replied`'s month and year, and `replied`'s day is the stamp
+/// day's first figure ("SEP 1 8 2015" read as 2015-09-01). A receipt's
+/// stamp ([`under_a_receipt_label`]) repairs nothing.
+fn stamp_date_cited(
+    scope: &ValidationScope<'_>,
+    cited: &[String],
+    replied: &str,
+) -> Option<String> {
+    let (year_month, day) = replied.rsplit_once('-')?;
+    let day = day.parse::<u32>().ok()?;
+    scope.cited_units(cited).into_iter().find_map(|unit| {
+        unit.text.lines().enumerate().find_map(|(at, line)| {
+            let stamps = crate::evidence::stamped_dates(line);
+            let [(stamped, first)] = stamps.as_slice() else {
+                return None;
+            };
+            (!under_a_receipt_label(scope, unit, at)
+                && extract_stated_dates(line)
+                    .iter()
+                    .all(|other| other == stamped)
+                && stamped.starts_with(&format!("{year_month}-"))
+                && *first == day)
+                .then(|| stamped.clone())
+        })
+    })
+}
+
+/// Whether the line at `at` of `unit` stands under a receipt's label: a
+/// "RECEIVED" or "FILED" on the line itself or on the line right over it
+/// (the last line of the unit before, where the index set the label apart
+/// as a heading). A stamp there dates a copy's arrival, not the document.
+fn under_a_receipt_label(scope: &ValidationScope<'_>, unit: &EvidenceUnit, at: usize) -> bool {
+    let labels_receipt = |line: &str| {
+        words(line)
+            .iter()
+            .any(|word| matches!(word.as_str(), "received" | "recd" | "filed"))
+    };
+    let lines = unit.text.lines().collect::<Vec<_>>();
+    let Some(line) = lines.get(at) else {
+        return false;
+    };
+    let above = match at.checked_sub(1) {
+        Some(before) => lines.get(before).copied(),
+        None => scope
+            .index
+            .units()
+            .iter()
+            .filter(|other| other.page == unit.page && other.ordinal < unit.ordinal)
+            .max_by_key(|other| other.ordinal)
+            .and_then(|other| other.text.lines().last()),
+    };
+    labels_receipt(line) || above.is_some_and(labels_receipt)
+}
+
+/// Whether the unit a loose reading of `date` was found in reads it only
+/// under receipts' labels: with every line under a "RECEIVED" or "FILED"
+/// ([`under_a_receipt_label`]) taken out, together with the lines a date
+/// begun on it wraps onto ("RECEIVED November" over "22,1923"), the rest
+/// of the unit no longer states `date` as [`read_date_positions`] reads it,
+/// whatever loose form it takes (a stamp's figures apart,
+/// "November 22,1923", "02-Jun-17"). The unit is read whole, as the
+/// digest reads it, so a date wrapped across lines is found as one.
+fn read_only_on_a_receipt_stamp(
+    scope: &ValidationScope<'_>,
+    unit: Option<&EvidenceUnit>,
+    date: &str,
+) -> bool {
+    let Some(unit) = unit else {
+        return false;
+    };
+    let reads = |text: &str| !read_date_positions(date, &normalize(text)).is_empty();
+    if !reads(&unit.text) {
+        return false;
+    }
+    let lines = unit.text.lines().collect::<Vec<_>>();
+    let mut rest = Vec::with_capacity(lines.len());
+    let mut at = 0;
+    while at < lines.len() {
+        if !under_a_receipt_label(scope, unit, at) {
+            rest.push(lines[at]);
+            at += 1;
+            continue;
+        }
+        // A date the labelled line begins may end one or two lines on: the
+        // lines after it are taken with it only when the date needs it, so
+        // a dateline of its own below a stamp ("RECEIVED" / "JAN 3 1924" /
+        // "November 22,1923") stays.
+        let wrapped = (!reads(lines[at]))
+            .then(|| {
+                (2..=3).find(|span| {
+                    at + span <= lines.len()
+                        && reads(&lines[at..at + span].join(" "))
+                        && !reads(&lines[at + 1..at + span].join(" "))
+                })
+            })
+            .flatten();
+        at += wrapped.unwrap_or(1);
+    }
+    !reads(&rest.join("\n"))
+}
+
+/// Whether a type names no class a letter could carry of its own - a
+/// notice, an invoice, an agreement, a form, an email - only a record or
+/// no known kind: what a letter may talk about.
+fn no_kind_of_its_own(document_type: Option<&str>) -> bool {
+    matches!(
+        DocumentClass::of(document_type),
+        DocumentClass::Unknown | DocumentClass::Record
+    )
+}
+
+/// The unit of the context that holds `line` as one of its lines.
+fn unit_holding<'a>(scope: &ValidationScope<'a>, line: &str) -> Option<&'a EvidenceUnit> {
+    let line = line.trim();
+    scope
+        .context_units()
+        .find(|unit| unit.text.lines().any(|held| held.trim() == line))
+}
+
 /// Keeps the line that shows a found fact as evidence, once.
 fn remember(found: &Found<'_>, references: &mut Vec<EvidenceRef>) {
     if let (Some(unit), Some(line)) = (found.unit, &found.line)
@@ -2134,7 +2378,7 @@ fn read_type_words<'a>(
                 continue;
             };
             let holds_reply = !phrase_positions(&words(&phrase), &value_words).is_empty();
-            if holds_reply || !stated_on(&line) {
+            if holds_reply || !stated_on(&line) || reads_past_title(value, &value_words, &phrase) {
                 return TypeReading::Title {
                     phrase,
                     found: found_in(unit, &line, Support::Cited),
@@ -2232,6 +2476,33 @@ fn read_type_words<'a>(
         }
     }
     TypeReading::Unsupported
+}
+
+/// Whether a reply's type is a title phrase with only what a title stops
+/// at around it: a side's possessive before it ("PLAINTIFF'S Notice of
+/// Voluntary Dismissal"), or the sentence it opens after it ("NOTICE is
+/// hereby given"). The title phrase is then the type. Only a sentence that
+/// gives the notice "hereby" opens on a title: a body's sentence that opens
+/// on a kind ("Receipt is acknowledged of the Letter of Notification",
+/// "Invoice is attached for services rendered") is no heading, and its
+/// first word is no type.
+fn reads_past_title(value: &str, value_words: &[String], phrase: &str) -> bool {
+    let phrase_words = words(phrase);
+    let Some(at) = phrase_positions(value_words, &phrase_words)
+        .first()
+        .copied()
+    else {
+        return false;
+    };
+    let before = &value_words[..at];
+    let after = &value_words[at + phrase_words.len()..];
+    let possessive = value
+        .split_whitespace()
+        .next()
+        .is_some_and(|token| possessive_side(token) && words(token) == before);
+    (before.is_empty() || possessive)
+        && (after.is_empty() || gives_notice(after, 0))
+        && !(before.is_empty() && after.is_empty())
 }
 
 /// The head of a reply's type that `line` holds when the reply ran on
@@ -2439,6 +2710,8 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
         title_lines(scope, unit).into_iter().find_map(|line| {
             // A letter's "Re:" line names it when its matter opens with a
             // kind of document: "Re: Demand for Payment - Highmeadow ...".
+            // A kind its number follows names the numbered document the
+            // letter is about: "RE: NDA 208090", "Re: Invoice No. 4471".
             if names_a_matter(line.trim_matches(|c: char| c == '*' || c.is_whitespace())) {
                 let line = line.trim_matches(|c: char| c == '*' || c.is_whitespace());
                 let line_words = words(line);
@@ -2449,11 +2722,17 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
                     .find(|word| names_a_kind(word))?;
                 let phrase = title_phrase(line, head)?;
                 let phrase_words = words(&phrase);
+                let numbered = |end: usize| {
+                    line_words.get(end).is_some_and(|next| {
+                        labels_a_number(next) || next.chars().any(|c| c.is_ascii_digit())
+                    })
+                };
                 return phrase_positions(&line_words, &phrase_words)
                     .into_iter()
                     .any(|at| {
                         at == label
                             && names_document_at(&line_words, at, at + phrase_words.len(), line)
+                            && !numbered(at + phrase_words.len())
                     })
                     .then(|| (phrase, line.to_owned()));
             }
@@ -3351,6 +3630,13 @@ struct LetterLayout {
     /// Where the salutation stands: the first page's first line that opens
     /// "Dear ...", as its unit's ordinal and the line's place in the unit.
     salutation: Option<(u32, usize)>,
+    /// Where a court document's caption stands, as the ordinals of its
+    /// first and last units: from the first of the first page's first units
+    /// that names a court, a tribunal or an arbitration, with no dateline
+    /// between it and its sides, down to the last one that sets the case's
+    /// sides against each other ("v.", "-against-") or labels one
+    /// ("Plaintiff,").
+    caption: Option<(u32, u32)>,
 }
 
 impl LetterLayout {
@@ -3373,10 +3659,72 @@ impl LetterLayout {
             .find(|unit| is_bare_date(unit))
             .map(|unit| unit.ordinal)
             .filter(|_| salutation.is_some());
+        let head = page().take(12).collect::<Vec<_>>();
+        let has_word = |text: &str, wanted: &[&str]| {
+            normalize_loosely(&text.replace(['|', '-'], " "))
+                .split_whitespace()
+                .any(|word| {
+                    wanted.contains(&word)
+                        || wanted.contains(&word.trim_end_matches(['s', ':', ';']))
+                })
+        };
+        // A caption opens at the forum's heading: a letter to a court names
+        // the court in its inside address, under the sender's letterhead,
+        // and that letterhead is no part of a caption. A "Re:" line sets
+        // out the case a letter is about ("Re: Nike, Inc. v. StockX LLC"),
+        // and a side's word below a greeting is the letter's body: neither
+        // marks a caption's side.
+        let sets_out_sides = |unit: &EvidenceUnit| {
+            if salutation.is_some_and(|(at, _)| unit.ordinal > at) {
+                return false;
+            }
+            let lines = unit.text.lines().collect::<Vec<_>>();
+            let above = match salutation {
+                Some((at, line)) if at == unit.ordinal => &lines[..line.min(lines.len())],
+                _ => &lines[..],
+            };
+            above
+                .iter()
+                .take_while(|line| !names_a_matter(line.trim().trim_matches('*')))
+                .any(|line| {
+                    has_word(line, VERSUS_WORDS)
+                        || has_word(line, BRINGING_SIDE)
+                        || has_word(line, ANSWERING_SIDE)
+                })
+        };
+        // A caption's sides stand under its forum's heading with no
+        // dateline between them: a court's own letterhead over a letter's
+        // dateline heads no caption, though the letter sets out its case
+        // below ("Smith v. Jones, No. 22-cv-123" with no "Re:").
+        let caption = head
+            .iter()
+            .filter(|unit| has_word(&unit.text, FORUM_WORDS))
+            .find_map(|forum| {
+                let dated_below = dateline.filter(|&dateline| dateline > forum.ordinal);
+                head.iter()
+                    .filter(|unit| {
+                        unit.ordinal >= forum.ordinal
+                            && dated_below.is_none_or(|dateline| unit.ordinal < dateline)
+                            && sets_out_sides(unit)
+                    })
+                    .map(|unit| unit.ordinal)
+                    .max()
+                    .map(|end| (forum.ordinal, end))
+            });
         Self {
             dateline,
             salutation,
+            caption,
         }
+    }
+
+    /// Whether a unit is part of a court document's caption: from the
+    /// forum's heading down to the last line that sets out or labels its
+    /// sides. A caption names the sides of a case, never a letterhead's
+    /// sender.
+    fn in_caption(self, unit: &EvidenceUnit) -> bool {
+        self.caption
+            .is_some_and(|(start, end)| (start..=end).contains(&unit.ordinal))
     }
 
     /// Whether the document is laid out as a letter: its first page greets
@@ -3598,6 +3946,33 @@ impl LetterLayout {
         })
     }
 
+    /// Whether the inside address names `organization` on a line of its
+    /// own words: a "Re:" or "Subject:" line, and the lines of its unit
+    /// after it, name the matter the letter is about ("Re: Nike, Inc. v.
+    /// StockX LLC", "Re: Toledo Refining Company LLC - Warning Letter"),
+    /// not who it is to.
+    fn addresses(self, scope: &ValidationScope<'_>, organization: &str) -> bool {
+        let Some((salutation, at)) = self.salutation else {
+            return false;
+        };
+        let wanted = normalize_loosely(organization);
+        scope.context_units().any(|unit| {
+            if !self.in_address(unit) {
+                return false;
+            }
+            unit.text
+                .lines()
+                .flat_map(|line| line.split("<br>"))
+                .take(if unit.ordinal == salutation {
+                    at
+                } else {
+                    usize::MAX
+                })
+                .take_while(|line| !names_a_matter(line.trim().trim_matches('*')))
+                .any(|line| contains_whole(&normalize_loosely(line), &wanted))
+        })
+    }
+
     /// Whether the first page states `value` whole above the salutation,
     /// where a letter's own title stands, on a line that is no "Re:" line.
     fn states_above_salutation(self, scope: &ValidationScope<'_>, value: &str) -> bool {
@@ -3700,16 +4075,30 @@ fn is_bare_date(unit: &EvidenceUnit) -> bool {
 /// "Dec. 26, 1907", "18th October 2019".
 fn is_dateline(line: &str) -> bool {
     let line_words = words(line);
-    let rest = line_words
-        .strip_prefix(&["date".to_owned()])
-        .unwrap_or(&line_words);
-    !rest.is_empty()
+    // An agency's letter dates itself as released, issued or sent.
+    let rest = match line_words.first().map(String::as_str) {
+        Some("date" | "dated" | "released" | "issued" | "sent") => &line_words[1..],
+        _ => &line_words[..],
+    };
+    let written = !rest.is_empty()
         && rest.len() <= 4
         && rest.iter().any(|word| names_a_month(word))
         && rest
             .iter()
             .all(|word| names_a_month(word) || is_date_number(word))
-        && !extract_stated_dates(&normalize(line)).is_empty()
+        && !extract_stated_dates(&normalize(line)).is_empty();
+    // Or a date in figures alone, its year whole: "02/09/2018".
+    let figures = || {
+        let normalized = normalize(line);
+        let dates = numeric_dates(&normalized);
+        let [date] = dates.as_slice() else {
+            return false;
+        };
+        date.parts.iter().any(|part| part.len() == 4)
+            && rest.len() == 3
+            && normalized.trim().trim_end_matches('.').len() == date.end - date.start
+    };
+    written || figures()
 }
 
 /// Greetings a letter opens with besides "Dear ...", as a line of their own.
@@ -3892,22 +4281,27 @@ fn unit_supports_role(
     // the opening paragraph that happens to be among them, and its name
     // opens a line of its own: a line OCR ran two names into is no one's
     // letterhead.
+    // A caption's head or an address block - a person's line ("The Rt Hon
+    // George Osborne MP") over the organization's - is no letterhead.
     if matches!(role, PartyRole::Issuer | PartyRole::Sender)
         && unit.features.position.letterhead
         && letter.before_dateline(unit)
+        && !letter.in_caption(unit)
         && unit.text.chars().count() <= LETTERHEAD_CHARACTERS
-        && unit
-            .text
-            .lines()
-            .any(|line| normalize_loosely(line).starts_with(loose))
+        && {
+            let lines = unit.text.lines().collect::<Vec<_>>();
+            lines
+                .iter()
+                .position(|line| normalize_loosely(line).starts_with(loose))
+                .is_some_and(|at| !lines[..at].iter().any(|line| names_a_person(line)))
+        }
     {
         return true;
     }
     let on_cue_line = |cues: &[&str]| {
-        unit.text.lines().any(|line| {
-            let line = normalize_loosely(line);
-            line.contains(loose) && cues.iter().any(|cue| line.contains(cue))
-        })
+        unit.text
+            .lines()
+            .any(|line| crate::infer::cue_labels(&normalize_loosely(line), loose, cues))
     };
     match role {
         PartyRole::Issuer => on_cue_line(ISSUER_CUES),
@@ -4046,13 +4440,60 @@ fn defines_role(after: &str, terms: &[&str]) -> bool {
     if let Some(rest) = trimmed.strip_prefix("as ") {
         return has_term(window_forward(rest, 0, 40));
     }
+    // An appositive role, unless it is the label of the party's number:
+    // ", company number 3899612" and "Employer ID Number NN-NNNNNNN" give
+    // the party's registration, not its side.
     terms.iter().any(|term| {
         trimmed.starts_with(term)
             && !trimmed[term.len()..]
                 .chars()
                 .next()
                 .is_some_and(char::is_alphanumeric)
+            && !labels_the_partys_number(&trimmed[term.len()..])
     })
+}
+
+/// Whether `text`, after a role word, opens with the label of the party's
+/// number ([`labels_a_number`]). "No." labels one only before a
+/// registration's figures ("Company No. 3899612"): "Tenant No. 2" counts
+/// the party among the others on its side.
+fn labels_the_partys_number(text: &str) -> bool {
+    let after = text.trim_start_matches(|character: char| !character.is_alphanumeric());
+    let label = after
+        .split(|character: char| !character.is_alphanumeric())
+        .next()
+        .unwrap_or_default();
+    if !labels_a_number(label) {
+        return false;
+    }
+    if !matches!(label, "no" | "nos") {
+        return true;
+    }
+    after[label.len()..]
+        .trim_start_matches(|character: char| !character.is_alphanumeric())
+        .split_whitespace()
+        .next()
+        .is_some_and(|value| value.chars().filter(char::is_ascii_digit).count() >= 3)
+}
+
+/// Whether a word labels a number: "number", "no", "ID", "registration" -
+/// or opens with "number", where a layout ran the value into its label
+/// ("NumberNN-NNNNNNN").
+fn labels_a_number(word: &str) -> bool {
+    matches!(
+        word,
+        "number"
+            | "numbers"
+            | "no"
+            | "nos"
+            | "id"
+            | "identification"
+            | "registration"
+            | "reg"
+            | "ref"
+            | "reference"
+            | "code"
+    ) || word.starts_with("number")
 }
 
 /// Where `needle` stands in `haystack` as whole words.
@@ -4332,6 +4773,102 @@ fn field_subject(scope: &ValidationScope<'_>) -> Option<String> {
     })
 }
 
+/// Whether a name is a redaction's marker: "REDACTED", "[name withheld]".
+fn is_redaction(name: &str) -> bool {
+    let name_words = words(name);
+    name_words
+        .iter()
+        .any(|word| matches!(word.as_str(), "redacted" | "withheld"))
+        && name_words.iter().all(|word| {
+            matches!(
+                word.as_str(),
+                "redacted" | "withheld" | "name" | "names" | "personal" | "details"
+            )
+        })
+}
+
+/// Courtesy titles a person's name is written after, never part of the
+/// name a file is known by: "Prof. A. G. Bell" is A. G. Bell. A title of
+/// rank ("Sir", "Lord") is part of the name and stays.
+const COURTESY_TITLES: &[&[&str]] = &[
+    &["the", "rt", "hon"],
+    &["the", "right", "honourable"],
+    &["the", "honourable"],
+    &["the", "honorable"],
+    &["the", "hon"],
+    &["rt", "hon"],
+    &["hon"],
+    &["mr"],
+    &["mrs"],
+    &["ms"],
+    &["miss"],
+    &["mx"],
+    &["dr"],
+    &["prof"],
+    &["professor"],
+];
+
+/// Honours written after a titled person's name: a member of a
+/// parliament, a King's or Queen's Counsel, an order.
+const HONOURS: &[&str] = &[
+    "mp", "msp", "ms", "am", "kc", "qc", "obe", "cbe", "mbe", "kcb", "dbe", "kbe", "ch",
+];
+
+/// A person's name without the courtesy title written before it, when
+/// what follows is a person's whole name: two or three words, none of
+/// them an organization's or a figure ("Dr. Ing. h.c. F. Porsche AG" keeps
+/// its "Dr.", and "Dr. Smith" its title, a surname alone being no name).
+/// A title that addresses two people at once ("Mr and Mrs Smith", "Mr &
+/// Mrs Smith") stays: what follows it is no one's name.
+fn without_courtesy_title(name: &str) -> String {
+    let tokens = name.split_whitespace().collect::<Vec<_>>();
+    let token_words = tokens.iter().map(|token| words(token)).collect::<Vec<_>>();
+    for title in COURTESY_TITLES {
+        if tokens.len() <= title.len()
+            || !token_words[..title.len()]
+                .iter()
+                .zip(title.iter())
+                .all(|(word, wanted)| word.len() == 1 && word[0] == *wanted)
+        {
+            continue;
+        }
+        // The honours after a titled name go with the title: "The Rt Hon
+        // Alex Chalk KC MP" is Alex Chalk.
+        let mut rest = &tokens[title.len()..];
+        while let [kept @ .., last] = rest
+            && words(last)
+                .first()
+                .is_some_and(|word| HONOURS.contains(&word.as_str()))
+        {
+            rest = kept;
+        }
+        let rest_name = rest.join(" ");
+        let joint = rest.first().is_some_and(|first| {
+            words(first)
+                .first()
+                .is_none_or(|word| matches!(word.as_str(), "and" | "or"))
+        }) || rest.iter().any(|token| {
+            let token_words = words(token);
+            COURTESY_TITLES
+                .iter()
+                .any(|title| title.len() == 1 && token_words == [title[0]])
+        });
+        if (2..=3).contains(&rest.len())
+            && !joint
+            && !is_organization_name(&rest_name)
+            && !rest_name.chars().any(|c| c.is_ascii_digit())
+            && !words(&rest_name).iter().any(|word| {
+                ORGANIZATION_WORDS.contains(&word.as_str())
+                    || crate::cues::ORGANIZATION_ENDINGS.contains(&word.as_str())
+            })
+        {
+            return rest_name;
+        }
+        break;
+    }
+    name.to_owned()
+}
+
 /// Whether a name is an organization's: it ends on a legal form or an
 /// organization's noun.
 fn is_organization(name: &str) -> bool {
@@ -4339,6 +4876,63 @@ fn is_organization(name: &str) -> bool {
         .split_whitespace()
         .last()
         .is_some_and(|word| crate::cues::ORGANIZATION_ENDINGS.contains(&word))
+}
+
+/// Nouns a public body's or a membership body's name is headed by, besides
+/// the [`crate::cues::ORGANIZATION_ENDINGS`] a company's name ends on:
+/// "Home Affairs Select Committee", "Horizon Compensation Advisory Board",
+/// "Ministry of Defence".
+const BODY_NOUNS: &[&str] = &[
+    "committee",
+    "board",
+    "commission",
+    "ministry",
+    "office",
+    "bureau",
+    "administration",
+    "directorate",
+    "secretariat",
+    "inspectorate",
+    "tribunal",
+    "federation",
+    "organisation",
+    "organization",
+];
+
+/// Whether a party's name is an organization's: [`is_organization`], or a
+/// name headed by a body's noun, at its end or before the "of", "for" or
+/// "on" that completes it - "Migration Advisory Committee", "International
+/// Union of Biochemistry", "Office for National Statistics". A person's post
+/// is headed by no such noun ("Secretary of State", "Chair of the Board",
+/// "Treasurer of the International Union"), so the people who hold one stay
+/// people, and so is a post written before the body it is held at
+/// ("Director, Office of Prescription Drug Promotion", "Member, Board of
+/// Directors"). Only a party's name is read this way: a line of an address
+/// or a signature block that ends on "Committee" may still be a post's.
+fn is_organization_name(name: &str) -> bool {
+    if is_organization(name) {
+        return true;
+    }
+    let loose = normalize_loosely(name);
+    let name_words = loose.split_whitespace().collect::<Vec<_>>();
+    let head = name_words
+        .iter()
+        .position(|word| matches!(*word, "of" | "for" | "on"))
+        .unwrap_or(name_words.len());
+    // "Office of the Chief Counsel, ..." is a body before its comma, though
+    // it names a post.
+    let post_before = name.split_once(',').is_some_and(|(post, _)| {
+        let post_words = words(post);
+        (holds_a_post(post) || post_words.iter().any(|word| word == "member"))
+            && !post_words.iter().any(|word| {
+                BODY_NOUNS.contains(&word.as_str())
+                    || crate::cues::ORGANIZATION_ENDINGS.contains(&word.as_str())
+            })
+    });
+    !post_before
+        && name_words[..head].last().is_some_and(|word| {
+            BODY_NOUNS.contains(word) || crate::cues::ORGANIZATION_ENDINGS.contains(word)
+        })
 }
 
 /// The most words a line naming an organization in an inside address runs
@@ -4947,7 +5541,7 @@ const JOB_TITLE_WORDS: &[&str] = &[
 /// of People Operations Northstar Lantern Works LLC", "Keziah Ambrose,
 /// Owner, Briarport Coffee Roasters LLC".
 fn signs_for(scope: &ValidationScope<'_>, name: &str, organizations: &[String]) -> bool {
-    if is_organization(name) || organizations.is_empty() {
+    if is_organization_name(name) || organizations.is_empty() {
         return false;
     }
     let loose = normalize_loosely(name);
@@ -5633,7 +6227,11 @@ fn organization_before_kind(line: &str) -> Option<String> {
 }
 
 /// The words of a unit that read, loosely, as `loose`: the document's own
-/// spelling of a name the index found.
+/// spelling of a name the index found. A "The" that opens the name's line
+/// is the name's own ("THE MCGRAW-HILL COMPANIES, INC.,"), as a caption, a
+/// letterhead or an address writes it: the name ends its line or its cell,
+/// or a comma closes it. A sentence that opens with the name ("The Acme
+/// Widget Company agrees ...") keeps its "The" to itself.
 fn written_span(unit: &EvidenceUnit, loose: &str) -> Option<String> {
     unit.text.lines().find_map(|line| {
         let tokens = line.split_whitespace().collect::<Vec<_>>();
@@ -5641,8 +6239,21 @@ fn written_span(unit: &EvidenceUnit, loose: &str) -> Option<String> {
             (start + 1..=tokens.len().min(start + 10)).find_map(|end| {
                 let span = tokens[start..end].join(" ");
                 (normalize_loosely(&span) == loose).then(|| {
-                    span.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '"'))
-                        .to_owned()
+                    let closed = end == tokens.len()
+                        || tokens[end] == "|"
+                        || span.ends_with([',', ';', ':']);
+                    let span = span.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '"'));
+                    let opens_line = |at: usize| at == 0 || tokens[at - 1] == "|";
+                    match start.checked_sub(1) {
+                        Some(article)
+                            if tokens[article].eq_ignore_ascii_case("the")
+                                && opens_line(article)
+                                && closed =>
+                        {
+                            format!("{} {span}", tokens[article])
+                        }
+                        _ => span.to_owned(),
+                    }
                 })
             })
         })
@@ -11024,7 +11635,12 @@ The merger needs a majority of votes cast.";
             ("Dec. 26, 1907.", true),
             ("18th October 2019", true),
             ("Date: 28 March 2023", true),
+            ("Released January 3, 2024", true),
+            ("02/09/2018", true),
             ("June 16, 2023 at noon", false),
+            ("Released for public availability", false),
+            ("Invoice 02/09/2018", false),
+            ("02/09/18", false),
         ] {
             assert_eq!(is_dateline(line), dateline, "{line}");
         }
@@ -11749,6 +12365,770 @@ Rickmansworth,
                 .contains("bramble"),
             "{:?}",
             outcome.proposal
+        );
+    }
+
+    /// A body's name ends on its noun ("Committee", "Board") or puts it
+    /// before what completes it ("Union of Biochemistry", "Office for
+    /// National Statistics"); a post is headed by no such noun.
+    #[test]
+    fn a_body_named_by_its_noun_is_an_organization() {
+        for name in [
+            "Home Affairs Select Committee",
+            "Horizon Compensation Advisory Board",
+            "International Union of Biochemistry",
+            "Office of Fair Trading",
+            "Office for National Statistics",
+            "Committee on Standards in Public Life",
+            "Department of Energy",
+            "Northstar Lantern Works LLC",
+            "Office of the Chief Counsel, Food and Drug Administration",
+        ] {
+            assert!(is_organization_name(name), "{name}");
+        }
+        for name in [
+            "Secretary of State for Business",
+            "Chair of the Board",
+            "Lord Lang of Monkton",
+            "Rashmi Panigrahi",
+            // A post written before the body it is held at.
+            "Director, Office of Prescription Drug Promotion",
+            "Member, Board of Directors",
+        ] {
+            assert!(!is_organization_name(name), "{name}");
+        }
+    }
+
+    /// A committee or a union the reply named is a party, never the staff
+    /// of one: the post a person holds there ("Chair, Home Affairs Select
+    /// Committee") does not make the committee a signatory.
+    #[test]
+    fn a_body_the_reply_named_is_no_one_s_staff() {
+        let (outcome, _) = facts_for(
+            "Home Secretary\n2 Marsham Street\nLondon SW1P 4DF\n\nRt Hon Yvette Cooper MP\n\
+             Chair, Home Affairs Select Committee\nHouse of Commons\nLondon SW1A 0AA\n\n\
+             28 April 2020\n\nDear Chair,\n\nPlease find below a further update on the work \
+             of my department, in line with the commitments made to your Committee.\n\n\
+             Yours sincerely,\n\nHome Secretary",
+            |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some("2020-04-28".into()),
+                date_evidence: vec![id_of(index, "28 April 2020")],
+                parties: vec![
+                    party(
+                        "Home Secretary",
+                        Some(PartyRole::Sender),
+                        &[id_of(index, "Marsham")],
+                    ),
+                    party(
+                        "Home Affairs Select Committee",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "Chair, Home Affairs")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            },
+        );
+        let facts = outcome.facts.expect("facts");
+        let committee = facts
+            .parties
+            .iter()
+            .find(|party| party.name == "Home Affairs Select Committee")
+            .expect("the committee is kept");
+        assert!(!committee.signatory, "{:?}", facts.parties);
+        assert_ne!(
+            committee.role,
+            Some(PartyRole::Other),
+            "{:?}",
+            facts.parties
+        );
+    }
+
+    /// A role word right after a name names its side - ", Tenant" - unless
+    /// it labels the party's number: ", company number 3899612", "Employer
+    /// ID Number NN-NNNNNNN".
+    #[test]
+    fn a_role_word_labeling_a_number_defines_no_role() {
+        let employer = role_words(PartyRole::Employer).1;
+        assert!(defines_role(", tenant, agrees", &["tenant"]));
+        assert!(defines_role(" (the \"company\") agrees", employer));
+        assert!(!defines_role(
+            ", company number 3899612 and good electricity gas limited",
+            employer
+        ));
+        assert!(!defines_role(" employer id numbernn-nnnnnnn", employer));
+        assert!(!defines_role(" company reg. no. 0412", employer));
+        assert!(!defines_role(", company no. 3899612, agrees", employer));
+        // "No." that counts a party among its side's labels no number.
+        assert!(defines_role(", tenant no. 2, agrees", &["tenant"]));
+        assert!(defines_role(", tenant no 1 and", &["tenant"]));
+    }
+
+    /// An organization the reply named as the recipient, which the inside
+    /// address names under the person written to, is the letter's
+    /// addressee, though the agency's letterhead supports its sender.
+    #[test]
+    fn an_organization_in_the_inside_address_is_the_addressee() {
+        let (outcome, _) = facts_for(
+            "U.S. DEPARTMENT OF JUSTICE\nAntitrust Division\n950 Pennsylvania Avenue, N.W.\n\
+             Washington, D.C. 20530\n\nApril 16, 2020\n\nRobert L. Sacks\nKane Kessler, P.C.\n\
+             666 Third Avenue\nNew York, NY 10017\n\nDear Mr. Sacks:\n\nThis letter responds \
+             to your request for a business review letter.\n\nSincerely,\n\nMakan Delrahim",
+            |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some("2020-04-16".into()),
+                date_evidence: vec![id_of(index, "April 16, 2020")],
+                parties: vec![
+                    party(
+                        "Kane Kessler, P.C.",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "Kane Kessler")],
+                    ),
+                    party(
+                        "U.S. Department of Justice",
+                        Some(PartyRole::Sender),
+                        &[id_of(index, "DEPARTMENT OF JUSTICE")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(outcome.proposal.parties, vec!["Kane Kessler, P.C."]);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        // A "Re:" line names the matter, not who the letter is to.
+        let (outcome, _) = facts_for(
+            "DLA Piper LLP (US)\n1251 Avenue of the Americas\nNew York, New York 10020\n\n\
+             October 7, 2024\n\nThe Honorable Valerie Caproni\nUnited States District Court\n\
+             40 Foley Square\nRe: Nike, Inc. v. StockX LLC, No. 22 CV 00983\n\nDear Judge \
+             Caproni:\n\nWe represent Nike in connection with the above-referenced matter.\n\n\
+             Respectfully submitted,",
+            |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some("2024-10-07".into()),
+                date_evidence: vec![id_of(index, "October 7, 2024")],
+                parties: vec![
+                    party(
+                        "Nike, Inc.",
+                        Some(PartyRole::Client),
+                        &[id_of(index, "Re: Nike")],
+                    ),
+                    party(
+                        "DLA Piper LLP (US)",
+                        Some(PartyRole::Sender),
+                        &[id_of(index, "DLA Piper")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            },
+        );
+        assert_ne!(
+            (
+                outcome.proposal.party_relation,
+                outcome.proposal.parties.clone()
+            ),
+            (PartyRelation::To, vec!["Nike, Inc.".to_owned()])
+        );
+    }
+
+    /// A reply that read a stamp's "SEP 1 8 2015" as September 1 cited a
+    /// line that states September 18 only: the stamp's date stands in.
+    #[test]
+    fn a_stamp_date_misread_by_its_first_figure_is_repaired() {
+        let notice = "UNITED STATES ENVIRONMENTAL PROTECTION AGENCY\n\nSEP 1 8 2015 OFFICE OF\n\
+                      ENFORCEMENT\n\nVolkswagen AG\n\nRe: Notice of Violation\n\n\
+                      Dear Mr. Geanacopoulos:\n\nThe EPA has investigated Volkswagen AG.";
+        for (replied, expected) in [
+            ("2015-09-01", Some("2015-09-18")),
+            ("2015-09-18", Some("2015-09-18")),
+            ("2015-09-08", None),
+            ("2015-10-01", None),
+        ] {
+            let (outcome, _) = facts_for(notice, |index| ModelFacts {
+                document_type: Some("Notice of Violation".into()),
+                document_date: Some(replied.into()),
+                date_evidence: vec![id_of(index, "SEP 1 8")],
+                parties: vec![party(
+                    "Volkswagen AG",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Volkswagen AG")],
+                )],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.document_date.as_deref(),
+                expected,
+                "{replied}"
+            );
+            assert!(
+                outcome.reasons.contains(&ReviewReason::DateUnsupported),
+                "{replied}"
+            );
+        }
+        // A receipt's stamp dates the copy's arrival: it repairs no date.
+        for (stamp, repaired) in [
+            ("SEP 1 8 2015", true),
+            ("RECEIVED\nSEP 1 8 2015", false),
+            ("RECEIVED SEP 1 8 2015", false),
+        ] {
+            let letter = format!(
+                "ARP INDUSTRIES\n\n{stamp}\n\nMr. Alfred Puccinelli\n\nDear Mr. Puccinelli:\n\n\
+                 This is in response to your letter."
+            );
+            let (outcome, _) = facts_for(&letter, |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some("2015-09-01".into()),
+                date_evidence: vec![id_of(index, "SEP 1 8")],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.document_date.as_deref() == Some("2015-09-18"),
+                repaired,
+                "{stamp}"
+            );
+        }
+    }
+
+    /// A date read only loosely meets the guards a date written out meets:
+    /// a due date is a deadline and another agreement's date is that
+    /// agreement's, however the scan left them, and a receipt's stamp dates
+    /// no document.
+    #[test]
+    fn a_date_read_loosely_meets_the_guards_of_one_written_out() {
+        let invoice = |issued: &str, due: &str| {
+            format!(
+                "NORTHWIND SUPPLY CO.\n\nINVOICE\n\nInvoice No. 4471\nInvoice Date: {issued}\n\n\
+                 Bill To: Contoso Ltd.\n\nWidgets 10 x $160.00 $1,600.00\n\n\
+                 Payment due by {due}"
+            )
+        };
+        // The issue date written out replaces the due date; one written
+        // loosely is never offered, and the due date is withheld.
+        for (issued, due, expected) in [
+            ("June 2, 2017", "July 2, 2017", Some("2017-06-02")),
+            ("June 2, 2017", "July 2,2017", Some("2017-06-02")),
+            ("June 2,2017", "July 2,2017", None),
+            ("02-Jun-17", "02-Jul-17", None),
+        ] {
+            let (outcome, _) = facts_for(&invoice(issued, due), |index| ModelFacts {
+                document_type: Some("Invoice".into()),
+                document_date: Some("2017-07-02".into()),
+                date_evidence: vec![id_of(index, "Payment due")],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.document_date.as_deref(),
+                expected,
+                "{issued} / {due}"
+            );
+            assert!(
+                outcome.reasons.contains(&ReviewReason::DateIsDeadline),
+                "{issued} / {due}: {:?}",
+                outcome.reasons
+            );
+        }
+        for dated in ["November 22, 1923", "November 22,1923"] {
+            let letter = format!(
+                "Dear Mr. Lee:\n\nWe write about the agreement dated {dated} between your \
+                 company and ours.\n\nSincerely,\n\nRuth Abbott"
+            );
+            let (outcome, _) = facts_for(&letter, |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some("1923-11-22".into()),
+                date_evidence: vec![id_of(index, "agreement dated")],
+                ..ModelFacts::default()
+            });
+            assert_eq!(outcome.proposal.document_date, None, "{dated}");
+            assert!(
+                outcome.reasons.contains(&ReviewReason::DateUnsupported),
+                "{dated}"
+            );
+        }
+        // A receipt's stamp is not read loosely, as it repairs nothing,
+        // whatever loose form its date takes.
+        for (stamp, needle, date, read) in [
+            ("SEP 1 8 2015", "SEP 1 8", "2015-09-18", true),
+            ("RECEIVED\nSEP 1 8 2015", "SEP 1 8", "2015-09-18", false),
+            ("RECEIVED SEP 1 8 2015", "SEP 1 8", "2015-09-18", false),
+            ("FILED SEP 1 8 2015", "SEP 1 8", "2015-09-18", false),
+            ("November 22,1923", "November 22", "1923-11-22", true),
+            (
+                "RECEIVED November 22,1923",
+                "November 22",
+                "1923-11-22",
+                false,
+            ),
+            (
+                "RECEIVED\nNovember 22,1923",
+                "November 22",
+                "1923-11-22",
+                false,
+            ),
+            ("FILED November 22,1923", "November 22", "1923-11-22", false),
+            ("November\n22,1923", "November", "1923-11-22", true),
+            (
+                "RECEIVED November\n22,1923",
+                "November",
+                "1923-11-22",
+                false,
+            ),
+            (
+                "RECEIVED\nNovember\n22,1923",
+                "November",
+                "1923-11-22",
+                false,
+            ),
+            ("RECEIVED\nSEP 1 8\n2015", "SEP 1 8", "2015-09-18", false),
+            // A dateline of its own two lines under a receipt's label is
+            // no part of the receipt's date.
+            (
+                "Received in the Office of the Clerk on\nJAN 3 1924 by the deputy clerk\n\
+                 November 22,1923, the date of the company's letter to the court",
+                "November 22,1923, the date",
+                "1923-11-22",
+                true,
+            ),
+        ] {
+            let letter = format!(
+                "ARP INDUSTRIES\n\n{stamp}\n\nMr. Alfred Puccinelli\n\nDear Mr. Puccinelli:\n\n\
+                 This is in response to your letter."
+            );
+            let (outcome, _) = facts_for(&letter, |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some(date.into()),
+                date_evidence: vec![id_of(index, needle)],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.document_date.as_deref() == Some(date),
+                read,
+                "{stamp}"
+            );
+            assert!(
+                outcome.reasons.contains(&ReviewReason::DateUnsupported),
+                "{stamp}"
+            );
+        }
+    }
+
+    /// A court document's caption names the sides of its case, and a
+    /// British letter's address block names who it is to: neither is the
+    /// letterhead of the party a line in it names.
+    #[test]
+    fn a_caption_or_an_address_block_is_no_letterhead() {
+        let (outcome, _) = facts_for(
+            "UNITED STATES DISTRICT COURT\nSOUTHERN DISTRICT OF NEW YORK\n\nLUXO AS,\n\n\
+             -against-\n\nTHE WALT DISNEY COMPANY\n\nPlaintiff,\n\nNOTICE OF DISMISSAL\n\n\
+             Defendants.\n\nPlaintiff hereby dismisses this action.\n\nDated: November 2, 2009",
+            |index| ModelFacts {
+                document_type: Some("NOTICE OF DISMISSAL".into()),
+                document_date: Some("2009-11-02".into()),
+                date_evidence: vec![id_of(index, "November 2, 2009")],
+                parties: vec![party(
+                    "LUXO AS",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "LUXO")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        let facts = outcome.facts.expect("facts");
+        assert_ne!(
+            facts.parties[0].document_role,
+            Some(PartyRole::Issuer),
+            "{:?}",
+            facts.parties
+        );
+        let (outcome, _) = facts_for(
+            "From the Chief Executive Office Of Fair Trading\n\nThe Rt Hon George Osborne MP\n\
+             Chancellor of the Exchequer\nHM Treasury\n1 Horse Guards Road\n\n11 September 2013\n\
+             Dear Chancellor\n\nI am writing to provide you with advice.\n\nYours sincerely",
+            |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some("2013-09-11".into()),
+                date_evidence: vec![id_of(index, "11 September 2013")],
+                parties: vec![party(
+                    "HM Treasury",
+                    Some(PartyRole::Employer),
+                    &[id_of(index, "HM Treasury")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        let facts = outcome.facts.expect("facts");
+        assert_ne!(
+            facts.parties[0].document_role,
+            Some(PartyRole::Issuer),
+            "{:?}",
+            facts.parties
+        );
+        // A law firm's letter to a court names the court in its inside
+        // address and the case on its "Re:" line: its letterhead, above
+        // both, is still its sender's.
+        let (outcome, _) = facts_for(
+            "DLA Piper LLP (US)\n1251 Avenue of the Americas\nNew York, New York 10020\n\n\
+             October 7, 2024\n\nThe Honorable Valerie Caproni\nUnited States District Court\n\
+             40 Foley Square\nRe: Nike, Inc. v. StockX LLC, No. 22 CV 00983\n\nDear Judge \
+             Caproni:\n\nWe represent Nike in connection with the above-referenced matter and \
+             write to request a conference against the defendant's objection.\n\n\
+             Respectfully submitted,\n\nJane Roe",
+            |index| ModelFacts {
+                document_type: Some("letter".into()),
+                type_evidence: vec![id_of(index, "Dear Judge")],
+                document_date: Some("2024-10-07".into()),
+                date_evidence: vec![id_of(index, "October 7, 2024")],
+                parties: vec![party(
+                    "DLA Piper LLP (US)",
+                    Some(PartyRole::Sender),
+                    &[id_of(index, "DLA Piper")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        let facts = outcome.facts.expect("facts");
+        assert_eq!(facts.parties[0].role, Some(PartyRole::Sender));
+        assert_eq!(facts.parties[0].role_support, Support::Cited);
+        // A court's own letter sets its case out with no "Re:": the court's
+        // letterhead stands over the letter's dateline and heads no
+        // caption, so it is still the sender's.
+        let court_letter = "UNITED STATES DISTRICT COURT\nSOUTHERN DISTRICT OF NEW YORK\n\
+             Chambers of Judge Jane Roe\n\nMarch 3, 2024\n\nJohn Smith, Esq.\nSmith & Co LLP\n\
+             1 Main Street\nNew York, NY 10001\n\nSmith v. Jones, No. 22-cv-123\n\n\
+             Dear Counsel:\n\nThe conference set for March 10 is adjourned to April 1, \
+             2024.\n\nSO ORDERED.\n\nJane Roe";
+        let index = index_of(court_letter);
+        let context = whole(&index);
+        let scope = ValidationScope::new(&index, &context, &[]);
+        assert_eq!(LetterLayout::of(&scope).caption, None);
+        let (outcome, _) = facts_for(court_letter, |index| ModelFacts {
+            document_type: Some("letter".into()),
+            type_evidence: vec![id_of(index, "Dear Counsel")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "March 3, 2024")],
+            parties: vec![party(
+                "United States District Court",
+                Some(PartyRole::Sender),
+                &[id_of(index, "UNITED STATES DISTRICT COURT")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        let facts = outcome.facts.expect("facts");
+        assert_eq!(facts.parties[0].role_support, Support::Cited);
+        // A caption set out above a letter's dateline is still a caption.
+        let index = index_of(
+            "UNITED STATES DISTRICT COURT\nSOUTHERN DISTRICT OF NEW YORK\n\n\
+             LUXO AS,\nPlaintiff,\n-against-\nTHE WALT DISNEY COMPANY,\nDefendant.\n\n\
+             March 3, 2024\n\nDear Counsel:\n\nThe conference is adjourned.",
+        );
+        let context = whole(&index);
+        let scope = ValidationScope::new(&index, &context, &[]);
+        let layout = LetterLayout::of(&scope);
+        let luxo = index
+            .units()
+            .iter()
+            .find(|unit| unit.text.contains("LUXO"))
+            .expect("unit");
+        assert!(layout.caption.is_some() && layout.in_caption(&index.units()[0]));
+        assert!(layout.in_caption(luxo), "{:?}", layout.caption);
+    }
+
+    /// A reply that copied a title line with the side filing it, or with
+    /// the sentence the title opens, is typed by the title alone.
+    #[test]
+    fn a_reply_past_its_title_is_typed_by_the_title() {
+        assert!(reads_past_title(
+            "PLAINTIFF'S NOTICE OF VOLUNTARY DISMISSAL",
+            &words("PLAINTIFF'S NOTICE OF VOLUNTARY DISMISSAL"),
+            "NOTICE OF VOLUNTARY DISMISSAL"
+        ));
+        assert!(reads_past_title(
+            "NOTICE IS HEREBY GIVEN",
+            &words("NOTICE IS HEREBY GIVEN"),
+            "NOTICE"
+        ));
+        assert_eq!(head_noun(&words("NOTICE IS HEREBY GIVEN")), Some("notice"));
+        assert!(!reads_past_title(
+            "Amended and Restated Lease Agreement",
+            &words("Amended and Restated Lease Agreement"),
+            "Lease Agreement"
+        ));
+        assert!(!reads_past_title(
+            "Notice of Default",
+            &words("Notice of Default"),
+            "Notice of Default"
+        ));
+        assert!(reads_past_title(
+            "Notice IS Hereby Given for MR. William Dew",
+            &words("Notice IS Hereby Given for MR. William Dew"),
+            "Notice"
+        ));
+        assert!(reads_past_title(
+            "NOTICE HEREBY GIVEN",
+            &words("NOTICE HEREBY GIVEN"),
+            "NOTICE"
+        ));
+        // A body's sentence that opens on a kind of document is no title:
+        // its first word is not the type.
+        assert!(!reads_past_title(
+            "Receipt is acknowledged of the Letter of Notification of PPL Electric Utilities",
+            &words(
+                "Receipt is acknowledged of the Letter of Notification of PPL Electric Utilities"
+            ),
+            "Receipt"
+        ));
+        assert!(!reads_past_title(
+            "Invoice is attached for services rendered",
+            &words("Invoice is attached for services rendered"),
+            "Invoice"
+        ));
+        assert!(!reads_past_title(
+            "Notice is",
+            &words("Notice is"),
+            "Notice"
+        ));
+        let (outcome, _) = facts_for(
+            "IN THE UNITED STATES DISTRICT COURT\n\nPA ADVISORS, LLC,\nPlaintiff,\nv.\n\
+             GOOGLE INC., et al.,\nDefendants.\n\n\
+             PLAINTIFF\u{2019}S NOTICE OF VOLUNTARY DISMISSAL OF WPP GROUP PLC\n\n\
+             Plaintiff hereby dismisses WPP GROUP PLC.\n\nDated: January 24, 2008",
+            |index| ModelFacts {
+                document_type: Some(
+                    "PLAINTIFF'S NOTICE OF VOLUNTARY DISMISSAL OF WPP GROUP PLC".into(),
+                ),
+                type_evidence: vec![id_of(index, "VOLUNTARY DISMISSAL")],
+                document_date: Some("2008-01-24".into()),
+                date_evidence: vec![id_of(index, "January 24, 2008")],
+                parties: vec![
+                    party(
+                        "PA ADVISORS, LLC",
+                        Some(PartyRole::Client),
+                        &[id_of(index, "PA ADVISORS")],
+                    ),
+                    party(
+                        "WPP GROUP PLC",
+                        Some(PartyRole::Client),
+                        &[id_of(index, "VOLUNTARY DISMISSAL")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome
+                .proposal
+                .document_type
+                .as_deref()
+                .map(str::to_lowercase)
+                .as_deref(),
+            Some("notice of voluntary dismissal")
+        );
+        // A reply that copied a body's sentence opening on a kind of
+        // document is not typed by its first word.
+        for (sentence, cited) in [
+            (
+                "Invoice is attached for services rendered",
+                "Invoice is attached",
+            ),
+            (
+                "Receipt is acknowledged of the Letter of Notification of Acme Utilities",
+                "Receipt is acknowledged",
+            ),
+        ] {
+            let (outcome, _) = facts_for(
+                &format!(
+                    "Acme Utilities Corporation\n12 High Street\n\n3 March 2024\n\n\
+                     {sentence} in February.\n\nAcme Utilities Corporation"
+                ),
+                |index| ModelFacts {
+                    document_type: Some(sentence.into()),
+                    type_evidence: vec![id_of(index, cited)],
+                    document_date: Some("2024-03-03".into()),
+                    date_evidence: vec![id_of(index, "3 March 2024")],
+                    parties: vec![party(
+                        "Acme Utilities Corporation",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "12 High Street")],
+                    )],
+                    ..ModelFacts::default()
+                },
+            );
+            let head = sentence.split_whitespace().next().expect("word");
+            assert_ne!(
+                outcome.proposal.document_type.as_deref(),
+                Some(head),
+                "{:?}",
+                outcome.proposal
+            );
+        }
+    }
+
+    /// A courtesy title is no part of a person's name in a filename; a
+    /// title of rank, an organization's "Dr." and a long name keep theirs.
+    #[test]
+    fn a_courtesy_title_is_no_part_of_a_name() {
+        for (written, name) in [
+            ("Prof. A. G. Bell", "A. G. Bell"),
+            ("MR. William Dew", "William Dew"),
+            ("The Rt Hon Kemi Badenoch", "Kemi Badenoch"),
+            ("Dr Jane Okafor", "Jane Okafor"),
+            ("Sir Gus O'Donnell", "Sir Gus O'Donnell"),
+            (
+                "DR ING. H.C.F. PORSCHE AKTIEGESELLSCHAFT",
+                "DR ING. H.C.F. PORSCHE AKTIEGESELLSCHAFT",
+            ),
+            ("Dr. Smith Dental Group", "Dr. Smith Dental Group"),
+            ("Mr.", "Mr."),
+            ("Dr. Smith", "Dr. Smith"),
+            ("The Rt Hon Alex Chalk KC MP", "Alex Chalk"),
+            ("John Mann MP", "John Mann MP"),
+            // Two people addressed together keep their titles.
+            ("Mr and Mrs Smith", "Mr and Mrs Smith"),
+            ("Mr & Mrs Smith", "Mr & Mrs Smith"),
+            ("Mr. and Mrs. Smith", "Mr. and Mrs. Smith"),
+            ("Dr Jane and Mr Smith", "Dr Jane and Mr Smith"),
+            ("Mr & Mrs J Smith", "Mr & Mrs J Smith"),
+        ] {
+            assert_eq!(without_courtesy_title(written), name, "{written}");
+        }
+    }
+
+    /// A notice to two people addressed together is to both of them: the
+    /// title before the first is no part of a name to cut.
+    #[test]
+    fn a_joint_addressee_keeps_the_title() {
+        let (outcome, _) = facts_for(
+            "NOTICE OF RENT INCREASE\n\nTo: Mr and Mrs Smith\n12 High Street\nNorthtown NT2 2BB\n\n\
+             Date: 3 March 2024\n\nYour rent for 12 High Street will rise from 1 April 2024 to \
+             650 pounds a month.\n\nNorthshire Council Housing Team",
+            |index| ModelFacts {
+                document_type: Some("Notice of Rent Increase".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF RENT")],
+                document_date: Some("2024-03-03".into()),
+                date_evidence: vec![id_of(index, "3 March 2024")],
+                parties: vec![party(
+                    "Mr and Mrs Smith",
+                    Some(PartyRole::Tenant),
+                    &[id_of(index, "To: Mr and Mrs Smith")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(outcome.proposal.parties, vec!["Mr and Mrs Smith"]);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// A redaction's marker names no one; a name with the word in it is
+    /// still a name.
+    #[test]
+    fn a_redaction_is_no_party() {
+        assert!(is_redaction("REDACTED"));
+        assert!(is_redaction("\\[REDACTED]"));
+        assert!(is_redaction("[name withheld]"));
+        assert!(!is_redaction("Redacted Records Ltd"));
+        assert!(!is_redaction("Jane Doe"));
+    }
+
+    /// A "Re:" line's kind followed by its number names the document the
+    /// letter is about, not the letter: the letter's layout stands in.
+    #[test]
+    fn a_numbered_matter_is_no_title() {
+        let letter = |re: &str| {
+            format!(
+                "Food and Drug Administration\n\nFebruary 9, 2018\n\nCollegium Pharmaceutical, \
+                 Inc.\n780 Dedham Street\n\n{re}\n\nDear Mr. Weet:\n\nThe Office of Prescription \
+                 Drug Promotion has reviewed your materials.\n\nSincerely,\n\nJane Smith"
+            )
+        };
+        for (re, title) in [
+            ("RE: NDA 208090", None),
+            ("Re: Invoice No. 4471", None),
+            ("Re: Notice of Default", Some("Notice of Default")),
+        ] {
+            let index = index_of(&letter(re));
+            let context = whole(&index);
+            let scope = ValidationScope::new(&index, &context, &[]);
+            assert_eq!(
+                title_of(&scope).map(|(phrase, _)| phrase).as_deref(),
+                title,
+                "{re}"
+            );
+        }
+    }
+
+    /// In a document laid out as a letter, a type read from what the letter
+    /// talks about below its salutation gives way to "Letter", still for a
+    /// person to complete.
+    #[test]
+    fn a_letter_typed_by_its_talk_stands_in_as_a_letter() {
+        let (outcome, _) = facts_for(
+            "Office of Fair Trading\nFleetbank House\n\n11 September 2013\n\nDear Chancellor\n\n\
+             I am writing to provide you with advice, as requested, concerning the divestments.\n\n\
+             Yours sincerely,\n\nClive Maxwell",
+            |index| ModelFacts {
+                document_type: Some("advice".into()),
+                type_evidence: vec![id_of(index, "I am writing")],
+                document_date: Some("2013-09-11".into()),
+                date_evidence: vec![id_of(index, "11 September 2013")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some("Letter"));
+        for reason in [
+            ReviewReason::TypeUnsupported,
+            ReviewReason::TypeInferred,
+            ReviewReason::TypeMissing,
+        ] {
+            assert!(outcome.reasons.contains(&reason), "{:?}", outcome.reasons);
+        }
+    }
+
+    /// A "The" that opens a name's line is the name's own; one in a sentence
+    /// is not.
+    #[test]
+    fn a_line_opening_the_is_part_of_the_name() {
+        let index = index_of(
+            "UNITED STATES DISTRICT COURT\n\nTHE MCGRAW-HILL COMPANIES, INC.,\nPlaintiffs,\n\n\
+             The parties met with the Acme Widget Company today.",
+        );
+        let unit = |needle: &str| {
+            index
+                .units()
+                .iter()
+                .find(|unit| unit.text.contains(needle))
+                .expect("unit")
+        };
+        assert_eq!(
+            written_span(unit("MCGRAW"), "mcgraw-hill companies inc").as_deref(),
+            Some("THE MCGRAW-HILL COMPANIES, INC.")
+        );
+        assert_eq!(
+            written_span(unit("Acme"), "acme widget company").as_deref(),
+            Some("Acme Widget Company")
+        );
+        // A sentence that opens with the name keeps its "The".
+        let index = index_of("The Acme Widget Company agrees to pay the invoice in full.");
+        let sentence = index
+            .units()
+            .iter()
+            .find(|unit| unit.text.contains("Acme"))
+            .expect("unit");
+        assert_eq!(
+            written_span(sentence, "acme widget company").as_deref(),
+            Some("Acme Widget Company")
         );
     }
 }

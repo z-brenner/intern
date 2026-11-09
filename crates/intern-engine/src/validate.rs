@@ -321,6 +321,12 @@ fn validate_date(
     (Some(date.to_owned()), candidate.date_role, true, None)
 }
 
+/// Where a line, `normalize`d, states a date: [`date_match_positions`], or
+/// for a date validation read only loosely, [`read_date_positions`].
+///
+/// [`read_date_positions`]: crate::evidence::read_date_positions
+pub(crate) type DatePositions = fn(&str, &str) -> Vec<usize>;
+
 /// Whether `digest` states `date` only as another document's date: every
 /// statement of it introduced by a reference to another agreement, and none
 /// naming this document.
@@ -328,6 +334,18 @@ pub(crate) fn date_is_tainted(
     digest: &impl Segments,
     date: &str,
     document_type: Option<&str>,
+) -> bool {
+    date_is_tainted_as(digest, date, document_type, date_match_positions)
+}
+
+/// [`date_is_tainted`], with the date's statements found by `positions`. A
+/// date read only loosely ("November 22,1923") is judged by the statements
+/// it was read from, which [`date_match_positions`] does not see.
+pub(crate) fn date_is_tainted_as(
+    digest: &impl Segments,
+    date: &str,
+    document_type: Option<&str>,
+    positions: DatePositions,
 ) -> bool {
     // The taint is judged over wrapped lines, not raw ones. A PDF breaks
     // "... Northstar Lantern Works LLC dated" from "March 3, 2024" wherever
@@ -347,7 +365,7 @@ pub(crate) fn date_is_tainted(
     let mut tainted = true;
     for line in &wrapped {
         let normalized = normalize(line);
-        for position in date_match_positions(date, &normalized) {
+        for position in positions(date, &normalized) {
             stated = true;
             if names_this_document(&normalized, position, document_type)
                 || !reference_introduced(&normalized, position)
@@ -426,6 +444,17 @@ fn deadline_redirect(digest: &impl Segments, date: &str) -> Option<Deadline> {
 /// Whether every statement of `date` in `digest`, references to other
 /// documents aside, is labeled a deadline - and there is at least one.
 pub(crate) fn deadline_fires(digest: &impl Segments, date: &str) -> bool {
+    deadline_fires_as(digest, date, date_match_positions)
+}
+
+/// [`deadline_fires`], with the date's statements found by `positions`: a
+/// due date written loosely ("Payment due by 02-Jul-17") is as much a
+/// deadline as one written out.
+pub(crate) fn deadline_fires_as(
+    digest: &impl Segments,
+    date: &str,
+    positions: DatePositions,
+) -> bool {
     let lines: Vec<String> = digest
         .segments()
         .iter()
@@ -434,7 +463,7 @@ pub(crate) fn deadline_fires(digest: &impl Segments, date: &str) -> bool {
     let mut stated = false;
     for line in &lines {
         let normalized = normalize(line);
-        for position in date_match_positions(date, &normalized) {
+        for position in positions(date, &normalized) {
             if reference_introduced(&normalized, position) {
                 continue;
             }
