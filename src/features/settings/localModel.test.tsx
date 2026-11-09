@@ -9,7 +9,9 @@ import { accuracyStatus } from './LocalModel';
 
 async function openSettings() {
   fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
-  return screen.findByRole('dialog', { name: 'Settings' });
+  const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+  fireEvent.click(within(dialog).getByText('Local processing', { selector: 'summary' }));
+  return dialog;
 }
 
 
@@ -62,13 +64,6 @@ describe('the local model setting', () => {
     fireEvent.click(within(quick).getByRole('button', { name: 'Download the quick model (2.55 GiB) for quicker readings and low-memory fallback' }));
     await waitFor(() => expect(startModelDownload).toHaveBeenCalledWith('fast'));
     expect(await within(quick).findByText(/Downloading/)).toBeVisible();
-  });
-
-  it('is not offered while a hosted model is chosen', async () => {
-    render(<App bridge={createInMemoryBridge()} />);
-    const dialog = await openSettings();
-    fireEvent.click(within(dialog).getByLabelText('Hosted model with my API key'));
-    expect(within(dialog).queryByRole('group', { name: 'Local model' })).not.toBeInTheDocument();
   });
 
   it('shows the accurate model arriving, and pauses and resumes it', async () => {

@@ -215,51 +215,40 @@ test('pause, resume, apply all ready, and discard waiting all report what they d
   }
 });
 
-test('settings reveals the hosted-model fields, keeps typed text, and closes on Escape', async ({ page }) => {
+test('settings keeps optional choices collapsed, preserves typing, and discards unsaved changes on Escape', async ({ page }) => {
   await page.goto('/');
   const gear = page.getByRole('button', { name: /Settings/i });
   await gear.click();
   const dialog = page.getByRole('dialog', { name: /Settings/i });
   await expect(dialog).toBeVisible();
   await shot(page, 'settings-open');
-
-  // The header must say the privacy posture, and it must be the local one
-  // until a hosted model is actually chosen.
   await expect(page.getByText(/Private . On this device/i)).toBeVisible();
+  await expect(dialog.getByLabel('API key', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel('API address', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('radio', { name: /Hosted model/i })).toHaveCount(0);
 
-  // Choosing a hosted model reveals the address, model, and key fields.
-  await dialog.getByRole('radio', { name: /Hosted model with my API key/i }).check();
-  await shot(page, 'settings-hosted-revealed');
-  // Not `input[type=text]`: an input that omits the attribute is still a text
-  // field, and most of these omit it.
-  const textInputs = dialog.locator('input:not([type="checkbox"]):not([type="radio"])');
-  expect(await textInputs.count(), 'choosing a hosted model must reveal its address, model, and key').toBeGreaterThan(2);
-  await expect(dialog.getByText(/sent to this service to be named/i)).toBeVisible();
+  const naming = dialog.locator('summary', { hasText: 'Naming and filing' });
+  const names = dialog.getByLabel("Your organization's names");
+  await expect(names).toBeHidden();
+  // Keyboard navigation skips controls inside closed sections.
+  await naming.focus();
+  await page.keyboard.press('Tab');
+  await expect(dialog.locator('summary', { hasText: 'Learned spellings' })).toBeFocused();
+  await naming.click();
+  await names.fill('Ridgeline Legal');
+  await page.waitForTimeout(1200);
+  await expect(names).toHaveValue('Ridgeline Legal');
+  await expect(names).toBeFocused();
+  await shot(page, 'settings-typed-name-kept');
 
-  // Typing into a revealed field must survive re-renders of the window
-  // behind the dialog. (The queue-event case that caused the original focus
-  // defect cannot be produced in the browser build, which has no ticking
-  // queue; that one is covered by the dialog-focus unit tests.)
-  const address = dialog.getByLabel(/API address/i).first();
-  if (await address.count()) {
-    await address.click();
-    await address.fill('http://127.0.0.1:11434/v1');
-    await page.waitForTimeout(1200);
-    await expect(address).toHaveValue('http://127.0.0.1:11434/v1');
-    await expect(address).toBeFocused();
-    await shot(page, 'settings-typed-address-kept');
-  }
-
-  // Escape closes, nothing is saved, and the focus returns to the control
-  // that opened it.
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
   await expect(gear).toBeFocused();
   await shot(page, 'settings-closed');
-
-  // Reopening shows the unsaved change was discarded.
   await gear.click();
-  await expect(page.getByRole('dialog', { name: /Settings/i }).getByRole('radio', { name: /Local model on this computer/i })).toBeChecked();
+  await expect(names).toBeHidden();
+  await naming.click();
+  await expect(names).toHaveValue('');
   await shot(page, 'settings-reopened-unsaved-discarded');
   await page.keyboard.press('Escape');
 });

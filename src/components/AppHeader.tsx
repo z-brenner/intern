@@ -24,7 +24,7 @@ export function AppHeader({ paused, inert, busy, privacy, inputFolder = '', onAd
     hosted model is on. Then it says the opposite, in the same place, so the
     one setting that sends document text off the machine is never invisible.
   */
-  const into = inputFolder || 'your input folder';
+  const into = inputFolder || 'your Queue folder';
   return <header className="app-header" inert={inert || undefined}>
     <div className="product"><strong>Intern</strong>
       <PrivacyBadge facts={privacy} onOpenSettings={onSettings} onOpenGuide={onHelp} /></div>
@@ -34,7 +34,7 @@ export function AppHeader({ paused, inert, busy, privacy, inputFolder = '', onAd
       is. The note is the buttons' description as well as visible text.
     */}
     <div className="header-actions">
-      <span className="header-note" id="add-destination" title={`Files you add are copied into ${into}. The originals stay where they are.`}>Copied into <strong>{into}</strong></span>
+      <span className="sr-only" id="add-destination" title={`Files you add are copied into ${into}. The originals stay where they are.`}>Copied into <strong>{into}</strong></span>
       <button type="button" aria-describedby="add-destination" title="Add files" onClick={onAddFiles}><Icon icon={FilePlus2} /><span className="button-label">Add files</span></button>
       <button type="button" aria-describedby="add-destination" title="Add folder" onClick={onAddFolder}><Icon icon={FolderOpen} /><span className="button-label">Add folder</span></button>
       {/*

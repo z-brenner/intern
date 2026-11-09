@@ -27,15 +27,14 @@ it names.
 
 ## What leaves your machine
 
-With local inference selected, document text, extracted pages, OCR output and
-model prompts stay on the machine. There is no telemetry or automatic cloud
+Intern processes document text, extracted pages, OCR output and model prompts
+on your computer. There is no telemetry or automatic cloud
 inference fallback. This is the complete list of what Intern sends anywhere:
 
 | Request | When | What it carries |
 | --- | --- | --- |
 | Model download | Once, when you start it (or never, if you choose existing model files) | A request for each pinned model file. Nothing about the machine or its documents. |
 | Update check | When Intern starts, every 6 hours while it runs, and when you press **Check for updates**. The automatic check can be switched off in Settings. | A request for the GitHub release manifest. Nothing about the machine or its documents. |
-| Hosted model | Only if you turn it on, under your own API key | The condensed text of each document, to the service you name. |
 | Microsoft sign-in and Graph (`login.microsoftonline.com`, `graph.microsoft.com`) | Only in a build an administrator provisioned for the SharePoint deployment | Sign-in and its renewal, then account and file metadata for upload verification, never document content. The build published here has none. |
 
 The first two are all a default install ever sends, and neither carries
@@ -46,17 +45,8 @@ found update is never installed by the check itself: installing is always a
 separate, explicit click, and only ever happens if the update is signed by this
 project's key — anything else is refused.
 
-There are two optional integrations. Both require an explicit choice. Settings
-can point Intern at a **hosted model** — Anthropic's, OpenAI's, or any service
-that speaks the OpenAI chat-completions shape, including a local server such as
-Ollama or LM Studio — under your own API key. With that on, the condensed text
-of every document is sent to that service to be named. Nothing else changes:
-the same distillation goes out, the same evidence checks are applied to what
-comes back, and the file itself never leaves. The header badge stops saying
-*On this device* for as long as it is on, the key lives in the operating
-system's credential store rather than in any Intern file, and **Test
-connection** sends only Intern's own calibration document. If the promise
-above is why you use Intern, leave hosted inference off.
+Intern no longer offers API-key setup or automatic hosted processing.
+Existing hosted-model settings are retired when you update.
 
 **Microsoft upload verification** is the account connection for the
 SharePoint deployment. It exists only in builds an administrator has
@@ -75,7 +65,7 @@ extraction nor OCR can read goes to review rather than being guessed at.
 
 ## Install and first run
 
-Windows 10 or 11, x86-64. Download `Intern_0.1.0-alpha.15_x64-setup.exe` from the
+Windows 10 or 11, x86-64. Download `Intern_0.1.0-alpha.16_x64-setup.exe` from the
 [latest release](https://github.com/z-brenner/intern/releases/latest) and run it;
 earlier versions are on the [releases page](https://github.com/z-brenner/intern/releases).
 It installs per-user, so it does not ask for administrator rights, and
@@ -93,7 +83,7 @@ carries a keyless Sigstore build-provenance attestation naming the repository,
 workflow, and commit that produced those exact bytes:
 
 ```sh
-gh attestation verify Intern_0.1.0-alpha.15_x64-setup.exe --repo z-brenner/intern \
+gh attestation verify Intern_0.1.0-alpha.16_x64-setup.exe --repo z-brenner/intern \
   --signer-workflow z-brenner/intern/.github/workflows/release.yml
 ```
 
@@ -142,18 +132,18 @@ loaded at a time, and it is unloaded after ten minutes without a document.
 Then Intern asks for **two folders**, and it cannot be used until both are
 chosen — there is no skipping it:
 
-- **Input folder** — put files here that you want Intern to process.
-- **Output folder** — processed files end up here, renamed. Neither folder
+- **Queue folder** — put files here that you want Intern to process.
+- **Completed folder** — processed files end up here, renamed. Neither folder
   may be inside the other.
 
 Setup lists the OneDrive and SharePoint folders already on the computer and
-can make an *Output* folder beside the input folder; both folders can be
+can create the Completed folder beside the Queue folder; both folders can be
 changed later at the top of Settings. An install from an earlier release that
-has no input folder is asked on its next launch, with its output folder
+has no Queue folder is asked on its next launch, with its Completed folder
 offered again.
 
-Put documents in the input folder, or drag documents or a folder onto the
-window — Intern **copies** what you drop into the input folder and leaves the
+Put documents in the Queue folder, or drag documents or a folder onto the
+window — Intern **copies** what you drop into the Queue folder and leaves the
 original where it was — PDFs, Word documents
 (`.docx`, `.doc`, `.rtf`, `.odt`), Excel workbooks and exports (`.xlsx`,
 `.xls`, `.ods`, `.csv`), PowerPoint decks (`.pptx`, `.ppt`, `.odp`), `.eml` and
@@ -161,9 +151,9 @@ Outlook `.msg` emails, plain text, Markdown, and scanned images. Names
 Intern can support with verbatim text from the document appear ready to apply;
 anything else goes to review with the reason shown. Nothing on disk is renamed
 until you approve it, either one item at a time or with **Rename all ready**;
-approving moves the document out of the input folder into the output folder
+approving moves the document out of the Queue folder into the Completed folder
 under its new name, and a rename can be undone - with two exceptions Intern
-makes on its own in the input folder, both of which say so in the file's
+makes on its own in the Queue folder, both of which say so in the file's
 name. A document Intern cannot read (a password, a damaged or mislabeled
 file, one too large to read, one the model could not answer for) stays in the
 queue for review and its file is renamed in place to `NEEDS REVIEW - <name>`,
@@ -198,7 +188,7 @@ states is one click away, and the file's own last-modified date is the last,
 labeled resort. The date a reviewer gives a name is the date the document
 is filed under: the year folder and the description record follow it.
 
-Filed documents can be **arranged into subfolders** of the output folder —
+Filed documents can be **arranged into subfolders** of the Completed folder —
 by year, by year and document type, by type, or by first party — with
 **Arrange filed documents** in Settings. Folders are created as documents
 arrive and removed again when an undo empties them, and a document missing
@@ -206,7 +196,7 @@ the fact a layout keys on goes into `Undated` or `Unsorted` rather than the
 root, so what still needs a hand stays visible.
 
 Intern can also **run in the background**: with the setting on, closing the
-window keeps Intern in the system tray — the input folder is still processed — and
+window keeps Intern in the system tray — the Queue folder is still processed — and
 **Start Intern when you sign in** makes it a quiet always-on service. Both are
 off by default. The tray icon's tooltip says how many documents need review
 or are ready to rename, so a glance answers whether the window is worth
@@ -214,12 +204,12 @@ opening.
 
 The installer also puts Intern in Explorer's **Send to** menu: select
 documents — attachments saved from Outlook, a folder of scans — right-click,
-and choose **Send to > Intern**. Intern copies them into the input folder and
+and choose **Send to > Intern**. Intern copies them into the Queue folder and
 queues them, whether or not it is already open. Every way of adding — Add
-files, Add folder, a drop, Send to — copies into the input folder: a folder is
+files, Add folder, a drop, Send to — copies into the Queue folder: a folder is
 flattened, a name already taken gets " (2)", " (3)", a file already in the
-input folder is not copied again, and the originals are never changed. Each
-copy is written under a temporary name in the input folder's hidden
+Queue folder is not copied again, and the originals are never changed. Each
+copy is written under a temporary name in the Queue folder's hidden
 `.intern` folder, checked against the original, and only then given its real
 name, so the folder never holds half a copy (one a crash leaves behind is
 swept away an hour later, by the computer that made it); it joins the queue at once
@@ -228,7 +218,7 @@ are copied once. An add is
 never refused as a batch: a file Intern cannot read (a `.zip`, an empty file,
 an Office lock file, a scan another program still has open) is left out and
 named in the window, with the reason, and everything else is copied and
-queued. With no input folder set up, an add is refused and points to
+queued. With no Queue folder set up, an add is refused and points to
 Settings; nothing is ever processed where it sits. Documents sent with **Send
 to > Intern** before setup has chosen the folders wait, and are copied in as
 soon as it has. Installing an update
@@ -248,58 +238,58 @@ themselves. Install a package from a CI run's `intern-linux-…` artifact, or
 build one, with apt:
 
 ```sh
-sudo apt install ./Intern_0.1.0-alpha.15_amd64.deb
+sudo apt install ./Intern_0.1.0-alpha.16_amd64.deb
 ```
 
 apt brings what it depends on (WebKitGTK, AppIndicator, `tesseract-ocr`,
 `libgomp1`, OpenSSL). First run, the queue, background mode and sign-in start
-work as above; data is in `~/.local/share/com.intern.app`, the hosted model's key in
-the Secret Service, and a file manager's **Open With** takes the place of
+work as above; data is in `~/.local/share/com.intern.app`, and a file manager's
+**Open With** takes the place of
 **Send to**. Microsoft sign-in, the OneDrive client, and the SharePoint
 deployment are Windows-only. [Linux](docs/linux.md) has the build, where
 everything lives, how to test it headless (Xvfb, or the pipeline with no
 window at all), and the rest of what differs.
 
-## Input and output folders, OneDrive, and SharePoint
+## Queue and Completed folders, OneDrive, and SharePoint
 
-Intern has one way in: a document is processed because it is in the **input
+Intern has one way in: a document is processed because it is in the **Queue
 folder**, which Intern always watches, and it is filed into the **output
-folder**. Documents that appear in the input folder — put there in Explorer,
+folder**. Documents that appear in the Queue folder — put there in Explorer,
 synced down by OneDrive, or copied in by a drop — are analyzed and, once
 approved (or automatically, if you enable high-confidence renames), moved to
-the output folder under their new name.
+the Completed folder under their new name.
 
 ### Choosing the folders
 
 Without an administrator's deployment, Intern's first launch asks for both
 folders. Nothing asks for a tenant, a site, or an account.
 
-1. **Choose your input folder.** Intern lists the OneDrive and SharePoint
+1. **Choose your Queue folder.** Intern lists the OneDrive and SharePoint
    folders already on this computer, such as *Legal - Documents (Contoso
    SharePoint)* or *OneDrive – Contoso*. Use one, browse to a folder inside it,
    or choose any folder on the computer. Folders synced with **Sync**, folders
    added with **Add shortcut to My files**, and your own OneDrive all work.
-2. **Choose your output folder.** Intern creates an *Output* folder next to
-   the input folder, keeps the output folder you already had, or you choose
+2. **Choose your Completed folder.** Intern creates a Completed folder next to
+   the Queue folder, keeps the Completed folder you already had, or you choose
    another — neither folder may be inside the other. Chosen whole, a synced
    location gets an *Input* and an *Output* folder inside it, so both stay
-   synced. An output folder chosen in a SharePoint library or OneDrive for
+   synced. A Completed folder chosen in a SharePoint library or OneDrive for
    work also turns on the description records below. A first run also turns
    on running in the background and at sign-in, once the folders are saved;
    an install from an earlier release keeps its own choices for everything
    but the folders.
-3. **Decide about what is already there.** If the input folder already holds
+3. **Decide about what is already there.** If the Queue folder already holds
    documents, Intern asks once whether to process them too. The default is
    only new files.
 
-Pick an input folder that **only you add documents to**: choosing it — in
+Pick a Queue folder that **only you add documents to**: choosing it — in
 setup, or with **Change…** in Settings — is how Intern knows the documents in
 it are yours, so it does not ask Microsoft who uploaded them. Intern then keeps
 running in the system tray and starts when you sign in. Settings shows both
-folders at the top, each with **Change…**, and how the input folder is doing —
+folders at the top, each with **Change…**, and how the Queue folder is doing —
 up to date, waiting for OneDrive to download documents, OneDrive not running,
 or no longer synced — with the one button that fixes each; **Set up folders
-step by step…** runs the same setup again. Changing the input folder there asks
+step by step…** runs the same setup again. Changing the Queue folder there asks
 the same question about documents already in it. The options for a folder
 shared with other computers are folded under **Advanced**. A document whose
 contents are still in the cloud is never renamed or moved until OneDrive has
@@ -315,7 +305,7 @@ Files continue to move through the **Microsoft sync client**. Shared intake
 uses strict Microsoft uploader verification rather than assuming that a file
 first seen on this machine was uploaded by its user. Unknown uploaders stay out
 of the processing queue. Settings shows `Files/Inbox` and `Files/Filed` as the
-input and output folders, read-only. A file dropped on the window is copied
+Queue and Completed folders, read-only. A file dropped on the window is copied
 into `Files/Inbox` like any other add, and OneDrive uploads the copy as you;
 it joins the queue only once Microsoft confirms that upload, so the window
 says the copy is waiting rather than queued. A same-user upload of an
@@ -354,7 +344,7 @@ In a build without the deployment, Settings lists the **synced locations** the
 sync client keeps on the machine — each SharePoint library and OneDrive
 account, with its local folder — so the folder a library syncs to
 (`C:\Users\pat\Contoso\Legal - Documents`, a name nobody chose) can be picked
-as the input or output folder without a hunt through a folder dialog. A synced
+as the Queue or Completed folder without a hunt through a folder dialog. A synced
 folder is watched as your own when it is chosen in setup or with **Change…**;
 one typed into Settings by an earlier release is still held for Microsoft
 upload verification until it is chosen again, and private local mode is
@@ -369,8 +359,8 @@ skipped rather than stopping the scan.
 
 Alongside the filename, Intern writes one sentence saying what the document
 concerns. With **Write a description record for each filed document** turned
-on, every rename into the output folder also writes a small JSON record under
-`<output folder>\.intern\descriptions\` — the filename, its path in the
+on, every rename into the Completed folder also writes a small JSON record under
+`<Completed folder>\.intern\descriptions\` — the filename, its path in the
 library, the sentence, and the date, type, and parties behind the name; never
 document text. The sync client uploads the record like any other file, and a
 Power Automate flow copies the sentence into a **Description** column of the
@@ -441,14 +431,14 @@ suffix on collision.
 ### The same document twice
 
 Identical bytes are caught before analysis and never read again: with an
-output folder set, the document is moved there under the original's filed
+Completed folder set, the document is moved there under the original's filed
 name with `COPY - ` in front - beside the original, `COPY - 2026-01-02
 Lease.pdf`, then `COPY - 2026-01-02 Lease (2).pdf` - whether automatic renaming
 is on or not. Every copy is named after the original, never after another
 copy, and a copy leaves no records of its own (no description record, no
-shared filed marker). Undo puts it back in the input folder, where it waits in
+shared filed marker). Undo puts it back in the Queue folder, where it waits in
 review as a duplicate and is not moved again; **Process anyway** reads it like
-any other document. Without an output folder, a duplicate waits in review
+any other document. Without a Completed folder, a duplicate waits in review
 untouched, as before. A second scan of the same page, a PDF exported twice, or a copy
 saved again with new metadata is not identical bytes, so Intern also
 fingerprints the text it extracted and holds every new document against what
@@ -514,7 +504,7 @@ cargo run --locked -p intern-engine --bin intern-evaluate -- \
 ```
 
 That is the evidence pipeline the local model reads with; CI also replays the
-digest pipeline a hosted model reads through, from
+legacy digest pipeline, from
 `fixtures/corpus-recording-digest.json` with `--pipeline digest`, and
 InternBench from `bench/recording.json`. A prompt change makes the recording
 stale and needs a live re-record;
@@ -525,12 +515,12 @@ stale and needs a live re-record;
 
 | Crate | What it owns |
 | --- | --- |
-| `intern-engine` | Document understanding: the evidence index and retrieval, the prompt and its grammar, local model client and server, fact validation against the document, composition of the filename and description, the digest pipeline the optional hosted-model client reads through, house style learned from review, model installation, and the corpus evaluator with its record-and-replay mode. |
+| `intern-engine` | Document understanding: the evidence index and retrieval, the prompt and its grammar, local model client and server, fact validation against the document, composition of the filename and description, the legacy digest pipeline, house style learned from review, model installation, and the corpus evaluator with its record-and-replay mode. |
 | `intern-intake` | Shared intake folders: the multi-machine claim protocol, cloud sync-root detection, and the polling watcher. |
 | `intern-queue` | The durable queue: ordering, leases, retries, the review/apply workflow, and the spellings it learns from approvals. |
 | `intern-core` | Crash-safe queue storage and journaled file operations. |
 | `intern-worker` | The out-of-process parser: PDFium, OCR, Office, and Outlook message extraction. |
-| `intern-app` | The Tauri desktop shell, including the switch between the local and hosted models and the credential store the hosted key lives in. |
+| `intern-app` | The Tauri desktop shell, local model management, settings and update handling. |
 | `intern-release-verifier` | The offline release gate: verifies the installer's updater signature against the public key committed in `tauri.conf.json`, and binds it to `latest.json`, before anything is published. Not shipped in the app. |
 
 The engine is usable without the desktop app:
@@ -578,7 +568,7 @@ from a release that put a build there deletes it (the installer hooks,
 Tauri produces a per-user NSIS installer. To smoke-test a clean installer:
 
 ```powershell
-./scripts/smoke-installer.ps1 -InstallerPath target/release/bundle/nsis/Intern_0.1.0-alpha.15_x64-setup.exe
+./scripts/smoke-installer.ps1 -InstallerPath target/release/bundle/nsis/Intern_0.1.0-alpha.16_x64-setup.exe
 ```
 
 The smoke test also starts the installed server with `--version` from its own

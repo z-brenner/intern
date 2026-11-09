@@ -124,7 +124,7 @@ describe('Settings: Descriptions for SharePoint', () => {
 
   it('sits in the Settings dialog and saves the setting with the rest', async () => {
     const base = createInMemoryBridge();
-    // The output folder is already set, so the test does not depend on how the folder fields are laid out.
+    // The Completed folder is already set, so the test does not depend on how the folder fields are laid out.
     await base.saveSettings({ ...(await base.getSettings()), destination: 'C:\\Filed', recordDescriptions: false });
     const saveSettings = vi.fn(base.saveSettings);
     render(<App bridge={{ ...base, saveSettings }} />);

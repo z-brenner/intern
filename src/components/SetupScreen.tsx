@@ -12,11 +12,9 @@ interface SetupScreenProps {
   onStart(): void;
   onCancel(): void;
   onChooseExisting(): void;
-  /** Open Settings to configure a hosted model instead of the download. */
-  onUseHostedModel?(): void;
 }
 
-export function SetupScreen({ setup, busy, canChooseExisting, operationError, onStart, onCancel, onChooseExisting, onUseHostedModel }: SetupScreenProps) {
+export function SetupScreen({ setup, busy, canChooseExisting, operationError, onStart, onCancel, onChooseExisting }: SetupScreenProps) {
   if (!setup) return <main className="setup-screen" aria-label="Intern setup"><section><p role="status" aria-label="Loading setup" aria-live="polite">Loading setup</p></section></main>;
   const failed = setup.state === 'failed';
   const downloading = setup.state === 'downloading';
@@ -77,15 +75,5 @@ export function SetupScreen({ setup, busy, canChooseExisting, operationError, on
         : `${size ? `${size} of ` : ''}model files`}, or the matching files if you already have them on this computer.</p>
       {accurate && accurate.state !== 'ready' && <p>{accurate.displayName}{accurate.totalBytes > 0 ? ` (${formatBytes(accurate.totalBytes)})` : ''}, the accurate model, then follows in the background while you work. Until it arrives, the quick model reads, every name it gives waits for your check, and the accurate one reads those documents again unless you have acted on them.</p>}
     </details>
-    {/*
-      The other way in. A hosted model needs no download, but it sends the
-      text of every document to the service named in Settings - the one
-      thing the paragraph above promises Intern does not do - so it is
-      offered as the smaller, plainly-labeled choice, never the default.
-    */}
-    {onUseHostedModel && <div className="setup-alternative">
-      <p>Prefer not to download? A hosted model, under your own API key, needs no download, but document text is sent to that service.</p>
-      <button type="button" disabled={downloading || busy} onClick={onUseHostedModel}>Set up a hosted model</button>
-    </div>}
   </section></main>;
 }

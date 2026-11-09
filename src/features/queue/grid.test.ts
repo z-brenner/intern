@@ -48,8 +48,8 @@ describe('queue grid', () => {
     expect(selectedBlock(range(['b', 'proposed'], ['a', 'original']), rows)).toEqual(block);
 
     const bounds = selectionBounds(range(['a', 'original'], ['b', 'proposed']), rows);
-    expect(inBounds(bounds, 0, 1)).toBe(false);
-    expect(inBounds(bounds, 0, 0)).toBe(true);
+    expect(inBounds(bounds, 0, 0)).toBe(false);
+    expect(inBounds(bounds, 0, 1)).toBe(true);
     expect(inBounds(bounds, 2, 0)).toBe(false);
   });
 

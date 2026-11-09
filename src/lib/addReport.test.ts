@@ -25,7 +25,7 @@ describe('describeAddReport', () => {
     expect(describeAddReport({ added: 3, alreadyQueued: 0, skipped: [], copied: 3, inputFolder: 'C:\\Intern\\Input' }))
       .toBe('Copied 3 files into Input.');
     expect(describeAddReport({ added: 2, alreadyQueued: 1, skipped: [{ name: 'Filed.pdf', code: 'IN_OUTPUT_FOLDER' }], copied: 1, inPlace: 1, inputFolder: 'C:\\Intern\\Input' }))
-      .toBe('Copied 1 file into Input. 1 already in Input was added to the queue. 1 was already in the queue. Skipped 1: Filed.pdf (it is already in your output folder).');
+      .toBe('Copied 1 file into Input. 1 already in Input was added to the queue. 1 was already in the queue. Skipped 1: Filed.pdf (it is already in your Completed folder).');
     expect(describeAddReport({ added: 0, alreadyQueued: 0, skipped: [], copied: 0 })).toBe('No documents were found to copy.');
   });
 

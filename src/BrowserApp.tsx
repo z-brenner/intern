@@ -2,6 +2,10 @@ import { useMemo, useRef } from 'react';
 import { App } from './App';
 import { createBrowserSelectionBoundary, createFixtureBatchBridge, createInMemoryBridge, createReviewBatchBridge } from './lib/inMemoryBridge';
 import { TauriBridge, createTauriSelectionBoundary, isTauriRuntime } from './lib/tauriBridge';
+import { WhatsNew } from './features/updates/WhatsNew';
+import packageInfo from '../package.json';
+
+const previewVersion = async () => packageInfo.version;
 
 /**
  * `?sharePoint=fake` swaps in the in-memory bridge's simulated SharePoint
@@ -31,7 +35,10 @@ export function BrowserApp() {
   if (isTauriRuntime()) {
     return <TauriApp />;
   }
-  return <App bridge={bridge} selection={createBrowserSelectionBoundary()} />;
+  return <>
+    <App bridge={bridge} selection={createBrowserSelectionBoundary()} />
+    {import.meta.env.DEV && new URLSearchParams(window.location.search).get('whatsNew') === '1' && <WhatsNew getVersion={previewVersion} />}
+  </>;
 }
 
 function TauriApp() {
@@ -39,5 +46,5 @@ function TauriApp() {
   // The window's drag-drop events are subscribed to by App, which routes them
   // through the same import path as the file pickers.
   const selection = useMemo(() => createTauriSelectionBoundary(), []);
-  return <App bridge={bridge} selection={selection} />;
+  return <><App bridge={bridge} selection={selection} /><WhatsNew /></>;
 }

@@ -22,6 +22,13 @@ but `docs/qa/`.
 
 ## One-time setup
 
+For each release, add a matching version entry to
+`src/features/updates/releaseNotes.ts` before QA. Write short, plain-language
+changes for people using Intern, including fixes and improvements they will
+notice. Keep older entries so people who skip releases see all their new
+changes. The desktop app shows these notes once after updating, and remembers
+the version when the person selects Continue or dismisses the summary.
+
 - **Secrets** (Settings → Secrets and variables → Actions). The release
   workflow needs exactly two, and only in its build step:
   - `TAURI_SIGNING_PRIVATE_KEY`: the private half of the updater key whose

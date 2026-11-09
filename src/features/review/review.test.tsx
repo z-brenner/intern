@@ -326,7 +326,7 @@ describe('review actions', () => {
     const trigger = (await screen.findAllByRole('button', { name: 'Settings' }))[0];
     fireEvent.click(trigger);
 
-    const change = await screen.findByRole('button', { name: 'Change input folder' });
+    const change = await screen.findByRole('button', { name: 'Change Queue folder' });
     await waitFor(() => expect(change).toHaveFocus());
     // Tabbing off the LAST control must wrap to the first. Found dynamically
     // rather than named, because this used to hard-code "Save settings" and
@@ -461,7 +461,7 @@ describe('review actions', () => {
     render(<App bridge={{ ...base, saveSettings }} selection={folderPicker('C:\\Scans')} />);
     fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Change input folder' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Change Queue folder' }));
     expect(await screen.findByText('C:\\Scans')).toBeVisible();
     fireEvent.click(screen.getByLabelText('Also process documents uploaded by others'));
     fireEvent.change(screen.getByLabelText("This machine's name"), { target: { value: 'Front desk' } });
@@ -496,26 +496,26 @@ describe('review actions', () => {
     })));
   });
 
-  it('changes the output and input folders with the folder picker', async () => {
+  it('changes the output and Queue folders with the folder picker', async () => {
     const pickFolder = vi.fn()
       .mockResolvedValueOnce({ path: 'C:\\Filed', displayName: 'Filed' })
       .mockResolvedValueOnce({ path: 'C:\\Scans', displayName: 'Scans' });
     render(<App bridge={createInMemoryBridge()} selection={{ pickFiles: async () => [], pickFolder, pickExistingModelFiles: async () => undefined, resolveDrop: async () => ({}) }} />);
     fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Change output folder' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Change Completed folder' }));
     expect(await screen.findByText('C:\\Filed')).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Change input folder' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change Queue folder' }));
     expect(await screen.findByText('C:\\Scans')).toBeVisible();
 
     expect(pickFolder).toHaveBeenCalledTimes(2);
   });
 
-  it('shows a cloud badge for a OneDrive input folder', async () => {
+  it('shows a cloud badge for a OneDrive Queue folder', async () => {
     render(<App bridge={createInMemoryBridge()} selection={folderPicker('C:\\Users\\pat\\OneDrive\\Scans')} />);
     fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Change input folder' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Change Queue folder' }));
 
     expect(await screen.findByText('Synced with OneDrive – Contoso')).toBeVisible();
   });
@@ -526,6 +526,7 @@ describe('review actions', () => {
     render(<App bridge={{ ...base, saveSettings }} />);
     fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
 
+    fireEvent.click(await screen.findByText('Naming and filing', { selector: 'summary' }));
     const layout = await screen.findByLabelText('Arrange filed documents');
     expect(layout).toHaveValue('flat');
     fireEvent.change(layout, { target: { value: 'year_type' } });
@@ -541,13 +542,14 @@ describe('review actions', () => {
     render(<App bridge={{ ...base, saveSettings }} />);
     fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
 
+    fireEvent.click(await screen.findByText('Shared folders and troubleshooting', { selector: 'summary' }));
     const locations = await screen.findByRole('group', { name: 'Synced locations on this computer' });
     expect(locations).toHaveTextContent('SharePoint – Contoso');
     expect(locations).toHaveTextContent('C:\\Users\\pat\\Contoso\\Legal - Documents');
-    fireEvent.click(screen.getByRole('button', { name: 'Use SharePoint – Contoso as the output folder' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use SharePoint – Contoso as the Completed folder' }));
     const folders = screen.getByRole('group', { name: 'Folders' });
     expect(await within(folders).findByText('C:\\Users\\pat\\Contoso\\Legal - Documents')).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Use OneDrive – Contoso as the input folder' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use OneDrive – Contoso as the Queue folder' }));
     expect(await within(folders).findByText('C:\\Users\\pat\\OneDrive - Contoso')).toBeVisible();
 
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
@@ -555,7 +557,7 @@ describe('review actions', () => {
       destination: 'C:\\Users\\pat\\Contoso\\Legal - Documents',
       intakeFolder: 'C:\\Users\\pat\\OneDrive - Contoso',
       intakeMyFolder: true,
-      // An output folder in a SharePoint library records descriptions for its column.
+      // An Completed folder in a SharePoint library records descriptions for its column.
       recordDescriptions: true,
     })));
   });
@@ -564,7 +566,7 @@ describe('review actions', () => {
     render(<App bridge={createInMemoryBridge()} selection={folderPicker('\\\\fileserver\\legal\\filed')} />);
     fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Change output folder' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Change Completed folder' }));
 
     expect(await screen.findByText('On a network share – \\\\fileserver\\legal')).toBeVisible();
   });
@@ -575,6 +577,7 @@ describe('review actions', () => {
     render(<App bridge={{ ...base, saveSettings }} />);
     fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
 
+    fireEvent.click(await screen.findByText('SharePoint descriptions', { selector: 'summary' }));
     const status = await screen.findByRole('status', { name: 'Description records status' });
     expect(status).toHaveTextContent('Off');
     // Not yet saved on, so the backfill cannot be offered.
@@ -594,6 +597,7 @@ describe('review actions', () => {
     render(<App bridge={bridge} />);
     fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
 
+    fireEvent.click(await screen.findByText('SharePoint descriptions', { selector: 'summary' }));
     const status = await screen.findByRole('status', { name: 'Description records status' });
     expect(status).toHaveTextContent('On');
     expect(status).toHaveTextContent('C:\\Filed\\.intern\\descriptions');
@@ -614,7 +618,7 @@ describe('review actions', () => {
     fireEvent.click(await screen.findByLabelText('Write a description record for each filed document'));
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/choose an output folder before turning them on.*\(DESCRIPTIONS_NEED_DESTINATION\)/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/choose a Completed folder before turning them on.*\(DESCRIPTIONS_NEED_DESTINATION\)/i);
   });
 
   it('renders the live intake status with the held-for-others count', async () => {
@@ -623,6 +627,7 @@ describe('review actions', () => {
     render(<App bridge={bridge} />);
     fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
 
+    fireEvent.click(await screen.findByText('Shared folders and troubleshooting', { selector: 'summary' }));
     const status = await screen.findByRole('status', { name: 'Intake status' });
     await waitFor(() => expect(status).toHaveTextContent('Watching'));
     expect(status).toHaveTextContent('2 machines active');
@@ -637,7 +642,7 @@ describe('review actions', () => {
     fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/output folder is inside the input folder.*\(DESTINATION_INSIDE_INTAKE\)/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Completed folder is inside the Queue folder.*\(DESTINATION_INSIDE_INTAKE\)/i);
     // The dialog stays open so the folders can be corrected.
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
   });

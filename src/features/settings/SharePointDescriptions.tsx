@@ -24,7 +24,7 @@ function statusLine(status: DescriptionsStatus): string {
   if (!status.enabled) return 'Off · no records are being written';
   return [
     'On',
-    status.folder ? `writing to ${status.folder}` : 'no output folder yet',
+    status.folder ? `writing to ${status.folder}` : 'no Completed folder yet',
     `${plural(status.recordedThisSession, 'record', 'records')} written since Intern started`,
     `Last recorded: ${formatRecordedTime(status.lastRecordedAt)}`,
   ].join(' · ');
@@ -43,7 +43,7 @@ function describeDescriptionsError(error: string): string {
 function backfillFailure(error: unknown): string {
   const code = typeof error === 'object' && error && 'code' in error && typeof error.code === 'string' ? error.code.trim() : undefined;
   if (code === 'DESCRIPTIONS_DISABLED') return 'Turn on description records and save settings first; then records can be written for documents already filed. (DESCRIPTIONS_DISABLED)';
-  if (code === 'DESCRIPTIONS_NEED_DESTINATION') return 'Description records live in the output folder, so choose an output folder first. (DESCRIPTIONS_NEED_DESTINATION)';
+  if (code === 'DESCRIPTIONS_NEED_DESTINATION') return 'Description records live in the Completed folder, so choose a Completed folder first. (DESCRIPTIONS_NEED_DESTINATION)';
   const message = error instanceof Error ? error.message : typeof error === 'object' && error && 'message' in error && typeof error.message === 'string' ? error.message : typeof error === 'string' ? error : '';
   return message.trim() ? `Records could not be written: ${message.trim()}${code ? ` (${code})` : ''}` : 'Records could not be written.';
 }
@@ -110,7 +110,7 @@ export function SharePointDescriptions({ bridge, savedEnabled, draftEnabled, onD
       <h3 id="sharepoint-descriptions-heading">Descriptions for SharePoint</h3>
       <p className="section-lead">Puts Intern's one-sentence description of each filed document in your SharePoint library's Description column.</p>
       <label className="check-label"><input type="checkbox" checked={draftEnabled} onChange={(event) => onDraftEnabledChange(event.target.checked)} />Write a description record for each filed document</label>
-      <p className="check-hint">Each record is a small file in <code>.intern\descriptions</code> inside the output folder. OneDrive uploads it with the document; Intern itself sends nothing.</p>
+      <p className="check-hint">Each record is a small file in <code>.intern\descriptions</code> inside the Completed folder. OneDrive uploads it with the document; Intern itself sends nothing.</p>
       {status && <div className="descriptions-status">
         <p role="status" aria-label="Description records status" aria-live="polite">{statusLine(status)}</p>
         {status.lastError && <p className="form-error" role="alert">{describeDescriptionsError(status.lastError)}</p>}

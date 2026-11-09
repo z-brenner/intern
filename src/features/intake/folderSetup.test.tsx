@@ -16,7 +16,7 @@ const roots = [
   { provider: 'onedrive_business' as const, displayName: 'OneDrive – Contoso', path: 'C:\\Users\\pat\\OneDrive - Contoso' },
 ];
 
-/** A first run: no input or output folder chosen yet. */
+/** A first run: no input or Completed folder chosen yet. */
 function firstRun(options: InMemoryBridgeOptions = {}) {
   return createInMemoryBridge({ completedOnboardingVersion: 0, ...options, settings: { intakeFolder: '', intakeEnabled: false, intakeLocalOnly: false, destination: '', ...options.settings } });
 }
@@ -48,7 +48,7 @@ describe('folder names', () => {
 
   // A root has nothing beside it. "E:\" used to come out as "E/Filed", and
   // a share root as a path on the server rather than on any share.
-  it('offers no Output folder beside a drive, a share, or the file system root', () => {
+  it('offers no Completed folder beside a drive, a share, or the file system root', () => {
     for (const root of ['E:\\', 'E:', 'e:/', '\\\\?\\E:\\', '\\\\server\\share', '\\\\server\\share\\', '\\\\?\\UNC\\server\\share', '/']) {
       expect(outputBeside(root), root).toBeUndefined();
     }
@@ -60,14 +60,14 @@ describe('folder names', () => {
     expect(outputBeside('/Scans')).toBe('/Output');
   });
 
-  it('says in plain words why a folder cannot be the output folder', () => {
-    expect(outputFolderProblem('D:\\Scans', 'D:\\Scans\\Done')).toMatch(/inside your input folder/);
+  it('says in plain words why a folder cannot be the Completed folder', () => {
+    expect(outputFolderProblem('D:\\Scans', 'D:\\Scans\\Done')).toMatch(/inside your Queue folder/);
     expect(outputFolderProblem('D:\\Scans', 'd:\\scans\\')).toMatch(/same folder/);
     expect(outputFolderProblem('D:\\Scans', 'D:\\Output')).toBeUndefined();
     // Neither folder may hold the other.
-    expect(outputFolderProblem('D:\\Output\\Input', 'D:\\Output')).toMatch(/Your input folder is inside that folder/);
-    expect(inputFolderProblem('D:\\Output\\Input', 'D:\\Output')).toMatch(/inside your output folder/);
-    expect(inputFolderProblem('D:\\Scans', 'D:\\Scans\\Done')).toMatch(/Your output folder is inside that folder/);
+    expect(outputFolderProblem('D:\\Output\\Input', 'D:\\Output')).toMatch(/Your Queue folder is inside that folder/);
+    expect(inputFolderProblem('D:\\Output\\Input', 'D:\\Output')).toMatch(/inside your Completed folder/);
+    expect(inputFolderProblem('D:\\Scans', 'D:\\Scans\\Done')).toMatch(/Your Completed folder is inside that folder/);
     expect(inputFolderProblem('D:\\Scans', 'D:\\Output')).toBeUndefined();
   });
 
@@ -94,7 +94,7 @@ describe('folder setup', () => {
     expect(screen.queryByRole('button', { name: 'Not now' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Choose folders' }));
 
-    expect(await screen.findByRole('heading', { name: 'Choose your input folder' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Choose your Queue folder' })).toBeVisible();
     const choices = await screen.findByRole('list', { name: 'Suggested folders' });
     expect(within(choices).getByText('Legal - Documents (Contoso SharePoint)')).toBeVisible();
     expect(within(choices).getAllByText('Synced by OneDrive')).toHaveLength(2);
@@ -102,11 +102,11 @@ describe('folder setup', () => {
     // person browses to the Inbox inside it instead.
     fireEvent.click(screen.getByRole('button', { name: 'Choose another folder…' }));
 
-    await screen.findByRole('heading', { name: 'Choose your output folder' });
+    await screen.findByRole('heading', { name: 'Choose your Completed folder' });
     expect(screen.queryAllByRole('textbox')).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: 'Create an “Output” folder next to it' }));
 
-    expect(await screen.findByText('Your input folder already has 4 files in it. Should Intern process them too, or only files you add from now on?')).toBeVisible();
+    expect(await screen.findByText('Your Queue folder already has 4 files in it. Should Intern process them too, or only files you add from now on?')).toBeVisible();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Only new files' })).toHaveFocus());
     fireEvent.click(screen.getByRole('button', { name: 'Process them too' }));
 
@@ -115,7 +115,7 @@ describe('folder setup', () => {
     expect(screen.getByText('Legal - Documents (Contoso SharePoint) › Output')).toBeVisible();
     expect(output).toHaveBeenCalledWith(`${library}\\Inbox`);
     expect(queueInputFolder).toHaveBeenCalledOnce();
-    // The output folder is in a SharePoint library, so description records
+    // The Completed folder is in a SharePoint library, so description records
     // for its Description column are switched on with it.
     expect(screen.getByText(/leaves a short description of each document there for SharePoint’s Description column/)).toBeVisible();
     expect(await bridge.getSettings()).toMatchObject({ intakeFolder: `${library}\\Inbox`, destination: `${library}\\Output`, intakeEnabled: true, intakeMyFolder: true, intakeLocalOnly: false, processOthersUploads: false, recordDescriptions: true });
@@ -136,7 +136,7 @@ describe('folder setup', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Process them too' }));
 
     expect(await screen.findByRole('heading', { name: 'You’re all set' })).toBeVisible();
-    expect(screen.getByRole('note', { name: 'Files not added' })).toHaveTextContent('Added 2 documents. Skipped 1: scan-3.pdf (another program has it open). They stay in your input folder.');
+    expect(screen.getByRole('note', { name: 'Files not added' })).toHaveTextContent('Added 2 documents. Skipped 1: scan-3.pdf (another program has it open). They stay in your Queue folder.');
   });
 
   it('says so when the folder itself could not be read for its existing documents', async () => {
@@ -164,19 +164,19 @@ describe('folder setup', () => {
     expect(await screen.findByRole('heading', { name: 'You’re all set' })).toBeVisible();
     expect(queueInputFolder).not.toHaveBeenCalled();
     // Not synced, so it is a private local intake rather than "my folder",
-    // and its output folder gets no records for a SharePoint column.
+    // and its Completed folder gets no records for a SharePoint column.
     expect(await bridge.getSettings()).toMatchObject({ intakeMyFolder: false, intakeLocalOnly: true, destination: 'D:\\Scans\\Output', recordDescriptions: false });
     expect(screen.queryByText(/SharePoint’s Description column/)).not.toBeInTheDocument();
   });
 
-  it('makes an Input and an Output folder inside a synced location chosen whole, so both stay synced', async () => {
+  it('makes an Input and a Completed folder inside a synced location chosen whole, so both stay synced', async () => {
     const bridge = firstRun({ existingDocuments: 0 });
     render(<App bridge={bridge} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Choose folders' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Use Legal - Documents (Contoso SharePoint)' }));
     expect(screen.queryByRole('button', { name: 'Create an “Output” folder next to it' })).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: 'Create Input and Output folders' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create both folders' }));
 
     expect(await screen.findByRole('heading', { name: 'You’re all set' })).toBeVisible();
     expect(screen.getByText('Legal - Documents (Contoso SharePoint) › Input')).toBeVisible();
@@ -184,10 +184,10 @@ describe('folder setup', () => {
     expect(await bridge.getSettings()).toMatchObject({ intakeFolder: `${library}\\Input`, destination: `${library}\\Output`, intakeMyFolder: true });
   });
 
-  // The backend refuses to make an Output folder beside a drive's top
+  // The backend refuses to make a Completed folder beside a drive's top
   // folder, so the button that asked it to could only fail, under a line
   // naming a path that cannot exist.
-  it('drive root has no output folder beside it', async () => {
+  it('drive root has no Completed folder beside it', async () => {
     const bridge = firstRun();
     const createOutputFolder = vi.spyOn(bridge, 'createOutputFolder');
     const picks = ['E:\\', 'D:\\Filed by Intern'];
@@ -197,10 +197,10 @@ describe('folder setup', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Choose folders' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Choose another folder…' }));
 
-    await screen.findByRole('heading', { name: 'Choose your output folder' });
+    await screen.findByRole('heading', { name: 'Choose your Completed folder' });
     expect(screen.getByText('A drive’s top folder has nothing beside it. Choose a folder for processed files.')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Create an “Output” folder next to it' })).not.toBeInTheDocument();
-    expect(screen.queryByText(/New Output folder:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/New Completed folder:/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Choose another folder…' }));
 
     expect(await screen.findByRole('heading', { name: 'You’re all set' })).toBeVisible();
@@ -208,7 +208,7 @@ describe('folder setup', () => {
     expect(await bridge.getSettings()).toMatchObject({ intakeFolder: 'E:\\', destination: 'D:\\Filed by Intern' });
   });
 
-  it('refuses an output folder inside the input folder, in plain words', async () => {
+  it('refuses a Completed folder inside the Queue folder, in plain words', async () => {
     const bridge = firstRun();
     const picks = ['D:\\Scans', 'D:\\Scans\\Done'];
     const selection = { ...selectionPicking(''), pickFolder: async () => { const path = picks.shift()!; return { path, displayName: path }; } };
@@ -216,20 +216,20 @@ describe('folder setup', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Choose folders' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Choose another folder…' }));
-    await screen.findByRole('heading', { name: 'Choose your output folder' });
+    await screen.findByRole('heading', { name: 'Choose your Completed folder' });
     fireEvent.click(screen.getByRole('button', { name: 'Choose another folder…' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('That folder is inside your input folder, so processed files would be picked up and processed again. Choose a folder outside it.');
-    expect(screen.getByRole('heading', { name: 'Choose your output folder' })).toBeVisible();
+    expect(await screen.findByRole('alert')).toHaveTextContent('That folder is inside your Queue folder, so processed files would be picked up and processed again. Choose a folder outside it.');
+    expect(screen.getByRole('heading', { name: 'Choose your Completed folder' })).toBeVisible();
     expect((await bridge.getSettings()).intakeEnabled).toBe(false);
   });
 
-  it('names the Output folder it will make beside an ordinary folder', async () => {
+  it('names the Completed folder it will make beside an ordinary folder', async () => {
     render(<App bridge={firstRun()} selection={selectionPicking('D:\\Scans\\Inbox')} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Choose folders' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Choose another folder…' }));
 
-    expect(await screen.findByText('New Output folder: D:\\Scans\\Output')).toBeVisible();
+    expect(await screen.findByText('New Completed folder: D:\\Scans\\Output')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Create an “Output” folder next to it' })).toBeVisible();
   });
 
@@ -251,7 +251,7 @@ describe('folder setup', () => {
     expect(await screen.findByRole('main', { name: 'Intern setup' })).toBeInTheDocument();
     first.unmount();
     // Even with onboarding recorded as done, as an earlier release's "Not
-    // now" left it: no input folder, no app.
+    // now" left it: no Queue folder, no app.
     await bridge.completeOnboarding();
     render(<App bridge={bridge} />);
     expect(await screen.findByRole('main', { name: 'Intern setup' })).toBeInTheDocument();
@@ -311,7 +311,7 @@ describe('folder setup', () => {
     expect(await bridge.getSettings()).toMatchObject({ intakeFolder: 'D:\\Scans', intakeEnabled: true, intakeLocalOnly: true, runInBackground: false, startAtLogin: false, processOthersUploads: true, recordDescriptions: false });
   });
 
-  it('offers the output folder an existing install already had', async () => {
+  it('offers the Completed folder an existing install already had', async () => {
     const bridge = firstRun({ settings: { intakeFolder: '', intakeEnabled: false, destination: 'D:\\Filed' } });
     render(<App bridge={bridge} selection={selectionPicking('D:\\Scans')} />);
 
@@ -332,9 +332,10 @@ describe('folder setup', () => {
   it('opens from Settings and returns to the app', async () => {
     render(<App bridge={createInMemoryBridge()} selection={selectionPicking('D:\\Scans\\Inbox')} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
+    fireEvent.click(await screen.findByText('Shared folders and troubleshooting', { selector: 'summary' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Set up folders step by step…' }));
 
-    expect(await screen.findByRole('heading', { name: 'Choose your input folder' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Choose your Queue folder' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
   });
@@ -360,20 +361,20 @@ describe('folders in Settings', () => {
     expect(screen.queryByRole('checkbox', { name: 'Watch a folder for new documents' })).not.toBeInTheDocument();
     expect(within(folders).queryAllByRole('textbox')).toHaveLength(0);
 
-    fireEvent.click(within(folders).getByRole('button', { name: 'Change input folder' }));
+    fireEvent.click(within(folders).getByRole('button', { name: 'Change Queue folder' }));
     expect(await within(folders).findByText('D:\\Scans')).toBeVisible();
     // The new folder already has documents: setup's question, only new files unless changed.
     const question = await within(folders).findByRole('group', { name: 'This folder already has 2 files in it. Process them too?' });
     expect(within(question).getByRole('radio', { name: 'Only new files' })).toBeChecked();
     fireEvent.click(within(question).getByRole('radio', { name: 'Process them too' }));
 
-    fireEvent.click(within(folders).getByRole('button', { name: 'Change output folder' }));
+    fireEvent.click(within(folders).getByRole('button', { name: 'Change Completed folder' }));
     expect(await within(folders).findByText('C:\\Users\\pat\\OneDrive - Contoso\\Filed')).toBeVisible();
-    // An output folder OneDrive syncs gets records for SharePoint's Description column.
+    // An Completed folder OneDrive syncs gets records for SharePoint's Description column.
     await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Write a description record for each filed document' })).toBeChecked());
 
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
-    // Queued by the window once the save has made it the input folder, and
+    // Queued by the window once the save has made it the Queue folder, and
     // reported apart from the save.
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({ intakeFolder: 'D:\\Scans', intakeEnabled: true, intakeLocalOnly: true, intakeMyFolder: false, destination: 'C:\\Users\\pat\\OneDrive - Contoso\\Filed', recordDescriptions: true }),
@@ -381,19 +382,19 @@ describe('folders in Settings', () => {
     ));
   });
 
-  it('refuses an output folder inside the input folder, and an input folder around the output folder', async () => {
+  it('refuses a Completed folder inside the Queue folder, and a Queue folder around the Completed folder', async () => {
     const bridge = createInMemoryBridge();
     const settings = await bridge.getSettings();
     const picks = ['C:\\Intern\\Input\\Done', 'C:\\Intern'];
     const onSave = openSettings(bridge, settings, async () => { const path = picks.shift()!; return { path, displayName: path }; });
     const folders = await screen.findByRole('group', { name: 'Folders' });
 
-    fireEvent.click(within(folders).getByRole('button', { name: 'Change output folder' }));
-    expect(await within(folders).findByRole('alert')).toHaveTextContent('That folder is inside your input folder');
+    fireEvent.click(within(folders).getByRole('button', { name: 'Change Completed folder' }));
+    expect(await within(folders).findByRole('alert')).toHaveTextContent('That folder is inside your Queue folder');
     expect(within(folders).getByText('C:\\Intern\\Output')).toBeVisible();
 
-    fireEvent.click(within(folders).getByRole('button', { name: 'Change input folder' }));
-    expect(await within(folders).findByRole('alert')).toHaveTextContent('Your output folder is inside that folder');
+    fireEvent.click(within(folders).getByRole('button', { name: 'Change Queue folder' }));
+    expect(await within(folders).findByRole('alert')).toHaveTextContent('Your Completed folder is inside that folder');
     expect(within(folders).getByText('C:\\Intern\\Input')).toBeVisible();
     expect(onSave).not.toHaveBeenCalled();
   });
@@ -401,31 +402,31 @@ describe('folders in Settings', () => {
   // A lookup that failed says nothing about whether the folder is synced,
   // so the folder is not vouched for as a private local one: it is not
   // changed at all, and the person is told.
-  it('leaves the input folder as it was when Intern cannot tell whether a new one is synced', async () => {
+  it('leaves the Queue folder as it was when Intern cannot tell whether a new one is synced', async () => {
     const base = createInMemoryBridge();
     const bridge = { ...base, classifyFolder: vi.fn(async () => { throw new Error('registry unavailable'); }) };
     const settings = await base.getSettings();
     const onSave = openSettings(bridge, settings, async () => ({ path: 'D:\\Scans', displayName: 'Scans' }));
     const folders = await screen.findByRole('group', { name: 'Folders' });
 
-    fireEvent.click(within(folders).getByRole('button', { name: 'Change input folder' }));
+    fireEvent.click(within(folders).getByRole('button', { name: 'Change Queue folder' }));
     expect(await within(folders).findByRole('alert')).toHaveTextContent('could not check whether that folder is synced');
     expect(within(folders).getByText('C:\\Intern\\Input')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ intakeFolder: 'C:\\Intern\\Input', intakeLocalOnly: true })));
   });
 
-  it('says when the files already in a new input folder could not be queued, without calling the save failed', async () => {
+  it('says when the files already in a new Queue folder could not be queued, without calling the save failed', async () => {
     const bridge = createInMemoryBridge({ existingDocuments: 2 });
     const queueInputFolder = vi.spyOn(bridge, 'queueInputFolder').mockRejectedValue(new Error('The folder could not be read.'));
     render(<App bridge={bridge} selection={selectionPicking('D:\\Scans')} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
     const folders = await screen.findByRole('group', { name: 'Folders' });
-    fireEvent.click(within(folders).getByRole('button', { name: 'Change input folder' }));
+    fireEvent.click(within(folders).getByRole('button', { name: 'Change Queue folder' }));
     fireEvent.click(await within(folders).findByRole('radio', { name: 'Process them too' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
 
-    expect(await screen.findByText(/Your settings were saved, but the files already in your input folder could not be added to the queue\. The folder could not be read\./)).toBeVisible();
+    expect(await screen.findByText(/Your settings were saved, but the files already in your Queue folder could not be added to the queue\. The folder could not be read\./)).toBeVisible();
     expect(queueInputFolder).toHaveBeenCalledOnce();
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument();
     expect((await bridge.getSettings()).intakeFolder).toBe('D:\\Scans');
@@ -434,7 +435,7 @@ describe('folders in Settings', () => {
   it('folds the shared-folder options away under Advanced', async () => {
     const bridge = createInMemoryBridge();
     openSettings(bridge, await bridge.getSettings(), async () => ({ path: 'D:\\Scans', displayName: 'Scans' }));
-    const advanced = (await screen.findByText('Advanced: shared folders and support details')).closest('details')!;
+    const advanced = (await screen.findByText('Shared folders and troubleshooting')).closest('details')!;
     expect(advanced).not.toHaveAttribute('open');
     expect(within(advanced).getByRole('checkbox', { name: 'Also process documents uploaded by others', hidden: true })).toBeInTheDocument();
     expect(within(advanced).getByLabelText('This machine\'s name', { selector: 'input' })).toBeInTheDocument();

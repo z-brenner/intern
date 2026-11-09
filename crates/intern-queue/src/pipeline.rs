@@ -1501,7 +1501,7 @@ impl Pipeline {
     }
 
     fn run_next_inner(&self) -> PipelineResult<bool> {
-        let Some(item) = self.claim_next()? else {
+        let Some(mut item) = self.claim_next()? else {
             // Nothing left but documents in doubt, if anything: only proof
             // that the machine works lets them be tried again.
             return self.prove_the_machine();
@@ -1533,6 +1533,62 @@ impl Pipeline {
                 return Ok(true);
             }
         };
+        // A personal/synced folder can finish updating a document while it
+        // waits in the queue. Bind this new reading to the bytes about to be
+        // read, instead of incorrectly comparing approval with arrival bytes.
+        // Provider-verified readings retain their immutable snapshot/hash.
+        if extraction_evidence.verified_hash().is_none() {
+            let current = match self.files.fingerprint(&item.source_path) {
+                Ok(hash) => hash,
+                Err(error) => {
+                    let code = if error.code == "SOURCE_LOCKED" {
+                        ErrorCode::SourceLocked
+                    } else {
+                        ErrorCode::IoError
+                    };
+                    self.store.record_processing_failure(item.id, code)?;
+                    self.events.queue_changed();
+                    return Ok(true);
+                }
+            };
+            if current != item.source_hash {
+                match self
+                    .store
+                    .refresh_extraction_hash(item.id, &item.source_hash, &current)
+                {
+                    Ok(refreshed) => item = refreshed,
+                    Err(error) if error.code() == ErrorCode::Duplicate => {
+                        self.store.transition(
+                            item.id,
+                            QueueStatus::Extracting,
+                            QueueStatus::NeedsReview,
+                            Some(ErrorCode::Duplicate),
+                        )?;
+                        self.events.queue_changed();
+                        return Ok(true);
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+                if self
+                    .store
+                    .find_completed_duplicate(&current, &source_path_key(&item.source_path))?
+                    .is_some()
+                    || self
+                        .duplicates
+                        .filed_elsewhere(&current, &item.source_path)
+                        .is_some()
+                {
+                    self.store.transition(
+                        item.id,
+                        QueueStatus::Extracting,
+                        QueueStatus::NeedsReview,
+                        Some(ErrorCode::Duplicate),
+                    )?;
+                    self.events.queue_changed();
+                    return Ok(true);
+                }
+            }
+        }
         let Some(extraction_path) = extraction_evidence.extraction_path(&item.source_path) else {
             self.store.transition(
                 item.id,

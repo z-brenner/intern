@@ -55,9 +55,7 @@ use crate::intake::{
     PipelineIntakeHost, SharedFiledIndex, classify_folder, filed_folder_for, list_cloud_roots,
     now_unix, status_dto,
 };
-use crate::model::{
-    HostedModel, HostedModelStatusDto, HostedModelTestDto, SwitchingModel, suggested_date,
-};
+use crate::model::{HostedModel, HostedModelStatusDto, HostedModelTestDto, suggested_date};
 use crate::secrets::{KeyringStore, SecretStore};
 
 #[derive(Clone, Debug, Deserialize)]
@@ -3218,7 +3216,10 @@ impl AppState {
             "intern-worker"
         };
         let model_directory = data.join("models");
-        let settings = SettingsStore::new(data.join("settings.json"));
+        let settings = SettingsStore::new(data.join("settings.json")).local_analysis_only();
+        // A failed migration must not prevent Settings from opening for repair.
+        // The application view and analysis runtime remain local regardless.
+        let _ = settings.retire_hosted_model();
         // Read at every document, so a choice made in Settings takes effect
         // at the next one with nothing restarted. A file that cannot be read
         // is Intern's own choice, as it is for everything else.
@@ -3268,11 +3269,9 @@ impl AppState {
         let filed_index = Arc::new(SharedFiledIndex::new(settings.clone(), data.clone()));
         let secrets: Arc<dyn SecretStore> = Arc::new(KeyringStore);
         let hosted = Arc::new(HostedModel::new(secrets));
-        let model = Arc::new(SwitchingModel::new(
-            Arc::clone(&runtime),
-            Arc::clone(&hosted),
-            settings.clone(),
-        ));
+        // The desktop app always analyzes locally. Legacy hosted settings or
+        // stored keys cannot select an upload path after the API-key UI retires.
+        let model = Arc::clone(&runtime);
         let events = Arc::new(TauriPipelineEvents::new(app.clone()));
         let pipeline = Arc::new(
             Pipeline::with_local_files(
@@ -3401,12 +3400,10 @@ impl AppState {
         }
     }
 
-    /// Tells setup whether a hosted model is chosen and able to answer, so
-    /// the queue runs on it - or stops, when the key is gone.
-    fn refresh_hosted_active(&self, settings: &AppSettings) {
-        let active =
-            settings.model_source == ModelSource::Hosted && self.hosted.configured(settings);
-        self.setup.set_hosted_active(active);
+    /// The desktop requires its local model even when legacy credentials
+    /// remain in the operating system's credential store.
+    fn refresh_hosted_active(&self, _settings: &AppSettings) {
+        self.setup.set_hosted_active(false);
     }
 
     /// Stops any running watcher and starts a fresh one when the settings
@@ -4844,9 +4841,10 @@ fn display_folder(folder: &str) -> String {
 /// on the thread WebView2 delivers invokes on.
 #[tauri::command]
 pub async fn settings_save(
-    settings: AppSettings,
+    mut settings: AppSettings,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
+    settings.model_source = ModelSource::Local;
     let app = state.app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();

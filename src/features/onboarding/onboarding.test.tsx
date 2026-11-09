@@ -167,31 +167,20 @@ describe('guided onboarding steps', () => {
     const advanced = screen.getByText('Other ways to get the model');
     expect(advanced.closest('details')).not.toHaveAttribute('open');
     expect(screen.getByRole('button', { name: 'Choose existing model files' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Use a hosted model instead' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Use a hosted model instead' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Download model' }));
     await expectFocused(await screen.findByRole('heading', { name: 'Connect your Microsoft account' }, { timeout: 3000 }));
   });
 
-  it('offers the hosted model without the SharePoint connection card before Microsoft is connected', async () => {
+  it('keeps model setup local without an API-key alternative', async () => {
     render(<App bridge={enabledBridge({}, { setup: { state: 'required', downloadedBytes: 0, totalBytes: PINNED_MODEL_BYTES } })} />);
-
     await begin();
     await screen.findByRole('heading', { name: 'Get the local model' });
     fireEvent.click(screen.getByText('Other ways to get the model'));
-    const hosted = screen.getByRole('button', { name: 'Use a hosted model instead' });
-    await waitFor(() => expect(hosted).toBeEnabled());
-    fireEvent.click(hosted);
-
-    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
-    expect(within(dialog).getByLabelText('Hosted model with my API key')).toBeVisible();
-    // Let the dialog learn this build is managed before looking for what it hides.
-    await act(async () => {});
-    await waitFor(() => expect(within(dialog).queryByRole('button', { name: 'Change output folder' })).not.toBeInTheDocument());
-    expect(within(dialog).queryByRole('region', { name: 'SharePoint connection' })).not.toBeInTheDocument();
-    expect(within(dialog).queryByRole('button', { name: 'Reconnect Microsoft' })).not.toBeInTheDocument();
-    expect(within(dialog).queryByRole('button', { name: 'Change input folder' })).not.toBeInTheDocument();
-    expect(within(dialog).queryByRole('group', { name: 'Microsoft upload identity' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose existing model files' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /hosted model/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/API key/i)).not.toBeInTheDocument();
   });
 
   it('resumes a partial model download', async () => {

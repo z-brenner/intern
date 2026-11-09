@@ -29,6 +29,28 @@ test.beforeEach(async ({ context, page }) => {
   await expect(page.getByRole('row', { name: /Scan 0101\.pdf/ })).toHaveAttribute('aria-current', 'true');
 });
 
+test('status stays left of the adjacent filename and description columns in both views', async ({ page }) => {
+  const headings = page.getByRole('columnheader');
+  await expect(headings).toHaveText(['Status', 'Original filename', 'Proposed filename', 'Description', 'Check']);
+  const from = await queueCell(page, 'Scan 0101.pdf').boundingBox();
+  const to = await queueCell(page, 'Scan 0101.pdf', 'description').boundingBox();
+  await page.mouse.move(from!.x + 20, from!.y + from!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to!.x + 20, to!.y + to!.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.press('ControlOrMeta+C');
+  expect((await readClipboard(page)).cells).toEqual([[
+    'Scan 0101.pdf', '2024-02-01 Engagement Letter with Northwind Traders.pdf',
+    'Engagement letter between Northwind Traders and the firm for 2024 advisory work.',
+  ]]);
+  const panel = await openDetails(page);
+  await expect(panel.getByText('Analysis details')).toBeVisible();
+  await expect(panel.locator('details.analysis-details')).not.toHaveAttribute('open');
+  await panel.getByRole('button', { name: 'Keep original' }).click();
+  await page.getByRole('button', { name: /^Completed/ }).click();
+  await expect(headings).toHaveText(['Status', 'Original filename', 'Proposed filename', 'Description', 'Check']);
+});
+
 test('a dragged range copies with Ctrl+C into separate cells, without Status', async ({ page }) => {
   const from = await queueCell(page, 'Scan 0101.pdf').boundingBox();
   const to = await queueCell(page, 'Scan 0103.pdf', 'proposed').boundingBox();

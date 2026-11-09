@@ -1,96 +1,36 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
 import { App } from '../../App';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 
-async function openSettings() {
-  fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
-  return screen.findByRole('dialog', { name: 'Settings' });
-}
-
-describe('the hosted model setting', () => {
-  it('is off by default, and says what turning it on means', async () => {
+describe('simple processing settings', () => {
+  it('offers no API key, provider, or server configuration', async () => {
     render(<App bridge={createInMemoryBridge()} />);
-    const dialog = await openSettings();
-
-    expect(within(dialog).getByLabelText('Local model on this computer (recommended)')).toBeChecked();
-    expect(within(dialog).getByLabelText('Hosted model with my API key')).not.toBeChecked();
-    expect(within(dialog).queryByRole('group', { name: 'Hosted model' })).not.toBeInTheDocument();
-    expect(screen.getByText('Private · On this device')).toBeVisible();
-
-    fireEvent.click(within(dialog).getByLabelText('Hosted model with my API key'));
-    const hosted = within(dialog).getByRole('group', { name: 'Hosted model' });
-    expect(within(hosted).getByRole('note')).toHaveTextContent(/sends document text off this computer/);
-    expect(within(hosted).getByLabelText('API address')).toHaveAttribute('placeholder', 'https://api.anthropic.com/v1');
-    expect(within(hosted).getByLabelText('Model')).toHaveAttribute('placeholder', 'claude-opus-5');
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(within(dialog).queryByLabelText('API key')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('API address')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Provider')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Hosted model with my API key')).not.toBeInTheDocument();
+    const summary = within(dialog).getByText('Local processing', { selector: 'summary' });
+    expect(summary.parentElement).not.toHaveAttribute('open');
+    fireEvent.click(summary);
+    expect(within(dialog).getByRole('group', { name: 'Local model' })).toBeVisible();
   });
 
-  it('refuses to save a hosted model before a key is stored', async () => {
-    const base = createInMemoryBridge();
-    const saveSettings = vi.fn(base.saveSettings);
-    render(<App bridge={{ ...base, saveSettings }} />);
-    const dialog = await openSettings();
-    fireEvent.click(within(dialog).getByLabelText('Hosted model with my API key'));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
-
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Paste an API key before choosing the hosted model');
-    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeVisible();
-  });
-
-  it('stores the key in the credential store, tests the connection, and saves the choice', async () => {
-    const base = createInMemoryBridge();
-    const saveSettings = vi.fn(base.saveSettings);
-    const hostedModelSetKey = vi.fn(base.hostedModelSetKey);
-    render(<App bridge={{ ...base, saveSettings, hostedModelSetKey }} />);
-    const dialog = await openSettings();
-    fireEvent.click(within(dialog).getByLabelText('Hosted model with my API key'));
-    fireEvent.change(within(dialog).getByLabelText('Model'), { target: { value: 'claude-sonnet-5' } });
-    fireEvent.change(within(dialog).getByLabelText('API key'), { target: { value: 'sk-ant-api03-example-key-9876' } });
-
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Test connection' }));
-    const status = await within(dialog).findByRole('status', { name: 'Hosted model test' });
-    expect(status).toHaveTextContent(/Connected\. claude-sonnet-5 at https:\/\/api\.anthropic\.com\/v1\/messages named the calibration document/);
-    expect(hostedModelSetKey).toHaveBeenCalledWith('sk-ant-api03-example-key-9876');
-    // The key left the field for the store; the field now says so.
-    expect(within(dialog).getByLabelText('API key')).toHaveValue('');
-    expect(within(dialog).getByLabelText('API key')).toHaveAttribute('placeholder', 'Stored in your credential manager (…9876)');
-    expect(within(dialog).getByRole('button', { name: 'Remove stored key' })).toBeVisible();
-
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
-
-    await waitFor(() => expect(saveSettings).toHaveBeenCalledWith(expect.objectContaining({ modelSource: 'hosted', hostedProvider: 'anthropic', hostedModel: 'claude-sonnet-5' })));
-    // The key is never part of the settings that were saved.
-    expect(JSON.stringify(saveSettings.mock.calls)).not.toContain('sk-ant');
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument());
-    expect(screen.getByText('Hosted model · Text leaves this device')).toBeVisible();
-    expect(screen.queryByText('Private · On this device')).not.toBeInTheDocument();
-  });
-
-  it('names a rejected key rather than a generic failure', async () => {
+  it('keeps optional settings collapsed and uses the same folder names as the tabs', async () => {
     render(<App bridge={createInMemoryBridge()} />);
-    const dialog = await openSettings();
-    fireEvent.click(within(dialog).getByLabelText('Hosted model with my API key'));
-    fireEvent.change(within(dialog).getByLabelText('Provider'), { target: { value: 'openai_compatible' } });
-    fireEvent.change(within(dialog).getByLabelText('Model'), { target: { value: 'gpt-filing' } });
-    fireEvent.change(within(dialog).getByLabelText('API key'), { target: { value: 'bad-key-1234567890' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Test connection' }));
-
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('The service rejected the API key');
-  });
-
-  // A Linux session with no Secret Service - a server, a VM under Xvfb - has
-  // nowhere to keep the key, and says what is missing.
-  it('names a missing Secret Service rather than a generic failure', async () => {
-    const base = createInMemoryBridge();
-    const hostedModelSetKey = vi.fn(async () => { throw { code: 'SECRET_SERVICE_UNAVAILABLE', message: 'the credential store could not be used' }; });
-    render(<App bridge={{ ...base, hostedModelSetKey }} />);
-    const dialog = await openSettings();
-    fireEvent.click(within(dialog).getByLabelText('Hosted model with my API key'));
-    fireEvent.change(within(dialog).getByLabelText('API key'), { target: { value: 'sk-ant-api03-example-key-9876' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Test connection' }));
-
-    const alert = await within(dialog).findByRole('alert');
-    expect(alert).toHaveTextContent('No credential store answered on this desktop, so the key was not saved');
-    expect(alert).toHaveTextContent('GNOME Keyring or KWallet');
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    const folders = within(dialog).getByRole('group', { name: 'Folders' });
+    expect(within(folders).getByText('Queue folder')).toBeVisible();
+    expect(within(folders).getByText('Completed folder')).toBeVisible();
+    const naming = within(dialog).getByText('Naming and filing', { selector: 'summary' });
+    naming.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(within(dialog).getByText('Learned spellings', { selector: 'summary' })).toHaveFocus();
+    for (const title of ['Naming and filing', 'Learned spellings', 'Local processing', 'SharePoint descriptions']) {
+      expect(within(dialog).getByText(title, { selector: 'summary' }).parentElement).not.toHaveAttribute('open');
+    }
   });
 });

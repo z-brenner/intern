@@ -226,3 +226,65 @@ fn a_field_the_reader_requires_and_the_file_does_not_have_is_reported() {
     assert!(loaded.settings.automatic_rename);
     assert_eq!(loaded.unreadable, ["destination"]);
 }
+
+#[test]
+fn retiring_hosted_inference_preserves_folders_and_unrecognized_settings() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("settings.json");
+    fs::write(&path, br#"{"destination":"C:/Completed","intakeFolder":"C:/Queue","modelSource":"hosted","futureSetting":{"keep":true},"destinationLayout":"future-layout"}"#).unwrap();
+    let store = SettingsStore::new(&path);
+    assert!(store.retire_hosted_model().unwrap());
+    let document: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(document["modelSource"], "local");
+    assert_eq!(document["destination"], "C:/Completed");
+    assert_eq!(document["intakeFolder"], "C:/Queue");
+    assert_eq!(document["futureSetting"]["keep"], true);
+    assert_eq!(document["destinationLayout"], "future-layout");
+    assert!(!store.retire_hosted_model().unwrap());
+}
+
+#[test]
+fn retiring_hosted_inference_leaves_local_or_damaged_settings_untouched() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("settings.json");
+    let store = SettingsStore::new(&path);
+    assert!(!store.retire_hosted_model().unwrap());
+    assert!(!path.exists());
+    for bytes in [
+        b"{broken".as_slice(),
+        br#"{ "destination": "C:/Completed", "modelSource": "local" }"#.as_slice(),
+    ] {
+        fs::write(&path, bytes).unwrap();
+        assert!(!store.retire_hosted_model().unwrap());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn application_settings_stay_local_when_the_migration_cannot_write() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("settings.json");
+    fs::write(
+        &path,
+        br#"{"destination":"C:/Completed","modelSource":"hosted"}"#,
+    )
+    .unwrap();
+    fs::create_dir(temp.path().join("settings.json.tmp")).unwrap();
+    let store = SettingsStore::new(&path).local_analysis_only();
+    assert!(store.retire_hosted_model().is_err());
+    assert_eq!(store.load().unwrap().model_source, ModelSource::Local);
+    assert_eq!(store.load().unwrap().destination, "C:/Completed");
+    assert_eq!(
+        store
+            .clone()
+            .load_with_report()
+            .unwrap()
+            .settings
+            .model_source,
+        ModelSource::Local
+    );
+    assert_eq!(
+        SettingsStore::new(&path).load().unwrap().model_source,
+        ModelSource::Hosted
+    );
+}

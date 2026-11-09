@@ -605,7 +605,7 @@
         <li><a href="#first-document"><span class="n">04</span>Your first document</a></li>
         <li><a href="#everyday"><span class="n">05</span>Everyday use</a></li>
         <li><a href="#onedrive"><span class="n">06</span>OneDrive &amp; SharePoint</a></li>
-        <li><a href="#watch"><span class="n">07</span>The input folder</a></li>
+        <li><a href="#watch"><span class="n">07</span>The Queue folder</a></li>
         <li><a href="#team"><span class="n">08</span>Working as a team</a></li>
         <li><a href="#troubleshooting"><span class="n">09</span>Troubleshooting</a></li>
         <li><a href="#updates"><span class="n">10</span>Updates</a></li>
@@ -637,7 +637,7 @@
           </div>
           <div>
             <dt>It stays on your machine</dt>
-            <dd>Reading, OCR, and the AI model all run locally. Your documents never leave the computer, unless you turn on a hosted model (opt-in, your own API key).</dd>
+            <dd>Reading, OCR, and the AI model all run locally. Intern processes your documents on your computer.</dd>
           </div>
         </dl>
 
@@ -654,10 +654,7 @@
             every 6 hours while it runs, and whenever you press <strong>Check
             for updates</strong>. You can switch the automatic check off
             (<a href="#updates">section 10</a>).</p>
-            <p>The one exception is yours to make: Settings can send documents
-            to a <strong>hosted model</strong> under your own API key. It is off
-            unless you turn it on, and the header says so while it is
-            (<a href="#first-launch">section 03</a>).</p>
+
           </div>
         </div>
 
@@ -742,13 +739,7 @@
             <dt>You can bring your own</dt>
             <dd><strong>Choose existing model files</strong> points Intern at a copy from another machine and skips the download. This is also how you install on a machine with no internet at all.</dd>
           </div>
-          <div>
-            <dt>Or use a hosted model</dt>
-            <dd>
-              <p><strong>Set up a hosted model</strong> on the setup screen — or the <strong>Model</strong> section in Settings later — lets Intern use Anthropic, OpenAI, or any OpenAI-compatible service (including a local server such as Ollama or LM Studio) under your own API key, with no download.</p>
-              <p>Understand the trade: the text Intern reads from each document is sent to that service. The header badge changes from <em>Private · On this device</em> to <em>Hosted model · Text leaves this device</em> for as long as it is on. The key is kept in your operating system's credential manager under “Intern”, never in Intern's files, and <strong>Test connection</strong> sends only Intern's own calibration page.</p>
-            </dd>
-          </div>
+
         </dl>
 
         <p class="note">Nothing else needs installing. PDF reading, OCR, and inference all ship inside the app.</p>
@@ -757,15 +748,15 @@
         <p class="prose">Then Intern asks for two folders. It cannot be used until both are chosen, and there is nothing to skip:</p>
         <dl class="kv">
           <div>
-            <dt>Input folder</dt>
+            <dt>Queue folder</dt>
             <dd>Put files here that you want Intern to process. Files you drop on Intern's window, or add with <strong>Add files</strong>, <strong>Add folder</strong>, or <strong>Send to &gt; Intern</strong>, are copied here; the originals stay where they were.</dd>
           </div>
           <div>
-            <dt>Output folder</dt>
+            <dt>Completed folder</dt>
             <dd>Processed files end up here, renamed. Neither folder may be inside the other.</dd>
           </div>
         </dl>
-        <p class="note">Setup lists the OneDrive and SharePoint folders already on this computer and can make an <em>Output</em> folder for you (<a href="#onedrive">section 06</a>). Change either folder later in Settings, under <strong>Folders</strong>. An install from an earlier release with no input folder asks for one on its next launch, offering the output folder it already had.</p>
+        <p class="note">Setup lists the OneDrive and SharePoint folders already on this computer and can create the Completed folder for you (<a href="#onedrive">section 06</a>). Change either folder later in Settings, under <strong>Folders</strong>. An install from an earlier release with no Queue folder asks for one on its next launch, offering the Completed folder it already had.</p>
       </section>
 
       <!-- ====================== 04 FIRST DOCUMENT ===================== -->
@@ -779,7 +770,7 @@
         <ol class="steps">
           <li>
             <b>Drag one PDF onto the window.</b>
-            <p>Or use <strong>Add files</strong>, or put it straight into your input folder. A file you drop or add is copied into the input folder; the original stays where it was. One document is enough to see the whole flow.</p>
+            <p>Or use <strong>Add files</strong>, or put it straight into your Queue folder. A file you drop or add is copied into the Queue folder; the original stays where it was. One document is enough to see the whole flow.</p>
           </li>
           <li>
             <b>Watch it change status.</b>
@@ -791,7 +782,7 @@
           </li>
           <li>
             <b>Approve it.</b>
-            <p>Only now is anything renamed: the document moves out of your input folder into your output folder under its new name. Changed your mind? Undo it from <strong>Completed</strong>.</p>
+            <p>Only now is anything renamed: the document moves out of your Queue folder into your Completed folder under its new name. Changed your mind? Undo it from <strong>Completed</strong>.</p>
           </li>
         </ol>
 
@@ -845,11 +836,11 @@
           <p class="sec-num">05</p>
           <h2>Everyday use</h2>
         </div>
-        <p class="lead">Put files in your input folder — or drag files or folders onto the window, or use <strong>Add files</strong> and <strong>Add folder</strong>, which copy them there for you.</p>
+        <p class="lead">Put files in your Queue folder — or drag files or folders onto the window, or use <strong>Add files</strong> and <strong>Add folder</strong>, which copy them there for you.</p>
         <p class="prose">
-          A dropped or added folder is flattened into the input folder: its
+          A dropped or added folder is flattened into the Queue folder: its
           documents are copied in side by side, and a name already there gets
-          “(2)”, “(3)”, and so on. A file already in the input folder is not
+          “(2)”, “(3)”, and so on. A file already in the Queue folder is not
           copied again, and the originals are never changed. Copies join the
           queue at once.
         </p>
@@ -889,7 +880,7 @@
           </div>
           <div>
             <dt>Send to Intern</dt>
-            <dd>The installer adds Intern to Explorer's <strong>Send to</strong> menu. Select documents — attachments saved from Outlook, a folder of scans — right-click, and choose <strong>Send to &gt; Intern</strong>. Intern copies them into your input folder and queues them, whether or not it is already open. A file Intern cannot read is left out and named in the window with the reason; everything else is copied and queued.</dd>
+            <dd>The installer adds Intern to Explorer's <strong>Send to</strong> menu. Select documents — attachments saved from Outlook, a folder of scans — right-click, and choose <strong>Send to &gt; Intern</strong>. Intern copies them into your Queue folder and queues them, whether or not it is already open. A file Intern cannot read is left out and named in the window with the reason; everything else is copied and queued.</dd>
           </div>
           <div>
             <dt>Your organization's names</dt>
@@ -905,12 +896,12 @@
           </div>
           <div>
             <dt>Duplicates</dt>
-            <dd>A document whose content Intern has already filed is not read again. With an output folder set, it is moved there under the original's filed name with <strong>COPY -</strong> in front — <code>COPY - 2026-01-02 Lease.pdf</code>, then <code>COPY - 2026-01-02 Lease (2).pdf</code> — next to the original. <strong>Undo</strong> puts it back, where it waits in review; choose <strong>Process anyway</strong> to process it all the same. Without an output folder it waits in review untouched. A second scan, a re-export, or a copy saved again is not the same bytes, so Intern also compares the words: a document that says what a filed one says, dated the same, waits in review with <strong>Filed already as</strong> and the name — on this computer or a teammate's. Approve to file it anyway, keep the original, or remove it.</dd>
+            <dd>A document whose content Intern has already filed is not read again. With a Completed folder set, it is moved there under the original's filed name with <strong>COPY -</strong> in front — <code>COPY - 2026-01-02 Lease.pdf</code>, then <code>COPY - 2026-01-02 Lease (2).pdf</code> — next to the original. <strong>Undo</strong> puts it back, where it waits in review; choose <strong>Process anyway</strong> to process it all the same. Without a Completed folder it waits in review untouched. A second scan, a re-export, or a copy saved again is not the same bytes, so Intern also compares the words: a document that says what a filed one says, dated the same, waits in review with <strong>Filed already as</strong> and the name — on this computer or a teammate's. Approve to file it anyway, keep the original, or remove it.</dd>
           </div>
           <div>
             <dt>Where files land</dt>
             <dd>
-              <p>Processed files are moved out of the input folder into your output folder under their new names. Change the output folder in Settings, under <strong>Folders</strong>.</p>
+              <p>Processed files are moved out of the Queue folder into your Completed folder under their new names. Change the Completed folder in Settings, under <strong>Folders</strong>.</p>
               <p><strong>Arrange filed documents</strong> can sort them into subfolders by year, by year and type, by type, or by first party. Folders appear as documents arrive and go away again when an undo empties them.</p>
             </dd>
           </div>
@@ -1005,7 +996,7 @@
 
         <h3 class="sym-group">CHOOSE YOUR TWO FOLDERS</h3>
         <p class="prose">
-          The first time Intern opens it asks for an input folder and an output
+          The first time Intern opens it asks for a Queue folder and an output
           folder, and it cannot be used until both are chosen. Later, open
           Settings and use <strong>Change…</strong> beside either folder, or
           <strong>Set up folders step by step…</strong>, under
@@ -1017,23 +1008,23 @@
         </p>
         <ol class="steps">
           <li>
-            <b>Choose your input folder.</b>
+            <b>Choose your Queue folder.</b>
             <p>Put files here that you want Intern to process. Intern lists the OneDrive and SharePoint folders already on this computer, such as <em>Legal - Documents</em> or <em>OneDrive – Contoso</em>. Use one, browse to a folder inside it, or choose any folder on this computer. Folders synced with <strong>Sync</strong>, folders added with <strong>Add shortcut to My files</strong>, and your own OneDrive all work. If none is listed, click Sync (or Add shortcut to My files) in SharePoint and choose <strong>Look for OneDrive folders again</strong>.</p>
           </li>
           <li>
-            <b>Choose your output folder.</b>
-            <p>Processed files end up here, renamed. Intern can create an <em>Output</em> folder next to the input folder, keep the output folder you already had, or you choose another — neither folder may be inside the other. Choose the top folder of a synced location and Intern makes an <em>Input</em> and an <em>Output</em> folder inside it, so both stay synced. An output folder chosen in a SharePoint library or OneDrive for work also turns on the description records below, for the library's Description column.</p>
+            <b>Choose your Completed folder.</b>
+            <p>Processed files end up here, renamed. Intern can create an <em>Output</em> folder next to the Queue folder, keep the Completed folder you already had, or you choose another — neither folder may be inside the other. Choose the top folder of a synced location and Intern makes an <em>Input</em> and an <em>Output</em> folder inside it, so both stay synced. A Completed folder chosen in a SharePoint library or OneDrive for work also turns on the description records below, for the library's Description column.</p>
           </li>
           <li>
             <b>Decide about what is already there.</b>
-            <p>If the input folder already holds files, Intern asks once whether to process them too. The default is only new files.</p>
+            <p>If the Queue folder already holds files, Intern asks once whether to process them too. The default is only new files.</p>
           </li>
         </ol>
 
         <div class="callout">
           <svg class="ico" aria-hidden="true"><use href="#i-shield"/></svg>
           <div>
-            <b>Pick an input folder that only you add documents to.</b>
+            <b>Pick a Queue folder that only you add documents to.</b>
             <p>Choosing it — in setup, or with <strong>Change…</strong> in
             Settings — is how Intern knows the documents in it are yours, so it
             does not ask Microsoft who uploaded them. Intern then keeps running
@@ -1068,7 +1059,7 @@
         <ol class="steps">
           <li>
             <b>Check that records are on.</b>
-            <p>In Settings, under <strong>Descriptions for SharePoint</strong>, <strong>Write a description record for each filed document</strong> should be ticked; the status line says <em>On</em> and where records go (<code>.intern\descriptions</code> in the output folder). Each record holds the new filename, its path, the sentence, and the date, type, and parties behind the name. Never any document text.</p>
+            <p>In Settings, under <strong>Descriptions for SharePoint</strong>, <strong>Write a description record for each filed document</strong> should be ticked; the status line says <em>On</em> and where records go (<code>.intern\descriptions</code> in the Completed folder). Each record holds the new filename, its path, the sentence, and the date, type, and parties behind the name. Never any document text.</p>
           </li>
           <li>
             <b>Add the column.</b>
@@ -1130,27 +1121,27 @@
       <section id="watch">
         <div class="sec-head">
           <p class="sec-num">07</p>
-          <h2>The input folder</h2>
+          <h2>The Queue folder</h2>
         </div>
-        <p class="lead">Intern always watches the input folder: whatever is put there is processed, however it got there.</p>
+        <p class="lead">Intern always watches the Queue folder: whatever is put there is processed, however it got there.</p>
 
         <ol class="steps">
           <li>
             <b>A plain folder works.</b>
-            <p>Any folder on this computer can be the input folder. One that no OneDrive or SharePoint client syncs is treated as a private local input folder: only you put documents there, so they are processed without asking anyone who added them.</p>
+            <p>Any folder on this computer can be the Queue folder. One that no OneDrive or SharePoint client syncs is treated as a private local Queue folder: only you put documents there, so they are processed without asking anyone who added them.</p>
           </li>
           <li>
             <b>Change it any time.</b>
-            <p>In Settings, under <strong>Folders</strong>, choose <strong>Change…</strong> beside <strong>Input folder</strong>. If the new folder already holds files, Settings asks whether to process them too; the default is only new files.</p>
+            <p>In Settings, under <strong>Folders</strong>, choose <strong>Change…</strong> beside <strong>Queue folder</strong>. If the new folder already holds files, Settings asks whether to process them too; the default is only new files.</p>
           </li>
           <li>
             <b>The rest is under Advanced.</b>
-            <p><strong>This is a private local input folder, not a shared or synced folder</strong> is refused for a OneDrive, SharePoint, or network-share folder; for those, use <strong>Set up folders step by step…</strong> (<a href="#onedrive">section 06</a>). Advanced also has this machine's name, the folder's scan status, and <strong>Scan now</strong>.</p>
+            <p><strong>This is a private local Queue folder, not a shared or synced folder</strong> is refused for a OneDrive, SharePoint, or network-share folder; for those, use <strong>Set up folders step by step…</strong> (<a href="#onedrive">section 06</a>). Advanced also has this machine's name, the folder's scan status, and <strong>Scan now</strong>.</p>
           </li>
         </ol>
 
         <p class="prose">
-          An input folder typed into Settings in an earlier release may still be
+          A Queue folder typed into Settings in an earlier release may still be
           treated as shared: its documents are held as <em>uploader unknown</em>
           until Microsoft confirms who uploaded them, which only a provisioned
           build can do. Choose it again with <strong>Change…</strong>.
@@ -1159,7 +1150,7 @@
 
         <ul class="bullets">
           <li><strong>Intern needs both folders.</strong></li>
-          <li><strong>Neither folder may be inside the other.</strong> A processed file landing back in the input folder would be picked up as new work, so Intern refuses that up front, and the other way round too when you choose the folders.</li>
+          <li><strong>Neither folder may be inside the other.</strong> A processed file landing back in the Queue folder would be picked up as new work, so Intern refuses that up front, and the other way round too when you choose the folders.</li>
         </ul>
 
         <dl class="kv">
@@ -1282,8 +1273,7 @@
             <div class="answer">
               <p>
                 It is the only network call Intern makes besides the model
-                download (and a hosted model, if you chose one, or Microsoft, in
-                a build provisioned for a team), so check your connectivity. An
+                download (or Microsoft, in a build provisioned for a team), so check your connectivity. An
                 update that is not signed by this project's key is refused
                 outright — that is deliberate.
               </p>
@@ -1294,10 +1284,7 @@
             <div class="answer">
               <p>
                 Untick <strong>Check for updates automatically</strong> in
-                Settings → Updates and save, and keep the local model rather than
-                a hosted one: with a hosted model, each document's text is sent
-                as the document arrives, watched folders included, without a
-                click. Intern then makes no request you did not ask for;
+                Settings → Updates and save.
                 <strong>Check for updates</strong> still works when you press it
                 (<a href="#updates">section 10</a>).
                 A build provisioned for a team also asks Microsoft about each
@@ -1308,7 +1295,7 @@
           </details>
         </div>
 
-        <h3 class="sym-group">NAMING AND THE HOSTED MODEL</h3>
+        <h3 class="sym-group">NAMING</h3>
         <div class="symptoms">
           <details>
             <summary>Approve says every rename needs a date</summary>
@@ -1348,33 +1335,8 @@
               </p>
             </div>
           </details>
-          <details>
-            <summary>The queue paused with a hosted-model error</summary>
-            <div class="answer">
-              <p>
-                A rejected key or an unreachable service would fail every
-                document in turn, so Intern pauses instead and says which it
-                was. Open Settings, use <strong>Test connection</strong> until
-                it succeeds, then press <strong>Resume</strong>. An account
-                that cannot pay is the next entry.
-                A document the hosted model <em>declined</em> to read is not a
-                pause: it fails on its own, and the rest carry on. Rename that
-                file yourself, or retry it.
-              </p>
-            </div>
-          </details>
-          <details>
-            <summary>The hosted model reported a billing or quota problem</summary>
-            <div class="answer">
-              <p>
-                Intern pauses the queue once instead of failing every document
-                against an account that cannot pay for them. Nothing is lost:
-                the documents wait in the queue. Sort out the billing or the
-                quota with the provider, then press <strong>Resume</strong>,
-                the play button beside <strong>Add folder</strong>.
-              </p>
-            </div>
-          </details>
+
+
         </div>
 
         <h3 class="sym-group">DOCUMENTS</h3>
@@ -1415,7 +1377,7 @@
             </div>
           </details>
           <details>
-            <summary>A file in my input folder is called NEEDS REVIEW - …</summary>
+            <summary>A file in my Queue folder is called NEEDS REVIEW - …</summary>
             <div class="answer">
               <p>Intern could not read it: a password, a damaged file, one too large to read, or one the model could not answer for. It waits in the queue for review with the reason shown, renamed so you can see it in the folder too, and Intern never picks it up as a new document. <strong>Retry</strong> reads it again (after you remove a password, say), or type a name for it and approve it to file it. <strong>Keep original</strong> takes the prefix off again; <strong>Remove from queue</strong> leaves the file as it is.</p>
             </div>
@@ -1462,7 +1424,7 @@
             <summary>Settings says “subfolders could not be read”</summary>
             <div class="answer">
               <p>
-                The input folder has a subfolder this Windows account cannot
+                The Queue folder has a subfolder this Windows account cannot
                 open — common on a shared drive where permissions are set per
                 folder. Documents in it are not seen; everything else is. Ask
                 for read permission on that folder, or move the documents out
@@ -1474,21 +1436,21 @@
             <summary>Settings says documents are “uploader unknown” and nothing is renamed</summary>
             <div class="answer">
               <p>
-                The input folder was typed into Settings in an earlier release,
+                The Queue folder was typed into Settings in an earlier release,
                 so Intern does not know the documents in it are yours and is
                 waiting for Microsoft to say who uploaded them — which the
                 published build cannot ask. In Settings, under
                 <strong>Folders</strong>, choose <strong>Change…</strong> beside
-                <strong>Input folder</strong> and pick the same folder again, or
+                <strong>Queue folder</strong> and pick the same folder again, or
                 run <strong>Set up folders step by step…</strong>
                 (<a href="#onedrive">section 06</a>). For a plain local folder you
-                can also tick <strong>This is a private local input
+                can also tick <strong>This is a private local Queue
                 folder</strong> under Advanced (<a href="#watch">section 07</a>).
               </p>
             </div>
           </details>
           <details>
-            <summary>A file in my input folder is being ignored</summary>
+            <summary>A file in my Queue folder is being ignored</summary>
             <div class="answer">
               <p>Work through the usual causes:</p>
               <ul class="bullets">
@@ -1504,8 +1466,8 @@
             <summary>The folder settings won't save</summary>
             <div class="answer">
               <p>
-                Both folders must exist, and the output folder must be outside
-                the input folder. Intern refuses the loop at save time and tells
+                Both folders must exist, and the Completed folder must be outside
+                the Queue folder. Intern refuses the loop at save time and tells
                 you which rule was hit.
               </p>
             </div>

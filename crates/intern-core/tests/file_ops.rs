@@ -477,6 +477,49 @@ fn changed_source_is_rejected_before_a_receipt_or_mutation() {
     assert!(!destination.exists());
 }
 
+struct UnavailableSource;
+
+impl FileSystem for UnavailableSource {
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+    fn hash(&self, _path: &Path) -> io::Result<String> {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "sync provider is busy",
+        ))
+    }
+    fn same_volume(&self, _source: &Path, _destination: &Path) -> io::Result<bool> {
+        Ok(true)
+    }
+    fn rename_no_replace(&self, _: &Path, _: &Path) -> io::Result<()> {
+        panic!("unverified file must not move")
+    }
+    fn copy_new_locked(&self, _: &Path, _: &Path) -> io::Result<Box<dyn LockedFile>> {
+        panic!("unverified file must not copy")
+    }
+    fn lock_for_delete(&self, _: &Path) -> io::Result<Box<dyn LockedFile>> {
+        panic!("unverified file must not delete")
+    }
+}
+
+#[test]
+fn source_read_failure_does_not_claim_the_document_changed() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.pdf");
+    let destination = temp.path().join("named.pdf");
+    write(&source, b"unchanged");
+    let (applier, store, id) = applying(&temp, &source, Arc::new(UnavailableSource));
+    let error = applier
+        .apply(id, &source, &destination, "expected")
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::IoError);
+    assert!(error.to_string().contains("sync provider is busy"));
+    assert!(store.load_receipt(id).unwrap().is_none());
+    assert_eq!(fs::read(&source).unwrap(), b"unchanged");
+    assert!(!destination.exists());
+}
+
 #[test]
 fn one_active_receipt_is_bound_to_each_applying_epoch() {
     let temp = TempDir::new().unwrap();

@@ -825,3 +825,9 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 /* The accurate model arriving behind the window: a line, not a banner. */
 .model-status { color: var(--text-muted); font-size: 12px; margin: 0 0 8px; }
 .read-by { margin: 4px 0 12px; }
+
+/* Keep the everyday review focused on the name and description. */
+.analysis-details { margin: 20px 0; }
+.analysis-details > summary { cursor: pointer; color: var(--text-muted); font-size: 13px; padding: 8px 0; }
+.analysis-details > summary:focus-visible { outline: 2px solid var(--brand-ink); outline-offset: 3px; }
+.analysis-details .evidence { margin-top: 10px; }

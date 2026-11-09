@@ -41,6 +41,17 @@ async function start(items?: QueueItem[]) {
 describe('queue cells', () => {
   afterEach(() => { vi.unstubAllGlobals(); });
 
+  it('puts status before the three document columns in Queue and Completed', async () => {
+    await start([
+      { id: 'a', originalFilename: 'queue.pdf', status: 'ready' },
+      { id: 'b', originalFilename: 'done.pdf', status: 'completed' },
+    ]);
+    const headings = () => screen.getAllByRole('columnheader').map((cell) => cell.textContent);
+    expect(headings().slice(0, 4)).toEqual(['Status', 'Original filename', 'Proposed filename', 'Description']);
+    fireEvent.click(screen.getByRole('button', { name: /Completed/ }));
+    expect(headings().slice(0, 4)).toEqual(['Status', 'Original filename', 'Proposed filename', 'Description']);
+  });
+
   it('selects a cell, a rectangle with Shift, and never a Status cell', async () => {
     const grid = await start();
     expect(grid).toHaveAttribute('aria-multiselectable', 'true');
