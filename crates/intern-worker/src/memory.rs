@@ -90,4 +90,28 @@ mod tests {
     fn the_machine_reports_its_memory() {
         assert!(available_bytes().is_some_and(|bytes| bytes > 0));
     }
+
+    /// The worker reads the memory as the app's tier plan reads it: this is
+    /// a copy of `intern_engine::tiers::available_memory_bytes`, which the
+    /// worker does not link, so the two are read side by side here and must
+    /// agree to within what the machine's other work moves in between.
+    #[test]
+    fn the_worker_reads_the_memory_as_the_tier_plan_does() {
+        const SLACK: u64 = 256 * 1024 * 1024;
+        let before = intern_engine::tiers::available_memory_bytes();
+        let worker = available_bytes();
+        let after = intern_engine::tiers::available_memory_bytes();
+        match (before, worker, after) {
+            (Some(before), Some(worker), Some(after)) => {
+                let low = before.min(after).saturating_sub(SLACK);
+                let high = before.max(after).saturating_add(SLACK);
+                assert!(
+                    (low..=high).contains(&worker),
+                    "{worker} against {before} and {after}"
+                );
+            }
+            (None, None, None) => {}
+            readings => panic!("one read the memory and the other did not: {readings:?}"),
+        }
+    }
 }

@@ -353,8 +353,10 @@ Scanned documents (one run each; Tesseract 5.3.4):
 A PDF's scanned pages are rendered one at a time (PDFium is not
 thread-safe; inspection and rendering share one open document) and read by
 a pool of OCR workers through a bounded queue: as many as the engine offers
-(`OcrBackend::concurrency`; for PP-OCR its configured workers, for Tesseract
-half the logical cores, at most four). Rendering never runs further ahead
+(`OcrBackend::concurrency`; for PP-OCR its configured workers when the
+memory for them is available as the document's pages start, and one
+otherwise (`paddle::pages_at_once`, docs/ocr.md), for Tesseract half the
+logical cores, at most four). Rendering never runs further ahead
 of OCR than the queue allows: the rendered pages held at once are the one
 being rendered, at most `MAX_QUEUED_RENDERED_PAGES` (one) waiting, and one
 per worker being read - six with four workers, about 450 MB at the

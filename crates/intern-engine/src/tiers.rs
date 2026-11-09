@@ -83,10 +83,12 @@ const MIB: u64 = 1024 * 1024;
 ///
 /// One page at a time. Two pages at once took the worker's peak to 1.4 GB
 /// over all of InternBench (docs/ocr.md), so the worker reads a second page
-/// at once only when 5 GiB are available as a document's pages start to be
-/// read (`intern_worker::paddle::pages_at_once`): the two-page peak, the
-/// weights a loaded accurate model keeps reading, and [`HEADROOM`]. Near a
-/// floor it reads one page at a time, which is what this counts.
+/// at once only with the memory for it available as a document's pages
+/// start to be read (`intern_worker::paddle::pages_at_once`): the two-page
+/// peak and [`HEADROOM`], and on Linux, where [`available_memory_bytes`]
+/// counts them, the weights a loaded accurate model keeps reading - 5 GiB
+/// on Linux, 3 GiB on Windows. Near a floor it reads one page at a time,
+/// which is what this counts.
 pub const WORKER_PEAK: u64 = 680 * MIB;
 
 /// What is left for the person's own work once a model and the worker are

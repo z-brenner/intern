@@ -89,9 +89,9 @@ score, the mean over every character, crowds every real reading into
 
 **Threads and memory.** Each page's networks use two intra-op threads. On a
 machine with four or more logical processors a second page is read at the
-same time, with its own sessions, when at least 5 GiB of memory are
-available as the document's pages start to be read
-(`paddle::pages_at_once`); otherwise, and below four logical processors,
+same time, with its own sessions, when enough memory is available as the
+document's pages start to be read - 5 GiB on Linux, 3 GiB on Windows
+(`paddle::pages_at_once`, below); otherwise, and below four logical processors,
 one page at a time, on at most half of them. Never more than two pages'
 worth of memory - about 570 MB each at their peak. Four threads on a 4-core
 machine is the whole machine, which is free while a document is extracted:
@@ -358,20 +358,31 @@ threads each, little on a busy machine. Every document - every page's text,
 source and confidence, and its warnings - was read the same in all twelve
 runs.
 
-The worker's peak resident memory rises from about 0.8 GB to 1.3-1.4 GB
-while two pages are read (`VmHWM` over the whole corpus); it falls back
-when the document is done, since the sessions are dropped then. The tier
-plan judges a model to fit with room for the worker reading one page
-(`tiers::WORKER_PEAK`), so the second set of sessions waits for memory
-beyond that: a document's pages are read two at a time only when 5 GiB are
-available as they start, the two-page peak (1.4 GB), the weights a loaded
-9B keeps reading (2.7 GB, which Linux counts as available) and the plan's
-1 GiB of headroom, rounded up. On a machine near a model's floor pages are
-read one at a time, as before. Windows does not count a loaded model's
-working set as available, so there the bar is higher than it needs to be,
-and a busy machine reads one page at a time a little more often than it
-must. On 8 or more logical processors two pages were read at once before
-too, whatever the memory; they now wait for it as well.
+The worker's peak resident memory rises from 0.75-0.92 GB to 1.30-1.42 GB
+while two pages are read (`VmHWM` over the whole corpus, twelve runs); it
+falls back when the document is done, since the sessions are dropped then.
+The tier plan judges a model to fit with room for the worker reading one
+page (`tiers::WORKER_PEAK`), so the second set of sessions waits for memory
+beyond that: a document's pages are read two at a time only when, as they
+start, the available memory holds the two-page peak (1.45 GB, above the
+highest measured), the plan's 1 GiB of headroom, and on Linux the weights
+a loaded 9B keeps reading (2.7 GB), rounded up to whole GiB: 5 GiB on
+Linux, 3 GiB on Windows. The weights are counted on Linux only because only
+Linux counts them as available: `MemAvailable` takes them for page cache it
+could reclaim, while Windows' available physical memory leaves out the
+server's working set, weights and all. On a 16 GiB Windows runner with the
+9B loaded and a document just read, 5,410-5,570 MiB were available with
+nothing else running and 3,535 MiB with another process holding 2 GiB,
+while the server's working set was 8,107-8,110 MiB
+(`runtime-speed.yml` runs 42573531984 and 42574460663, the memory probe;
+`bench/reports/windows-memory-2026-11-09`). A 5 GiB bar there counts the
+weights twice: that runner cleared it by 290-450 MiB with nothing else
+running and missed it by 1.5 GiB with 2 GiB held, as a laptop with a
+browser open would, where alpha.14 read two pages at once on eight or more
+logical processors whatever the memory. At 3 GiB it reads two in both. On a machine near a model's floor
+pages are read one at a time, as before; on 8 or more logical processors
+they now wait for the memory too. The Windows bar was not measured with
+OCR running: it is reasoned from that runner's figures.
 
 ### Model bytes
 
@@ -413,7 +424,7 @@ The shipped configuration:
 | orientation | classifier first, then the search | one pass for a turned page instead of two to four |
 | leveling | past 10 degrees only | lines are cut along their own slopes; leveling bought nothing up to 10 |
 | second reading | binarized, least certain character under 0.9, at most 12 lines a page | most dates for the time; +20% |
-| threads | 2 a page; 2 pages at once from 4 logical processors with 5 GiB available, else 1 | 1.8 times as fast as one thread; the model server is idle while pages are read; memory caps the pages at once |
+| threads | 2 a page; 2 pages at once from 4 logical processors with 5 GiB (Linux) or 3 GiB (Windows) available, else 1 | 1.8 times as fast as one thread; the model server is idle while pages are read; memory caps the pages at once |
 | recognition batch | 6 lines | reading lines one at a time drops trailing periods and commas at the end of long lines |
 
 Shipped together: InternBench CER 0.49%, WER 1.78%, dates 29/30, names
