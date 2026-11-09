@@ -1,50 +1,21 @@
-# Intern v0.1.0-alpha.14 release checklist
+# Intern v0.1.0-alpha.15 release checklist
 
-**Release status: blocked pending exact-main validation and the deliberately
-dispatched release workflow.** Whole-product QA has run and the rendered
-fidelity sign-off is accepted, so those two gates are no longer
-**pending/blocked**. Everything the release job owns still is. Nothing in this
-checklist authorizes a tag or publication.
+**Release status: pending/blocked.** Alpha.14's accepted evidence is historical
+and does not qualify these release inputs. No tag or publication is authorized
+by this checklist.
 
-## Hosted QA artifacts and accepted alpha.14 evidence
-
-- Workflow: Whole-product QA evidence, run `42129423153`, attempt `1`.
-- Commit: `1710056f98df097b42e96f8cf4b03b57d3d9d3bf`; runner: `Windows/X64`.
-- Execution result: every step passed, including the real-inference corpus
-  evaluation on the Qwen3.5 9B model, which `validate-model-evaluation.mjs`
-  accepted.
-- Release-input digest:
-  `c233331e1444f3edb9e3d65e7eef8f5e726cbd19926dc7830886fa134c9f0d25`.
-- Capture: `docs/qa/latest-implementation.png`, 1536x1024, SHA-256
-  `e5f68d84302602dfb63feecf3518223dfa51fa3559409ccb19a000d0cd34f3b0`.
-- Fidelity reviewer: Claude Code accepted the capture under the maintainer's
-  standing instruction for this release; no person has looked at it. The
-  record is in `rendered-fidelity-signoff.json`, bound to the digest above, and
-  the reasoning, and who did what, is in `fidelity-ledger.md`.
-
-| Gate | Status | Hosted run artifact or post-run evidence |
+| Gate | Status | Required evidence |
 |---|---|---|
-| Frontend unit, lint, and build check | accepted | `npm run check` exit 0; TypeScript, 77 Vitest files (753 tests passed, 1 skipped), and the Vite production build. |
-| Browser core interaction, accessibility, and 1024-pixel layout | accepted | `npm run test:e2e` exit 0; 30 Playwright tests, and the 1536x1024 capture. |
-| Rendered fidelity review | accepted | The capture above, reviewed and bound to the alpha.14 release-input digest. |
-| Rust formatting and workspace lint | accepted | `cargo fmt --all -- --check` and `cargo clippy --locked --workspace --all-targets -- -D warnings`, both exit 0. |
-| Rust workspace tests | accepted | `cargo test --locked --workspace --all-targets` exit 0; 1,759 tests. |
-| Pinned runtime assets and native fixtures | accepted | `npm run assets:verify -- --require-bundled` exit 0 (76 runtime files, 27 license files); 4 native fixture tests with the pinned assets. |
-| Windows Tauri/NSIS build | accepted | `npm run tauri build -- --bundles nsis -- --locked` exit 0; one installer. |
-| Installer and installed-core smoke | accepted | `scripts/smoke-installer.ps1` exit 0: install, both installed llama-server builds started, packaged worker PDF/OCR, uninstall, user data retained. |
-| Corpus evaluation and model acceptance | accepted | 19 documents scored on the pinned Qwen3.5 9B model, peak model RSS 8,124 MiB. Every accuracy gate is above its floor, and no document was filed under a forbidden date or party. |
-| Exact-main validation | pending/blocked | The release workflow must verify its dispatch target is the exact current `main` commit. |
-| Deliberately dispatched release workflow | pending/blocked | Rebuild, updater signature verification, checksums/SBOM/evidence acceptance, provenance, annotated tag creation, and publication remain release-job gates. |
+| Frontend lint, unit tests and build | pending/blocked | `npm run check` on final inputs. |
+| Browser interactions, accessibility and layout | pending/blocked | `npm run test:e2e` and fresh 1536x1024 QA capture. |
+| Rust format, strict lint and workspace tests | pending/blocked | Rust 1.88 hosted Linux and Windows CI. |
+| Corpus replay and real inference | pending/blocked | Recorded-baseline checks and whole-product QA model evaluation. |
+| Pinned assets and native fixtures | pending/blocked | Bundled asset verification and native fixture tests. |
+| Windows NSIS build and installed-core smoke | pending/blocked | Whole-product QA Windows build, install, runtime, worker and uninstall checks. |
+| Update over published alpha.14 | pending/blocked | Deliberately dispatched CI's upgrade smoke with the pinned alpha.14 installer. |
+| Rendered fidelity | pending/blocked | Review this QA run's capture under `docs/releasing.md`; record exact digest and screenshot hash. |
+| Exact-main release preflight | pending/blocked | All input changes merged before QA; only `docs/qa/` changes after QA. |
+| Release workflow | pending/blocked | Deliberate dispatch after preparation; signed updater verification, checksums, SBOMs, evidence acceptance, provenance, tag and publication. |
 
-## Release boundary
-
-The QA workflow has read-only repository permissions and cannot tag, push, or
-publish. The release workflow independently checks the exact main commit and
-recreates its release evidence. It fails closed unless the model evaluation,
-the fidelity sign-off, the installed-core smoke, updater verification,
-checksums, SPDX SBOMs, and the evidence manifest are accepted before
-provenance, annotated tag creation, and GitHub release publication.
-
-The release ships the reviewed capture rather than generating a new one after
-review. Freshness is supplied by the committed non-QA `release_inputs_sha256`;
-changing a relevant release input requires a new capture and sign-off.
+Follow `docs/releasing.md`. Do not carry forward the old capture's acceptance,
+change a digest to bypass review, or treat green CI as installed-app evidence.

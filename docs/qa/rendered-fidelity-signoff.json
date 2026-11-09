@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "status": "accepted",
-  "release_inputs_sha256": "c233331e1444f3edb9e3d65e7eef8f5e726cbd19926dc7830886fa134c9f0d25",
+  "status": "pending",
+  "release_inputs_sha256": "pending",
   "screenshot_path": "docs/qa/latest-implementation.png",
-  "screenshot_sha256": "e5f68d84302602dfb63feecf3518223dfa51fa3559409ccb19a000d0cd34f3b0",
-  "reviewer": "Claude Code, under the maintainer Zachary Brenner's standing instruction for this release, on the capture from Whole-product QA evidence run 42129423153; no person looked at this capture",
-  "reviewed_at": "2026-11-06T00:21:58Z",
-  "notes": "Fresh 1536x1024 capture from Whole-product QA evidence run 42129423153 (attempt 1) at commit 1710056f98df097b42e96f8cf4b03b57d3d9d3bf, which is main after the alpha.14 release preparation. The accepted alpha.13 record is superseded because its digest no longer describes what ships. Who looked: Claude Code opened the capture from the run's artifact at full size, checked it against the concept the ledger records, compared it pixel by pixel with the alpha.13 capture, and accepted it. No person has looked at this capture. The maintainer, Zachary Brenner, instructed in advance that this release be cut without further questions and that the work be reviewed and approved by Claude Code; this record is written under that standing instruction, and says so rather than naming a person who did not look. What was checked: the counts strip and toolbar, the queue table, and the review panel read as three planes. The header states the privacy posture (Private, On this device). Proposed filenames stay date-first, with em-dashes for absent values, and the model's confidence is a right-aligned percentage beside its track in the panel. Ready, Needs review, Proposing a name, and Waiting differ by icon as well as color. The panel opens with 'What to check' and the reason for review, and evidence is attributed under Date and Type, each value on its own line, with the approve and keep actions pinned at the foot with their shortcuts. No collisions, clipping, illegible copy, or ambiguous focus were seen, and the run's automated contrast assertions passed. What changed in the frame: nothing of substance. This release changes the engine's reading rules, the thread count and the memory floor, none of which this screen shows; the capture differs from the accepted alpha.13 capture in 15 pixels on the outline of the Queue and Completed tabs, which is anti-aliasing, and is otherwise identical. The alpha.13 observation stands: at this size Parties sits below the fold under the pinned Approve bar and is reached by scrolling the panel. The sign-off is accepted only for the digest and screenshot hash above. Any later change to a non-QA release input invalidates it and requires a new capture and review."
+  "screenshot_sha256": "pending",
+  "reviewer": "pending",
+  "reviewed_at": "pending",
+  "notes": "Alpha.15 preparation: alpha.14 evidence is historical. Awaiting whole-product QA on the final release inputs and a fresh capture review."
 }
