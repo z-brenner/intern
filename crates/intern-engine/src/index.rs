@@ -228,6 +228,13 @@ pub struct UnitFeatures {
     pub money_labeled: bool,
     /// Likely organizations, loosely normalized.
     pub organizations: Vec<String>,
+    /// Public bodies named by what they are, then "of" and where or what:
+    /// `City of Stanfield`, `Royal Borough of Greenwich`, `Department of
+    /// Health and Social Care`. [`Self::organizations`] reads a name by its
+    /// last word and misses these. Kept apart from it, since validation and
+    /// the rules read organizations; retrieval counts both as names a
+    /// party's line adds. Loosely normalized.
+    pub public_bodies: Vec<String>,
     /// Likely people, loosely normalized.
     pub people: Vec<String>,
     /// Runs of two or more capitalized words: names of some kind.
@@ -822,6 +829,7 @@ impl Builder {
             .map(|draft| normalize(&draft.text))
             .collect::<Vec<_>>();
         let numeric_order = numeric_date_order_of(drafts.iter().map(|draft| draft.text.as_str()));
+        let stacked = stacked_issue_labels(&drafts, &normalized, &running, numeric_order);
 
         // Positions over the units that are not running.
         let live = (0..drafts.len())
@@ -887,6 +895,7 @@ impl Builder {
                     draft
                         .table_header
                         .map(|header| drafts[header as usize].cells.as_slice()),
+                    stacked[ordinal],
                 ),
                 date_signals: saturate(date_signal_count(&draft.text)),
                 section_tags: tags,
@@ -911,6 +920,10 @@ impl Builder {
                         || header_text.is_some_and(|header| contains_word(header, word))
                 });
             features.organizations = organizations(&draft.text);
+            features.public_bodies = public_bodies(&draft.text)
+                .into_iter()
+                .filter(|body| !features.organizations.contains(body))
+                .collect();
             features.people = people(&draft.text, label.as_deref());
             features.proper_names = saturate(proper_name_runs(&draft.text));
             features.identifiers = identifiers(&draft.text, label.as_deref());
@@ -1163,6 +1176,80 @@ fn section_tags(heading: &str) -> u16 {
         .fold(0, |tags, (_, bits)| tags | bits)
 }
 
+/// Labels that, opening a form's line of labels, name the date of issue.
+const STACKED_ISSUE_LABELS: &[&str] = &[
+    "invoice date",
+    "issue date",
+    "date of issue",
+    "statement date",
+    "bill date",
+];
+/// How many units above a line of values its line of labels may stand.
+const STACKED_LABEL_REACH: usize = 5;
+/// Longest line of labels, in characters.
+const MAX_LABEL_LINE_CHARACTERS: usize = 80;
+
+/// For each unit, the issue-date label of the line of labels it stands
+/// under, when a form's labels and values came out as lines rather than a
+/// table: "Invoice Date Invoice Month Invoice Period" above "1327345-1
+/// 01/28/24 January 2024 01/01/24 - 01/21/24". The labels are a short line
+/// on the same page, at most [`STACKED_LABEL_REACH`] units up, with no
+/// figure in it, that opens with an issue-date label; every unit between
+/// is figures-free of dates too, and the unit itself is not a table row
+/// and states a two-digit-year date. Only that first label is read, so
+/// only the first value is the issue date.
+fn stacked_issue_labels(
+    drafts: &[Draft],
+    normalized: &[String],
+    running: &[bool],
+    order: Option<NumericOrder>,
+) -> Vec<Option<&'static str>> {
+    let states_a_date = |text: &str| {
+        wrapped_lines(text).iter().any(|line| {
+            let line = normalize(line);
+            !dates_stated_on(&line, order).is_empty()
+                || !two_digit_year_dates(&line, order).is_empty()
+        })
+    };
+    drafts
+        .iter()
+        .enumerate()
+        .map(|(ordinal, draft)| {
+            if running[ordinal]
+                || draft.table_header.is_some()
+                || draft.kind == UnitKind::TableRow
+                || wrapped_lines(&draft.text)
+                    .iter()
+                    .all(|line| two_digit_year_dates(&normalize(line), order).is_empty())
+            {
+                return None;
+            }
+            for above in (ordinal.saturating_sub(STACKED_LABEL_REACH)..ordinal).rev() {
+                let candidate = &drafts[above];
+                if candidate.page != draft.page {
+                    return None;
+                }
+                if running[above] {
+                    continue;
+                }
+                let text = normalized[above].as_str();
+                if let Some(label) = STACKED_ISSUE_LABELS
+                    .iter()
+                    .find(|label| text.starts_with(**label))
+                    && text.chars().count() <= MAX_LABEL_LINE_CHARACTERS
+                    && !text.chars().any(|character| character.is_ascii_digit())
+                {
+                    return Some(*label);
+                }
+                if states_a_date(&candidate.text) {
+                    return None;
+                }
+            }
+            None
+        })
+        .collect()
+}
+
 /// Every date a unit states, line by wrapped line, with the wording before
 /// each read the way validation reads it.
 ///
@@ -1171,12 +1258,20 @@ fn section_tags(heading: &str) -> u16 {
 /// "Invoice Date" column - in a row that carries no amount. Elsewhere its
 /// century is a guess; a bare "Date:" labels a signature's date as often as
 /// the document's, and a line item's date is the item's.
+///
+/// `stacked` is the issue-date label of a form's line of labels above this
+/// line of values, when the extractor kept them as lines rather than a
+/// table ([`stacked_issue_labels`]): the first date of the values, when it
+/// has a two-digit year, is read under it.
 fn date_mentions(
     text: &str,
     order: Option<NumericOrder>,
     headers: Option<&[String]>,
+    stacked: Option<&str>,
 ) -> Vec<DateMention> {
     let mut mentions = Vec::new();
+    // Only the first date of the values stands under a stacked label.
+    let mut first_date = true;
     for line in wrapped_lines(text) {
         let normalized = normalize(&line);
         let stated = dates_stated_on(&normalized, order)
@@ -1188,6 +1283,12 @@ fn date_mentions(
                     .map(|(iso, at)| (iso, at, true)),
             )
             .collect::<Vec<_>>();
+        // The first date on the line, by position, is the first value.
+        let first_at = stated.iter().map(|(_, at, _)| *at).min();
+        let under_stacked = stacked.filter(|_| first_date && first_at.is_some());
+        if first_at.is_some() {
+            first_date = false;
+        }
         for (iso, at, two_digit_year) in stated {
             if mentions
                 .iter()
@@ -1196,6 +1297,9 @@ fn date_mentions(
                 continue;
             }
             let window = window_before(&normalized, at);
+            let stacked_label = under_stacked
+                .filter(|_| two_digit_year && Some(at) == first_at)
+                .map(|label| format!("{label}: "));
             let numeric = normalized[at..]
                 .chars()
                 .next()
@@ -1204,17 +1308,19 @@ fn date_mentions(
                 && !normalized[at..].starts_with(&iso[..4]);
             // The column a row's date stands in - the cell the pipes before
             // it put it in - and that column's header as its label.
-            let column_label = headers.and_then(|headers| {
-                let before = &normalized[..at];
-                let pipes = before.matches('|').count();
-                let column = if before.trim_start().starts_with('|') {
-                    pipes.checked_sub(1)?
-                } else {
-                    pipes
-                };
-                let header = normalize(headers.get(column)?);
-                (!header.is_empty()).then(|| format!("{header}: "))
-            });
+            let column_label = headers
+                .and_then(|headers| {
+                    let before = &normalized[..at];
+                    let pipes = before.matches('|').count();
+                    let column = if before.trim_start().starts_with('|') {
+                        pipes.checked_sub(1)?
+                    } else {
+                        pipes
+                    };
+                    let header = normalize(headers.get(column)?);
+                    (!header.is_empty()).then(|| format!("{header}: "))
+                })
+                .or(stacked_label);
             let column = |read: fn(&str) -> bool| column_label.as_deref().is_some_and(read);
             if two_digit_year {
                 let field = window.trim_end().ends_with([':', '|']);
@@ -1490,6 +1596,128 @@ fn organizations(text: &str) -> Vec<String> {
             name.push_str(form);
         }
         let name = normalize_loosely(&name);
+        if !name.is_empty() && !found.contains(&name) {
+            found.push(name);
+        }
+    }
+    found
+}
+
+/// Words that open a public body's name when "of" follows: `City of`,
+/// `Borough of`, `Department of`.
+/// Not "State of", "Commonwealth of" or "County of": a contract's
+/// governing law and a notary's venue name them in every other document,
+/// and neither is a party there. Nor "District of": a court's caption
+/// names its district ("Southern District of New York").
+const PUBLIC_BODY_HEADS: &[&str] = &[
+    "borough",
+    "bureau",
+    "city",
+    "commission",
+    "council",
+    "department",
+    "government",
+    "ministry",
+    "municipality",
+    "office",
+    "parish",
+    "province",
+    "town",
+    "township",
+    "village",
+];
+/// Most capitalized words a public body's name runs to after its "of".
+const PUBLIC_BODY_WORDS: usize = 6;
+
+/// An abbreviation written with its periods: `U.S.`, `N.Y.`.
+fn is_dotted_abbreviation(word: &str) -> bool {
+    let mut letters = 0;
+    let mut expect_letter = true;
+    for character in word.chars() {
+        if expect_letter && character.is_uppercase() {
+            letters += 1;
+            expect_letter = false;
+        } else if !expect_letter && character == '.' {
+            expect_letter = true;
+        } else {
+            return false;
+        }
+    }
+    letters >= 2 && expect_letter
+}
+
+/// Public bodies named head first: a capitalized head word ("City",
+/// "Borough", "Department"), "of", maybe "the", and the capitalized words
+/// of the place or the remit - "and", "&" and "of" may join them - up to
+/// the punctuation or lower-case word that ends the name. Up to three
+/// capitalized words before the head belong to the name ("Royal Borough
+/// of Greenwich", "U.S. Department of Justice"). "To the Inhabitants of
+/// the Parish of Clerkenwell" reads `Parish of Clerkenwell`.
+fn public_bodies(text: &str) -> Vec<String> {
+    let words = words_of(text);
+    let is_of = |word: &str| matches!(word, "of" | "Of" | "OF");
+    let is_the = |word: &str| matches!(word, "the" | "The" | "THE");
+    let ends_name = |word: &str| word.ends_with([',', '.', ';', ':', ')', '"']);
+    let mut found: Vec<String> = Vec::new();
+    for (index, head) in words.iter().enumerate() {
+        if !is_capitalized(head)
+            || ends_name(head)
+            || !PUBLIC_BODY_HEADS.contains(&folded_form(head).as_str())
+            || !words.get(index + 1).is_some_and(|next| is_of(next))
+        {
+            continue;
+        }
+        let mut end = index + 2;
+        if words.get(end).is_some_and(|word| is_the(word)) {
+            end += 1;
+        }
+        let mut last = None;
+        let mut taken = 0;
+        while let Some(word) = words.get(end) {
+            let core = bare(word);
+            if is_capitalized(word) && core.chars().any(char::is_alphabetic) && core != "&" {
+                taken += 1;
+                last = Some(end);
+                end += 1;
+                if ends_name(word) || taken >= PUBLIC_BODY_WORDS {
+                    break;
+                }
+            } else if matches!(core, "&" | "and" | "of")
+                && !ends_name(word)
+                && words.get(end + 1).is_some_and(|next| {
+                    is_capitalized(next) && !matches!(bare(next), "&" | "The" | "THE")
+                })
+            {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        let Some(last) = last else {
+            continue;
+        };
+        let mut start = index;
+        while start > 0 && index - start < 3 {
+            let previous = words[start - 1];
+            let clean = previous
+                .chars()
+                .all(|character| character.is_alphanumeric() || matches!(character, '.' | '-'));
+            let abbreviation = is_dotted_abbreviation(previous);
+            if !clean
+                || (previous.ends_with('.') && !abbreviation)
+                || !is_capitalized(previous)
+                || is_the(previous)
+                || is_of(previous)
+                || matches!(
+                    bare(previous),
+                    "To" | "TO" | "From" | "FROM" | "Dear" | "DEAR"
+                )
+            {
+                break;
+            }
+            start -= 1;
+        }
+        let name = normalize_loosely(&words[start..=last].join(" "));
         if !name.is_empty() && !found.contains(&name) {
             found.push(name);
         }
@@ -2113,6 +2341,80 @@ mod tests {
                 .iter()
                 .all(|mention| mention.column_issue)
         );
+    }
+
+    /// A form's labels above its values, kept as lines: the first value
+    /// under a line that opens with "Invoice Date" is the invoice's date,
+    /// read with its two-digit year; the line's other dates are not, nor is
+    /// a two-digit year under any other line of labels or in a table row.
+    #[test]
+    fn a_two_digit_year_under_a_stacked_issue_date_label_is_read() {
+        let index = EvidenceIndex::build(&source_from_text(
+            "WTTG\n\nInvoice #\n\nInvoice Date Invoice Month Invoice Period\n\nOrder # Alt Order # Deal # Order Flight\n\nAgency Code Advertiser Code Product 1/2\n\n1327345-1 01/28/24 January 2024 01/01/24 - 01/21/24\n\nOrder Date Order Month\n\n02/03/24 February 2024",
+        ));
+        let read = index
+            .units()
+            .iter()
+            .flat_map(|unit| &unit.features.dates)
+            .map(|mention| (mention.iso.as_str(), mention.column_issue))
+            .collect::<Vec<_>>();
+        assert_eq!(read, vec![("2024-01-28", true)], "{read:?}");
+    }
+
+    /// Public bodies named head first are names a party's line carries,
+    /// beside the organizations, which a name's last word decides; a
+    /// governing law's state and a court's district are not.
+    #[test]
+    fn public_bodies_are_read_head_first() {
+        for (text, expected) in [
+            (
+                "Jillian Holford, Royal Borough of Greenwich",
+                vec!["royal borough of greenwich"],
+            ),
+            (
+                "City of Stanfield c/o Darla Linker, City Manager",
+                vec!["city of stanfield"],
+            ),
+            (
+                "Antitrust Division, U.S. Department of Justice.",
+                vec!["us department of justice"],
+            ),
+            (
+                "Ministers at the Home Office and the Department of Health and Social Care",
+                vec!["department of health and social care"],
+            ),
+            (
+                "TO THE INHABITANTS OF THE PARISH OF CLERKENWELL.",
+                vec!["parish of clerkenwell"],
+            ),
+            (
+                "Office of the Chief Signal Officer",
+                vec!["office of the chief signal officer"],
+            ),
+            ("governed by the laws of the State of Delaware", vec![]),
+            (
+                "UNITED STATES DISTRICT COURT SOUTHERN DISTRICT OF NEW YORK",
+                vec![],
+            ),
+            ("the department of labor", vec![]),
+        ] {
+            assert_eq!(public_bodies(text), expected, "{text}");
+        }
+        let index = EvidenceIndex::build(&source_from_text(
+            "From: Jillian Holford\n\nPrincipal Planning Officer\n\nRoyal Borough of Greenwich\n\nAcme Holdings LLC",
+        ));
+        let bodies = index
+            .units()
+            .iter()
+            .flat_map(|unit| &unit.features.public_bodies)
+            .collect::<Vec<_>>();
+        assert_eq!(bodies, vec!["royal borough of greenwich"]);
+        assert!(index.units().iter().all(|unit| {
+            !unit
+                .features
+                .organizations
+                .contains(&"royal borough of greenwich".to_owned())
+        }));
     }
 
     /// A row of dates under a header row: the header names each column's

@@ -815,7 +815,8 @@ fn components(
         }
         Field::Parties => {
             let labeled = label_has(unit, PARTY_LABELS);
-            let entities = features.organizations.len() + features.people.len();
+            let organizations = features.organizations.len() + features.public_bodies.len();
+            let entities = organizations + features.people.len();
             if entities == 0
                 && cues.party_cues == 0
                 && features.proper_names == 0
@@ -842,7 +843,7 @@ fn components(
                 position: flag(position.opening, 40)
                     + flag(position.first_page, 12)
                     + flag(position.closing, 20),
-                features: features.organizations.len().min(4) as i64 * 25
+                features: organizations.min(4) as i64 * 25
                     + features.people.len().min(4) as i64 * 20
                     + i64::from(features.proper_names.min(4)) * 5,
             }
@@ -1188,6 +1189,7 @@ fn select(
         let mut names = features
             .organizations
             .iter()
+            .chain(&features.public_bodies)
             .chain(&features.people)
             .collect::<Vec<_>>();
         names.sort_unstable();
@@ -1323,6 +1325,7 @@ fn select(
             .features
             .organizations
             .iter()
+            .chain(&unit.features.public_bodies)
             .chain(&unit.features.people)
         {
             entities_seen.insert(name.clone());
