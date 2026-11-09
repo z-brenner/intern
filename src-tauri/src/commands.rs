@@ -958,10 +958,10 @@ impl RuntimeModel {
     /// What reads the next document, given what Settings asks for, what is
     /// installed and checked, and the memory free. What unloading the loaded
     /// model would give back counts as free ([`RuntimeModel::unload_gives_back`]),
-    /// so the plan judges the machine as it would be with no model loaded: the
-    /// same test whichever model is loaded, and the one a launch with nothing
-    /// loaded makes. Credited short, a loaded accurate model was judged not to
-    /// fit beside itself and swapped for the quick one, and the quick one
+    /// so the plan judges the machine as it would be once that model is
+    /// unloaded: about the test a launch with nothing loaded makes, whichever
+    /// model is loaded. Credited short, a loaded accurate model is judged not
+    /// to fit beside itself and swapped for the quick one, and the quick one
     /// swapped back for it, document after document.
     fn plan(&self) -> Option<TierPlan> {
         let available = (self.senses.available_memory)().map(|available| {
@@ -985,8 +985,8 @@ impl RuntimeModel {
     /// memory, since the mapped weights are page cache the machine counts
     /// already. When that cannot be read, or a start or stop has the server's
     /// slot, the estimate ([`tiers::unload_gives_back`]), which is about right
-    /// on Linux and, for the 9B right after a document on Windows, 5.2 GB
-    /// short (`bench/reports/windows-memory-2026-11-09`).
+    /// on Linux and, for the 9B right after a document on Windows, about
+    /// 5,200 MiB short (`bench/reports/windows-memory-2026-11-09`).
     fn unload_gives_back(&self, tier: ModelTier) -> u64 {
         let measured = match self.server.try_lock() {
             Ok(server) => server.as_ref().and_then(|server| server.memory_released()),
@@ -10099,7 +10099,7 @@ mod runtime_tests {
     /// ([`tiers::unload_gives_back`]); the fixtures' files are a few bytes.
     const PINNED_ACCURATE_BYTES: u64 = 5_680_522_464;
     const PINNED_FAST_BYTES: u64 = 2_740_937_888;
-    /// Measured on a 16 GB `windows-latest` runner with 2 GiB held by another
+    /// Measured on a 16 GiB `windows-latest` runner with 2 GiB held by another
     /// process, as a browser holds it (`bench/reports/windows-memory-2026-11-09`):
     /// the available physical memory before any model was loaded, then with
     /// each model loaded and one document read, and that model's server's
@@ -10111,12 +10111,18 @@ mod runtime_tests {
     const WINDOWS_FAST_WORKING_SET: u64 = 4_514 * MIB;
 
     /// What the probe found on Windows: credited only the estimate, the 9B
-    /// loaded on a 16 GB machine with a browser open was judged not to fit
-    /// beside itself and gave way to the 4B, and the 4B loaded was judged to
-    /// leave room for the 9B, so the two swapped before every document.
+    /// loaded on a 16 GiB machine with a browser open is judged not to fit
+    /// beside itself and gives way to the 4B, and the 4B loaded is judged to
+    /// leave room for the 9B, so the two swap before every document.
     /// Credited the working set each server reports - what its exit gave
-    /// back - both judge the machine as it is with nothing loaded, and the 9B
-    /// stays.
+    /// back - both judge the machine about as it would be with that server
+    /// stopped, and the 9B stays.
+    ///
+    /// The first half, the plan's arithmetic with the pinned files' sizes,
+    /// is what tells the two credits apart. The runtime half pins down that
+    /// the runtime credits the server's own figure: its fixture files are a
+    /// few bytes, so its fallback estimate is nearly the whole resident
+    /// estimate, not the pinned 9B's 2,883 MiB, and would keep the 9B too.
     #[test]
     fn the_windows_numbers_no_longer_swap_the_models_document_after_document() {
         // The probe's numbers are the swap, under the estimate: the plan
@@ -10183,9 +10189,12 @@ mod runtime_tests {
 
     /// A machine that is short with nothing loaded is short with the
     /// accurate model loaded, by the server's own figure: the quick model
-    /// stands in, and stays while memory is short. Here the figure is less
-    /// than the estimate would have credited - a working set the system has
-    /// trimmed - and the estimate would have kept the accurate model.
+    /// stands in, and stays while memory is short. The figure here, a
+    /// working set the system has trimmed, is less than the fixture's
+    /// estimate, which would have kept the accurate model, so the verdict
+    /// shows which of the two was credited. (That is the fixture's few-byte
+    /// file: with the pinned 9B's the estimate is 2,883 MiB, less than this
+    /// figure, and would have stood the accurate model down as well.)
     #[test]
     fn a_full_machine_still_stands_the_quick_model_in() {
         let install = Install::new("tier-full");
@@ -10214,7 +10223,7 @@ mod runtime_tests {
             )
             .map(|plan| plan.first),
             Some(ModelTier::Accurate),
-            "the estimate would have kept it"
+            "the fixture's estimate would have kept it"
         );
         let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
         assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));

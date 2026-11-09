@@ -145,9 +145,9 @@ pub const fn resident_estimate(tier: ModelTier) -> u64 {
 /// limit it read a document in 95 s against 72 s with no limit; at 5 GB it
 /// thrashed (421 s). The 4B was not measured under a limit; its resident
 /// set stands in. Windows does not take those pages back at once: right
-/// after a document the 9B's working set on a 16 GB runner was 8.1 GB, the
-/// touched originals included, and a minute idle trimmed it to 6.3-7.5 GB;
-/// what it needs under a squeeze there is not measured
+/// after a document the 9B's working set on a 16 GiB runner was 8,110 MiB,
+/// the touched originals included, and a minute idle trimmed it to
+/// 6,332-7,528 MiB; what it needs under a squeeze there is not measured
 /// (`bench/reports/windows-memory-2026-11-09`).
 pub const fn working_set(tier: ModelTier) -> u64 {
     match tier {
@@ -175,11 +175,12 @@ pub const fn working_set(tier: ModelTier) -> u64 {
 /// standby list, where a mapped file's cached pages wait, but not the pages
 /// a process has in its working set, and the server keeps the weights it
 /// has touched there until it exits or the system trims them. Measured on a
-/// 16 GB runner (`bench/reports/windows-memory-2026-11-09`): right after a
+/// 16 GiB runner (`bench/reports/windows-memory-2026-11-09`): right after a
 /// document the 9B's working set was 8,108 MiB and the 4B's 4,513, against
-/// the 2,883 and 2,086 this credits; with 2 GiB held by another process
-/// that stood the loaded 9B down for the 4B before the next document, and
-/// the loaded 4B down for the 9B before the one after.
+/// the 2,883 and 2,086 this credits. With 2 GiB held by another process,
+/// the plan's arithmetic on those numbers stands the loaded 9B down for the
+/// 4B before the next document, and the loaded 4B down for the 9B before
+/// the one after.
 pub const fn unload_gives_back(tier: ModelTier, model_file_bytes: u64) -> u64 {
     resident_estimate(tier).saturating_sub(model_file_bytes)
 }
@@ -515,7 +516,7 @@ pub fn available_memory_bytes() -> Option<u64> {
 /// page in it is on none of the lists the available physical memory counts,
 /// and every page in it goes back to one when the process exits - its
 /// private memory to the free list, the mapped weights it touched to the
-/// standby list. On a 16 GB runner the available memory 3 s after the 9B or
+/// standby list. On a 16 GiB runner the available memory 3 s after the 9B or
 /// the 4B exited was the available memory before plus the working set
 /// before, to within 83 MiB in six stops
 /// (`bench/reports/windows-memory-2026-11-09`). On Linux, its anonymous
