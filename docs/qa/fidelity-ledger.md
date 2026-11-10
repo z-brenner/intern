@@ -611,3 +611,35 @@ acceptance was recorded at `2026-11-09T19:59:34Z`. Codex inspected the frame and
 the record; Zachary Brenner looked and accepted. The rendered-fidelity sign-off
 is accepted for the exact digest and screenshot hash above. Alpha.14
 acceptance has not been carried forward.
+
+
+## Alpha.16 fresh capture — accepted by Zachary Brenner
+
+Whole-product QA run `42722700028`, attempt `1`, completed successfully on
+main commit `b69ffcfa4f9a42fa93856b3193752ede1dc17d17`.
+Release-input digest: `473175c1ed816db6b94c53bec6d1ab35cdca533ed925dbe9510016fd8187b676`.
+Capture SHA-256: `770c7a6def2044a8b0af60aa3ca5f23f7cc8ca30641b3d76cc4eaa3ec8bba456`.
+The committed capture is the exact 1536x1024 image from that artifact.
+All 11 manifest artifact hashes and sizes were independently verified by
+Codex and a second reviewing agent. Model and installed-core gates passed.
+The artifact correctly recorded human rendered-fidelity acceptance as pending.
+
+Both agents inspected the fresh image at full size. Status appears first,
+with original filename, proposed filename and description contiguous.
+Queue/Completed navigation, the queue table and review panel have distinct
+hierarchy. The header states “Private · On this device”. Review reasons,
+filename and description are readable, while Analysis details is collapsed.
+Ready, Needs review, Proposing a name and Waiting have distinct icons as well
+as color. Filename focus and row selection remain visibly distinct.
+Approve & rename and Keep original stay visible. No unintended clipping,
+collisions or illegible text were observed. Deliberate ellipsis in table cells
+and wrapped filename text are visible. This frame does not establish every
+native window or interaction state; browser and installed-app tests provide
+separate evidence.
+
+The exact image was shown to Zachary Brenner for acceptance. He replied:
+“I looked at it and accept”. His acceptance was recorded at
+`2026-11-10T00:57:53Z`. Codex inspected the frame and prepared this record;
+Zachary Brenner looked and accepted. The accepted sign-off binds the exact
+digest and screenshot hash above. No acceptance from alpha.15 or an earlier
+release is carried forward.
