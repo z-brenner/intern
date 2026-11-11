@@ -122,3 +122,39 @@ test('the Copy button copies a selection, and leaves the Details panel as it was
   expect((await readClipboard(page)).text).toBe('Model unsure of its reading');
   await expect(panel).toBeVisible();
 });
+
+// A real double-click: two presses, each of which the table answers by
+// selecting the cell, and then dblclick. It opens the Details panel at the
+// row's name, starts no drag, and selects no text.
+test('a double-click on a row opens its details at the name', async ({ page }) => {
+  await expect(page.getByRole('complementary', { name: 'Review item' })).toHaveCount(0);
+  await queueCell(page, 'Scan 0104.pdf', 'proposed').dblclick();
+
+  const panel = page.getByRole('complementary', { name: 'Review item' });
+  await expect(panel).toContainText('Scan 0104.pdf');
+  await expect(panel.getByLabel('Filename')).toBeFocused();
+  await expect(panel.getByLabel('Filename')).toHaveValue('2024-03-30 Statement of Work with Litware Inc');
+  await expect(page.getByRole('row', { name: /Scan 0104\.pdf/ })).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('.queue-grid [aria-selected="true"]')).toHaveCount(1);
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('');
+  // Moving the pointer afterwards extends nothing: no drag was left running.
+  const other = await queueCell(page, 'Scan 0106.pdf', 'description').boundingBox();
+  await page.mouse.move(other!.x + 20, other!.y + other!.height / 2, { steps: 4 });
+  await expect(page.locator('.queue-grid [aria-selected="true"]')).toHaveCount(1);
+
+  // Analysis details, opened here from the keyboard, is open for the next
+  // document as well, and Escape closes the More menu without closing anything else.
+  const disclosure = panel.locator('details.analysis-details');
+  await panel.getByText('Analysis details').focus();
+  await page.keyboard.press('Enter');
+  await expect(disclosure).toHaveAttribute('open', '');
+  await panel.getByRole('button', { name: 'More review actions' }).click();
+  await panel.getByRole('button', { name: 'Analyze again' }).focus();
+  await page.keyboard.press('Escape');
+  await expect(panel.getByRole('group', { name: 'More review actions' })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'More review actions' })).toBeFocused();
+  await expect(panel).toBeVisible();
+  await panel.getByRole('button', { name: 'Next undecided' }).click();
+  await expect(panel).toContainText('Scan 0106.pdf');
+  await expect(disclosure).toHaveAttribute('open', '');
+});

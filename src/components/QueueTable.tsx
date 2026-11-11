@@ -19,7 +19,7 @@ interface Props {
   store: GridStore;
   /** A cell was clicked or arrowed to: its row becomes the selected item. Never opens the Details panel. */
   onSelectRow(item: QueueItem, cell: HTMLElement): void;
-  /** Enter on a cell: open the Details panel for its row. */
+  /** Enter on a cell, or a double-click on one: open the Details panel for its row. */
   onOpen(item: QueueItem, cell: HTMLElement): void;
 }
 
@@ -45,8 +45,8 @@ const copyableColumn = (column: ColumnKey, fallback?: ColumnKey): ColumnKey => C
  * a row count of Tab presses away. J/K, which move between rows from
  * anywhere, stay in useReviewShortcuts.
  *
- * Selecting never opens the Details panel; the toolbar's Details button and
- * Enter on a cell do.
+ * Selecting never opens the Details panel; the toolbar's Details button,
+ * Enter on a cell and a double-click on one do.
  */
 export function QueueTable({ items, selectedId, store, onSelectRow, onOpen }: Props) {
   const tableRef = useRef<HTMLTableElement>(null);
@@ -116,6 +116,15 @@ export function QueueTable({ items, selectedId, store, onSelectRow, onOpen }: Pr
     moveTo({ anchor: state.anchor, focus }, { preventScroll: true });
   };
 
+  // A double-click is the mouse's Enter: it opens the Details panel for the
+  // row at its name, as it opens a cell for editing in a spreadsheet. Its two
+  // clicks have already selected the cell. With Shift or Ctrl held the clicks
+  // were extending a selection, and that is all they do.
+  const onCellDoubleClick = (event: MouseEvent<HTMLElement>, item: QueueItem) => {
+    if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+    onOpen(item, event.currentTarget);
+  };
+
   // A heading selects its column, or with Shift extends the selection across
   // to it. The keyboard has Ctrl+Space for the same.
   const selectColumn = (column: ColumnKey, extend: boolean) => {
@@ -127,11 +136,12 @@ export function QueueTable({ items, selectedId, store, onSelectRow, onOpen }: Pr
     moveTo({ anchor: { id: last.id, column: from }, focus: { id: first.id, column } }, { preventScroll: true });
   };
 
-  const handlers = useRef({ onCellMouseDown, onCellMouseEnter });
-  useLayoutEffect(() => { handlers.current = { onCellMouseDown, onCellMouseEnter }; });
+  const handlers = useRef({ onCellMouseDown, onCellMouseEnter, onCellDoubleClick });
+  useLayoutEffect(() => { handlers.current = { onCellMouseDown, onCellMouseEnter, onCellDoubleClick }; });
   const stableHandlers = useMemo<RowHandlers>(() => ({
     mouseDown: (event, item, column) => handlers.current.onCellMouseDown(event, item, column),
     mouseEnter: (event, item, column) => handlers.current.onCellMouseEnter(event, item, column),
+    doubleClick: (event, item) => handlers.current.onCellDoubleClick(event, item),
   }), []);
 
   const onKeyDown = (event: KeyboardEvent<HTMLTableElement>) => {
@@ -225,6 +235,7 @@ export function QueueTable({ items, selectedId, store, onSelectRow, onOpen }: Pr
 interface RowHandlers {
   mouseDown(event: MouseEvent<HTMLElement>, item: QueueItem, column: ColumnKey): void;
   mouseEnter(event: MouseEvent<HTMLElement>, item: QueueItem, column: ColumnKey): void;
+  doubleClick(event: MouseEvent<HTMLElement>, item: QueueItem): void;
 }
 
 interface RowProps {
@@ -273,7 +284,8 @@ const QueueRow = memo(function QueueRow({ item, statusId, current, left, right, 
         aria-selected={column.copyable ? selected : undefined}
         title={column.key === 'description' && item.status !== 'waiting' ? item.description : column.key === 'check' ? checkCell(item)?.title : undefined}
         onMouseDown={(event) => handlers.mouseDown(event, item, column.key)}
-        onMouseEnter={(event) => handlers.mouseEnter(event, item, column.key)}>
+        onMouseEnter={(event) => handlers.mouseEnter(event, item, column.key)}
+        onDoubleClick={(event) => handlers.doubleClick(event, item)}>
         {cellContent(item, column.key)}
       </td>;
     })}

@@ -132,9 +132,9 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const [moreOpen, setMoreOpen] = useState(false);
   const [lastUpdateCheck, setLastUpdateCheck] = useState<Date>();
   const [selectedId, setSelectedId] = useState<string>();
-  // The Details panel opens and closes only by its own buttons - the
-  // toolbar's Details toggle, its close button, and Enter or F2 on the
-  // selected item - never by selecting something. Selecting used to open it,
+  // The Details panel opens and closes only when asked - the toolbar's
+  // Details toggle, its close button, and Enter, F2 or a double-click on an
+  // item - never by selecting something. Selecting used to open it,
   // so every click in the table pushed the queue aside, and the selection
   // Intern seeds at launch opened it before anyone had asked for anything.
   // Wide, whether it is open is remembered from one launch to the next.
@@ -324,8 +324,8 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     const cell = document.querySelector<HTMLElement>('.queue-grid [tabindex="0"]');
     setQueueFocus({ version: ++focusRestoreVersion.current, element: cell ?? detailsButton.current ?? undefined });
   };
-  // Enter on a cell, F2, and Next undecided: select the item, open the
-  // Details panel, and go straight to its name.
+  // Enter on a cell, a double-click on one, F2, and Next undecided: select
+  // the item, open the Details panel, and go straight to its name.
   const openItem = (item: QueueItem, trigger?: HTMLElement) => {
     seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = trigger ? { element: trigger, itemId: item.id } : rowTrigger(item.id); setSelectedId(item.id);
     rememberDetails(true);
@@ -894,7 +894,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
           */}
           <button type="button" disabled={visible.length === 0} onClick={clipboard.copy}><Icon icon={ClipboardCopy} />{clipboard.hasSelection ? 'Copy selection' : 'Copy table'}</button>
           <button ref={detailsButton} type="button" className="details-toggle" aria-expanded={panelOpen} aria-controls={panelOpen ? REVIEW_PANEL_ID : undefined} disabled={!selected}
-            title={selected ? undefined : 'Select a row to see its details'} onClick={() => panelOpen ? closeDetails(true) : rememberDetails(true)}><Icon icon={PanelRight} />Details</button>
+            title={selected ? 'Show or hide details for the selected row. Enter, F2 or a double-click on a row opens them at its name.' : 'Select a row to see its details'} onClick={() => panelOpen ? closeDetails(true) : rememberDetails(true)}><Icon icon={PanelRight} />Details</button>
           {/*
             The way out of a folder chosen by mistake. Pointing the queue at a
             large directory used to be unrecoverable from inside the app:
