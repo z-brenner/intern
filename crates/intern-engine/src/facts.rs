@@ -7121,15 +7121,126 @@ fn caption_units<'a>(scope: &ValidationScope<'a>) -> Vec<&'a EvidenceUnit> {
             if at < FORUM_HEAD_UNITS {
                 names_forum(&unit.text)
             } else {
-                unit.text
-                    .lines()
-                    .any(|line| in_capitals(line) && names_forum(line))
+                unit.text.lines().any(heads_a_court)
             }
         });
-    match heading {
-        Some(heading) => page().skip(heading).take(CAPTION_UNITS).collect(),
-        None => Vec::new(),
+    let Some(heading) = heading else {
+        return Vec::new();
+    };
+    let caption = page().skip(heading).take(CAPTION_UNITS).collect::<Vec<_>>();
+    // Under a block that fills the page's opening units, a court's heading
+    // heads a caption only where one is set out under it.
+    if heading >= FORUM_HEAD_UNITS && !sets_out_a_caption(&caption_cells(&caption)) {
+        return Vec::new();
     }
+    caption
+}
+
+/// Whether a line reads as a court's heading: set in capitals, with no
+/// figure, a forum's word ending the line or a cell of it, or standing
+/// before "of", "for" or "in" or its own comma ("UNITED STATES DISTRICT
+/// COURT", "COURT OF APPEAL FOR ONTARIO", "SUPREME COURT, STATE OF NEW
+/// YORK"). An address's "15 COURT STREET" and a contract's "SECTION 14.
+/// ARBITRATION" name no forum a caption is headed by.
+fn heads_a_court(line: &str) -> bool {
+    if !in_capitals(line) || line.chars().any(|character| character.is_ascii_digit()) {
+        return false;
+    }
+    line.split('|').any(|cell| {
+        let tokens = cell.split_whitespace().collect::<Vec<_>>();
+        tokens.iter().enumerate().any(|(at, token)| {
+            let word = caption_word(token);
+            let forum = FORUM_WORDS.contains(&word.as_str())
+                || word
+                    .strip_suffix('s')
+                    .is_some_and(|word| FORUM_WORDS.contains(&word));
+            forum
+                && (token.ends_with(',')
+                    || tokens.get(at + 1).is_none_or(|next| {
+                        matches!(caption_word(next).as_str(), "" | "of" | "for" | "in")
+                    }))
+        })
+    })
+}
+
+/// A caption's lines as its cells: each line, or each cell of a table's
+/// row, as its words, with the marks a caption's rule is drawn with left
+/// out (")", "§", ":"). Cells with no words are left out.
+fn caption_cells<'a>(caption: &[&'a EvidenceUnit]) -> Vec<(&'a EvidenceUnit, Vec<&'a str>)> {
+    caption
+        .iter()
+        .flat_map(|unit| {
+            unit.text
+                .lines()
+                .flat_map(|line| line.split('|'))
+                .map(move |cell| (*unit, caption_cell_words(cell)))
+        })
+        .filter(|(_, words)| !words.is_empty())
+        .collect()
+}
+
+/// A caption's cell as its words, the marks of its rule left out.
+fn caption_cell_words(cell: &str) -> Vec<&str> {
+    cell.split_whitespace()
+        .filter(|word| !word.chars().all(|mark| matches!(mark, ')' | '§' | ':')))
+        .collect()
+}
+
+/// A caption's word as a label is compared: without its marks, in lower
+/// case ("Plaintiffs," is "plaintiffs", "-against-" is "against").
+fn caption_word(word: &str) -> String {
+    word.trim_matches(|character: char| !character.is_alphanumeric())
+        .to_lowercase()
+}
+
+/// Whether a caption's cell sets out one of `labels` as a side's label,
+/// singular or plural: alone, closing the cell after a name's comma
+/// ("Plaintiff,", "BETA LENDING INC., Defendant."), or opening it with its
+/// own mark ("Plaintiffs, JUDGE CHIN", "Defendants. Notice is hereby
+/// given ..."), as a reader runs a caption's column into the next. A
+/// sentence that speaks of "the Lead Plaintiffs" or ends on "the
+/// Defendant." labels no side.
+fn labels_a_side(words: &[&str], labels: &[&str]) -> bool {
+    let label = |word: &str| {
+        let word = caption_word(word);
+        labels.contains(&word.as_str())
+            || word
+                .strip_suffix('s')
+                .is_some_and(|word| labels.contains(&word))
+    };
+    let closes = words.split_last().is_some_and(|(last, before)| {
+        label(last) && before.last().is_none_or(|word| word.ends_with(','))
+    });
+    let opens = words
+        .first()
+        .is_some_and(|first| label(first) && first.ends_with([',', '.']));
+    closes || opens
+}
+
+/// Whether a caption's cell holds its versus word and nothing else:
+/// "-against-", "- against -", "v.", "vs.".
+fn versus_alone(words: &[&str]) -> bool {
+    let words = words
+        .iter()
+        .map(|word| caption_word(word))
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    matches!(words.as_slice(), [word] if VERSUS_WORDS.contains(&word.as_str()))
+}
+
+/// Whether a caption's cells set out a case as a caption does: an "In re"
+/// opens one, a versus word stands alone in one, or a side's label is set
+/// out in one ([`labels_a_side`]). A letter's inside address on a court's
+/// street, or a notice's sentence that reserves rights "against" a tenant,
+/// sets out none.
+fn sets_out_a_caption(cells: &[(&EvidenceUnit, Vec<&str>)]) -> bool {
+    let sides = [BRINGING_SIDE, ANSWERING_SIDE, DEBTOR_LABELS].concat();
+    cells.iter().any(|(_, words)| {
+        matches!(words.as_slice(), [first, second, ..]
+            if caption_word(first) == "in" && caption_word(second) == "re")
+            || versus_alone(words)
+            || labels_a_side(words, &sides)
+    })
 }
 
 /// A caption's units as its sides are read from them: their text, loosely
@@ -7264,26 +7375,8 @@ fn caption_debtor<'a>(
     // The caption's lines, a table's cells each a line of their own, with
     // the marks a caption's rule is drawn with left out: ")", "§", ":".
     let caption = caption_units(scope);
-    let lines = caption
-        .iter()
-        .flat_map(|unit| {
-            unit.text
-                .lines()
-                .flat_map(|line| line.split('|'))
-                .map(move |cell| {
-                    let words = cell
-                        .split_whitespace()
-                        .filter(|word| !word.chars().all(|mark| matches!(mark, ')' | '§' | ':')))
-                        .collect::<Vec<_>>();
-                    (*unit, words)
-                })
-        })
-        .filter(|(_, words)| !words.is_empty())
-        .collect::<Vec<_>>();
-    let bare = |word: &str| {
-        word.trim_matches(|character: char| !character.is_alphanumeric())
-            .to_lowercase()
-    };
+    let lines = caption_cells(&caption);
+    let bare = caption_word;
     let opens = lines.iter().position(|(_, words)| match words.as_slice() {
         [first, second, ..] => bare(first) == "in" && bare(second) == "re",
         _ => false,
@@ -14033,6 +14126,84 @@ Dated: October 13, 2009";
             "{:?}",
             outcome.proposal
         );
+    }
+
+    /// Past the page's opening units, only a line that reads as a court's
+    /// heading, over a caption set out as one, heads a caption: a letter's
+    /// inside address on a court's street and a contract's section on
+    /// arbitration head none, though the notice's body reserves rights
+    /// "against" its tenant. The notice stays for the tenant.
+    #[test]
+    fn a_court_named_far_down_a_page_heads_a_caption_only_over_one() {
+        const LETTERHEAD: &str = "ACME PROPERTIES LLC\n\n200 Harbor Way\n\n\
+Boston, MA 02110\n\n(617) 555-0100\n\nMarch 4, 2024\n\nVIA CERTIFIED MAIL\n\n\
+RETURN RECEIPT REQUESTED\n\nAND FIRST CLASS MAIL\n\n";
+        let body = |title: &str| {
+            format!(
+                "{title}\n\nAcme Properties LLC, as Landlord, gives notice that you are in \
+                 default of the Lease for failure to pay the rent due on March 1, 2024. \
+                 Landlord reserves all of its rights and remedies against Beta Bakery LLC and \
+                 its guarantor.\n\nACME PROPERTIES LLC"
+            )
+        };
+        let notice = |title: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(title.into()),
+                type_evidence: vec![id_of(index, title)],
+                document_date: Some("2024-03-04".into()),
+                date_evidence: vec![id_of(index, "March 4, 2024")],
+                parties: vec![
+                    party(
+                        "Acme Properties LLC",
+                        Some(PartyRole::Landlord),
+                        &[id_of(index, "ACME PROPERTIES LLC")],
+                    ),
+                    party(
+                        "Beta Bakery LLC",
+                        Some(PartyRole::Tenant),
+                        &[id_of(index, "BETA BAKERY LLC")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            }
+        };
+        for (address, title) in [
+            (
+                "BETA BAKERY LLC\n\n15 COURT STREET\n\nBOSTON, MA 02108\n\n",
+                "NOTICE OF DEFAULT",
+            ),
+            (
+                "BETA BAKERY LLC\n\nSECTION 14. ARBITRATION\n\nBOSTON, MA 02108\n\n",
+                "NOTICE OF TERMINATION",
+            ),
+            (
+                "BETA BAKERY LLC\n\nARBITRATION\n\nBOSTON, MA 02108\n\n",
+                "NOTICE OF TERMINATION",
+            ),
+        ] {
+            let text = format!("{LETTERHEAD}{address}{}", body(title));
+            let (outcome, index) = facts_for(&text, notice(title));
+            let forum = index
+                .units()
+                .iter()
+                .position(|unit| {
+                    unit.text.contains("COURT STREET") || unit.text.contains("ARBITRATION")
+                })
+                .unwrap();
+            assert!(forum >= FORUM_HEAD_UNITS, "{forum}");
+            assert_ne!(
+                outcome.proposal.party_relation,
+                PartyRelation::Between,
+                "{address}: {:?}",
+                outcome.proposal
+            );
+        }
+        assert!(heads_a_court("UNITED STATES DISTRICT COURT"));
+        assert!(heads_a_court("COURT OF APPEAL FOR ONTARIO"));
+        assert!(heads_a_court("SUPREME COURT, STATE OF NEW YORK"));
+        assert!(!heads_a_court("15 COURT STREET"));
+        assert!(!heads_a_court("COURT STREET"));
+        assert!(!heads_a_court("SECTION 14. ARBITRATION"));
     }
 
     /// A reader takes a scanned caption's column of labels out of line:
