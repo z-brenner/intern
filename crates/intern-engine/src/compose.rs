@@ -1775,25 +1775,49 @@ mod tests {
             role_supported: false,
             proposed_role: proposed,
         };
-        let notice = |proposed: Option<PartyRole>| {
-            relation_from_roles(
-                DocumentClass::Notice,
-                Some("Public Notice"),
-                &[unsupported("Harrow County Water Court", proposed)],
-                cues,
-            )
-        };
-        for (proposed, doubtful) in [
-            (Some(PartyRole::Issuer), true),
-            (Some(PartyRole::Sender), true),
-            (Some(PartyRole::Client), false),
-            (Some(PartyRole::Contractor), false),
-            (Some(PartyRole::Recipient), false),
-            (None, false),
+        // A court's public notice the reply read as the court's own, and a
+        // loss notice for the insured it names, whose "for" is right.
+        for (kind, name, proposed, doubtful) in [
+            (
+                "Public Notice",
+                "Harrow County Water Court",
+                Some(PartyRole::Issuer),
+                true,
+            ),
+            (
+                "Public Notice",
+                "Harrow County Water Court",
+                Some(PartyRole::Sender),
+                true,
+            ),
+            (
+                "Notice of Loss",
+                "Westbrook Kettle Brewing",
+                Some(PartyRole::Client),
+                false,
+            ),
+            (
+                "Improvement Notice",
+                "Tarnwick Offshore (U.K.) Limited",
+                Some(PartyRole::Contractor),
+                false,
+            ),
+            (
+                "Notice of Loss",
+                "Westbrook Kettle Brewing",
+                Some(PartyRole::Recipient),
+                false,
+            ),
+            ("Notice of Loss", "Westbrook Kettle Brewing", None, false),
         ] {
-            let relation = notice(proposed);
+            let relation = relation_from_roles(
+                DocumentClass::Notice,
+                Some(kind),
+                &[unsupported(name, proposed)],
+                cues,
+            );
             assert_eq!(relation.relation, PartyRelation::For, "{proposed:?}");
-            assert_eq!(relation.parties, vec!["Harrow County Water Court"]);
+            assert_eq!(relation.parties, vec![name]);
             assert_eq!(relation.doubtful, doubtful, "{proposed:?}");
             assert_eq!(
                 relation.basis.contains("though the reply called it"),

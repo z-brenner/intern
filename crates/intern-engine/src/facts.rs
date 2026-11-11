@@ -12352,22 +12352,18 @@ Northern Division of Meriden\n\
 410 Ferry Street, Room 12\n\
 Dalton, Meriden 75242\n\n\
 Notice Date: April 16, 2025";
-        let reply = |role: PartyRole| {
-            facts_for(NOTICE, |index| ModelFacts {
-                document_type: Some("PUBLIC NOTICE".into()),
-                type_evidence: vec![id_of(index, "PUBLIC NOTICE")],
-                document_date: Some("2025-04-16".into()),
-                date_evidence: vec![id_of(index, "Notice Date")],
-                parties: vec![party(
-                    "Harrow County Water Court Northern Division of Meriden",
-                    Some(role),
-                    &[id_of(index, "Clerk of Court")],
-                )],
-                ..ModelFacts::default()
-            })
-            .0
-        };
-        let outcome = reply(PartyRole::Issuer);
+        let (outcome, _) = facts_for(NOTICE, |index| ModelFacts {
+            document_type: Some("PUBLIC NOTICE".into()),
+            type_evidence: vec![id_of(index, "PUBLIC NOTICE")],
+            document_date: Some("2025-04-16".into()),
+            date_evidence: vec![id_of(index, "Notice Date")],
+            parties: vec![party(
+                "Harrow County Water Court Northern Division of Meriden",
+                Some(PartyRole::Issuer),
+                &[id_of(index, "Clerk of Court")],
+            )],
+            ..ModelFacts::default()
+        });
         assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
         assert_eq!(
             outcome.proposal.parties,
@@ -12388,13 +12384,10 @@ Notice Date: April 16, 2025";
             "{}",
             facts.relation_basis
         );
-        let outcome = reply(PartyRole::Client);
-        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
-        assert!(
-            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
-            "{:?}",
-            outcome.reasons
-        );
+        // A reply that called the court the client says nothing against
+        // "for" and is not held by this rule, though the name is as wrong:
+        // that is a gap this rule leaves, not a name it files on purpose,
+        // and this test pins none.
 
         const IMPROVEMENT: &str = "## Sheet1\n\n\
 | Details for Improvement Notice No. 04/17 |  |\n\
