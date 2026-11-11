@@ -431,6 +431,84 @@ describe('review actions', () => {
     await waitFor(() => expect(queueCell('NDA - Acme Corp.docx')).toHaveFocus());
   });
 
+  // The panel's More menu closed only by its own button or by taking one of
+  // its actions. Escape did nothing beside the queue, and in the narrow
+  // drawer closed the whole drawer from under the open menu.
+  it('closes the More menu on Escape with focus back on its button, and on a press outside it', async () => {
+    const bridge = createInMemoryBridge();
+    const reanalyze = vi.spyOn(bridge, 'reanalyze');
+    render(<App bridge={bridge} />);
+    const panel = await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    const more = within(panel).getByRole('button', { name: 'More review actions' });
+    const menu = () => within(panel).queryByRole('group', { name: 'More review actions' });
+
+    fireEvent.click(more);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    const again = within(menu()!).getByRole('button', { name: 'Analyze again' });
+    again.focus();
+    // Handled here: nothing behind the panel hears this Escape as well.
+    expect(fireEvent.keyDown(again, { key: 'Escape' })).toBe(false);
+    expect(menu()).not.toBeInTheDocument();
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    expect(more).toHaveFocus();
+    // The panel is beside the queue and stays; a second Escape has nothing to close.
+    fireEvent.keyDown(more, { key: 'Escape' });
+    expect(panel).toBeInTheDocument();
+
+    // From elsewhere in the panel the menu closes and focus stays where it is.
+    fireEvent.click(more);
+    const filename = within(panel).getByLabelText('Filename');
+    filename.focus();
+    fireEvent.keyDown(filename, { key: 'Escape' });
+    expect(menu()).not.toBeInTheDocument();
+    expect(filename).toHaveFocus();
+    expect(filename).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
+
+    // A press inside the menu, or on its own button, is not a press outside it.
+    fireEvent.click(more);
+    fireEvent.pointerDown(within(menu()!).getByRole('button', { name: 'Remove from queue' }));
+    expect(menu()).toBeInTheDocument();
+    fireEvent.pointerDown(more);
+    expect(menu()).toBeInTheDocument();
+    // One anywhere else is: in the panel, or in the queue.
+    fireEvent.pointerDown(within(panel).getByRole('heading', { name: 'Review item' }));
+    expect(menu()).not.toBeInTheDocument();
+    fireEvent.click(more);
+    fireEvent.pointerDown(queueCell('NDA - Acme Corp.docx'));
+    expect(menu()).not.toBeInTheDocument();
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+
+    // Its actions still work, and still close it.
+    fireEvent.click(more);
+    fireEvent.click(within(menu()!).getByRole('button', { name: 'Analyze again' }));
+    await waitFor(() => expect(reanalyze).toHaveBeenCalledWith('lease'));
+  });
+
+  it('closes the More menu before the narrow drawer: Escape once for the menu, again for the drawer', async () => {
+    stubNarrowWindow();
+    render(<App bridge={createInMemoryBridge()} />);
+    await screen.findByRole('grid', { name: 'Queue' });
+    selectByName('Lease Agreement - 123 Main St.pdf');
+    fireEvent.click(detailsToggle());
+    const drawer = await screen.findByRole('dialog', { name: 'Review item' });
+    const more = within(drawer).getByRole('button', { name: 'More review actions' });
+
+    fireEvent.click(more);
+    const remove = within(drawer).getByRole('button', { name: 'Remove from queue' });
+    remove.focus();
+    fireEvent.keyDown(remove, { key: 'Escape' });
+
+    // The menu went; the drawer, and the document in it, did not.
+    expect(within(drawer).queryByRole('group', { name: 'More review actions' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Review item' })).toBe(drawer);
+    expect(more).toHaveFocus();
+    expect(screen.getByRole('banner')).toHaveAttribute('inert');
+
+    fireEvent.keyDown(more, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Review item' })).not.toBeInTheDocument();
+    await waitFor(() => expect(queueCell('Lease Agreement - 123 Main St.pdf')).toHaveFocus());
+  });
+
   it('moves focus to a visible queue control when refresh removes the invoking row', async () => {
     const bridge = createInMemoryBridge();
     render(<App bridge={bridge} />);

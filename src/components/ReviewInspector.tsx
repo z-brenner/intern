@@ -147,8 +147,23 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   const filenameRef = useRef<HTMLTextAreaElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
   const fieldId = useId();
   useEffect(() => { if (confirmingRemove) confirmRef.current?.focus(); }, [confirmingRemove]);
+  // The More menu closes on a press anywhere outside it, as the toolbar's
+  // does. It used to stay open over the panel until its own button was
+  // pressed again or one of its actions taken.
+  useEffect(() => {
+    if (!moreOpen) return;
+    const close = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && (moreMenuRef.current?.contains(target) || moreButtonRef.current?.contains(target))) return;
+      setMoreOpen(false);
+    };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [moreOpen]);
   // The whole name, always: a single-line field showed about half of a
   // typical proposal, and the caret only its tail. The field grows to fit
   // instead. Chromium sizes it from its content (field-sizing, in app.css);
@@ -206,6 +221,18 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     // The same for Enter held on a button, which presses it again with every
     // repeat - by then the next item's button, in the same place.
     if (event.repeat && event.key === 'Enter' && event.target instanceof HTMLButtonElement) { event.preventDefault(); return; }
+    // Escape takes back the last thing opened: the More menu first, with
+    // focus back on its button. Only with no menu open does it reach the
+    // drawer, which it closes. It used to close the whole drawer from under
+    // an open menu, and beside the queue it did nothing at all.
+    if (event.key === 'Escape' && moreOpen && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      event.stopPropagation();
+      // Focus on one of the menu's actions would go with the menu.
+      if (moreMenuRef.current?.contains(document.activeElement)) moreButtonRef.current?.focus();
+      setMoreOpen(false);
+      return;
+    }
     if (!drawer) return;
     if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
     if (event.key !== 'Tab') return;
@@ -455,8 +482,8 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         {actions.approve && <button type="button" className={actions.retry?.primary ? undefined : 'primary'} disabled={busy} onClick={decides(approve)} aria-keyshortcuts="Control+Enter"><Icon icon={FileCheck2} />{item.status === 'ready' ? 'Apply rename' : 'Approve & rename'}<Shortcut keys="Ctrl+Enter" /></button>}
         {actions.keep && <>
           <button type="button" className="secondary-action" disabled={busy} onClick={decides(onKeep)} aria-keyshortcuts="Alt+K"><Icon icon={FileText} />Keep original<Shortcut keys="Alt+K" /></button>
-          <button type="button" className="icon-button more-actions" disabled={busy} aria-label="More review actions" aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>
-          {moreOpen && <div className="review-menu" role="group" aria-label="More review actions">
+          <button ref={moreButtonRef} type="button" className="icon-button more-actions" disabled={busy} aria-label="More review actions" aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>
+          {moreOpen && <div ref={moreMenuRef} className="review-menu" role="group" aria-label="More review actions">
             {actions.retry && <button type="button" disabled={busy} onClick={() => { setMoreOpen(false); onRetry(); }}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
             {actions.reanalyze && <button type="button" disabled={busy} onClick={() => { setMoreOpen(false); onReanalyze(); }}><Icon icon={RefreshCw} />Analyze again</button>}
             {remove && <button type="button" disabled={busy} onClick={decides(chooseRemove)} aria-keyshortcuts="Delete"><Icon icon={Trash2} />{remove.label}<Shortcut keys="Del" /></button>}
