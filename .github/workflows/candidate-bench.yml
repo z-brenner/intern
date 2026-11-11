@@ -53,6 +53,14 @@ on:
         required: false
         default: ""
         type: string
+      bench_args:
+        description: >-
+          Extra intern-bench run options appended after the gate, to try
+          another way of asking on the same sets, e.g. "--id-style ordinal"
+          or "--retrieval-tier normal"; empty for the app's own request
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -78,6 +86,7 @@ jobs:
           THREADS: ${{ inputs.threads }}
           LLAMA_RELEASE: ${{ inputs.llama_release }}
           EXTRA_SERVER_ARGS: ${{ inputs.extra_server_args }}
+          BENCH_ARGS: ${{ inputs.bench_args }}
         run: |
           python3 -I - <<'EOF'
           import json, os, re, sys
@@ -125,6 +134,8 @@ jobs:
               problems.append("llama_release must be empty or a ggml-org release tag like b12078")
           if re.search(r"[\r\n]", os.environ["EXTRA_SERVER_ARGS"]):
               problems.append("extra_server_args must be one line")
+          if not re.fullmatch(r"(--[a-z-]+ [A-Za-z0-9._,-]+( |$))*", os.environ["BENCH_ARGS"]):
+              problems.append('bench_args must be "--option value" pairs separated by one space')
           if problems:
               sys.exit("\n".join(problems))
           include = [
@@ -291,10 +302,14 @@ jobs:
           # model found most probable, so the recording can be studied and
           # replayed token by token. No generated token changes.
           INTERN_BENCH_TOKEN_TRACE: "1"
+          BENCH_ARGS: ${{ inputs.bench_args }}
         run: |
           started=$(date +%s)
           status=0
-          scripts/run-internbench.sh "$OUT" -- --min-token-confidence 0.5 2>&1 | tee "$OUT/run.log" || status=$?
+          # The plan job has checked that these are plain "--option value"
+          # pairs; they are read into words here and never evaluated.
+          read -r -a bench_args <<< "$BENCH_ARGS"
+          scripts/run-internbench.sh "$OUT" -- --min-token-confidence 0.5 ${bench_args[@]+"${bench_args[@]}"} 2>&1 | tee "$OUT/run.log" || status=$?
           echo $(( $(date +%s) - started )) > "$OUT/wall-seconds.txt"
           exit "$status"
       - name: Summarize
@@ -304,6 +319,7 @@ jobs:
           SET: ${{ matrix.set }}
           LLAMA_RELEASE: ${{ inputs.llama_release }}
           EXTRA_SERVER_ARGS: ${{ inputs.extra_server_args }}
+          BENCH_ARGS: ${{ inputs.bench_args }}
           THREADS: ${{ inputs.threads }}
         run: |
           lscpu > "$OUT/lscpu.txt" || true
@@ -341,6 +357,7 @@ jobs:
               f"- runner CPU: {cpu.group(1).strip() if cpu else 'unknown'}; {os.environ['THREADS']} threads",
               f"- llama-server: {server}",
               f"- extra server flags: `{os.environ['EXTRA_SERVER_ARGS']}`" if os.environ["EXTRA_SERVER_ARGS"] else "- extra server flags: none",
+              f"- extra benchmark options: `{os.environ['BENCH_ARGS']}`" if os.environ["BENCH_ARGS"] else "- extra benchmark options: none (the app's own request)",
               "- CPU backend: " + ("; ".join(backends) if backends else "no load_backend line in llama-server.log"),
               "",
           ]
