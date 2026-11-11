@@ -4,19 +4,18 @@ export interface ReleaseNotes { version: string; changes: readonly string[] }
 export const releaseNotes: readonly ReleaseNotes[] = [
   {
     version: '0.1.0-alpha.17',
+    // Shown whole in a dialog that must not scroll at the smallest window it
+    // is tested in (a scrolling dialog takes a Tab stop of its own): short
+    // lines, the rest in docs/releases/v0.1.0-alpha.17.md.
     changes: [
-      'The accurate model holds about 2.7 GB less memory while it is loaded and reads documents faster on most processors.',
-      'The first document after Intern starts is read sooner on most computers: the model’s instructions are kept between starts.',
-      'A file dropped into a watched folder on this computer’s own disk is noticed within seconds.',
-      'On a slow computer, a reading that needs more than ten minutes is no longer abandoned.',
-      'Fewer wrong names are filed without your check: a name is filed on its own only when the model is surer of it, so more documents wait for a quick look.',
+      'The accurate model reads faster on most processors and holds about 2.7 GB less memory.',
+      'The first document after Intern starts is read sooner on most computers.',
+      'Fewer wrong names are filed without your check, so more documents wait for a quick look.',
       'Court filings, invoices, letters and emails are named right a little more often.',
-      'Evidence in review now says when it is the document’s own lines, and which model read the document.',
-      'The “model unsure” reason says what to check, and no longer contradicts the confidence shown beside it.',
-      'Analysis details stay open or closed as you left them while you move through review.',
-      'Alt+N skips to the next document to decide, a double-click on a row opens its details, and Escape closes the More menu.',
-      'Long queues respond faster while Intern is reading and while you type in the filter.',
-      'Once Intern has read a couple of documents, the progress bar moves while each one is read, and the time left is shown from the start of every run.',
+      'A file dropped into a folder on this computer’s own disk is noticed within seconds.',
+      'Review says which model read a document, and its reasons say what to check.',
+      'Alt+N skips to the next document to decide; a double-click opens a row’s details.',
+      'Long queues respond faster, and the progress bar moves while each document is read.',
     ],
   },
   {
