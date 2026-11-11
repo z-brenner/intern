@@ -2603,7 +2603,10 @@ fn lost_processing_lease_cancels_worker_and_pauses_before_more_work() {
 /// the request again. Not here. Nothing is recovered and nothing is sent a
 /// second time - a request that has just used the whole deadline would only
 /// use it again - and the document waits in doubt over a time-out, counted
-/// as one, with the queue still running.
+/// as one, with the queue still running. This pins what the queue already
+/// did; what keeps the client's own limit from ending a slow request before
+/// the deadline does is the check on `client::REQUEST_TIMEOUT` beside
+/// `MODEL_TIMEOUT_SECONDS`, which fails the build.
 #[test]
 fn a_request_that_misses_the_deadline_is_canceled_once_and_not_sent_again() {
     let temp = tempdir().unwrap();

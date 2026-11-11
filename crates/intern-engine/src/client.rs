@@ -259,18 +259,31 @@ pub struct ModelClient {
 /// A backstop, and on purpose longer than the fifteen minutes the queue
 /// gives a document with the model (`MODEL_TIMEOUT_SECONDS`; the queue
 /// refuses to build if this is not longer). The queue keeps that deadline
-/// itself and ends a request that misses it by restarting the server under
-/// it, so the deadline is the one clock a document's reading runs against.
-/// This was ten minutes, and the two clocks disagreed: a request the client
-/// gave up on is a failed request, which the queue answers by restarting the
-/// server and sending it again, so a document that needed eleven minutes on
-/// a slow or memory-starved machine was cut off at ten, sent again to a
-/// freshly started server, and cut off again by the deadline five minutes
-/// later. It could never be read, however long it was given.
+/// itself and ends a reading that misses it by canceling it, which stops
+/// the server under the document's request, or under the self-test of a
+/// model the document has just loaded; so under the queue no request of a
+/// document's is ended by this limit, only by the deadline, once. This was
+/// ten minutes, and the two clocks disagreed: a request the client gave up
+/// on is a failed request, which the queue answers by restarting the server
+/// and sending it again, so a document that needed eleven minutes on a slow
+/// or memory-starved machine was cut off at ten, sent again to a freshly
+/// started server, and cut off again by the deadline five minutes later. It
+/// could never be read, however long it was given.
 ///
-/// What this still bounds is a server that stops answering a caller with no
-/// deadline of its own: the self-test at startup, the benchmark, the command
-/// line.
+/// What this still bounds on its own is a server that stops answering a
+/// caller with no deadline: the setup thread's verified start - and a
+/// document that waits for the model behind it - the benchmark, and the
+/// command line.
+///
+/// Against the ten minutes, the deadline ending a request that hangs moves
+/// three outcomes under the queue. A request that hangs once is no longer
+/// given up, restarted for and sent again within the same attempt: the
+/// document waits in doubt over a time-out. A restart that fails under a
+/// hung server pauses the queue as a failed cancel at the deadline, not as
+/// a failed recovery at ten minutes. And in the cascade, an accurate second
+/// reading that was given up at ten minutes, leaving the fast reading to
+/// stand, now runs to the deadline, whose cancel takes the fast reading
+/// with it.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(16 * 60);
 
 impl Proposer for ModelClient {
