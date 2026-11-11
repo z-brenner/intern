@@ -2501,10 +2501,15 @@ fn read_type_words<'a>(
             return reading;
         }
     }
+    // A title of the same kind stands in, for a person to confirm. A line
+    // that runs on from the kind into a sentence is the body talking about
+    // a document, not a title: "The report on the works is provided
+    // below:" titles no email.
     for unit in title_units(scope) {
         for line in title_lines(scope, unit) {
             if title_like(unit, &line)
                 && let Some(phrase) = title_on(&line)
+                && !runs_into_a_sentence(&line, &phrase)
             {
                 return TypeReading::Retitled {
                     phrase,
@@ -2514,6 +2519,18 @@ fn read_type_words<'a>(
         }
     }
     TypeReading::Unsupported
+}
+
+/// Whether a title phrase read from `line` runs on into a sentence there
+/// ([`crate::phrases::begins_a_sentence`]), wherever the line states it.
+fn runs_into_a_sentence(line: &str, phrase: &str) -> bool {
+    let line_words = words(line);
+    let phrase_words = words(phrase);
+    let positions = phrase_positions(&line_words, &phrase_words);
+    !positions.is_empty()
+        && positions
+            .into_iter()
+            .all(|at| crate::phrases::begins_a_sentence(&line_words, at + phrase_words.len()))
 }
 
 /// Whether a reply's type is a title phrase with only what a title stops
@@ -13146,6 +13163,58 @@ Rickmansworth,
                 "{to}"
             );
         }
+    }
+
+    /// A sentence of an email's body that talks about a report is no title
+    /// for the email: the reply's kind is not read back from a line that
+    /// runs on from it into a sentence, and the header block stands in. A
+    /// line that is the kind's own title still is, and so is a notice given
+    /// "hereby".
+    #[test]
+    fn a_sentence_about_a_document_retitles_nothing() {
+        let email = |line: &str| {
+            format!(
+                "From: Marsh, Colin (DLR) <colin.marsh@dlr.example>\n\
+                 To: Petra Lindqvist <petra.lindqvist@borough.example>\n\
+                 Date: Wed, 21 Mar 2018 11:16:03 +0000\n\
+                 Subject: RE: 16/4008/F - Quay Trading Estate Re-consultation (PLA Ref DC 816)\n\n\
+                 Petra,\n\n{line}\n\n\
+                 The proposed development is a sufficient distance from the wharves.\n\n\
+                 Please confirm acceptance.\n\nRegards,\n\nColin"
+            )
+        };
+        let reply = |index: &EvidenceIndex| ModelFacts {
+            document_type: Some("Email thread regarding planning consultation report".into()),
+            type_evidence: vec![id_of(index, "Subject:")],
+            document_date: Some("2018-03-21".into()),
+            date_evidence: vec![id_of(index, "Date:")],
+            ..ModelFacts::default()
+        };
+        let (outcome, _) = facts_for(&email("The report on the PLA is provided below:"), reply);
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Email"),
+            "{:?}",
+            outcome.proposal
+        );
+        let (outcome, _) = facts_for(&email("Report on the PLA Consultation"), reply);
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Report on the PLA Consultation"),
+            "{:?}",
+            outcome.proposal
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::TypeInferred));
+        assert!(runs_into_a_sentence(
+            "The report on the PLA is provided below:",
+            "report on the PLA"
+        ));
+        assert!(runs_into_a_sentence("Invoice will follow", "Invoice"));
+        assert!(!runs_into_a_sentence("NOTICE IS HEREBY GIVEN", "NOTICE"));
+        assert!(!runs_into_a_sentence(
+            "Report on the PLA Consultation",
+            "Report on the PLA Consultation"
+        ));
     }
 
     /// A courtesy title is no part of a person's name in a filename; a

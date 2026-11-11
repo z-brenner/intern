@@ -89,6 +89,17 @@ pub(crate) fn gives_notice(words: &[String], at: usize) -> bool {
     }
 }
 
+/// Whether the words from `at` begin a sentence about a document rather
+/// than end its title: "The report on the works *is* provided below", "The
+/// invoice *will* follow". A sentence that gives a notice ([`gives_notice`])
+/// stands under the notice's own title.
+pub(crate) fn begins_a_sentence(words: &[String], at: usize) -> bool {
+    words
+        .get(at)
+        .is_some_and(|word| RIGHT_STOPS.contains(&word.as_str()))
+        && !gives_notice(words, at)
+}
+
 /// Whether a token is the possessive of a side of a case - "Plaintiff's",
 /// "Defendants'", "PETITIONER'S" - which names who files a notice, not
 /// the notice.
@@ -1248,5 +1259,21 @@ mod tests {
             .map(|phrase| phrase.starts_with("direction")),
             Some(true)
         );
+    }
+
+    /// A sentence begins after a kind where a verb follows it; a notice
+    /// given "hereby" is its title's own sentence.
+    #[test]
+    fn a_verb_after_a_kind_begins_a_sentence() {
+        let w = |text: &str| words(text);
+        assert!(begins_a_sentence(
+            &w("The report on the works is provided below"),
+            5
+        ));
+        assert!(begins_a_sentence(&w("Invoice will follow"), 1));
+        assert!(!begins_a_sentence(&w("NOTICE IS HEREBY GIVEN"), 1));
+        assert!(!begins_a_sentence(&w("Notice hereby given"), 1));
+        assert!(!begins_a_sentence(&w("Report on the Consultation"), 1));
+        assert!(!begins_a_sentence(&w("Report"), 1));
     }
 }
