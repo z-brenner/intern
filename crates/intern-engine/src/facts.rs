@@ -6492,54 +6492,97 @@ fn caption_sides(
 /// LYNCH ... AND MORGAN STANLEY & CO., INCORPORATED, Plaintiffs, v.
 /// THEFLYONTHEWALL.COM, INC., Defendant."), and the parties named after it
 /// down to theirs - a label in the plural too, and the caption laid out as
-/// a table. Each side is the first of the cast the caption names on it.
+/// a table ([`CaptionLayout`]). Each side is the first of the cast the
+/// caption names on it.
 fn caption_block_sides(caption: &[&EvidenceUnit], cast: &[CastMember]) -> Option<(usize, usize)> {
     let text = caption_text(caption);
-    // Where any of `words` stands in the caption, singular or plural.
-    let positions = |words: &[&str], from: usize, to: usize| {
-        words
-            .iter()
-            .flat_map(|word| {
-                let mut found = whole_positions(&text, word);
-                found.extend(whole_positions(&text, &format!("{word}s")));
-                found
-            })
-            .filter(|at| (from..to).contains(at))
-            .collect::<Vec<_>>()
-    };
-    let forum = positions(FORUM_WORDS, 0, text.len()).into_iter().min()?;
-    let versus = VERSUS_WORDS
-        .iter()
-        .flat_map(|word| whole_positions(&text, word))
-        .filter(|at| *at > forum)
-        .min()?;
-    // The bringing side's label closes its names, before "v."; the answering
-    // side's follows "v." within the caption. A caption that labels
-    // neither side - "LUXO AS, -against- THE WALT DISNEY COMPANY" - still
-    // sets them on either side of its "against".
-    let reach = (versus + CAPTION_REACH).min(text.len());
-    let bringing_label = positions(BRINGING_SIDE, forum, versus).into_iter().max();
-    let answering_label = positions(ANSWERING_SIDE, versus, reach).into_iter().min();
-    let (bringing_label, answering_label) = match (bringing_label, answering_label) {
-        (Some(bringing), Some(answering)) => (bringing, answering),
-        (None, None) => (versus, reach),
-        _ => return None,
-    };
-    let named_in = |from: usize, to: usize| {
+    let layout = CaptionLayout::of(&text)?;
+    let named_in = |side: std::ops::Range<usize>| {
         cast.iter()
             .enumerate()
             .filter_map(|(index, party)| {
                 whole_positions(&text, &normalize_loosely(&party.name))
                     .into_iter()
-                    .find(|at| (from..to).contains(at))
+                    .find(|at| side.contains(at))
                     .map(|at| (at, index))
             })
             .min()
             .map(|(_, index)| index)
     };
-    let bringing = named_in(forum, bringing_label)?;
-    let answering = named_in(versus, answering_label)?;
+    let bringing = named_in(layout.bringing)?;
+    let answering = named_in(layout.answering)?;
     (bringing != answering).then_some((bringing, answering))
+}
+
+/// Where a caption sets out its two sides, as stretches of its text
+/// ([`caption_text`]): the bringing side's names stand between the forum's
+/// heading and "v.", the answering side's after "v.", and each side's
+/// label closes its names where the caption has one.
+#[derive(Clone, Debug)]
+struct CaptionLayout {
+    /// Where the bringing side's names stand: from the forum's heading to
+    /// the side's label, or to "v.".
+    bringing: std::ops::Range<usize>,
+    /// Where the answering side's names stand: from "v." to the side's
+    /// label, or as far as a caption's answering side can run.
+    answering: std::ops::Range<usize>,
+    /// Whether the answering side's label closes its names: a caption with
+    /// no label sets out its sides, but nothing says where the second ends.
+    answering_closed: bool,
+}
+
+impl CaptionLayout {
+    /// The layout of a caption's text; `None` when it sets no two sides
+    /// against each other under a forum's heading.
+    fn of(text: &str) -> Option<Self> {
+        // Where any of `words` stands in the caption, singular or plural.
+        let positions = |words: &[&str], from: usize, to: usize| {
+            words
+                .iter()
+                .flat_map(|word| {
+                    let mut found = whole_positions(text, word);
+                    found.extend(whole_positions(text, &format!("{word}s")));
+                    found
+                })
+                .filter(|at| (from..to).contains(at))
+                .collect::<Vec<_>>()
+        };
+        let forum = positions(FORUM_WORDS, 0, text.len()).into_iter().min()?;
+        let versus = VERSUS_WORDS
+            .iter()
+            .flat_map(|word| whole_positions(text, word))
+            .filter(|at| *at > forum)
+            .min()?;
+        // The bringing side's label closes its names, before "v."; the
+        // answering side's follows "v." within the caption.
+        let reach = (versus + CAPTION_REACH).min(text.len());
+        let bringing_label = positions(BRINGING_SIDE, forum, versus).into_iter().max();
+        let answering_label = positions(ANSWERING_SIDE, versus, reach).into_iter().min();
+        let (bringing_end, answering_end) = match (bringing_label, answering_label) {
+            (Some(bringing), Some(answering)) => (bringing, answering),
+            // A caption that labels neither side - "LUXO AS, -against- THE
+            // WALT DISNEY COMPANY" - still sets them on either side of its
+            // "against".
+            (None, None) => (versus, reach),
+            // A reader takes a scanned caption's column of labels out of
+            // line: "LUXO AS, / -against- / THE WALT DISNEY COMPANY, PIXAR
+            // / Plaintiff, Case No. ... / ANIMATION STUDIOS ... /
+            // Defendants." The bringing side's label is still the
+            // caption's, under "v." instead of over it, and "v." still
+            // divides the sides.
+            (None, Some(answering)) if !positions(BRINGING_SIDE, versus, reach).is_empty() => {
+                (versus, answering)
+            }
+            // One side labeled and the other's label nowhere: a body's
+            // "against" and "the Defendant", not a caption's.
+            _ => return None,
+        };
+        Some(Self {
+            bringing: forum..bringing_end,
+            answering: versus..answering_end,
+            answering_closed: answering_label.is_some(),
+        })
+    }
 }
 
 /// How far after "v." a caption's answering side and its label can run.
@@ -6613,52 +6656,38 @@ fn caption_text(caption: &[&EvidenceUnit]) -> String {
 
 /// The side of a case the reply left out, read from the caption itself:
 /// when the first page sets the case out as "A v. B" under a forum's
-/// heading, one side's label closes its names and the other's follows,
-/// and a party is named on one side only, the first organization the
-/// caption names on the other side is the other side. Returned with the
-/// unit that names it and whether it is the bringing side (`true`) or
-/// the answering one.
+/// heading, one side's label closes its names and the other's follows
+/// ([`CaptionLayout`]), and a party is named on one side only, the first
+/// organization the caption names on the other side is the other side.
+/// Returned with the unit that names it and whether it is the bringing
+/// side (`true`) or the answering one.
 fn caption_other_side<'a>(
     scope: &ValidationScope<'a>,
     parties: &[ValidatedParty],
 ) -> Option<(String, &'a EvidenceUnit, bool)> {
     let caption = caption_units(scope);
     let text = caption_text(&caption);
-    let positions = |words: &[&str], from: usize, to: usize| {
-        words
-            .iter()
-            .flat_map(|word| {
-                let mut found = whole_positions(&text, word);
-                found.extend(whole_positions(&text, &format!("{word}s")));
-                found
-            })
-            .filter(|at| (from..to).contains(at))
-            .collect::<Vec<_>>()
-    };
-    let forum = positions(FORUM_WORDS, 0, text.len()).into_iter().min()?;
-    let versus = VERSUS_WORDS
-        .iter()
-        .flat_map(|word| whole_positions(&text, word))
-        .filter(|at| *at > forum)
-        .min()?;
-    let reach = (versus + CAPTION_REACH).min(text.len());
-    let bringing_label = positions(BRINGING_SIDE, forum, versus).into_iter().max()?;
-    let answering_label = positions(ANSWERING_SIDE, versus, reach).into_iter().min()?;
-    let named_in = |from: usize, to: usize| {
+    let layout = CaptionLayout::of(&text)?;
+    let named_in = |side: std::ops::Range<usize>| {
         parties.iter().any(|party| {
             !party.copied
                 && !party.signatory
                 && whole_positions(&text, &normalize_loosely(&party.name))
                     .into_iter()
-                    .any(|at| (from..to).contains(&at))
+                    .any(|at| side.contains(&at))
         })
     };
-    let (from, to, bringing) = match (
-        named_in(forum, bringing_label),
-        named_in(versus, answering_label),
+    // A caption that labels neither side names none the reply did not:
+    // nothing says where its second side ends.
+    if !layout.answering_closed {
+        return None;
+    }
+    let (side, bringing) = match (
+        named_in(layout.bringing.clone()),
+        named_in(layout.answering.clone()),
     ) {
-        (true, false) => (versus, answering_label, false),
-        (false, true) => (forum, bringing_label, true),
+        (true, false) => (layout.answering, false),
+        (false, true) => (layout.bringing, true),
         _ => return None,
     };
     caption.into_iter().find_map(|unit| {
@@ -6672,7 +6701,7 @@ fn caption_other_side<'a>(
             }
             whole_positions(&text, &loose)
                 .into_iter()
-                .any(|at| (from..to).contains(&at))
+                .any(|at| side.contains(&at))
                 .then(|| written_span(unit, organization))
                 .flatten()
                 // The index stops a name at its organization's word:
@@ -12602,6 +12631,117 @@ Dated: October 13, 2009";
             "{:?}",
             outcome.proposal
         );
+    }
+
+    /// A reader takes a scanned caption's column of labels out of line:
+    /// "Plaintiff," comes after "-against-" and the other side's first
+    /// names, while "Defendants." keeps its place. "-against-" still divides
+    /// the sides: the notice is between them, and a reply that kept one
+    /// side takes the other from the caption. A notice whose body is
+    /// "against" someone and speaks of "the Defendant" under a caption
+    /// that sets no sides out has no label out of place, and no side to
+    /// add.
+    #[test]
+    fn a_caption_with_a_label_out_of_its_place_is_divided_by_its_versus() {
+        const DISMISSAL: &str = "UNITED STATES DISTRICT COURT SOUTHERN DISTRICT OF NEW YORK\n\n\
+LUMO AS,\n\n\
+-against-\n\n\
+THE WALTER DABNEY COMPANY, PIXEL\n\n\
+x\n\n:\n\n:\n\n\
+Plaintiff, Case No. 09 Civ 7689 (LTS)\n\n\
+NOTICE OF DISMISSAL\n\n\
+ANIMATION STUDIOS, JOHN DOES, JANE :\n\n\
+DOES and XYZ COMPANIES\n\n\
+Defendants.\n\n\
+Pursuant to Rule 41(a) of the Federal Rules of Civil Procedure, plaintiff hereby dismisses\n\n\
+this action with prejudice and without costs or disbursements to any party.\n\n\
+Dated: New York, New York\n\n\
+November 2, 2009\n\n\
+Respectfully submitted,\n\n\
+CARROW, LIEBERT & LATHAM, P.C.\n\n\
+Attorneys for Plaintiff";
+        let dismissal = |parties: Vec<(&'static str, PartyRole)>| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some("NOTICE OF DISMISSAL".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF DISMISSAL")],
+                document_date: Some("2009-11-02".into()),
+                date_evidence: vec![id_of(index, "November 2, 2009")],
+                parties: parties
+                    .iter()
+                    .map(|(name, role)| party(name, Some(*role), &[id_of(index, name)]))
+                    .collect(),
+                ..ModelFacts::default()
+            }
+        };
+        // Both sides named, with roles the document supports nowhere.
+        let (outcome, _) = facts_for(
+            DISMISSAL,
+            dismissal(vec![
+                ("LUMO AS", PartyRole::Client),
+                ("THE WALTER DABNEY COMPANY", PartyRole::Contractor),
+            ]),
+        );
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::Between,
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["LUMO AS", "THE WALTER DABNEY COMPANY"]
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // One side named: the other is the caption's.
+        let (outcome, _) = facts_for(DISMISSAL, dismissal(vec![("LUMO AS", PartyRole::Issuer)]));
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::Between,
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["LUMO AS", "THE WALTER DABNEY COMPANY"]
+        );
+        // A notice filed in a consolidated matter, its caption an "In re"
+        // with no sides: the "against" and "the Defendant" are its body's.
+        let (outcome, _) = facts_for(
+            "Case 1:99-cv-00371-GMS Document 377 Filed 09/16/2008 Page 1 of 3\n\n\
+UNITED STATES DISTRICT COURT DISTRICT OF DELAWARE\n\n\
+| IN RE: ALDER GOLF, INC., | con con con con | CIVIL ACTION NO. 99-371-GMS |\n\
+| SECURITIES LITIGATION | | (CONSOLIDATED) |\n\n\
+NOTICE OF BANKRUPTCY\n\n\
+PLEASE TAKE NOTICE that, on September 15, 2008 (the \"Commencement Date\"), Lehigh Brothers \
+Holdings Inc. (the \"Defendant\") commenced a case under chapter 11 of title 11 of the United \
+States Code.\n\n\
+PLEASE BE ADVISED that nothing herein stays the claims pending against Marlow Underwriters, \
+Inc., which the Defendant does not own.\n\n\
+Dated: September 16, 2008",
+            |index| ModelFacts {
+                document_type: Some("NOTICE OF BANKRUPTCY".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF BANKRUPTCY")],
+                document_date: Some("2008-09-16".into()),
+                date_evidence: vec![id_of(index, "Dated")],
+                parties: vec![party(
+                    "Lehigh Brothers Holdings Inc.",
+                    Some(PartyRole::Borrower),
+                    &[id_of(index, "Lehigh")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Lehigh Brothers Holdings Inc."],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
     }
 
     /// A body's name ends on its noun ("Committee", "Board") or puts it
