@@ -4127,26 +4127,67 @@ fn is_date_number(word: &str) -> bool {
     !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
 }
 
-/// Whether a unit is a date and nothing else - "March 2, 2026" - as a
-/// letter's dateline is written.
+/// The days of the week, as a dateline writes one before its date
+/// ("Thursday 10 September 2020", "Thurs., Sept. 10, 2020").
+const WEEKDAYS: &[&str] = &[
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+    "mon",
+    "tue",
+    "tues",
+    "wed",
+    "weds",
+    "thu",
+    "thur",
+    "thurs",
+    "fri",
+    "sat",
+    "sun",
+];
+
+/// The marks a word processor's file sets around a line in bold or in
+/// italics ("**Thursday 10 September 2020**").
+const EMPHASIS_MARKS: [char; 2] = ['*', '_'];
+
+/// A dateline's words without the day of the week it opens on: the day
+/// says nothing the date does not, and only the date's own words are read.
+fn without_weekday(line_words: &[String]) -> &[String] {
+    match line_words.split_first() {
+        Some((first, rest)) if WEEKDAYS.contains(&first.as_str()) => rest,
+        _ => line_words,
+    }
+}
+
+/// Whether a unit is a date and nothing else - "March 2, 2026", "Thursday
+/// 10 September 2020" - as a letter's dateline is written.
 fn is_bare_date(unit: &EvidenceUnit) -> bool {
     unit.label.is_none()
-        && !unit.features.dates.is_empty()
-        && words(&unit.text)
+        && (!unit.features.dates.is_empty() || is_dateline(&unit.text))
+        && without_weekday(&words(&unit.text))
             .iter()
             .all(|word| names_a_month(word) || is_date_number(word))
 }
 
 /// Whether a line is a letter's dateline: a written date and nothing else,
 /// or a "Date:" field holding one - "June 16, 2023", "Date: 28 March 2023",
-/// "Dec. 26, 1907", "18th October 2019".
+/// "Dec. 26, 1907", "18th October 2019" - with or without the day of the
+/// week before it ("Thursday 10 September 2020").
 fn is_dateline(line: &str) -> bool {
+    // A word processor's file marks a line set in bold or italics
+    // ("**10 September 2020**"): the marks are no part of the date.
+    let line = &line.replace(EMPHASIS_MARKS, " ");
     let line_words = words(line);
     // An agency's letter dates itself as released, issued or sent.
     let rest = match line_words.first().map(String::as_str) {
         Some("date" | "dated" | "released" | "issued" | "sent") => &line_words[1..],
         _ => &line_words[..],
     };
+    let rest = without_weekday(rest);
     let written = !rest.is_empty()
         && rest.len() <= 4
         && rest.iter().any(|word| names_a_month(word))
@@ -11707,6 +11748,12 @@ The merger needs a majority of votes cast.";
              Lesley Bainsfair\nHead of Secretariat",
             "| Dear | Mr. | Pilcher: |\n| This | refers | to | the | October | 26, | 1992 | \
              redistricting | plan |\n\nSincerely,\n\nJohn R. Dunne\nAssistant Attorney General",
+            // A word processor's letter, its dateline opening on the day of
+            // the week, each line a paragraph set in bold.
+            "**1 Quay Road**\n\n**London**\n\n**SW1A 2HQ**\n\n**Thursday 10 September 2020**\n\n\
+             **Tel: 020 7946 0000**\n\n**Mara Quill MP**\n\n**Chair, Harbour Party**\n\n\
+             Dear Mara Quill MP,\n\nI hope you are well. We write jointly to update you on \
+             our work.",
         ] {
             let (outcome, _) = facts_for(text, untyped);
             assert_eq!(
@@ -11754,6 +11801,14 @@ The merger needs a majority of votes cast.";
             ("Date: 28 March 2023", true),
             ("Released January 3, 2024", true),
             ("02/09/2018", true),
+            ("Thursday 10 September 2020", true),
+            ("**Thursday 10 September 2020**", true),
+            ("FRIDAY, JUNE 8, 2007", true),
+            ("Date: Thurs., Sept. 10, 2020", true),
+            ("Thursday", false),
+            ("Thursday 10 September", false),
+            ("10 September 2020 Thursday meeting", false),
+            ("Sat on 10 September 2020", false),
             ("June 16, 2023 at noon", false),
             ("Released for public availability", false),
             ("Invoice 02/09/2018", false),
