@@ -520,11 +520,15 @@ pub fn escalation_with(
 ///
 /// 0.8 from alpha.17, by a rule written down before the sixth real set was
 /// read (`bench/reports/review-gate-2026-11`): of the policies that filed no
-/// more wrong names than 0.7 on the development recordings, the one that
-/// filed the fewest wrong names on that unseen set. Replayed through this
-/// release's engine, 0.7 filed 4 right names and 2 wrong ones there, 0.8
-/// 3 and 1; on the five development sets and InternBench 0.7 filed 55 right
-/// and 2 wrong, 0.8 39 and none. A name filed wrong is renamed with no one
+/// more wrong names than 0.7 on the development recordings, those that filed
+/// the fewest wrong names on that unseen set. Three tied there, all at 0.8,
+/// with the same right names too: this threshold alone, and with either of
+/// two extra rules, which filed nothing more on that set. The plain
+/// threshold was taken over two tied policies with an extra rule, a choice
+/// the pre-registered rule left open. Replayed through this release's
+/// engine, 0.7 filed 4 right names and 2 wrong ones there, 0.8 3 and 1; on
+/// the five development sets and InternBench 0.7 filed 55 right and 2
+/// wrong, 0.8 39 and none. A name filed wrong is renamed with no one
 /// looking; a right one held is a click. 51 documents cannot certify a
 /// rate, and the counts say so.
 pub const REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE: f32 = 0.8;
