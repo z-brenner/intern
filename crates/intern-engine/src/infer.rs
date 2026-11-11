@@ -936,9 +936,11 @@ const ISSUED_TYPES: &[&str] = &[
 /// [`normalize_loosely`] writes them: a cue anywhere on the line, as on a
 /// plain line ("remit to acme inc"), except that in a table's row a label's
 /// cell - a cue ending on its colon - labels the cells after it, never the
-/// one before it. The customer's name at the head of an invoice's row is
-/// not where payment goes because a later cell of the row reads "Please
-/// Remit To:".
+/// one before it, and a cue's cell that carries its own value ("Send
+/// Payment To: Halvorsen Fixture Works LLC") labels that value only. The
+/// customer's name at the head of an invoice's row is not where payment
+/// goes because a later cell of the row reads "Please Remit To:" or
+/// "Remit To: <issuer>".
 pub(crate) fn cue_labels(line: &str, party: &str, cues: &[&str]) -> bool {
     if !line.contains('|') {
         return line.contains(party) && cues.iter().any(|cue| line.contains(cue));
@@ -949,12 +951,26 @@ pub(crate) fn cue_labels(line: &str, party: &str, cues: &[&str]) -> bool {
         .filter(|cell| !cell.is_empty())
         .collect::<Vec<_>>();
     let cued = |cell: &str| cues.iter().any(|cue| cell.contains(cue));
+    // A cue's label closed by its colon with the value after it, in the
+    // cell: "send payment to: halvorsen fixture works llc". A cell with
+    // no colon after its cue does not say where its label ends ("vendor
+    // registration form", "remit to").
+    let carries_a_value = |cell: &str| {
+        cues.iter().any(|cue| {
+            cell.find(cue).is_some_and(|at| {
+                cell[at + cue.len()..]
+                    .split_once(':')
+                    .is_some_and(|(_, value)| !value.trim().is_empty())
+            })
+        })
+    };
     cells.iter().enumerate().any(|(at, cell)| {
         cell.contains(party)
-            && cells
-                .iter()
-                .enumerate()
-                .any(|(other, text)| cued(text) && (other <= at || !text.ends_with(':')))
+            && cells.iter().enumerate().any(|(other, text)| {
+                cued(text)
+                    && (other == at
+                        || (!carries_a_value(text) && (other < at || !text.ends_with(':'))))
+            })
     })
 }
 
@@ -1869,6 +1885,33 @@ Date: April 1, 2026",
             "eog resources inc",
             issuers
         ));
+        // A cue's cell that carries its own value labels that value, not
+        // the customer's cell beside it, whichever side it stands on.
+        for cues in [issuers.as_slice(), PAYMENT_ADDRESS_CUES] {
+            let cue = cues[0];
+            assert!(!cue_labels(
+                &format!("| quillon ridge bakery inc | {cue}: halvorsen fixture works llc |"),
+                "quillon ridge bakery inc",
+                cues
+            ));
+            assert!(!cue_labels(
+                &format!(
+                    "| bill to: quillon ridge bakery inc | {cue}: halvorsen fixture works llc |"
+                ),
+                "quillon ridge bakery inc",
+                cues
+            ));
+            assert!(!cue_labels(
+                &format!("| {cue}: halvorsen fixture works llc | quillon ridge bakery inc |"),
+                "quillon ridge bakery inc",
+                cues
+            ));
+            assert!(cue_labels(
+                &format!("| quillon ridge bakery inc | {cue}: halvorsen fixture works llc |"),
+                "halvorsen fixture works llc",
+                cues
+            ));
+        }
         // The issuer is then named by the customer's cue alone.
         let digest = digest_of(
             "| INVOICE | |\n| EOG RESOURCES, INC. | | | Please Remit To: | |\n\

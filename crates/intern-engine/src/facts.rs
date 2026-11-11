@@ -12295,6 +12295,82 @@ Tidewater Buying LLC / POL\nAttention: Accounts Payable\n41 Wharf Street\nGilchr
         assert_eq!(agency.document_role, None, "{agency:?}");
     }
 
+    /// A table's row that sets the customer's block beside the payment
+    /// line: the payment cell carries its own value, so it labels its own
+    /// cell and not the customer's beside it. The customer is no issuer
+    /// on the document's word, whichever way the reply read the sides and
+    /// whichever spelling the label takes.
+    #[test]
+    fn a_payment_cell_beside_the_customers_labels_only_its_own_value() {
+        for label in ["Send Payment To:", "Remit To:"] {
+            for (customer_cell, issuer, customer) in [
+                (
+                    "Quillon Ridge Bakery, Inc.",
+                    PartyRole::Seller,
+                    PartyRole::Buyer,
+                ),
+                (
+                    "Bill To: Quillon Ridge Bakery, Inc.",
+                    PartyRole::Buyer,
+                    PartyRole::Seller,
+                ),
+                (
+                    "Bill To: Quillon Ridge Bakery, Inc.",
+                    PartyRole::Customer,
+                    PartyRole::Issuer,
+                ),
+            ] {
+                let page = format!(
+                    "INVOICE\n\nInvoice No. 4471\nInvoice Date: 03/04/2024\n\n\
+                     | {customer_cell} | {label} Halvorsen Fixture Works LLC |\n\
+                     | 41 Wharf Street | P.O. Box 7710 |\n\n\
+                     | Item | Qty | Amount |\n| Display shelving | 4 | $1,300.00 |"
+                );
+                let (outcome, _) = facts_for(&page, |index| ModelFacts {
+                    document_type: Some("Invoice".into()),
+                    type_evidence: vec![id_of(index, "INVOICE")],
+                    parties: vec![
+                        party(
+                            "Halvorsen Fixture Works LLC",
+                            Some(issuer),
+                            &[id_of(index, "Halvorsen")],
+                        ),
+                        party(
+                            "Quillon Ridge Bakery, Inc.",
+                            Some(customer),
+                            &[id_of(index, "Quillon")],
+                        ),
+                    ],
+                    ..ModelFacts::default()
+                });
+                assert!(
+                    !(outcome.status == ProposalStatus::Ready
+                        && outcome
+                            .proposal
+                            .parties
+                            .iter()
+                            .any(|party| party.starts_with("Quillon"))),
+                    "{label} {customer_cell} {issuer:?}: {:?} {:?}",
+                    outcome.proposal,
+                    outcome.reasons
+                );
+                let facts = outcome.facts.as_ref().expect("facts");
+                let named = facts
+                    .parties
+                    .iter()
+                    .find(|party| party.name.starts_with("Quillon"))
+                    .expect("the customer");
+                assert!(
+                    !matches!(
+                        named.document_role,
+                        Some(PartyRole::Issuer | PartyRole::Seller | PartyRole::Vendor)
+                    ),
+                    "{label} {customer_cell}: {named:?}"
+                );
+            }
+        }
+    }
+
     /// A buyer's dispute of an invoice in the real set, typed into a sheet
     /// and read by Qwen3.5-9B as the invoice: the company it is addressed
     /// to heads the sheet, the one that wrote it signs at the foot, below
