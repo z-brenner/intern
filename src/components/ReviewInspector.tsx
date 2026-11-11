@@ -226,6 +226,14 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     the document's own lines get them.
   */
   const verbatim = item.readBy !== undefined;
+  /*
+    The Parties row is another matter whoever read it: what the backend
+    sends there is the names the proposal settled on, not the lines that
+    name them. Set in quotation marks under "Lines from the document" it
+    claimed a line no document has - and a party is the part of a name most
+    often in doubt. It is shown as the names it is, and the lead says so.
+  */
+  const quoted = (field: ReasonField) => verbatim && field !== 'parties';
   // The parts of the name being edited that the review is about, as they now read.
   const nameFlags = editable ? flaggedNameParts(joinFilename(stem, extension), flagged) : [];
   const reviewNote = item.reason && (item.status === 'review' || item.status === 'failed');
@@ -353,13 +361,13 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       {item.readBy && <p className="check-hint read-by" aria-label="Read by">{readByLine(item.readBy, !item.approved)}</p>}
       {evidence.length > 0 && <section className="evidence"><h3>Evidence</h3>
         <p className="section-lead">{verbatim
-          ? 'Lines from the document behind each part of this name.'
+          ? evidenceLead(evidence.map((entry) => entry.field))
           : 'The model\'s reading of the document, in its own words. These are not lines matched in the document, so check them against it.'}</p>
         <dl className="evidence-list">{evidence.map(({ label, field, quotes }) => {
           const doubted = flagged.includes(field);
           return <div className={`evidence-item${doubted ? ' flagged' : ''}`} key={label}>
             <dt className="field-label">{doubted && <Icon icon={CircleAlert} />}{label}{doubted && <span className="sr-only"> (check this)</span>}</dt>
-            <dd>{quotes.map((quote) => verbatim ? <q key={quote}>{quote}</q> : <span className="reading" key={quote}>{quote}</span>)}</dd>
+            <dd>{quotes.map((quote) => quoted(field) ? <q key={quote}>{quote}</q> : <span className="reading" key={quote}>{quote}</span>)}</dd>
           </div>;
         })}</dl></section>}
     </details>}
@@ -416,6 +424,19 @@ export function readByLine(reading: ModelReading, pending: boolean): string {
 }
 
 const FIELD_WORDS: Record<ReasonField, string> = { date: 'date', type: 'document type', parties: 'parties', description: 'description' };
+
+/**
+ * What a local reading's evidence is, said for the rows it has: the date and
+ * the document type are lines found in the document; the parties are names.
+ */
+function evidenceLead(fields: readonly ReasonField[]): string {
+  const lines = fields.filter((field) => field !== 'parties').map((field) => FIELD_WORDS[field]);
+  const names = fields.includes('parties');
+  return [
+    lines.length > 0 ? `Lines from the document behind the ${listOf(lines)}.` : '',
+    names ? `The parties are the names Intern read${lines.length > 0 ? ', not lines from the document' : '. They are not lines from the document'}.` : '',
+  ].filter(Boolean).join(' ');
+}
 
 /** "date", "date and parties", "date, document type and parties". */
 function listOf(words: string[]): string {
