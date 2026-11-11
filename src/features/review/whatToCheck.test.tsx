@@ -29,7 +29,7 @@ describe('what to check', () => {
     expect(screen.getByRole('button', { name: 'Approve & rename' })).toBeVisible();
     fireEvent.click(screen.getByText('Analysis details'));
     expect(disclosure).toHaveAttribute('open');
-    expect(screen.getByText("Model's confidence")).toBeVisible();
+    expect(screen.getByText("Model's own confidence")).toBeVisible();
   });
 
   it('says what to check in the table, in words, and marks that part of the name', async () => {
@@ -63,7 +63,48 @@ describe('what to check', () => {
     const evidence = within(panel).getByRole('heading', { name: 'Evidence' }).closest('section')!;
     expect(within(evidence).getByText('Date')).toHaveTextContent('Date (check this)');
     // The model's figure is still there, as a detail.
-    expect(panel).toHaveTextContent("Model's confidence");
+    expect(panel).toHaveTextContent("Model's own confidence");
+  });
+
+  // 173 of 204 real review items: the model rated itself at 100% and Intern
+  // measured doubt in the words of the date or a party. The panel used to say
+  // "The model reported low confidence in its own proposal" above a readout
+  // of "Model's confidence 100%".
+  it('does not let the unsure-reading reason and the model\'s own figure contradict each other', async () => {
+    const unsure: QueueItem = { ...ambiguous, id: 'unsure', originalFilename: 'Scan 0103.pdf', confidence: 1, reason: humanizeReason('LOW_CONFIDENCE'), reasonCodes: ['LOW_CONFIDENCE'] };
+    const dated: QueueItem = { ...ambiguous, id: 'dated', originalFilename: 'Scan 0104.pdf', confidence: 1, reason: humanizeReason('DATE_AMBIGUOUS'), reasonCodes: ['DATE_AMBIGUOUS'] };
+    render(<App bridge={createInMemoryBridge({ items: [unsure, dated] })} />);
+    await openRow(await screen.findByRole('row', { name: /Scan 0103.pdf/i }));
+    const panel = await screen.findByRole('complementary', { name: 'Review item' });
+
+    const check = within(panel).getByRole('heading', { name: 'What to check' }).closest('section')!;
+    expect(check).toHaveTextContent('The model was unsure of its reading. Check the name against the document, starting with the date and the parties.');
+    // Nothing says the model reported the doubt: it reported 100%.
+    expect(panel).not.toHaveTextContent(/reported low confidence/i);
+
+    fireEvent.click(within(panel).getByText('Analysis details'));
+    const readout = within(panel).getByText("Model's own confidence").closest('p')!;
+    expect(readout).toHaveTextContent("Model's own confidence100%");
+    const note = within(panel).getByRole('note', { name: "About the model's own confidence" });
+    expect(note).toHaveTextContent(/the model's rating of its whole answer.*can be flagged as unsure while this figure is high/);
+    // Straight after the figure it explains.
+    expect(readout.nextElementSibling).toBe(note);
+
+    // Without that reason there is nothing to reconcile, and no note.
+    await openRow(screen.getByRole('row', { name: /Scan 0104.pdf/i }));
+    fireEvent.click(within(panel).getByText('Analysis details'));
+    expect(within(panel).getByText("Model's own confidence")).toBeVisible();
+    expect(within(panel).queryByRole('note', { name: "About the model's own confidence" })).not.toBeInTheDocument();
+  });
+
+  it('adds no explanation when the model\'s own figure is low too: the two agree', async () => {
+    const low: QueueItem = { ...ambiguous, id: 'low', originalFilename: 'Scan 0105.pdf', confidence: 0.41, reason: humanizeReason('LOW_CONFIDENCE'), reasonCodes: ['LOW_CONFIDENCE'] };
+    render(<App bridge={createInMemoryBridge({ items: [low] })} />);
+    await openRow(await screen.findByRole('row', { name: /Scan 0105.pdf/i }));
+    const panel = await screen.findByRole('complementary', { name: 'Review item' });
+    fireEvent.click(within(panel).getByText('Analysis details'));
+    expect(within(panel).getByText("Model's own confidence").closest('p')).toHaveTextContent('41%');
+    expect(within(panel).queryByRole('note', { name: "About the model's own confidence" })).not.toBeInTheDocument();
   });
 
   it('quotes the document only when the evidence is the document\'s own lines', async () => {

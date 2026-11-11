@@ -196,7 +196,7 @@ describe('createInMemoryBridge review rules mirror the backend', () => {
     vi.useFakeTimers();
     try {
       const bridge = createInMemoryBridge({ items: [
-        review('lease', { proposalRevision: '3', reason: 'The model reported low confidence in its own proposal.' }),
+        review('lease', { proposalRevision: '3', reason: 'The model was unsure of its reading. Check the name against the document, starting with the date and the parties.' }),
         review('stuck', { parked: true }),
         { id: 'done', originalFilename: 'done.pdf', status: 'completed', undoable: true },
       ], analysisDelayMs: 100, liveEvents: true });

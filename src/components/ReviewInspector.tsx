@@ -6,11 +6,19 @@ import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
 import { StatusCell } from './StatusCell';
 import { isUnreadable, itemActions, keptOriginal, withoutReviewPrefix } from '../features/review/actions';
-import { itemFlaggedFields, nameParts } from '../features/queue/check';
+import { itemFlaggedFields, itemReasonCodes, nameParts } from '../features/queue/check';
 import type { ReasonField } from '../lib/reasons';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
 import type { ModelReading, QueueItem } from '../types';
+
+/**
+ * Below this the model's own figure already says it was unsure, and is by
+ * itself why the engine sends a reading to review (READY_CONFIDENCE in
+ * validate.rs). At or above it, a reading flagged as unsure was flagged by
+ * what Intern measured, and the figure needs a word of explanation.
+ */
+const SELF_RATED_UNSURE = 0.6;
 
 /** What the inspector says when a name has no date; the backend says the same in DATE_REQUIRED. */
 export const DATE_REQUIRED_MESSAGE = 'Every rename needs a date. Start the filename with the document\'s date as YYYY-MM-DD.';
@@ -226,6 +234,10 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     the document's own lines get them.
   */
   const verbatim = item.readBy !== undefined;
+  // In review because the model was unsure (LOW_CONFIDENCE) while the model's
+  // own figure, shown under Analysis details, says it was sure.
+  const sureByItsOwnFigure = item.status === 'review' && item.confidence !== undefined && item.confidence >= SELF_RATED_UNSURE
+    && itemReasonCodes(item).includes('LOW_CONFIDENCE');
   /*
     The Parties row is another matter whoever read it: what the backend
     sends there is the names the proposal settled on, not the lines that
@@ -349,9 +361,21 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       {/*
         The model's figure for its own reading. It no longer has a column:
         a small model overstates it, and what decides review is the checks
-        above. Kept here for anyone who wants it.
+        above. Kept here for anyone who wants it, and named as the model's
+        own so it is not read as Intern's.
       */}
-      {item.confidence !== undefined && <p className={`confidence-readout confidence ${item.status}`}><span className="field-label">Model's confidence</span><ConfidenceMeter value={item.confidence} status={item.status} variant="panel" /></p>}
+      {item.confidence !== undefined && <p className={`confidence-readout confidence ${item.status}`}><span className="field-label">Model's own confidence</span><ConfidenceMeter value={item.confidence} status={item.status} variant="panel" /></p>}
+      {/*
+        "The model was unsure of its reading" above, and "100%" here: both
+        true, and a contradiction unless the panel says why. The review
+        reason comes from what Intern measured as the model wrote the date
+        and the parties, or from this figure when it is low - and then the
+        two agree and there is nothing to explain. The line says only that
+        they are different measures, not which one flagged this reading.
+      */}
+      {sureByItsOwnFigure && <p className="check-hint confidence-note" role="note" aria-label="About the model's own confidence">
+        This is the model's rating of its whole answer, and small models rate themselves high. Intern also measures how sure the model was of each word of the date and the parties as it wrote them, so a reading can be flagged as unsure while this figure is high.
+      </p>}
       {/*
         Which local model read it, in a quiet line: worth knowing when two
         models can, and the reason a reading may change by itself - one the

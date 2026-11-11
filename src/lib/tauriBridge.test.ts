@@ -254,7 +254,7 @@ describe('TauriBridge', () => {
     const items = await new TauriBridge(fake.transport).listItems();
 
     expect(items[0]).not.toHaveProperty('errorCode');
-    expect(items[0].reason).toBe('The model reported low confidence in its own proposal.');
+    expect(items[0].reason).toBe('The model was unsure of its reading. Check the name against the document, starting with the date and the parties.');
     // The codes the sentence came from say which part of the name is in doubt.
     expect(items[0].reasonCodes).toEqual(['LOW_CONFIDENCE']);
     expect(items[1]).toMatchObject({ errorCode: 'DUPLICATE', reason: 'Duplicate of 2024 Filed.pdf' });

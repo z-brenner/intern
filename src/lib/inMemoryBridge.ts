@@ -56,12 +56,12 @@ const seedItems: QueueItem[] = [
  * the queue from the keyboard, for the browser build's `?reviewBatch=1`.
  */
 const reviewBatchItems: QueueItem[] = [
-  { id: 'scan-0101', originalFilename: 'Scan 0101.pdf', status: 'review', proposedFilename: '2024-02-01 Engagement Letter with Northwind Traders.pdf', confidence: 0.74, description: 'Engagement letter between Northwind Traders and the firm for 2024 advisory work.', reason: 'The model reported low confidence in its own proposal.', errorCode: 'LOW_CONFIDENCE' },
+  { id: 'scan-0101', originalFilename: 'Scan 0101.pdf', status: 'review', proposedFilename: '2024-02-01 Engagement Letter with Northwind Traders.pdf', confidence: 0.74, description: 'Engagement letter between Northwind Traders and the firm for 2024 advisory work.', reason: humanizeReason('LOW_CONFIDENCE'), errorCode: 'LOW_CONFIDENCE' },
   { id: 'scan-0102', originalFilename: 'Scan 0102.pdf', status: 'review', proposedFilename: '2024-02-09 Invoice INV-3301 from Fabrikam Inc.pdf', confidence: 0.81, description: 'Invoice INV-3301 from Fabrikam Inc. for February consulting hours.', reason: 'The date is written only as numbers that could be read day-first or month-first. Check which one the document means.', errorCode: 'DATE_AMBIGUOUS' },
   { id: 'scan-0103', originalFilename: 'Scan 0103.pdf', status: 'ready', proposedFilename: '2024-03-14 Notice of Termination to Contoso Ltd.pdf', confidence: 0.95, description: 'Notice terminating the services agreement with Contoso Ltd.' },
-  { id: 'scan-0104', originalFilename: 'Scan 0104.pdf', status: 'review', proposedFilename: '2024-03-30 Statement of Work with Litware Inc.pdf', confidence: 0.69, description: 'Statement of work with Litware Inc. for the spring data migration.', reason: 'The model reported low confidence in its own proposal.', errorCode: 'LOW_CONFIDENCE' },
+  { id: 'scan-0104', originalFilename: 'Scan 0104.pdf', status: 'review', proposedFilename: '2024-03-30 Statement of Work with Litware Inc.pdf', confidence: 0.69, description: 'Statement of work with Litware Inc. for the spring data migration.', reason: humanizeReason('LOW_CONFIDENCE'), errorCode: 'LOW_CONFIDENCE' },
   { id: 'scan-0105', originalFilename: 'Scan 0105.pdf', status: 'ready', proposedFilename: '2024-04-02 Board Resolution of Tailspin Toys.pdf', confidence: 0.97, description: 'Board resolution of Tailspin Toys approving the annual budget.' },
-  { id: 'scan-0106', originalFilename: 'Scan 0106.pdf', status: 'review', proposedFilename: '2024-04-18 Lease Amendment for 500 Pine St.pdf', confidence: 0.77, description: 'First amendment to the lease of 500 Pine St.', reason: 'The model reported low confidence in its own proposal.', errorCode: 'LOW_CONFIDENCE' },
+  { id: 'scan-0106', originalFilename: 'Scan 0106.pdf', status: 'review', proposedFilename: '2024-04-18 Lease Amendment for 500 Pine St.pdf', confidence: 0.77, description: 'First amendment to the lease of 500 Pine St.', reason: humanizeReason('LOW_CONFIDENCE'), errorCode: 'LOW_CONFIDENCE' },
   { id: 'scan-0107', originalFilename: 'Scan 0107.pdf', status: 'waiting' },
 ];
 
