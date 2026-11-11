@@ -1464,6 +1464,43 @@ fn a_scan_the_look_calls_for_asks_nothing_again_about_held_documents() {
     assert_eq!(rig.host.admission_calls(), 4);
 }
 
+/// The rescans while a file settles are not listed for the look, which is
+/// off while anything arrives; the scan that ends the settling run is, and
+/// the looks after it compare with what it left. A file that went on
+/// growing after the look first saw it calls for no further scan once it
+/// has been claimed, and a file that turns up after that is still seen
+/// without anyone asking.
+#[test]
+fn the_look_after_a_settling_run_compares_with_what_its_last_scan_left() {
+    let rig = looking_rig(&[], |config| {
+        config.arrival_probe_interval = Some(Duration::from_millis(5));
+    });
+    rig.step();
+    let path = rig.write("growing.pdf", b"the first pages");
+    wait_until("the file to be seen", || rig.watcher.status().arriving == 1);
+    // It goes on growing; the rescans while it settles see that.
+    let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+    writeln!(file, "and the rest of the upload").unwrap();
+    drop(file);
+    rig.step_by(1);
+    assert_eq!(rig.watcher.status().arriving, 1);
+    rig.step_by(DEFAULT_MIN_QUIET_SECONDS);
+    assert_eq!(rig.host.enqueued(), vec![path]);
+    assert_eq!(rig.watcher.status().arriving, 0);
+
+    // Every scan asks the host again about the document this machine
+    // holds, so the count of those questions is a count of scans.
+    let scans = rig.host.admission_calls();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(rig.host.admission_calls(), scans, "no scan ran");
+
+    rig.write("late.pdf", b"a document that turns up");
+    wait_until("the late file to be seen", || {
+        rig.watcher.status().arriving == 1
+    });
+    assert!(rig.host.admission_calls() > scans);
+}
+
 /// Settings shows what is on its way, and the loop rescans quickly while
 /// anything is. Files that were already there when watching started are not
 /// arriving.

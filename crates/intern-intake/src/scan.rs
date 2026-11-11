@@ -488,9 +488,36 @@ pub(crate) struct ArrivalProbe {
     last: Option<Listing>,
     /// Whether something has turned up that no scan has been run for yet.
     waiting: bool,
+    /// Whether the last scan found files still arriving.
+    settling: bool,
 }
 
 impl ArrivalProbe {
+    /// Whether the folder is listed just before the scan about to run, as
+    /// what the look after it compares with ([`Self::rebase`]).
+    ///
+    /// Not when a look has just listed it and `called_for` this scan. And
+    /// not while files settle: the rescans then come every few seconds, no
+    /// look follows one that finds anything arriving, and a listing before
+    /// each was read only after the last of them. That one is listed after
+    /// it instead ([`Self::scanned`]).
+    pub(crate) fn lists_before_scan(&self, called_for: bool) -> bool {
+        !called_for && !self.settling
+    }
+
+    /// Notes how many files a scan found `arriving`, and says whether the
+    /// folder is to be listed now, after it: when it ends a settling run,
+    /// whose rescans were not listed before. A file that landed during that
+    /// scan, behind its walk, is in this listing and so brings no scan
+    /// forward: the next scan finds it, as a scan always found such a file
+    /// before there was a look. The window is the length of one scan of a
+    /// folder on this computer's own disk.
+    pub(crate) fn scanned(&mut self, arriving: usize) -> bool {
+        let settled = self.settling && arriving == 0;
+        self.settling = arriving > 0;
+        settled
+    }
+
     /// Takes `listing` as what is already known, with nothing waiting: a
     /// scan is about to walk the folder, and only what turns up after this
     /// listing is news to the next look. `None`, for a folder that could
@@ -1008,6 +1035,37 @@ mod tests {
             probe.look(listing(&[("dropped.pdf", 20, 200), ("more.pdf", 5, 300)])),
             Glimpse::Nothing
         );
+    }
+
+    /// While files settle the rescans come every few seconds and no look
+    /// follows one that finds anything arriving, so the folder is not listed
+    /// before them: it is listed once, after the scan that finds nothing
+    /// more arriving, as what the next look compares with. Every other scan
+    /// is listed before it, but for one a look just listed the folder for.
+    #[test]
+    fn a_settling_run_is_listed_once_after_its_last_scan() {
+        let mut probe = ArrivalProbe::default();
+        assert!(probe.lists_before_scan(false));
+        assert!(!probe.lists_before_scan(true), "the look's listing serves");
+        assert!(!probe.scanned(0), "listed before, not again after");
+
+        // A scan finds a file arriving; the rescans while it settles are
+        // not listed, before or after.
+        assert!(!probe.scanned(1));
+        assert!(!probe.lists_before_scan(false));
+        assert!(!probe.scanned(2));
+        assert!(!probe.lists_before_scan(false));
+        // The scan that finds nothing more arriving is listed after.
+        assert!(probe.scanned(0));
+        assert!(probe.lists_before_scan(false));
+        assert!(!probe.scanned(0));
+
+        // A scan a look called for that finds something arriving starts a
+        // settling run like any other.
+        assert!(!probe.lists_before_scan(true));
+        assert!(!probe.scanned(1));
+        assert!(!probe.lists_before_scan(false));
+        assert!(probe.scanned(0));
     }
 
     /// Listing a folder costs more the more it holds, and the look's cost is

@@ -399,8 +399,10 @@ fn run(
         // What the listings show before this scan walks the folder is what
         // the look between scans takes as known: a file that lands after
         // this is news to it, whether or not the scan caught it. A scan the
-        // look itself called for follows a listing just taken.
-        if config.arrival_probe_interval.is_some() && probed.is_none() {
+        // look itself called for follows a listing just taken, and a rescan
+        // while files settle is listed after, if at all (below).
+        let looking = config.arrival_probe_interval.is_some();
+        if looking && probe.lists_before_scan(probed.is_some()) {
             let (listing, took) = timed_listing(&config);
             probe.rebase(listing.ok());
             listing_took = took;
@@ -439,6 +441,11 @@ fn run(
         );
         *lock(&shared.status) = status.clone();
         let arriving = status.arriving as usize;
+        if probe.scanned(arriving) && looking {
+            let (listing, took) = timed_listing(&config);
+            probe.rebase(listing.ok());
+            listing_took = took;
+        }
         let interval = config.next_interval(arriving);
         if last_reported
             .as_ref()
