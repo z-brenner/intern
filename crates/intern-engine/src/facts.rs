@@ -674,6 +674,25 @@ pub fn validate_facts_at(
             },
         }
     }
+    // An email's "Subject:" names its matter, as a letter's "Re:" does: the
+    // agreement it sends for signature, the guide it attaches. A type read
+    // from the header block's subject line says what the message is about,
+    // and the message is an email. A notice or an invoice sent as an
+    // email is still one - a carrier's "Ship Notification", a system's
+    // "Invoice #IN0260" - and keeps the kind its subject gives.
+    if type_line
+        .as_deref()
+        .is_some_and(|line| is_email_subject(scope, line))
+        && !matches!(
+            DocumentClass::of(document_type.as_deref()),
+            DocumentClass::Issued | DocumentClass::Notice | DocumentClass::Email
+        )
+    {
+        document_type = Some("Email".to_owned());
+        type_title = None;
+        type_line = None;
+        push(&mut reasons, ReviewReason::TypeInferred);
+    }
 
     // The date.
     let mut date_line: Option<String> = None;
@@ -2704,6 +2723,18 @@ fn email_header<'a>(scope: &ValidationScope<'a>) -> Option<(&'a EvidenceUnit, St
         line.split_once(':')
             .is_some_and(|(label, _)| label.trim().eq_ignore_ascii_case("from"))
     })
+}
+
+/// Whether `line` is the "Subject:" line of the email's header block
+/// ([`email_header_block`]).
+fn is_email_subject(scope: &ValidationScope<'_>, line: &str) -> bool {
+    let subject = |held: &str| {
+        held.split_once(':')
+            .is_some_and(|(label, _)| label.trim().eq_ignore_ascii_case("subject"))
+    };
+    subject(line)
+        && email_header_block(scope)
+            .is_some_and(|block| block.iter().any(|(_, held)| held.trim() == line.trim()))
 }
 
 /// Mail providers, whose domains name no organization: an address there
@@ -11462,6 +11493,99 @@ Contractor: QRPA";
         ] {
             assert_eq!(domain_spells(label, name), spelled, "{label} {name}");
         }
+    }
+
+    /// An email's "Subject:" names what the message is about. A reply that
+    /// typed the email by it - the agreement it sends for signature - gets
+    /// "Email" for a person to confirm. A notice or an invoice sent as an
+    /// email keeps the kind its subject gives, and a letter's "Subject:"
+    /// line, with no header block around it, still names the letter.
+    #[test]
+    fn an_emails_subject_names_its_matter_not_its_kind() {
+        let message = |subject: &str| {
+            format!(
+                "From: Betts, Bruce@DHS <Bruce.Betts@dhs.ca.gov>\n\
+                 To: drose@qrpa.org <drose@qrpa.org>\n\
+                 Cc: de la Motte, Leann@DHS <Leann.delaMotte@dhs.ca.gov>\n\
+                 Date: Tue, 5 Apr 2016 14:42:09 +0000\n\
+                 Subject: {subject}\n\n\
+                 Good Morning Debra,\n\n\
+                 I have attached the documents for the Department of Harbour Services. Please \
+                 complete and return them to me via email.\n\nContractor: QRPA"
+            )
+        };
+        let typed = |kind: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(kind.into()),
+                type_evidence: vec![id_of(index, "Subject:")],
+                document_date: Some("2016-04-05".into()),
+                date_evidence: vec![id_of(index, "Date: Tue")],
+                parties: vec![
+                    party(
+                        "Department of Harbour Services",
+                        Some(PartyRole::Employer),
+                        &[id_of(index, "I have attached")],
+                    ),
+                    party(
+                        "QRPA",
+                        Some(PartyRole::Contractor),
+                        &[id_of(index, "Contractor: QRPA")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            }
+        };
+        const AGREEMENT: &str = "2016 Harbour Code Publication Agreement";
+        let (outcome, _) = facts_for(&message(AGREEMENT), typed(AGREEMENT));
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Email"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::TypeInferred));
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Department of Harbour Services"]
+        );
+        // An invoice or a notice that arrives as an email is still one.
+        for (subject, kind, class) in [
+            (
+                "Invoice for Harbour Code Printing",
+                "Invoice",
+                DocumentClass::Issued,
+            ),
+            (
+                "Notice of Shipment 1Z7261100192688747",
+                "Notice of Shipment",
+                DocumentClass::Notice,
+            ),
+        ] {
+            let (outcome, _) = facts_for(&message(subject), typed(kind));
+            assert_eq!(
+                DocumentClass::of(outcome.proposal.document_type.as_deref()),
+                class,
+                "{subject}: {:?}",
+                outcome.proposal.document_type
+            );
+        }
+        // A letter's "Subject:" line stands in no header block.
+        let (outcome, _) = facts_for(
+            "Harbour Advisory Committee\n\n5 April 2016\n\nSubject: Offer of Employment\n\n\
+             Dear Ms. Rose,\n\nWe are pleased to offer you the post of analyst.\n\n\
+             Yours sincerely,\n\nBruce Betts",
+            |index| ModelFacts {
+                document_type: Some("Offer of Employment".into()),
+                type_evidence: vec![id_of(index, "Subject:")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Offer of Employment")
+        );
     }
 
     #[test]
