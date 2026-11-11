@@ -20,6 +20,17 @@ import type { ModelReading, QueueItem } from '../types';
  */
 const SELF_RATED_UNSURE = 0.6;
 
+/** Where "Analysis details" being open or closed is remembered, between documents and between launches. */
+export const ANALYSIS_DETAILS_KEY = 'intern.analysisDetails';
+
+/**
+ * Closed unless a person left it open. Storage can be missing or refuse to
+ * be read (a locked-down profile); that is a closed section, not an error.
+ */
+function readAnalysisDetailsPreference(): boolean {
+  try { return window.localStorage.getItem(ANALYSIS_DETAILS_KEY) === 'open'; } catch { return false; }
+}
+
 /** What the inspector says when a name has no date; the backend says the same in DATE_REQUIRED. */
 export const DATE_REQUIRED_MESSAGE = 'Every rename needs a date. Start the filename with the document\'s date as YYYY-MM-DD.';
 
@@ -115,6 +126,16 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   const [error, setError] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
+  // "Analysis details" - the evidence, the model's own figure, who read it -
+  // stays as the person left it. It used to close itself for every document,
+  // so checking each name against its evidence cost Tab, Tab, Enter (or a
+  // click) per document, on a queue where nearly every document is reviewed.
+  // Closed until someone opens it; remembered for the next launch too.
+  const [analysisOpen, setAnalysisOpen] = useState(readAnalysisDetailsPreference);
+  const rememberAnalysis = (open: boolean) => {
+    setAnalysisOpen(open);
+    try { window.localStorage.setItem(ANALYSIS_DETAILS_KEY, open ? 'open' : 'closed'); } catch { /* Not remembered; it still opens now. */ }
+  };
   if (draft.for !== draftFor) {
     setDraft({ for: draftFor, stem: proposedStem, description: item.description ?? '' });
     setError(''); setMoreOpen(false); setConfirmingRemove(false);
@@ -356,8 +377,15 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     */}
     {!editable && item.description && <section><h3>Description</h3><p className="settled-description">{item.description}</p>
       <button type="button" className="copy-description" onClick={() => void navigator.clipboard?.writeText(item.description ?? '')}><Icon icon={ClipboardCopy} />Copy description</button></section>}
-    {(evidence.length > 0 || item.confidence !== undefined || item.readBy) && <details className="analysis-details" key={item.id}>
-      <summary>Analysis details</summary>
+    {/*
+      Opened and closed here rather than by the browser, so the panel knows
+      which it is and the next document's section is drawn the same way. A
+      section the browser opens by itself (find in page) is taken note of
+      for now, and not as the person's choice.
+    */}
+    {(evidence.length > 0 || item.confidence !== undefined || item.readBy) && <details className="analysis-details" open={analysisOpen}
+      onToggle={(event) => { if (event.currentTarget.open !== analysisOpen) setAnalysisOpen(event.currentTarget.open); }}>
+      <summary onClick={(event) => { event.preventDefault(); rememberAnalysis(!analysisOpen); }}>Analysis details</summary>
       {/*
         The model's figure for its own reading. It no longer has a column:
         a small model overstates it, and what decides review is the checks

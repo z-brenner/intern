@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
+import { ANALYSIS_DETAILS_KEY } from '../../components/ReviewInspector';
 import { openRow } from '../queue/gridTesting';
-import { createInMemoryBridge } from '../../lib/inMemoryBridge';
+import { createInMemoryBridge, createReviewBatchBridge } from '../../lib/inMemoryBridge';
 import { humanizeReason } from '../../lib/reasons';
 import { TauriBridge } from '../../lib/tauriBridge';
 import type { QueueItem } from '../../types';
@@ -30,6 +31,79 @@ describe('what to check', () => {
     fireEvent.click(screen.getByText('Analysis details'));
     expect(disclosure).toHaveAttribute('open');
     expect(screen.getByText("Model's own confidence")).toBeVisible();
+  });
+
+  // It closed itself for every document, so a reviewer who checks each name
+  // against its evidence opened it again for every one of them.
+  it('leaves analysis details as the person left them, from one document to the next', async () => {
+    render(<App bridge={createReviewBatchBridge()} />);
+    const panel = await openRow(await screen.findByRole('row', { name: /Scan 0101.pdf/i }));
+    const disclosure = () => within(panel).getByText('Analysis details').closest('details')!;
+    expect(disclosure()).not.toHaveAttribute('open');
+
+    fireEvent.click(within(panel).getByText('Analysis details'));
+    expect(disclosure()).toHaveAttribute('open');
+    expect(within(panel).getByText("Model's own confidence")).toBeVisible();
+
+    // Approving moves on to the next document, and its details are open too.
+    const filename = within(panel).getByLabelText('Filename');
+    filename.focus();
+    fireEvent.keyDown(filename, { key: 'Enter', ctrlKey: true });
+    await waitFor(() => expect(panel).toHaveTextContent('Scan 0102.pdf'));
+    expect(disclosure()).toHaveAttribute('open');
+    expect(within(panel).getByText("Model's own confidence").closest('p')).toHaveTextContent('81%');
+
+    // Selecting another row, and one with nothing to disclose in between, changes nothing.
+    await openRow(screen.getByRole('row', { name: /Scan 0107.pdf/i }));
+    expect(within(panel).queryByText('Analysis details')).not.toBeInTheDocument();
+    await openRow(screen.getByRole('row', { name: /Scan 0104.pdf/i }));
+    expect(disclosure()).toHaveAttribute('open');
+
+    // Closed, it stays closed for the next one as well.
+    fireEvent.click(within(panel).getByText('Analysis details'));
+    expect(disclosure()).not.toHaveAttribute('open');
+    await openRow(screen.getByRole('row', { name: /Scan 0106.pdf/i }));
+    expect(disclosure()).not.toHaveAttribute('open');
+    expect(within(panel).getByRole('button', { name: 'Approve & rename' })).toBeVisible();
+  });
+
+  it('remembers analysis details open or closed from one launch to the next, and starts closed', async () => {
+    const launch = async () => {
+      const view = render(<App bridge={createReviewBatchBridge()} />);
+      const panel = await openRow(await screen.findByRole('row', { name: /Scan 0101.pdf/i }));
+      return { view, summary: within(panel).getByText('Analysis details') };
+    };
+    const first = await launch();
+    expect(first.summary.closest('details')).not.toHaveAttribute('open');
+    expect(window.localStorage.getItem(ANALYSIS_DETAILS_KEY)).toBeNull();
+    fireEvent.click(first.summary);
+    expect(window.localStorage.getItem(ANALYSIS_DETAILS_KEY)).toBe('open');
+    first.view.unmount();
+
+    const second = await launch();
+    expect(second.summary.closest('details')).toHaveAttribute('open');
+    fireEvent.click(second.summary);
+    second.view.unmount();
+
+    const third = await launch();
+    expect(third.summary.closest('details')).not.toHaveAttribute('open');
+  });
+
+  it('still opens analysis details when the choice cannot be stored or read', async () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Storage is disabled.'); });
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('Storage is disabled.'); });
+    try {
+      render(<App bridge={createInMemoryBridge({ items: [ambiguous] })} />);
+      const panel = await openRow(await screen.findByRole('row', { name: /Scan 0102.pdf/i }));
+      const summary = within(panel).getByText('Analysis details');
+      expect(summary.closest('details')).not.toHaveAttribute('open');
+      fireEvent.click(summary);
+      expect(summary.closest('details')).toHaveAttribute('open');
+      expect(within(panel).getByRole('heading', { name: 'Evidence' })).toBeVisible();
+    } finally {
+      setItem.mockRestore();
+      getItem.mockRestore();
+    }
   });
 
   it('says what to check in the table, in words, and marks that part of the name', async () => {
@@ -90,9 +164,9 @@ describe('what to check', () => {
     // Straight after the figure it explains.
     expect(readout.nextElementSibling).toBe(note);
 
-    // Without that reason there is nothing to reconcile, and no note.
+    // Without that reason there is nothing to reconcile, and no note. (The
+    // section is still open: it stays as it was left from one document to the next.)
     await openRow(screen.getByRole('row', { name: /Scan 0104.pdf/i }));
-    fireEvent.click(within(panel).getByText('Analysis details'));
     expect(within(panel).getByText("Model's own confidence")).toBeVisible();
     expect(within(panel).queryByRole('note', { name: "About the model's own confidence" })).not.toBeInTheDocument();
   });
