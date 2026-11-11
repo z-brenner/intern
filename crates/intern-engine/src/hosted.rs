@@ -52,7 +52,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 /// long document timed out, was retried into the same timeout, and paused the
 /// queue.
 ///
-/// Not the local llama-server's ten minutes: a request that times out is
+/// Not the limit Intern's own llama-server is given
+/// ([`crate::client::REQUEST_TIMEOUT`]), which the queue can restart under a
+/// request that misses its deadline. Here a request that times out is
 /// retried once, so two of these and the longest wait between them (860 s)
 /// must end inside the queue's fifteen-minute deadline. At ten minutes they
 /// did not, and the queue gave up on the document while its retry went on

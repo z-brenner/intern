@@ -253,6 +253,26 @@ pub struct ModelClient {
     benchmark_transport: Option<crate::benchmark_transport::BenchmarkTransport>,
 }
 
+/// How long the client itself waits for the local server's reply before it
+/// gives a request up as failed.
+///
+/// A backstop, and on purpose longer than the fifteen minutes the queue
+/// gives a document with the model (`MODEL_TIMEOUT_SECONDS`; the queue
+/// refuses to build if this is not longer). The queue keeps that deadline
+/// itself and ends a request that misses it by restarting the server under
+/// it, so the deadline is the one clock a document's reading runs against.
+/// This was ten minutes, and the two clocks disagreed: a request the client
+/// gave up on is a failed request, which the queue answers by restarting the
+/// server and sending it again, so a document that needed eleven minutes on
+/// a slow or memory-starved machine was cut off at ten, sent again to a
+/// freshly started server, and cut off again by the deadline five minutes
+/// later. It could never be read, however long it was given.
+///
+/// What this still bounds is a server that stops answering a caller with no
+/// deadline of its own: the self-test at startup, the benchmark, the command
+/// line.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(16 * 60);
+
 impl Proposer for ModelClient {
     fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal> {
         ModelClient::propose(self, request)
@@ -276,6 +296,22 @@ impl Proposer for ModelClient {
     }
 }
 
+/// The HTTP client for a server on this machine, which gives a request up
+/// once it has gone `timeout` without its whole reply.
+fn local_http(timeout: Duration) -> EngineResult<Client> {
+    // Plain HTTP to this machine never consults a root certificate, so
+    // the operating system's store is not read: one with nothing usable
+    // in it fails the build, and must not stop the local model.
+    Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(timeout)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .tls_built_in_native_certs(false)
+        .build()
+        .map_err(|_| request_failed())
+}
+
 impl ModelClient {
     pub fn new(
         endpoint: &str,
@@ -293,22 +329,11 @@ impl ModelClient {
                 "model endpoint must be local HTTP",
             ));
         }
-        // Plain HTTP to this machine never consults a root certificate, so
-        // the operating system's store is not read: one with nothing usable
-        // in it fails the build, and must not stop the local model.
-        let http = Client::builder()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(10 * 60))
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .tls_built_in_native_certs(false)
-            .build()
-            .map_err(|_| request_failed())?;
         Ok(Self {
             endpoint,
             api_key: api_key.into(),
             model_id: model_id.into(),
-            http,
+            http: local_http(REQUEST_TIMEOUT)?,
             #[cfg(feature = "benchmark-transport")]
             benchmark_transport: None,
             token_confidence: false,
@@ -1585,7 +1610,7 @@ mod tests {
 
     /// A retry is for a reply that came back malformed. A request that failed
     /// outright fails the same way twice, and against a dead or hung server
-    /// the second attempt only doubles a ten-minute wait for one document.
+    /// the second attempt only doubles a wait of minutes for one document.
     #[test]
     fn a_failed_request_is_not_retried() {
         let server = scripted_server(vec![http_reply("503 Service Unavailable", &[], "")]);
@@ -1596,6 +1621,42 @@ mod tests {
 
         assert_eq!(error.code(), EngineErrorCode::ModelRequestFailed);
         assert_eq!(server.attempts(), 1);
+    }
+
+    /// A server that takes a request and never answers does not hold its
+    /// caller for ever: the client gives the request up at its own limit, as
+    /// a failed request, and does not send it again. The limit itself is
+    /// longer than the queue's deadline for a document (the queue checks),
+    /// so under the queue it is the deadline that ends a slow request, once.
+    #[test]
+    fn a_server_that_stops_answering_is_given_up_on_at_the_clients_limit() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (connected, connections) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            // Every connection is taken and kept open, unanswered, for as
+            // long as the test runs.
+            for stream in listener.incoming() {
+                if connected.send(stream).is_err() {
+                    return;
+                }
+            }
+        });
+        let mut client = local_client(address);
+        let limit = Duration::from_millis(400);
+        client.http = local_http(limit).unwrap();
+
+        let started = std::time::Instant::now();
+        let error = client.propose(&ModelRequest::new("p")).unwrap_err();
+
+        assert_eq!(error.code(), EngineErrorCode::ModelRequestFailed);
+        assert!(started.elapsed() >= limit, "{:?}", started.elapsed());
+        assert!(started.elapsed() < Duration::from_secs(30));
+        assert_eq!(
+            connections.try_iter().count(),
+            1,
+            "the request was not sent again"
+        );
     }
 
     /// llama-server answers a prompt longer than its context with a 400. That
