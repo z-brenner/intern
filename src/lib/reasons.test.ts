@@ -62,9 +62,9 @@ describe('humanizeReason', () => {
     expect(sentence).not.toMatch(/reported|low confidence/i);
   });
 
-  // The two party codes usually arrive together, in either order, and end on
-  // the same instruction. It is said once, after the last of them, and each
-  // still ends on it alone.
+  // PARTY_MISSING arrives with PARTY_UNSUPPORTED, in either order, and the
+  // two end on the same instruction. It is said once, after the last of
+  // them, and each still ends on it alone.
   it('says where to look about the parties once, after the last party sentence', () => {
     const check = 'Check who the document is from, to, for or between.';
     for (const code of ['PARTY_UNSUPPORTED', 'PARTY_MISSING']) {

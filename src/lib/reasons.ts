@@ -18,10 +18,11 @@ const SENTENCES: Record<string, string> = {
   // relation compose.rs reads). PARTY_UNSUPPORTED: most often a name that
   // rests on sides only the model's reading gave, the document's wording
   // saying nothing of them (Relation::on_proposed_roles; 99 of the 160 in
-  // the 9B's replays of InternBench and the real sets); then a party the
-  // model named that the document does not contain, a placeholder, or one
-  // capitalized word such as a first name, each left out of the name, which
-  // may then have no party at all; a default the model's own reading speaks
+  // the 9B's replays of InternBench and the real sets, 70 of the 107 in the
+  // 4B's of InternBench and real sets 1-4); then a party the model named
+  // that the document does not contain, a placeholder, or one capitalized
+  // word such as a first name, each left out of the name, which may then
+  // have no party at all; a default the model's own reading speaks
   // against - a document "for" the party the model called its issuer or
   // sender, or the first of several parties the model told no further
   // apart, kept only for coming first (Relation::doubtful); a release named
@@ -33,8 +34,10 @@ const SENTENCES: Record<string, string> = {
   // naming no one because every party the model gave was set aside (copied,
   // signing for another, staff of an organization no single line names).
   // Neither sentence assumes the name has a party; each opens on what holds
-  // in every case. The two usually come together, and the place to look,
-  // PARTY_CHECK below, follows the last of them only.
+  // in every case. PARTY_MISSING comes with PARTY_UNSUPPORTED (all three in
+  // each model's replays), though PARTY_UNSUPPORTED mostly comes without
+  // it, and the place to look, PARTY_CHECK below, follows the last of them
+  // only.
   PARTY_UNSUPPORTED: 'Intern could not confirm from the document which party this name should give. Most often the document does not say which side a party is on, so the side rests on the model\'s reading alone. A party the model named may also be absent from the document, or be one word such as a first name, and is then left out of the name. Or the name may give a party picked only for coming first or against the model\'s own reading, a release between two of its parties, or a group of recipients such as “all staff”.',
   PARTY_MISSING: 'The name lacks a party it needs, such as the other side of an agreement or who issued the document.',
   DESCRIPTION_UNSUPPORTED: 'The description asserts something the document does not contain.',
@@ -128,9 +131,9 @@ const SENTENCES: Record<string, string> = {
 
 /**
  * Where to look about the parties, after PARTY_UNSUPPORTED's sentence or
- * PARTY_MISSING's. The two usually arrive together (all three PARTY_MISSING
- * readings in the 9B's replays came with PARTY_UNSUPPORTED), and the same
- * instruction after each made one text repeat itself.
+ * PARTY_MISSING's. PARTY_MISSING arrives with PARTY_UNSUPPORTED (all three
+ * PARTY_MISSING readings in the 9B's replays did, in either order), and the
+ * same instruction after each made one text repeat itself.
  */
 const PARTY_CHECK = 'Check who the document is from, to, for or between.';
 
