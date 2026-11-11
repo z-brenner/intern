@@ -7291,10 +7291,7 @@ fn caption_units<'a>(scope: &ValidationScope<'a>) -> Vec<&'a EvidenceUnit> {
     let Some(heading) = heading else {
         return Vec::new();
     };
-    let caption = page()
-        .skip(heading)
-        .take(CAPTION_UNITS)
-        .collect::<Vec<_>>();
+    let caption = page().skip(heading).take(CAPTION_UNITS).collect::<Vec<_>>();
     // Under a block that fills the page's opening units, a court's heading
     // heads a caption only where one is set out under it.
     if heading >= FORUM_HEAD_UNITS && !sets_out_a_caption(&caption_cells(&caption)) {
@@ -12128,8 +12125,9 @@ operation is conducted in pursuance of the plans stated in its notification. |\n
     /// people its attendance table lists and called each the client. No
     /// role tells them apart, so the record's default would file the
     /// minutes "for" whoever the table names first: the name waits for a
-    /// person instead. A report whose reply told its client from its
-    /// contractor keeps the default as it was.
+    /// person instead, and so it does where a letterhead names the body
+    /// that keeps the minutes. A report whose reply told its client from
+    /// its contractor keeps the default as it was.
     #[test]
     fn a_record_for_the_first_of_several_alike_goes_to_review() {
         const MINUTES: &str = "**MINUTES**\n\n\
@@ -12168,6 +12166,59 @@ operation is conducted in pursuance of the plans stated in its notification. |\n
         });
         assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
         assert_eq!(outcome.proposal.parties, vec!["Odalys Brandt"]);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        // The same minutes under the letterhead of the body that keeps them,
+        // which the reply called the issuer: the attendees are the
+        // letterhead's counterpart, and the first of them is no more the
+        // one the minutes are for.
+        const LETTERHEAD: &str = "HALVERSTON COOPERATIVE GROCERS\n\n\
+MINUTES OF THE BOARD MEETING\n\n\
+14 June 2018\n\n\
+Present: Odalys Brandt, Teodor Lindqvist, Maren Achterberg\n\n\
+1. The chair welcomed the members and the minutes of the last meeting were approved.\n\
+2. The board approved the budget for the coming year.";
+        let (outcome, _) = facts_for(LETTERHEAD, |index| ModelFacts {
+            document_type: Some("Minutes of the Board Meeting".into()),
+            type_evidence: vec![id_of(index, "MINUTES OF THE")],
+            document_date: Some("2018-06-14".into()),
+            date_evidence: vec![id_of(index, "14 June")],
+            parties: vec![
+                party(
+                    "Halverston Cooperative Grocers",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "HALVERSTON")],
+                ),
+                party(
+                    "Odalys Brandt",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "Present:")],
+                ),
+                party(
+                    "Teodor Lindqvist",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "Present:")],
+                ),
+                party(
+                    "Maren Achterberg",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "Present:")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(outcome.proposal.parties, vec!["Odalys Brandt"]);
+        let basis = outcome
+            .facts
+            .as_ref()
+            .map(|facts| facts.relation_basis.clone())
+            .unwrap_or_default();
+        assert!(basis.contains("provider's counterpart"), "{basis}");
         assert!(
             outcome.reasons.contains(&ReviewReason::PartyUnsupported),
             "{:?}",
@@ -15381,7 +15432,10 @@ Dated: April 2, 2024"
         });
         assert_eq!(
             outcome.proposal.parties,
-            vec!["Official Committee of Unsecured Creditors", "Beta Lending Inc."],
+            vec![
+                "Official Committee of Unsecured Creditors",
+                "Beta Lending Inc."
+            ],
             "{:?}",
             outcome.proposal
         );
