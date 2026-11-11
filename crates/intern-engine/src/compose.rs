@@ -32,6 +32,24 @@ const SHORT_SUBJECT_WORDS: usize = 6;
 /// is an agreement.
 const PUBLISHED_RELEASES: &[&str] = &["enforcement release", "press release", "news release"];
 
+/// Words that make a type an agreement besides "release", which also
+/// names what an organization publishes ([`PUBLISHED_RELEASES`]).
+const AGREEMENT_WORDS: &[&str] = &[
+    "agreement",
+    "contract",
+    "lease",
+    "statement of work",
+    // Filers agreeing to file one Schedule 13D or 13G for all of them
+    // (Rule 13d-1(k)): an agreement among them, whatever its title calls it.
+    "joint filing",
+    "terms",
+    "license",
+    "licence",
+    "deed",
+    "promissory note",
+    "waiver",
+];
+
 /// Parties the reply gave no role at all, of which a default that kept the
 /// first is doubtful: a list - the people a meeting's minutes record, the
 /// lenders a notice goes to - that nothing told apart. Two such parties are
@@ -82,23 +100,7 @@ impl DocumentClass {
                 ]))
         {
             Self::Issued
-        } else if has(&[
-            "agreement",
-            "contract",
-            "lease",
-            "statement of work",
-            // Filers agreeing to file one Schedule 13D or 13G for all of
-            // them (Rule 13d-1(k)): an agreement among them, whatever its
-            // title calls it.
-            "joint filing",
-            "terms",
-            "license",
-            "licence",
-            "deed",
-            "promissory note",
-            "waiver",
-        ]) || (!published && has(&["release"]))
-        {
+        } else if has(AGREEMENT_WORDS) || (!published && has(&["release"])) {
             Self::Agreement
         } else if published {
             Self::Record
@@ -551,8 +553,31 @@ fn relation_from_supported_roles(
     {
         return one(PartyRelation::For, debtor, "the debtor of the case");
     }
+    // A type that is an agreement by "release" alone may name a release an
+    // organization publishes in words [`PUBLISHED_RELEASES`] does not hold -
+    // a "Media Release", an "Earnings Release" - which is about its subject,
+    // not between the first two parties it names. A release a party gives
+    // names its two sides ("by and between"); one whose document names none
+    // is joined "between" its first two parties by their order alone, and
+    // waits for a person ([`Relation::doubtful`]).
+    let released_alone = class == DocumentClass::Agreement
+        && contains_word(&lowered, "release")
+        && !AGREEMENT_WORDS
+            .iter()
+            .any(|word| contains_word(&lowered, word));
     match class {
         DocumentClass::Agreement | DocumentClass::Amendment => match parties {
+            [a, b, ..] if released_alone && !cues.between => Relation {
+                relation: PartyRelation::Between,
+                parties: vec![a.name.clone(), b.name.clone()],
+                basis: format!(
+                    "{}: the first two parties, of a release that names no two sides",
+                    class.as_str()
+                ),
+                on_proposed_roles: false,
+                defaulted: false,
+                doubtful: true,
+            },
             [a, b, ..] => Relation {
                 relation: PartyRelation::Between,
                 parties: vec![a.name.clone(), b.name.clone()],
@@ -2008,6 +2033,52 @@ mod tests {
         let apart = form(Some(PartyRole::Issuer));
         assert_eq!(apart.parties, vec!["Westbrook Kettle Brewing"]);
         assert!(!apart.doubtful, "{}", apart.basis);
+    }
+
+    /// A type that is an agreement by "release" alone - a "Media Release"
+    /// or an "Earnings Release" an organization publishes, as well as a
+    /// release a party gives - joins its first two parties "between" by
+    /// their order alone where the document names no two sides, and says
+    /// that it is doubtful. A release whose document names its sides "by
+    /// and between", and an agreement that is one by another word, are as
+    /// settled as before.
+    #[test]
+    fn a_release_that_names_no_two_sides_is_doubtful() {
+        let parties = cast(&[
+            ("Corvane Media Group", None),
+            ("Pellham Tobacco Company", None),
+        ]);
+        let named = RelationCues {
+            between: true,
+            ..RelationCues::default()
+        };
+        for kind in [
+            "Media Release",
+            "Earnings Release",
+            "General Release",
+            "Mutual Release",
+        ] {
+            let class = DocumentClass::of(Some(kind));
+            assert_eq!(class, DocumentClass::Agreement, "{kind}");
+            let relation =
+                relation_from_roles(class, Some(kind), &parties, RelationCues::default());
+            assert_eq!(relation.relation, PartyRelation::Between, "{kind}");
+            assert!(relation.doubtful, "{kind}: {}", relation.basis);
+            let sides = relation_from_roles(class, Some(kind), &parties, named);
+            assert_eq!(sides.relation, PartyRelation::Between, "{kind}");
+            assert!(!sides.doubtful, "{kind}: {}", sides.basis);
+        }
+        for kind in [
+            "Separation Agreement and General Release",
+            "Settlement Agreement and Mutual Release",
+            "Distribution Agreement",
+        ] {
+            let class = DocumentClass::of(Some(kind));
+            let relation =
+                relation_from_roles(class, Some(kind), &parties, RelationCues::default());
+            assert_eq!(relation.relation, PartyRelation::Between, "{kind}");
+            assert!(!relation.doubtful, "{kind}: {}", relation.basis);
+        }
     }
 
     fn cast(parties: &[(&str, Option<PartyRole>)]) -> Vec<CastMember> {

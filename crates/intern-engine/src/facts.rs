@@ -1809,12 +1809,14 @@ pub fn validate_facts_at(
     // A release the type names as published - an enforcement release, a
     // press release - is a record of what it announces, about its subject
     // ([`DocumentClass::of`]). One whose document names its first two
-    // parties as its two sides, "by and between", is an agreement after
-    // all, and is named between them as a release a party gives is.
-    let class = if class == DocumentClass::Record
+    // parties as its two sides, "by and between", may be an agreement after
+    // all, and is named between them as a release a party gives is - or
+    // may be an announcement that quotes the agreement it announces. The
+    // type and the text disagree, and the name waits for a person.
+    let published_between = class == DocumentClass::Record
         && cues.between
-        && names_a_published_release(document_type.as_deref())
-    {
+        && names_a_published_release(document_type.as_deref());
+    let class = if published_between {
         DocumentClass::Agreement
     } else {
         class
@@ -1825,7 +1827,7 @@ pub fn validate_facts_at(
     // does one the reply's own reading speaks against
     // ([`Relation::doubtful`]): the document did not say, and the reply
     // said otherwise.
-    if relation.on_proposed_roles || relation.doubtful {
+    if relation.on_proposed_roles || relation.doubtful || published_between {
         push(&mut reasons, ReviewReason::PartyUnsupported);
     }
     // An agreement has two sides at least. One that names only one has
@@ -12166,8 +12168,11 @@ This certificate is issued as a matter of information only.";
     /// subject, not an agreement between the first two parties it names:
     /// it is "for" the company it penalizes, and its title loses the date
     /// it is set beside. A general release that names its two sides "by
-    /// and between" stays an agreement between them, and so does a
-    /// published release whose document names its two sides that way.
+    /// and between" stays an agreement between them and files. A published
+    /// release whose document names two sides that way is named between
+    /// them too, and one under a word no list holds ("Media Release")
+    /// between its first two parties, but neither the type nor the text
+    /// settles which it is, and both wait for a person.
     #[test]
     fn a_published_release_is_a_record_for_its_subject() {
         const RELEASE: &str = "DEPARTMENT OF THE EXCHEQUER\n\
@@ -12242,6 +12247,47 @@ all claims arising from the distribution agreement.";
             outcome.proposal.parties,
             vec!["Corvane Media Group LLC", "Pellham Tobacco Company"]
         );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        // A release published under another word than the three a type is
+        // read by is an agreement by "release" alone; its document names no
+        // two sides, and the name its first two parties are joined in by
+        // their order waits for a person.
+        const MEDIA: &str = "MINISTER FOR TRADE\n\n\
+MEDIA RELEASE\n\n\
+3 March 2024\n\n\
+New export deal for Corvane Media Group\n\n\
+The Minister for Trade today welcomed the agreement reached with Pellham Tobacco Company, which \
+will see Corvane Media Group export its services to twelve new markets.";
+        let (outcome, _) = facts_for(MEDIA, |index| ModelFacts {
+            document_type: Some("Media Release".into()),
+            type_evidence: vec![id_of(index, "MEDIA RELEASE")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "3 March 2024")],
+            parties: vec![
+                party(
+                    "Corvane Media Group",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "New export")],
+                ),
+                party(
+                    "Pellham Tobacco Company",
+                    Some(PartyRole::Other),
+                    &[id_of(index, "The Minister")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
 
         const ANNOUNCED: &str = "PRESS RELEASE\n\n\
 March 3, 2024\n\n\
@@ -12270,6 +12316,11 @@ Tobacco Company, who each release the other from all claims.";
         assert_eq!(
             outcome.facts.as_ref().map(|facts| facts.document_class),
             Some(DocumentClass::Agreement)
+        );
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
         );
     }
 
