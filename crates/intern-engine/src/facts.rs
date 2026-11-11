@@ -2478,7 +2478,13 @@ fn read_type_words<'a>(
                 if !tail.is_empty() && !following(&line).starts_with(tail_head) {
                     return None;
                 }
-                let phrase = title_phrase(&kept, &head)?;
+                // The part the line holds is a title by its own kind. The
+                // whole reply's head noun may lie in what it ran on into:
+                // "Public Information Statement National Weather Service
+                // Wichita KS 710 PM CDT Mon" names a kind followed by an
+                // office, and ends on a weekday.
+                let kept_words = words(&kept);
+                let phrase = title_phrase(&kept, head_noun(&kept_words)?)?;
                 let line_words = words(&line);
                 let phrase_words = words(&phrase);
                 (phrase_words.len() >= 2
@@ -13090,6 +13096,85 @@ Rickmansworth,
                 "{:?}",
                 outcome.proposal
             );
+        }
+    }
+
+    /// A reply that copied a title and ran on past its line - into the
+    /// office and the hour a weather statement prints under its title,
+    /// into the delivery line under a letter's heading - is typed by the
+    /// part the line holds, read by that part's own kind: the reply's last
+    /// word is no head noun. A reply whose tail the document does not go on
+    /// with copied nothing, and waits for a person.
+    #[test]
+    fn a_reply_run_past_its_title_line_is_typed_by_the_part_the_line_holds() {
+        const STATEMENT: &str = "753\nNOUS43 KHLW 200010\nPNSHLW\n\n\
+             Public Information Statement\nNational Weather Service Harlow KS\n\
+             710 PM CDT Mon Oct 19 2026\n\n\
+             ...TEMPERATURE AND PRECIPITATION REPORTS FROM THE PAST 24 HOURS...\n\n\
+             Location                     High   Low   Precip\n\
+             Harlow Municipal Airport       71    44     0.00";
+        let statement = |index: &EvidenceIndex, kind: &str| ModelFacts {
+            document_type: Some(kind.into()),
+            type_evidence: vec![id_of(index, "Public Information Statement")],
+            document_date: Some("2026-10-19".into()),
+            date_evidence: vec![id_of(index, "Oct 19 2026")],
+            parties: vec![party(
+                "National Weather Service Harlow KS",
+                Some(PartyRole::Issuer),
+                &[id_of(index, "National Weather Service")],
+            )],
+            ..ModelFacts::default()
+        };
+        let (outcome, _) = facts_for(STATEMENT, |index| {
+            statement(
+                index,
+                "Public Information Statement National Weather Service Harlow KS 710 PM CDT Mon",
+            )
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Public Information Statement"),
+            "{:?}",
+            outcome.reasons
+        );
+        for reason in [ReviewReason::TypeUnsupported, ReviewReason::TypeInferred] {
+            assert!(!outcome.reasons.contains(&reason), "{:?}", outcome.reasons);
+        }
+        // Words the document does not go on with are no copy of it.
+        let (outcome, _) = facts_for(STATEMENT, |index| {
+            statement(
+                index,
+                "Public Information Statement Harlow Rail Users Group Summer Timetable",
+            )
+        });
+        assert!(
+            outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.proposal
+        );
+        // A letter's heading and the delivery line set under it.
+        let (outcome, _) = facts_for(
+            "Pipeline and Hazardous Materials\nSafety Administration\n\nWARNING LETTER\n\n\
+             OVERNIGHT EXPRESS DELIVERY\n\nMarch 2, 2018\n\nMr. Jerome Colfax\n\
+             Refinery Manager\nTollard Refining Company, LLC\n1819 Woodville Road\n\n\
+             Dear Mr. Colfax:\n\n\
+             A representative of the Administration inspected the pipeline facilities.",
+            |index| ModelFacts {
+                document_type: Some("WARNING LETTER OVERNIGHT EXPRESS DELIVERY".into()),
+                type_evidence: vec![id_of(index, "WARNING LETTER")],
+                document_date: Some("2018-03-02".into()),
+                date_evidence: vec![id_of(index, "March 2, 2018")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Warning Letter"),
+            "{:?}",
+            outcome.reasons
+        );
+        for reason in [ReviewReason::TypeUnsupported, ReviewReason::TypeInferred] {
+            assert!(!outcome.reasons.contains(&reason), "{:?}", outcome.reasons);
         }
     }
 
