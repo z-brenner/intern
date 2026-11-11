@@ -583,14 +583,14 @@ fn log_save(tier: ModelTier, save: intern_engine::slots::Save) {
             tokens,
             request_tokens,
         } => eprintln!(
-            "intern: the {} local model's server saved state for {tokens} tokens where the instructions are {request_tokens}; the file was deleted",
+            "intern: the {} local model's server saved state for {tokens} tokens where the instructions are {request_tokens}; the file was deleted, and nothing more is saved until Intern restarts",
             tier.as_str()
         ),
         Save::Unchecked => eprintln!(
-            "intern: the {} local model's saved instructions could not be read back to check them; the file was deleted",
+            "intern: the {} local model's saved instructions could not be read back to check them; the file was deleted, and nothing more is saved until Intern restarts",
             tier.as_str()
         ),
-        Save::Uneven | Save::NoRoom | Save::NotNeeded => {}
+        Save::Uneven | Save::NoRoom | Save::NotNeeded | Save::Refused => {}
     }
 }
 

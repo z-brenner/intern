@@ -232,6 +232,10 @@ pub enum Save {
     /// ([`saved_state_reach`]), so what it holds is not known. It was
     /// deleted.
     Unchecked,
+    /// A save earlier in this session was [`Save::HeldMore`] or
+    /// [`Save::Unchecked`]: the runtime may keep a document in its slot, so
+    /// no lifetime of the session saves again ([`KnownInstructions`]).
+    Refused,
     Failed,
 }
 
@@ -387,16 +391,29 @@ fn checkpoints_at(file: &mut fs::File, offset: u64, length: u64) -> Option<Vec<S
     (file.stream_position().ok()? == length).then_some(checkpoints)
 }
 
+/// What a session has learned of its saves, shared by every server lifetime
+/// of it.
+///
 /// The instructions' length in tokens for each configuration, by slot file
-/// name, once a lifetime of it has sent the instructions-only request in
-/// this session: a later lifetime whose first document is too short to save
-/// from then knows it without sending the request again.
+/// name, once a lifetime of it has sent the instructions-only request: a
+/// later lifetime whose first document is too short to save from then
+/// knows it without sending the request again.
+///
+/// And whether a save has held more than the instructions, or could not be
+/// read back ([`Save::HeldMore`], [`Save::Unchecked`]). Either says the
+/// runtime may keep a document in its slot. The file is deleted, but every
+/// later lifetime - each idle unload, each switch between the models -
+/// would write the document's tokens and state to the slot folder again
+/// before deleting them, so none does until the app restarts.
 #[derive(Debug, Default)]
-pub struct KnownInstructions(Mutex<HashMap<String, u64>>);
+pub struct KnownInstructions {
+    lengths: Mutex<HashMap<String, u64>>,
+    refused: AtomicBool,
+}
 
 impl KnownInstructions {
     fn get(&self, file_name: &str) -> Option<u64> {
-        self.0
+        self.lengths
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(file_name)
@@ -404,10 +421,18 @@ impl KnownInstructions {
     }
 
     fn record(&self, file_name: &str, tokens: u64) {
-        self.0
+        self.lengths
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(file_name.to_owned(), tokens);
+    }
+
+    fn refuse_saves(&self) {
+        self.refused.store(true, Ordering::SeqCst);
+    }
+
+    fn saves_refused(&self) -> bool {
+        self.refused.load(Ordering::SeqCst)
     }
 }
 
@@ -604,13 +629,14 @@ impl SlotKeeper {
     /// ([`saved_state_reach`]), and the server's own count of what it saved.
     /// A file reaching past that request's prompt and the one token it
     /// generated is deleted ([`Save::HeldMore`]), and so is one whose
-    /// checkpoints cannot be read ([`Save::Unchecked`]). What is checked is
-    /// how far the saved state reaches, by position: a checkpoint inside the
-    /// request's own 15 tokens is taken to be the request's, as on b11946
-    /// it is, since the server keeps no checkpoint past where the prompts
-    /// part. The speed battery's `live_slots` job runs the app's own save
-    /// against the real server; it is the check to run after any runtime
-    /// change.
+    /// checkpoints cannot be read ([`Save::Unchecked`]); after either, no
+    /// lifetime of the session saves again ([`Save::Refused`]). What is
+    /// checked is how far the saved state reaches, by position: a
+    /// checkpoint inside the request's own 15 tokens is taken to be the
+    /// request's, as on b11946 it is, since the server keeps no checkpoint
+    /// past where the prompts part. The speed battery's `live_slots` job
+    /// runs the app's own save against the real server; it is the check to
+    /// run after any runtime change.
     ///
     /// The instructions' length is what that request finds cached. Until a
     /// lifetime of this configuration has sent it, a short first document
@@ -620,6 +646,9 @@ impl SlotKeeper {
     pub fn save_once(&self, first_request_tokens: Option<u64>) -> Save {
         if !self.unsaved.swap(false, Ordering::SeqCst) || self.path().is_file() {
             return Save::NotNeeded;
+        }
+        if self.known.saves_refused() {
+            return Save::Refused;
         }
         let Some(first_request_tokens) = first_request_tokens else {
             return Save::Uneven;
@@ -668,11 +697,13 @@ impl SlotKeeper {
         let request_tokens = request.cached + request.processed;
         let Some(state) = saved_state_reach(&partial) else {
             let _ = fs::remove_file(&partial);
+            self.known.refuse_saves();
             return Save::Unchecked;
         };
         let reach = state.reach().max(saved.n_saved);
         if reach > request_tokens + 1 {
             let _ = fs::remove_file(&partial);
+            self.known.refuse_saves();
             return Save::HeldMore {
                 tokens: reach,
                 request_tokens,
@@ -1251,10 +1282,22 @@ mod tests {
         ] {
             let directory = tempfile::tempdir().unwrap();
             let server = fake_llama_saving(directory.path(), "secret", false, saving);
-            let holding_more = keeper(&server, directory.path());
+            let known = Arc::new(KnownInstructions::default());
+            let holding_more = keeper_knowing(&server, directory.path(), "4", Arc::clone(&known));
             assert_eq!(holding_more.save_once(LONG_FIRST_REQUEST), expected);
             assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
             assert_eq!(holding_more.save_once(LONG_FIRST_REQUEST), Save::NotNeeded);
+
+            // No later lifetime of the session writes its slot again, of
+            // this configuration or another; a restore is still made.
+            let sent = server.requests().len();
+            for threads in ["4", "8"] {
+                let later = keeper_knowing(&server, directory.path(), threads, Arc::clone(&known));
+                assert_eq!(later.restore(), Restore::NoFile);
+                assert_eq!(later.save_once(LONG_FIRST_REQUEST), Save::Refused);
+            }
+            assert_eq!(server.requests().len(), sent, "nothing more is asked");
+            assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
         }
 
         // The one token the request generated may be kept with it.

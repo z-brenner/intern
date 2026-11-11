@@ -934,7 +934,11 @@ token count from the file's own header, the position each checkpoint reaches,
 and the server's count of what it saved. A file that reaches past the
 instructions-only request's prompt and the one token it generated is deleted
 (`Save::HeldMore`), and so is one whose checkpoint list cannot be read
-(`Save::Unchecked`), as a runtime that wrote it differently would leave. What
+(`Save::Unchecked`), as a runtime that wrote it differently would leave.
+After either, no server lifetime of the session saves again
+(`Save::Refused`): such a runtime may keep the document in its slot, and every
+idle unload and every switch of model would otherwise write it to the slot
+folder once more before deleting it. What
 is checked is how far the saved state reaches, by position, not where each
 checkpoint came from: one inside the request's own 15 tokens is taken to be
 the request's, which on b11946 it is, since the server keeps no checkpoint
