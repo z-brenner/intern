@@ -173,9 +173,10 @@ pub struct Relation {
     pub defaulted: bool,
     /// The rules named a party whose role nothing in the document settles,
     /// and the reply's own reading of that party speaks against the name:
-    /// a document "for" a party the reply called its issuer or sender.
-    /// Neither the document nor the reply is behind such a name, and it
-    /// waits for a person; the basis says why.
+    /// a document "for" a party the reply called its issuer or sender, or
+    /// a default that kept the first of several parties the reply gave one
+    /// and the same role. Neither the document nor the reply is behind such
+    /// a name, and it waits for a person; the basis says why.
     pub doubtful: bool,
 }
 
@@ -431,6 +432,33 @@ fn relation_from_supported_roles(
         parties
             .iter()
             .find(|party| party.supported_role().is_none())
+    };
+    // A default keeps the first party no role assigns. Where the reply gave
+    // another such party the very role it gave that one, it told the two no
+    // further apart than the document did, and only coming first chose
+    // between them: the three people a meeting's minutes list, each called
+    // the client, are not the one the minutes are for. The name stands, and
+    // waits for a person ([`Relation::doubtful`]).
+    let first_of_alike = |relation: Relation, party: &CastMember| {
+        let Some(role) = party.proposed_role else {
+            return relation;
+        };
+        let alike = parties
+            .iter()
+            .filter(|other| other.supported_role().is_none() && other.proposed_role == Some(role))
+            .count();
+        if alike < 2 {
+            return relation;
+        }
+        Relation {
+            basis: format!(
+                "{}, one of {alike} the reply called the {}",
+                relation.basis,
+                role.as_str()
+            ),
+            doubtful: true,
+            ..relation
+        }
     };
     let unresolved = || Relation {
         relation: PartyRelation::None,
@@ -724,7 +752,9 @@ fn relation_from_supported_roles(
             // first names: a maintenance record for the aircraft's owner,
             // a certificate for the insured.
             match unassigned() {
-                Some(party) => for_unassigned(party, "the first party, by default"),
+                Some(party) => {
+                    first_of_alike(for_unassigned(party, "the first party, by default"), party)
+                }
                 None => unresolved(),
             }
         }
@@ -758,7 +788,10 @@ fn relation_from_supported_roles(
             // A form whose roles settle nothing is the filing of the party
             // it first names.
             match unassigned() {
-                Some(party) => by_default(PartyRelation::For, party, "the filer, by default"),
+                Some(party) => first_of_alike(
+                    by_default(PartyRelation::For, party, "the filer, by default"),
+                    party,
+                ),
                 None => unresolved(),
             }
         }
@@ -1775,6 +1808,90 @@ mod tests {
         );
         assert_eq!(form.relation, PartyRelation::For);
         assert!(!form.doubtful, "{}", form.basis);
+    }
+
+    /// A record's default keeps the first party no role assigns, and a
+    /// form's the first it names. Where the reply gave another such party
+    /// the very role it gave that one - three attendees of a meeting each
+    /// called the client - only coming first chose the name, and it says it
+    /// is doubtful. A reply that told the parties apart, or gave them no
+    /// role at all, leaves the default as it was, and a party the
+    /// document's own label names is no default.
+    #[test]
+    fn a_default_that_kept_one_of_several_alike_is_doubtful() {
+        let cues = RelationCues::default();
+        let unsupported = |name: &str, proposed: Option<PartyRole>| CastMember {
+            name: name.to_owned(),
+            role: None,
+            role_supported: false,
+            proposed_role: proposed,
+        };
+        let record = |parties: &[CastMember]| {
+            relation_from_roles(DocumentClass::Record, Some("Minutes"), parties, cues)
+        };
+        let attendees = record(&[
+            unsupported("Odalys Brandt", Some(PartyRole::Client)),
+            unsupported("Teodor Lindqvist", Some(PartyRole::Client)),
+            unsupported("Maren Achterberg", Some(PartyRole::Client)),
+        ]);
+        assert_eq!(attendees.relation, PartyRelation::For);
+        assert_eq!(attendees.parties, vec!["Odalys Brandt"]);
+        assert!(attendees.doubtful, "{}", attendees.basis);
+        assert!(
+            attendees
+                .basis
+                .ends_with("one of 3 the reply called the client"),
+            "{}",
+            attendees.basis
+        );
+        // Told apart: the default is as settled as before.
+        let report = record(&[
+            unsupported("Kestrel Point Developers LLC", Some(PartyRole::Client)),
+            unsupported("Alder Geosciences, Inc.", Some(PartyRole::Contractor)),
+        ]);
+        assert_eq!(report.parties, vec!["Kestrel Point Developers LLC"]);
+        assert!(!report.doubtful, "{}", report.basis);
+        // No role from the reply: nothing it said speaks against the name.
+        let bare = record(&[
+            unsupported("Odalys Brandt", None),
+            unsupported("Teodor Lindqvist", None),
+        ]);
+        assert_eq!(bare.parties, vec!["Odalys Brandt"]);
+        assert!(!bare.doubtful, "{}", bare.basis);
+        // A party the document's own label names is named by its role, and
+        // the people beside it change nothing.
+        let labeled = record(&[
+            CastMember {
+                name: "Ione Kowalczyk".into(),
+                role: Some(PartyRole::Client),
+                role_supported: true,
+                proposed_role: Some(PartyRole::Client),
+            },
+            unsupported("Odalys Brandt", Some(PartyRole::Client)),
+            unsupported("Teodor Lindqvist", Some(PartyRole::Client)),
+        ]);
+        assert_eq!(labeled.parties, vec!["Ione Kowalczyk"]);
+        assert!(!labeled.doubtful, "{}", labeled.basis);
+        // A form's first party, of two the reply both called the employee,
+        // is its filer only by coming first.
+        let form = |second: Option<PartyRole>| {
+            relation_from_roles(
+                DocumentClass::Form,
+                Some("Benefits Enrollment Change Form"),
+                &[
+                    unsupported("Westbrook Kettle Brewing", Some(PartyRole::Employee)),
+                    unsupported("Tamsin Okonkwo", second),
+                ],
+                cues,
+            )
+        };
+        let alike = form(Some(PartyRole::Employee));
+        assert_eq!(alike.relation, PartyRelation::For);
+        assert_eq!(alike.parties, vec!["Westbrook Kettle Brewing"]);
+        assert!(alike.doubtful, "{}", alike.basis);
+        let apart = form(Some(PartyRole::Issuer));
+        assert_eq!(apart.parties, vec!["Westbrook Kettle Brewing"]);
+        assert!(!apart.doubtful, "{}", apart.basis);
     }
 
     fn cast(parties: &[(&str, Option<PartyRole>)]) -> Vec<CastMember> {

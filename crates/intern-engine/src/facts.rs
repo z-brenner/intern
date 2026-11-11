@@ -11576,6 +11576,93 @@ operation is conducted in pursuance of the plans stated in its notification. |\n
         );
     }
 
+    /// real5-office-01's shape: minutes whose reply named three of the
+    /// people its attendance table lists and called each the client. No
+    /// role tells them apart, so the record's default would file the
+    /// minutes "for" whoever the table names first: the name waits for a
+    /// person instead. A report whose reply told its client from its
+    /// contractor keeps the default as it was.
+    #[test]
+    fn a_record_for_the_first_of_several_alike_goes_to_review() {
+        const MINUTES: &str = "**MINUTES**\n\n\
+**THURSDAY 14 JUNE 2018**\n\n\
+**Attendees**\n\n\
+| Professor Odalys Brandt | Professor Teodor Lindqvist |\n\
+| --- | --- |\n\
+| Maren Achterberg | Professor Ines Calloway MBE |\n\
+| Tegwen Morrow | Callum Hartsfield |\n\n\
+**Minute**\n\n\
+1. **Chair\u{2019}s welcome and introductions**\n\n\
+   - 1.1 Professor Odalys Brandt provided an introduction to the review.";
+        let (outcome, _) = facts_for(MINUTES, |index| ModelFacts {
+            document_type: Some("MINUTES".into()),
+            type_evidence: vec![id_of(index, "**MINUTES**")],
+            document_date: Some("2018-06-14".into()),
+            date_evidence: vec![id_of(index, "THURSDAY")],
+            parties: vec![
+                party(
+                    "Professor Odalys Brandt",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "| Professor Odalys")],
+                ),
+                party(
+                    "Professor Teodor Lindqvist",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "| Professor Odalys")],
+                ),
+                party(
+                    "Maren Achterberg",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "| Professor Odalys")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(outcome.proposal.parties, vec!["Odalys Brandt"]);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        const REPORT: &str = "Site Completion Report\n\n\
+Prepared 14 March 2025\n\n\
+This report records the closure of the former range site. Kestrel Point Developers LLC \
+engaged Alder Geosciences, Inc. to carry out the works described below.";
+        let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+            document_type: Some("Site Completion Report".into()),
+            type_evidence: vec![id_of(index, "Site Completion")],
+            document_date: Some("2025-03-14".into()),
+            date_evidence: vec![id_of(index, "Prepared")],
+            parties: vec![
+                party(
+                    "Kestrel Point Developers LLC",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "This report")],
+                ),
+                party(
+                    "Alder Geosciences, Inc.",
+                    Some(PartyRole::Contractor),
+                    &[id_of(index, "This report")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Kestrel Point Developers LLC"],
+            "{:?}",
+            outcome.facts
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
     /// CUAD's cuad-34 of the held-out sample, as Qwen3.5-2B read it: one
     /// side named, the other left out, both in the opening clause.
     #[test]
