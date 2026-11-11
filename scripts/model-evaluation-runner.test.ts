@@ -101,3 +101,24 @@ it('the runner scores with the pipeline the release gate accepts, unless told ot
     expect(workflow).not.toMatch(/-Pipeline\b/);
   }
 });
+
+// The accurate model is launched with flags of its own
+// (tiers::tier_server_flags in crates/intern-engine/src/tiers.rs). Every
+// script that starts it the way the app does must pass them, or the QA and
+// release scores, the recordings of record and the memory probe describe a
+// server the app never runs.
+it('starts the accurate model with its own flags wherever the app launch is copied', async () => {
+  const tiers = await readFile('crates/intern-engine/src/tiers.rs', 'utf8');
+  const row = tiers.match(/ModelTier::Accurate => &\[([^\]]*)\]/);
+  expect(row, 'the accurate tier has a row in tier_server_flags').not.toBeNull();
+  const flags = [...row![1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  expect(flags).toContain('--no-repack');
+  for (const path of ['scripts/run-model-evaluation.ps1', 'scripts/record-corpus.ps1', 'scripts/probe-windows-memory.ps1']) {
+    const script = await readFile(path, 'utf8');
+    for (const flag of flags) {
+      expect(script, `${path} passes ${flag} for the accurate model`).toMatch(
+        new RegExp(`\\$Tier -eq "accurate"\\) \\{ \\$\\w+ \\+= "${flag}" \\}`),
+      );
+    }
+  }
+});

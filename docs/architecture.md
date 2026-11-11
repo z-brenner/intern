@@ -726,7 +726,7 @@ named as it was keeps whatever the reviewer had typed.
 | Runtime | llama.cpp `b11946` (ggml-org), CPU only, in `llama-upstream/` of the sidecar folder; both models run on it |
 | Context | 8,192 tokens |
 | Threads | every logical processor, at most 8, for generation and for prompt processing alike |
-| Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below); `--slot-save-path` ([the instructions across a restart](#the-instructions-across-a-restart)) |
+| Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below); `--slot-save-path` ([the instructions across a restart](#the-instructions-across-a-restart)); and for the accurate model `--no-repack` (below) |
 | Vision | none. No projector is pinned, downloaded, or loaded, and the request type has no field for an image |
 
 The model is text-first. Essentially every business document has usable text,
@@ -753,6 +753,18 @@ longer. `-ub 256`: 13-14% off a document on the AVX2-only CPU path most laptops
 load, neutral on AVX-512. `--prio -1 --poll 0`: low thread priority and no
 spinning between operations, which cost nothing measurable. The server is given
 180 seconds to become healthy; a cold disk took up to 117.
+
+The accurate model alone also runs with `--no-repack`
+(`tiers::tier_server_flags`,
+[`bench/reports/speed-linux-cpu-2026-11-11`](../bench/reports/speed-linux-cpu-2026-11-11/README.md)):
+llama.cpp otherwise keeps a second, interleaved copy of every Q4_K weight
+matrix for its older x86 GEMM. Without it the 9B's peak resident memory fell
+from 8.96 GB to 6.28 GB, and a document took 22-27% less time on AMD Zen 4
+and 5, 10-15% less on the AVX2 path most laptops load, and the same on an
+Intel Xeon with AMX; its names differed from the repacked run's no more
+than two repacked runs on different processors differ. The memory floors
+below were measured with repacked weights and are kept, so they now err
+toward the fast model.
 
 ### Two models, one at a time
 
