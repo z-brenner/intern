@@ -3,7 +3,7 @@ import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 // Types only: the plugin itself is still imported lazily, below.
 import type { DownloadEvent } from '@tauri-apps/plugin-updater';
-import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, ModelTier, OnboardingStatus, ProcessingStage, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, ModelReading, ModelTier, OnboardingStatus, ProcessingStage, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import { SUPPORTED_EXTENSIONS } from './formats';
 import type {
@@ -90,6 +90,9 @@ interface QueueItemDto {
   keptOriginal?: boolean;
   parked?: boolean;
   omittedParties?: string[];
+  // Which local model read the document. The backend leaves it out for a
+  // hosted model and for a reading stored before it was recorded.
+  readBy?: Partial<ModelReading> | null;
   copyOf?: string | null;
 }
 
@@ -604,6 +607,7 @@ function normalizeItem(item: QueueItemDto): QueueItem {
   // into one "Processing (0%)": no figure ever arrives, so every document read
   // as stalled at nothing. The stage is the honest part of what it knows.
   const stage = status === 'processing' ? processingStage(item.status) : undefined;
+  const reading = normalizeReading(item.readBy);
   return {
     id: String(item.id),
     originalFilename: item.originalFilename,
@@ -639,7 +643,28 @@ function normalizeItem(item: QueueItemDto): QueueItem {
     ...(item.nearDuplicateOf === undefined ? {} : { nearDuplicateOf: item.nearDuplicateOf }),
     ...(item.fileModifiedDate === undefined ? {} : { fileModifiedDate: item.fileModifiedDate }),
     ...(item.omittedParties?.length ? { omittedParties: [...item.omittedParties] } : {}),
+    ...(reading ? { readBy: reading } : {}),
     ...(typeof item.copyOf === 'string' ? { copyOf: item.copyOf } : {}),
+  };
+}
+
+/**
+ * Which local model read a document, as the backend sent it. The review
+ * panel takes its presence to mean the evidence is the document's own lines,
+ * and says the model's name. A reading this build cannot name - no name, or
+ * a tier it has never heard of - is left out, so the panel falls back to the
+ * cautious wording rather than saying "Read by undefined".
+ */
+function normalizeReading(reading: QueueItemDto['readBy']): ModelReading | undefined {
+  if (!reading || typeof reading.displayName !== 'string' || !reading.displayName.trim()) return undefined;
+  if (reading.tier !== 'fast' && reading.tier !== 'accurate') return undefined;
+  return {
+    tier: reading.tier,
+    modelId: typeof reading.modelId === 'string' ? reading.modelId : '',
+    displayName: reading.displayName,
+    ...(reading.escalated ? { escalated: reading.escalated } : {}),
+    ...(reading.escalationFailed === true ? { escalationFailed: true } : {}),
+    ...(reading.provisional === true ? { provisional: true } : {}),
   };
 }
 

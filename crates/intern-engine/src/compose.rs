@@ -239,6 +239,10 @@ pub struct RelationCues {
     /// names them - the one bringing it, then the one answering it - by
     /// their places in the cast.
     pub caption: Option<(usize, usize)>,
+    /// The debtor of the bankruptcy case the document is filed in, as its
+    /// caption names it ("In re: Delta Mills, Inc., et al., Debtors."), by
+    /// its place in the cast.
+    pub debtor: Option<usize>,
 }
 
 /// The filename's parties and joining word, from the document's class and
@@ -425,6 +429,17 @@ fn relation_from_supported_roles(
             on_proposed_roles: false,
             defaulted: false,
         };
+    }
+    // A notice filed in a bankruptcy case is filed under the case too, and
+    // a bankruptcy case has no two sides: it is its debtor's. The notice
+    // is for the debtor, whoever gives it - the creditors' committee that
+    // appears in the case, the creditor that sets a hearing in it, the
+    // trustee that appoints the committee - and whatever role the reply
+    // gave them.
+    if class == DocumentClass::Notice
+        && let Some(debtor) = cues.debtor.and_then(|index| parties.get(index))
+    {
+        return one(PartyRelation::For, debtor, "the debtor of the case");
     }
     match class {
         DocumentClass::Agreement | DocumentClass::Amendment => match parties {
@@ -1778,6 +1793,64 @@ mod tests {
         assert_eq!(relation.relation, PartyRelation::To);
         let relation = relation_from_roles(DocumentClass::Issued, Some("Invoice"), &parties, cues);
         assert_ne!(relation.relation, PartyRelation::Between);
+    }
+
+    #[test]
+    fn a_notice_in_a_bankruptcy_case_is_for_its_debtor_whoever_gives_it() {
+        // The committee that appears in the case is the reply's "client",
+        // and the document supports no role for the debtor.
+        let mut parties = cast(&[
+            ("Delta Mills, Inc.", None),
+            (
+                "Official Committee of Unsecured Creditors",
+                Some(PartyRole::Client),
+            ),
+        ]);
+        parties[1].role_supported = false;
+        let cues = RelationCues {
+            debtor: Some(0),
+            ..RelationCues::default()
+        };
+        let relation = relation_from_roles(
+            DocumentClass::Notice,
+            Some("Notice of Appearance"),
+            &parties,
+            cues,
+        );
+        assert_eq!(relation.relation, PartyRelation::For);
+        assert_eq!(relation.parties, vec!["Delta Mills, Inc."]);
+        assert!(!relation.on_proposed_roles, "{relation:?}");
+        // A role the document does support for the one who gives the
+        // notice does not make the notice theirs.
+        let trustee = cast(&[
+            ("United States Trustee", Some(PartyRole::Issuer)),
+            ("Tile Outlet, Inc.", None),
+        ]);
+        let relation = relation_from_roles(
+            DocumentClass::Notice,
+            Some("Notice of Appointment"),
+            &trustee,
+            RelationCues {
+                debtor: Some(1),
+                ..RelationCues::default()
+            },
+        );
+        assert_eq!(relation.relation, PartyRelation::For);
+        assert_eq!(relation.parties, vec!["Tile Outlet, Inc."]);
+        // An adversary proceeding in the case has two sides, and is filed
+        // between them; a letter about the case is still a letter.
+        let relation = relation_from_roles(
+            DocumentClass::Notice,
+            Some("Notice of Hearing"),
+            &parties,
+            RelationCues {
+                caption: Some((1, 0)),
+                ..cues
+            },
+        );
+        assert_eq!(relation.relation, PartyRelation::Between);
+        let relation = relation_from_roles(DocumentClass::Letter, Some("Letter"), &parties, cues);
+        assert_ne!(relation.parties, vec!["Delta Mills, Inc."]);
     }
 
     #[test]

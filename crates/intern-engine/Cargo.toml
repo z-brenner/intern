@@ -25,6 +25,9 @@ base64 = "=0.22.1"
 # intern-intake with exactly these features, so it costs no compilation.
 chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
 fs4 = "=0.13.1"
+# Finds the checkpoint list in a saved slot file (`slots::saved_state_reach`).
+# Already built for serde_json, so it costs no compilation.
+memchr = "=2.8.3"
 rand = "=0.8.5"
 # Both root sets: the bundled Mozilla roots, and the operating system's store.
 # A firm that inspects TLS installs its own root in the Windows store by

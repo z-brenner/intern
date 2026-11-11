@@ -80,6 +80,15 @@ const MIB: u64 = 1024 * 1024;
 /// The parser worker's peak while it reads a document: 0.71 GB on a 25-page
 /// scan through PP-OCR, the most any InternBench document needed. It runs
 /// beside the model, so a model is judged to fit only with room for it too.
+///
+/// One page at a time. Two pages at once took the worker's peak to 1.4 GB
+/// over all of InternBench (docs/ocr.md), so the worker reads a second page
+/// at once only with the memory for it available as a document's pages
+/// start to be read (`intern_worker::paddle::pages_at_once`): the two-page
+/// peak and [`HEADROOM`], and on Linux, where [`available_memory_bytes`]
+/// counts them, the weights a loaded accurate model keeps reading - 5 GiB
+/// on Linux, 3 GiB on Windows. Near a floor it reads one page at a time,
+/// which is what this counts.
 pub const WORKER_PEAK: u64 = 680 * MIB;
 
 /// What is left for the person's own work once a model and the worker are
@@ -222,12 +231,27 @@ pub const fn memory_for_plan(available: u64, loaded: Option<(ModelTier, u64)>) -
 }
 
 /// llama-server flags for one tier alone, added after the ones every launch
-/// sets ([`crate::server::LlamaServer::arguments_for`]). Empty until the
-/// benchmarks show a flag that helps one model and not the other: this is the
-/// one place to add it.
+/// sets ([`crate::server::LlamaServer::arguments_for`]): the one place a flag
+/// that was measured on one model and not the other goes.
+///
+/// The accurate model runs with `--no-repack`. llama.cpp otherwise copies
+/// every Q4_K weight matrix into an interleaved layout for its older x86
+/// GEMM, and that copy is about 2.6 GB of the 9B's private memory; without
+/// it the weights stay mapped from the file and b11946's tiled k-quant kernel
+/// reads them. Measured on the 9B with the recorded requests
+/// (`bench/reports/speed-linux-cpu-2026-11-11`), each runner its own
+/// baseline: the server's peak resident memory fell from 8.96 GB to 6.28 GB
+/// on every set; time per request fell 22-27% on AMD Zen 4 and Zen 5 runners
+/// (AVX-512), and 10-15% with ggml's AVX2 backend pinned, the code path most
+/// laptops load; on an Intel Xeon with AMX it was unchanged. Live on
+/// InternBench and the five real sets the names it gave differed from the
+/// repacked run's no more than two repacked runs on different processors
+/// differ from each other. The fast model was not measured with it, so it
+/// keeps the repacked layout.
 pub const fn tier_server_flags(tier: ModelTier) -> &'static [&'static str] {
     match tier {
-        ModelTier::Fast | ModelTier::Accurate => &[],
+        ModelTier::Fast => &[],
+        ModelTier::Accurate => &["--no-repack"],
     }
 }
 
@@ -1084,6 +1108,10 @@ mod tests {
             assert_eq!(options.extra_arguments, tier_server_flags(tier));
         }
         assert_eq!(IDLE_UNLOAD_AFTER.as_secs(), 600);
+        // Measured on the 9B only: the 4B keeps llama.cpp's repacked
+        // weights.
+        assert_eq!(tier_server_flags(ModelTier::Accurate), ["--no-repack"]);
+        assert!(tier_server_flags(ModelTier::Fast).is_empty());
     }
 
     #[test]

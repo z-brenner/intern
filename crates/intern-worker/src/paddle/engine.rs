@@ -841,10 +841,12 @@ impl OcrBackend for PaddleOcr {
         self.read_page(lease.sessions(), &rgb, cancel)
     }
 
-    /// As many pages as the pool has sessions for; a page past that would
-    /// only wait for one.
+    /// As many pages as the pool has sessions for - a page past that would
+    /// only wait for one - while the memory for a second set is there now
+    /// ([`super::pages_at_once`]). Asked once a document, before its first
+    /// page, so a document read one page at a time builds one set.
     fn concurrency(&self) -> usize {
-        self.config.workers.max(1)
+        super::pages_at_once(self.config.workers, crate::memory::available_bytes())
     }
 
     /// Drops the sessions no page is using, and with them their arenas.

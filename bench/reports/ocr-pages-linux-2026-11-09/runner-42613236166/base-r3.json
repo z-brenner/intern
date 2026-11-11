@@ -1,0 +1,857 @@
+{
+ "wall_s": 117.34,
+ "worker_peak_mb": 915.0,
+ "documents": [
+  {
+   "id": "notice-rent-increase",
+   "seconds": 0.005,
+   "mem_available_gib": 14.36,
+   "sha256": "31bebc7b773022e536f5b34efc02b47eb53f16492e30463be4374f39f3e03c40",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "invoice-date-in-table",
+   "seconds": 0.003,
+   "mem_available_gib": 14.36,
+   "sha256": "a4c954efd673a7a27a29c05d8c225c56f43558d497df36b69b861a4d0c4c8cab",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "invoice-layout-only",
+   "seconds": 0.002,
+   "mem_available_gib": 14.36,
+   "sha256": "b93681de3edc9a10ab4778c6f31f6ba923a7d765b4dd1657714cb6a9f8a4bfce",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "account-statement",
+   "seconds": 0.004,
+   "mem_available_gib": 14.36,
+   "sha256": "035d3bbb8e94877560f06ede4340d9e22307ae596eb721abbcf91ee860fd3064",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "purchase-order",
+   "seconds": 0.003,
+   "mem_available_gib": 14.36,
+   "sha256": "e9cb26f3ae45cf4faca9a7609f14a09edb5c6ca0dbfd0851a7f817e5a26904b8",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "services-agreement",
+   "seconds": 0.012,
+   "mem_available_gib": 14.36,
+   "sha256": "41cf0940a61e51f1d377f681a1534de65f8e83037cbe12cbf0dbcfcb1de8f365",
+   "pages": 6,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "second-amendment",
+   "seconds": 0.005,
+   "mem_available_gib": 14.36,
+   "sha256": "3acb2aed283db2133ee7e7d49f19a09aacd63f4e99ece072bf46e0bda17e3434",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "sow-under-msa-5p",
+   "seconds": 0.011,
+   "mem_available_gib": 14.36,
+   "sha256": "92cf0d332bd8daca0bc425586d58b76dd66f27d815a1f9a25e2cd1d81b7fbcc9",
+   "pages": 5,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "notice-of-default",
+   "seconds": 0.004,
+   "mem_available_gib": 14.36,
+   "sha256": "3ccf57fcba8a3dc0b98c6a72c372a227c9fb32b02457e5e58f070015322458b7",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "offer-letter",
+   "seconds": 0.003,
+   "mem_available_gib": 14.36,
+   "sha256": "beee8ef723d164a734d89c401d359a68c22d5c7dfcbf03a412c7320ff66fcf32",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "prior-authorization",
+   "seconds": 0.003,
+   "mem_available_gib": 14.36,
+   "sha256": "d1fd5042020c7a6c11b1cbc69121cf646c88fb4f6b18b39849f33f2cfa3a197d",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "explanation-of-benefits",
+   "seconds": 0.003,
+   "mem_available_gib": 14.36,
+   "sha256": "dee8ff097e7cd3f9a34998823543ef6dda3df80e86942698a0b8aaf91834b7fd",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "promissory-note",
+   "seconds": 0.005,
+   "mem_available_gib": 14.36,
+   "sha256": "7bd1443d74ffe9d21ac97f083cb06bf5637792d7eb9ec6009770068949c67d00",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "capital-call-notice",
+   "seconds": 0.004,
+   "mem_available_gib": 14.36,
+   "sha256": "2ac48061037ea75cf91b03314c4f7c2fd791dda53f11e6a21b22803b836282f5",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "engagement-letter",
+   "seconds": 0.004,
+   "mem_available_gib": 14.36,
+   "sha256": "e31d9b43794d6dd10e92c1eb0118299251747d6da39f5a4a55a1263efcae7a09",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "letterhead-letter",
+   "seconds": 0.003,
+   "mem_available_gib": 14.36,
+   "sha256": "d0442f84f5c670fa648e5284f1e90b1d055a1e28e3fc3639d78b0f9318def70c",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "lease-two-column",
+   "seconds": 0.006,
+   "mem_available_gib": 14.36,
+   "sha256": "5ab3b3ebb3998b9c96b18150fd87dbb2eaeb21126a80d85644a605099a59636e",
+   "pages": 3,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "declarations-interleaved",
+   "seconds": 0.004,
+   "mem_available_gib": 14.36,
+   "sha256": "b72e0c35de2ffefe766e1619be5ff78cc0f0ae53df552ac789545e74e1534372",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "annual-report-excerpt-8p",
+   "seconds": 0.009,
+   "mem_available_gib": 14.36,
+   "sha256": "1ea3d0e20e4f3cea0b074c4fdbd84c63229279cf0b5276ce6a96a085afa52bc4",
+   "pages": 8,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "vendor-registration-form",
+   "seconds": 0.004,
+   "mem_available_gib": 14.36,
+   "sha256": "dd0ee65db6378aacc15450770d967b6233e91653802e953dc1f4b7aa1cea1c06",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "change-order-form",
+   "seconds": 0.003,
+   "mem_available_gib": 14.36,
+   "sha256": "3650dbca37b27e59e6709583db76d872c18d3f0a776265d0913823e34e3ec2b2",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "board-minutes",
+   "seconds": 0.004,
+   "mem_available_gib": 14.36,
+   "sha256": "e1953e85035c8db88e10b79a7042f38bea101fc724c64dbf72f018caf686087f",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "field-condition-report",
+   "seconds": 0.003,
+   "mem_available_gib": 14.36,
+   "sha256": "9f0d7892a4b28bdc88da5db52d5c627ee518661f993d2129b6c7d526c9cdebb4",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "aircraft-maintenance-log",
+   "seconds": 0.003,
+   "mem_available_gib": 14.36,
+   "sha256": "2765ba3f57e781888211e6417c9e1b90cfbb1d6d2c87306acdefb401c283c583",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "assignment-assumption",
+   "seconds": 0.004,
+   "mem_available_gib": 14.36,
+   "sha256": "8a49c93ad5d6e269fc02ca333838f08b08b46742c3cba24a773f0849a8e89085",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "data-processing-agreement-10p",
+   "seconds": 0.018,
+   "mem_available_gib": 14.36,
+   "sha256": "05c8abb824efaf6db11027505ea9d06b1ec821d312e930e2b7728fc713e24ea7",
+   "pages": 10,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "asset-purchase-agreement-25p",
+   "seconds": 0.031,
+   "mem_available_gib": 14.36,
+   "sha256": "90b637b19e800af8eae2838c04f1bc6c4a4372a8f5d84c44412cdd5e89392cb4",
+   "pages": 25,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "credit-agreement-50p",
+   "seconds": 0.056,
+   "mem_available_gib": 14.36,
+   "sha256": "5050cd9fac5bf7908173f2ec310ad5fc82dd4846e6b09f35dea77ebb7982d7f1",
+   "pages": 50,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "annual-report-100p",
+   "seconds": 0.117,
+   "mem_available_gib": 14.36,
+   "sha256": "da1638a0cf4ed946232ddfcd9f196e8a3274a325b539ed3bbd7500690b1c590c",
+   "pages": 100,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "separation-agreement",
+   "seconds": 0.002,
+   "mem_available_gib": 14.36,
+   "sha256": "09b080a9170bad4271387bfbcd87162cd0f21b3cde2e67e1f90143c1db769fc8",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "any_doc"
+   ]
+  },
+  {
+   "id": "demand-letter",
+   "seconds": 0.001,
+   "mem_available_gib": 14.36,
+   "sha256": "d9661cf28bfe81b46ab8b5203aa087f66cd078a357082fc46cf50dbfe7b7ab2c",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "any_doc"
+   ]
+  },
+  {
+   "id": "board-resolution",
+   "seconds": 0.001,
+   "mem_available_gib": 14.36,
+   "sha256": "924994db331ae012bb58dffe0045b6414a1dc6af2610f948c1a5d0d8c5732e5c",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "any_doc"
+   ]
+  },
+  {
+   "id": "quarterly-business-review",
+   "seconds": 0.002,
+   "mem_available_gib": 14.36,
+   "sha256": "cfa5792f8dc1e725da6fa969a1a31e83622927eb82af8a8a051e0d659e67854d",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "any_doc"
+   ]
+  },
+  {
+   "id": "product-launch-plan",
+   "seconds": 0.002,
+   "mem_available_gib": 14.36,
+   "sha256": "0fd3447b768e51599092a3e6e692958453e40db1270895ac0bc6dd1578a77e44",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "any_doc"
+   ]
+  },
+  {
+   "id": "payroll-register",
+   "seconds": 0.002,
+   "mem_available_gib": 14.36,
+   "sha256": "cd179d219fa2954a20686085de892cad846c6f3c40ddbb7f7832a7c9bc51ca89",
+   "pages": 3,
+   "ocr_pages": 0,
+   "sources": [
+    "any_doc"
+   ]
+  },
+  {
+   "id": "ap-aging-report",
+   "seconds": 0.001,
+   "mem_available_gib": 14.36,
+   "sha256": "112bb3e2b37e5d145da47de2c27f3255e81412eee078486a210ca5aa3f19d7dd",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "any_doc"
+   ]
+  },
+  {
+   "id": "harvest-log",
+   "seconds": 0.001,
+   "mem_available_gib": 14.36,
+   "sha256": "1c4afbfc9db14d282475a3b9c064522c2b7dcd8d575252204746d7edc0d8c044",
+   "pages": 4,
+   "ocr_pages": 0,
+   "sources": [
+    "any_doc"
+   ]
+  },
+  {
+   "id": "email-approval-thread",
+   "seconds": 0.0,
+   "mem_available_gib": 14.36,
+   "sha256": "b9520b5deae047f5fad953a360363fe3c6c90d81013c2ab52fceba45314b5301",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "text"
+   ]
+  },
+  {
+   "id": "court-hearing-notice",
+   "seconds": 0.0,
+   "mem_available_gib": 14.36,
+   "sha256": "402160063421c0e7150ecf078b8b00196125ea91ae42c0d7c25c78b40c2b0a94",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "text"
+   ]
+  },
+  {
+   "id": "scan-clean-lease-2p",
+   "seconds": 4.171,
+   "mem_available_gib": 14.36,
+   "sha256": "084d91a6d351d5cc31f2414a06385e8a7504c719c354946718483c11ce3cd353",
+   "pages": 2,
+   "ocr_pages": 2,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-mixed-amendment",
+   "seconds": 1.485,
+   "mem_available_gib": 14.18,
+   "sha256": "5f8547c550ab1e2407c8859a395eb1f5b3eafefe22b720dda19a24a09ec9e718",
+   "pages": 3,
+   "ocr_pages": 1,
+   "sources": [
+    "native",
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-rotated-90-invoice",
+   "seconds": 1.586,
+   "mem_available_gib": 13.95,
+   "sha256": "242dbe9e92244da63cec4e7684594ee08a4f67c7b0a8cf2d63c9d7b34c8fe788",
+   "pages": 1,
+   "ocr_pages": 1,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-upside-down-po",
+   "seconds": 2.082,
+   "mem_available_gib": 13.94,
+   "sha256": "c5c5560ac90a99b63f55a2f711e6fde23b28d11d5845f371d5f9b603838d012b",
+   "pages": 1,
+   "ocr_pages": 1,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-skewed-notice",
+   "seconds": 2.081,
+   "mem_available_gib": 14.28,
+   "sha256": "f8d8925d6ecde225685e26f9244291274007fa2af20673993d63b29c47e2888b",
+   "pages": 1,
+   "ocr_pages": 1,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-low-res-receipt",
+   "seconds": 1.168,
+   "mem_available_gib": 14.2,
+   "sha256": "ae122a57b4b6fd012ab29a6e07bc9dde575e717f055d92562906bc4f8a2dae9c",
+   "pages": 1,
+   "ocr_pages": 1,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-noisy-statement",
+   "seconds": 1.913,
+   "mem_available_gib": 14.3,
+   "sha256": "9a13e8a1bcb7b2290973041fd1702eb4ddad527b976a447f2640710e4883d834",
+   "pages": 1,
+   "ocr_pages": 1,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-faint-letter",
+   "seconds": 1.892,
+   "mem_available_gib": 14.3,
+   "sha256": "6143512d4ac454a5a8b24f9c564dcc042c4067fde1208719741e2f7685ca5fa7",
+   "pages": 1,
+   "ocr_pages": 1,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-agreement-10p",
+   "seconds": 23.811,
+   "mem_available_gib": 14.3,
+   "sha256": "6a48b98fd3cf0d5f9856319a7e93c39d338a03331cefeff33f97f42a336bc978",
+   "pages": 10,
+   "ocr_pages": 10,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-lease-25p",
+   "seconds": 53.085,
+   "mem_available_gib": 14.34,
+   "sha256": "3908501fd6befe0c11d6f7dee9d0979f58b4fe38d984dc455e38b24f85229824",
+   "pages": 25,
+   "ocr_pages": 25,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "ocr-corrupted-invoice",
+   "seconds": 1.9,
+   "mem_available_gib": 14.35,
+   "sha256": "ed2a9a67c834508a319efa2c268250c4cbea920ddfcecf84b5a6b85d61a2951f",
+   "pages": 1,
+   "ocr_pages": 1,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-fax-two-frames",
+   "seconds": 2.896,
+   "mem_available_gib": 14.3,
+   "sha256": "f5ac8dc801e92be0ba1430a15d577cf689b2e00017eb9bd2953a4902ca575e9d",
+   "pages": 2,
+   "ocr_pages": 2,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-patient-intake-form",
+   "seconds": 2.357,
+   "mem_available_gib": 14.26,
+   "sha256": "05be812cc4b59b7a6f6ea0a12ae7c773c377a0846e3881cf08b03721f10422ec",
+   "pages": 1,
+   "ocr_pages": 1,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "newsletter-three-column",
+   "seconds": 0.007,
+   "mem_available_gib": 14.21,
+   "sha256": "7d88db2843d1f9d7b6270a618ae427b66210b6301f36410375e4daed9f6a86f9",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "agreement-two-column-footnotes",
+   "seconds": 0.003,
+   "mem_available_gib": 14.26,
+   "sha256": "4f34c5f8e65bb4c1f9d46b226cdcbd1c9cbc6abbbcafb614389a8d54e4bf64c7",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "meeting-notice-columns",
+   "seconds": 0.003,
+   "mem_available_gib": 14.26,
+   "sha256": "21392764ce200ad72189c0438257d05ad331b28c548bc1818ab01eccc5bd6706",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "meeting-notice-interleaved",
+   "seconds": 0.003,
+   "mem_available_gib": 14.26,
+   "sha256": "21392764ce200ad72189c0438257d05ad331b28c548bc1818ab01eccc5bd6706",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "meeting-notice-reversed",
+   "seconds": 0.003,
+   "mem_available_gib": 14.26,
+   "sha256": "21392764ce200ad72189c0438257d05ad331b28c548bc1818ab01eccc5bd6706",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "rate-confirmation-rotated",
+   "seconds": 0.003,
+   "mem_available_gib": 14.26,
+   "sha256": "1fc7e728053e4f817c3e93668345a2c219739b5c29b0267fca965e165d116661",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "inspection-log-ruled-2p",
+   "seconds": 0.005,
+   "mem_available_gib": 14.26,
+   "sha256": "6c684a88df0629a3bc4c3d03a2db1b4bb1c04ad124c15d3ca7e2b2081d0a81bd",
+   "pages": 2,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "price-list-unruled",
+   "seconds": 0.003,
+   "mem_available_gib": 14.26,
+   "sha256": "7cf9d96f2cc2985353d4bab98fd7482b1468acb5def15f65d07cf99fc6bc515f",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "invoice-label-above",
+   "seconds": 0.002,
+   "mem_available_gib": 14.26,
+   "sha256": "ab3e36d22eec097205681dfc3d39d1fd2a575c102e53d43ca49da8d54327ff7c",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "invoice-right-aligned",
+   "seconds": 0.002,
+   "mem_available_gib": 14.26,
+   "sha256": "a65d732975161f9a891ee9d6b0e06926a540348526e02726dd35c6d9b35ce69f",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "invoice-boxed-grid",
+   "seconds": 0.002,
+   "mem_available_gib": 14.26,
+   "sha256": "1e7b9b66524efc5f772294dcb9ed291b067d929615baeadd23f0efdb20ac58d3",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "benefits-change-checkbox-form",
+   "seconds": 0.003,
+   "mem_available_gib": 14.26,
+   "sha256": "18e3ad2eb428afc9dd5c8e3deeeff49fda9af9ec4e661b9e1893e4e986d6c0ce",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "loss-notice-boxed-fields",
+   "seconds": 0.002,
+   "mem_available_gib": 14.26,
+   "sha256": "89a0d0e0297f5abbfc25c73a982db664a6801338a19c7858cdbb6cb4713bfdfd",
+   "pages": 1,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "scan-rotated-page-in-pdf",
+   "seconds": 3.362,
+   "mem_available_gib": 14.26,
+   "sha256": "c9c162786b9ba6ff8b7f063361d2001362dbedbb1af8547da01608ad582ee5ef",
+   "pages": 2,
+   "ocr_pages": 2,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-cancellation-notice-150dpi",
+   "seconds": 2.198,
+   "mem_available_gib": 14.18,
+   "sha256": "6d2c4e119b650678d9c4fc1682ae98c8272b0fca4fa1a581ea6fdef74d0fb0f2",
+   "pages": 1,
+   "ocr_pages": 1,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-remittance-advice-120dpi",
+   "seconds": 2.239,
+   "mem_available_gib": 14.24,
+   "sha256": "44776ca61621ea7d5ce77f8c86026d09a5736b6d393002a1b104e83743bf5b1c",
+   "pages": 1,
+   "ocr_pages": 1,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-mixed-middle-page",
+   "seconds": 1.46,
+   "mem_available_gib": 14.14,
+   "sha256": "f4c59720497f16c1582d5ad311336f05ab3cd0e581662bfce30fdda2f180bf5a",
+   "pages": 3,
+   "ocr_pages": 1,
+   "sources": [
+    "native",
+    "ocr"
+   ]
+  },
+  {
+   "id": "mixed-signature-region",
+   "seconds": 0.922,
+   "mem_available_gib": 14.18,
+   "sha256": "021fc583c79556df50a18372ab90ded64e60ad6196313390063940924195935e",
+   "pages": 2,
+   "ocr_pages": 1,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "scan-certificate-of-insurance",
+   "seconds": 3.015,
+   "mem_available_gib": 14.29,
+   "sha256": "03447db4bb0ae0ae2553e0f334fcdc125ba6d64a8059f7d76076a58a0e930590",
+   "pages": 1,
+   "ocr_pages": 1,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "scan-bill-of-lading",
+   "seconds": 2.736,
+   "mem_available_gib": 14.15,
+   "sha256": "dcbf6d2a20c5994bcdca22577fba59515f8f77fb47bed771f674f1b19e63dbb8",
+   "pages": 1,
+   "ocr_pages": 1,
+   "sources": [
+    "ocr"
+   ]
+  },
+  {
+   "id": "msa-effective-date-in-definitions-12p",
+   "seconds": 0.025,
+   "mem_available_gib": 14.23,
+   "sha256": "619d8d288afcf672c6bd6d583e896c68bcc6c249a11de75e09b6e40282f57e6c",
+   "pages": 12,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "industrial-lease-dated-in-schedule-25p",
+   "seconds": 0.051,
+   "mem_available_gib": 14.28,
+   "sha256": "655ca0cc1ee09b7718d62f7068e97217ea729217fd106ab84ab9b671760a9fbc",
+   "pages": 25,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "term-loan-parties-apart-40p",
+   "seconds": 0.098,
+   "mem_available_gib": 14.28,
+   "sha256": "2d05d766795e49029a80cd429bccc14d3f5715a08f285dcb4ecf585890744966",
+   "pages": 40,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "property-policy-declarations-mid-60p",
+   "seconds": 0.145,
+   "mem_available_gib": 14.28,
+   "sha256": "7607db87109ea06d9bc5488eb0b88ab3597d3915c1b7f8c0c623b0f50785ae2a",
+   "pages": 60,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  },
+  {
+   "id": "watershed-monitoring-report-100p",
+   "seconds": 0.222,
+   "mem_available_gib": 14.28,
+   "sha256": "6bf9dda55cb5c7904901cc797939769fba588b877d3fc67b5ae808198869c2a6",
+   "pages": 100,
+   "ocr_pages": 0,
+   "sources": [
+    "native"
+   ]
+  }
+ ],
+ "worker": "base",
+ "round": 3
+}

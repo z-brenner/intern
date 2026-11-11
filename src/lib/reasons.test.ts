@@ -47,9 +47,19 @@ describe('humanizeReason', () => {
     const result = humanizeReason('TYPE_UNSUPPORTED, LOW_CONFIDENCE, MODEL_REQUESTED_REVIEW');
     expect(result).toBe(
       'The proposed document type does not appear verbatim in the document. '
-      + 'The model reported low confidence in its own proposal. '
+      + 'The model was unsure of its reading. Check the name against the document, starting with the date and the parties. '
       + 'The model asked for a person to look at this one.',
     );
+  });
+
+  // LOW_CONFIDENCE is raised when the model rates itself low, and also when
+  // it rates itself at 100% and Intern measures doubt in the words of the
+  // date or a party. The sentence must be true of both, so it does not say
+  // the model "reported" anything, and it says where to look.
+  it('says a doubted reading without claiming the model reported its doubt', () => {
+    const sentence = humanizeReason('LOW_CONFIDENCE');
+    expect(sentence).toBe('The model was unsure of its reading. Check the name against the document, starting with the date and the parties.');
+    expect(sentence).not.toMatch(/reported|low confidence/i);
   });
 
   it('tolerates lowercase codes from other serializations', () => {

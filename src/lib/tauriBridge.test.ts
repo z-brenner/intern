@@ -254,7 +254,7 @@ describe('TauriBridge', () => {
     const items = await new TauriBridge(fake.transport).listItems();
 
     expect(items[0]).not.toHaveProperty('errorCode');
-    expect(items[0].reason).toBe('The model reported low confidence in its own proposal.');
+    expect(items[0].reason).toBe('The model was unsure of its reading. Check the name against the document, starting with the date and the parties.');
     // The codes the sentence came from say which part of the name is in doubt.
     expect(items[0].reasonCodes).toEqual(['LOW_CONFIDENCE']);
     expect(items[1]).toMatchObject({ errorCode: 'DUPLICATE', reason: 'Duplicate of 2024 Filed.pdf' });
@@ -370,6 +370,34 @@ describe('TauriBridge', () => {
 
     expect(items[0].omittedParties).toEqual(['Contoso Worldwide, Inc.']);
     expect(items[1]).not.toHaveProperty('omittedParties');
+  });
+
+  // The review panel takes a named local reading to mean the evidence is the
+  // document's own lines. The backend sent `readBy` and this bridge dropped
+  // it, so in the desktop app every local reading's evidence was introduced
+  // as the model's paraphrase and "Read by ..." never showed.
+  it('carries which local model read a document, exactly as the backend serializes it', async () => {
+    const fake = fakeTransport({
+      queue_list: [
+        // ModelReading as serde writes it: false flags and an absent reason are left out.
+        { id: 1, originalFilename: 'lease.pdf', status: 'needs_review', proposedFilename: '2024-03-01 Lease.pdf', readBy: { tier: 'accurate', modelId: 'qwen3.5-9b-instruct-q4-k-m', displayName: 'Qwen3.5 9B' } },
+        { id: 2, originalFilename: 'quick.pdf', status: 'needs_review', proposedFilename: '2024-03-02 Notice.pdf', readBy: { tier: 'fast', modelId: 'qwen3.5-4b-instruct-q4-k-m', displayName: 'Qwen3.5 4B', provisional: true } },
+        { id: 3, originalFilename: 'again.pdf', status: 'ready', proposedFilename: '2024-03-03 Memo.pdf', readBy: { tier: 'fast', modelId: 'qwen3.5-4b-instruct-q4-k-m', displayName: 'Qwen3.5 4B', escalated: 'low_token_confidence', escalationFailed: true } },
+        // A hosted model's reading, and one stored before readings were recorded.
+        { id: 4, originalFilename: 'hosted.pdf', status: 'needs_review', proposedFilename: '2024-03-04 Letter.pdf' },
+        { id: 5, originalFilename: 'older.pdf', status: 'needs_review', proposedFilename: '2024-03-05 Letter.pdf', readBy: null },
+        // Nothing this build could say: no name, or a tier it does not know.
+        { id: 6, originalFilename: 'unnamed.pdf', status: 'needs_review', proposedFilename: '2024-03-06 Letter.pdf', readBy: { tier: 'accurate', modelId: 'x' } },
+        { id: 7, originalFilename: 'future.pdf', status: 'needs_review', proposedFilename: '2024-03-07 Letter.pdf', readBy: { tier: 'huge', modelId: 'x', displayName: 'Some 70B' } },
+      ],
+    });
+
+    const items = await new TauriBridge(fake.transport).listItems();
+
+    expect(items[0].readBy).toEqual({ tier: 'accurate', modelId: 'qwen3.5-9b-instruct-q4-k-m', displayName: 'Qwen3.5 9B' });
+    expect(items[1].readBy).toEqual({ tier: 'fast', modelId: 'qwen3.5-4b-instruct-q4-k-m', displayName: 'Qwen3.5 4B', provisional: true });
+    expect(items[2].readBy).toEqual({ tier: 'fast', modelId: 'qwen3.5-4b-instruct-q4-k-m', displayName: 'Qwen3.5 4B', escalated: 'low_token_confidence', escalationFailed: true });
+    for (const item of items.slice(3)) expect(item).not.toHaveProperty('readBy');
   });
 
   // The backend's status vocabulary can grow ahead of this build. An unmapped

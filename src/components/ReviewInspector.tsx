@@ -6,11 +6,31 @@ import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
 import { StatusCell } from './StatusCell';
 import { isUnreadable, itemActions, keptOriginal, withoutReviewPrefix } from '../features/review/actions';
-import { itemFlaggedFields, nameParts } from '../features/queue/check';
+import { itemFlaggedFields, itemReasonCodes, nameParts } from '../features/queue/check';
 import type { ReasonField } from '../lib/reasons';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
 import type { ModelReading, QueueItem } from '../types';
+
+/**
+ * Below this the model's own figure already says it was unsure, and is by
+ * itself why the engine sends a reading to review (READY_CONFIDENCE in
+ * validate.rs, which a test holds this to). At or above it, a reading
+ * flagged as unsure was flagged by what Intern measured, and the figure
+ * needs a word of explanation.
+ */
+export const SELF_RATED_UNSURE = 0.6;
+
+/** Where "Analysis details" being open or closed is remembered, between documents and between launches. */
+export const ANALYSIS_DETAILS_KEY = 'intern.analysisDetails';
+
+/**
+ * Closed unless a person left it open. Storage can be missing or refuse to
+ * be read (a locked-down profile); that is a closed section, not an error.
+ */
+function readAnalysisDetailsPreference(): boolean {
+  try { return window.localStorage.getItem(ANALYSIS_DETAILS_KEY) === 'open'; } catch { return false; }
+}
 
 /** What the inspector says when a name has no date; the backend says the same in DATE_REQUIRED. */
 export const DATE_REQUIRED_MESSAGE = 'Every rename needs a date. Start the filename with the document\'s date as YYYY-MM-DD.';
@@ -79,6 +99,9 @@ interface Props {
   onOpen(): void;
   onReveal(): void;
 }
+/** The name and description being edited, for one item and one revision of its proposal (`for`). */
+interface Draft { for: string; stem: string; description: string; edited: boolean }
+
 export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal }: Props) {
   // Exactly what the backend accepts for this item. Retry on an ordinary
   // review item, and nothing at all for a ready or waiting one, were the
@@ -103,23 +126,62 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // are put back while rendering instead, so no commit, and no handler or
   // shortcut taken from one, ever pairs an item with another's draft.
   const draftFor = `${item.id}\n${item.proposalRevision ?? ''}`;
-  const [draft, setDraft] = useState({ for: draftFor, stem: proposedStem, description: item.description ?? '' });
+  const [draft, setDraft] = useState<Draft>({ for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false });
+  // What was typed for an item left undecided - Alt+N, Next undecided, or
+  // another row - is set aside under the same item and revision, and is in
+  // the fields again when review comes back to it. It used to be thrown
+  // away, and Alt+N is pressed from inside the name, where corrections are
+  // typed. A new reading is a new revision: its own proposal is shown, not
+  // an edit of the one before.
+  const [setAside, setSetAside] = useState<ReadonlyMap<string, Draft>>(() => new Map());
   const [error, setError] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
+  // "Analysis details" - the evidence, the model's own figure, who read it -
+  // stays as the person left it. It used to close itself for every document,
+  // so checking each name against its evidence cost Tab, Tab, Enter (or a
+  // click) per document, on a queue where nearly every document is reviewed.
+  // Closed until someone opens it; remembered for the next launch too.
+  const [analysisOpen, setAnalysisOpen] = useState(readAnalysisDetailsPreference);
+  const rememberAnalysis = (open: boolean) => {
+    setAnalysisOpen(open);
+    try { window.localStorage.setItem(ANALYSIS_DETAILS_KEY, open ? 'open' : 'closed'); } catch { /* Not remembered; it still opens now. */ }
+  };
   if (draft.for !== draftFor) {
-    setDraft({ for: draftFor, stem: proposedStem, description: item.description ?? '' });
+    const kept = draft.edited ? new Map(setAside).set(draft.for, draft) : setAside;
+    if (kept !== setAside) setSetAside(kept);
+    setDraft(kept.get(draftFor) ?? { for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false });
     setError(''); setMoreOpen(false); setConfirmingRemove(false);
   }
+  // The More menu is drawn only beside Keep original. An item that can no
+  // longer be kept - a refresh showing it being read again - took the menu
+  // off screen and left it open, and the next Escape closed that unseen
+  // menu instead of the drawer. It closes with what it belonged to.
+  if (moreOpen && !actions.keep) setMoreOpen(false);
   const { stem, description } = draft;
-  const setStem = (value: string) => setDraft((current) => ({ ...current, stem: value }));
-  const setDescription = (value: string) => setDraft((current) => ({ ...current, description: value }));
+  const setStem = (value: string) => setDraft((current) => ({ ...current, stem: value, edited: true }));
+  const setDescription = (value: string) => setDraft((current) => ({ ...current, description: value, edited: true }));
   const inspectorRef = useRef<HTMLElement>(null);
   const filenameRef = useRef<HTMLTextAreaElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
   const fieldId = useId();
   useEffect(() => { if (confirmingRemove) confirmRef.current?.focus(); }, [confirmingRemove]);
+  // The More menu closes on a press anywhere outside it, as the toolbar's
+  // does. It used to stay open over the panel until its own button was
+  // pressed again or one of its actions taken.
+  useEffect(() => {
+    if (!moreOpen) return;
+    const close = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && (moreMenuRef.current?.contains(target) || moreButtonRef.current?.contains(target))) return;
+      setMoreOpen(false);
+    };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [moreOpen]);
   // The whole name, always: a single-line field showed about half of a
   // typical proposal, and the caret only its tail. The field grows to fit
   // instead. Chromium sizes it from its content (field-sizing, in app.css);
@@ -152,13 +214,18 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // The model's date, when Intern could not find it written in the document
   // and so left it out of the name. Offered until the name carries a date.
   const suggestedDate = item.suggestedDate && !dated ? item.suggestedDate : undefined;
-  const useSuggestedDate = () => editStem(withLeadingDate(stem, suggestedDate!));
+  // A date put into the name takes the offer off screen, and the button that
+  // was pressed with it: focus fell to nothing, and a keyboard user had to
+  // find the panel again to file the name they had just completed. It goes
+  // to the name, which now starts with that date; Enter there files it.
+  const putDate = (date: string) => { editStem(withLeadingDate(stem, date)); filenameRef.current?.focus(); };
+  const useSuggestedDate = () => putDate(suggestedDate!);
   const acceptSuggestedDate = () => submit(withLeadingDate(stem, suggestedDate!));
   // When the name has no date and the model offered none worth showing, the
   // document's own dates - and, last, the file's - are one click each.
   const dateChoices = !dated ? (item.datesInDocument ?? []) : [];
   const fileDate = !dated ? item.fileModifiedDate : undefined;
-  const chooseDate = (date: string) => editStem(withLeadingDate(stem, date));
+  const chooseDate = putDate;
   // Enter files the name, as it does in any one-line field; the IME's Enter
   // that ends a composition is left to the IME. A held Enter repeats, and
   // after the first press the caret is in the next item's name: only the
@@ -172,6 +239,18 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     // The same for Enter held on a button, which presses it again with every
     // repeat - by then the next item's button, in the same place.
     if (event.repeat && event.key === 'Enter' && event.target instanceof HTMLButtonElement) { event.preventDefault(); return; }
+    // Escape takes back the last thing opened: the More menu first, with
+    // focus back on its button. Only with no menu open does it reach the
+    // drawer, which it closes. It used to close the whole drawer from under
+    // an open menu, and beside the queue it did nothing at all.
+    if (event.key === 'Escape' && moreOpen && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      event.stopPropagation();
+      // Focus on one of the menu's actions would go with the menu.
+      if (moreMenuRef.current?.contains(document.activeElement)) moreButtonRef.current?.focus();
+      setMoreOpen(false);
+      return;
+    }
     if (!drawer) return;
     if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
     if (event.key !== 'Tab') return;
@@ -226,6 +305,18 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     the document's own lines get them.
   */
   const verbatim = item.readBy !== undefined;
+  // In review because the model was unsure (LOW_CONFIDENCE) while the model's
+  // own figure, shown under Analysis details, says it was sure.
+  const sureByItsOwnFigure = item.status === 'review' && item.confidence !== undefined && item.confidence >= SELF_RATED_UNSURE
+    && itemReasonCodes(item).includes('LOW_CONFIDENCE');
+  /*
+    The Parties row is another matter whoever read it: what the backend
+    sends there is the names the proposal settled on, not the lines that
+    name them. Set in quotation marks under "Lines from the document" it
+    claimed a line no document has - and a party is the part of a name most
+    often in doubt. It is shown as the names it is, and the lead says so.
+  */
+  const quoted = (field: ReasonField) => verbatim && field !== 'parties';
   // The parts of the name being edited that the review is about, as they now read.
   const nameFlags = editable ? flaggedNameParts(joinFilename(stem, extension), flagged) : [];
   const reviewNote = item.reason && (item.status === 'review' || item.status === 'failed');
@@ -235,7 +326,8 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     <div className="inspector-title"><h2 ref={headingRef} tabIndex={-1}>{completed ? 'Filed document' : 'Review item'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close review"><Icon icon={X} /></button></div>
     {position && position.total > 0 && <div className="review-position">
       <span>{position.index ? `${position.index} of ${position.total} to decide` : `${position.total} to decide`}</span>
-      {onNext && <button type="button" className="link-button" onClick={onNext}>Next undecided<Icon icon={ChevronRight} /></button>}
+      {/* Its key is in the tooltip and read out with it; no badge here, where the line has no room for one. */}
+      {onNext && <button type="button" className="link-button" onClick={onNext} aria-keyshortcuts="Alt+N" title="Leave this one for now and go to the next still to decide (Alt+N)">Next undecided<Icon icon={ChevronRight} /></button>}
     </div>}
     {/*
       What to check comes first. It used to be the last thing in the panel,
@@ -336,14 +428,33 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     */}
     {!editable && item.description && <section><h3>Description</h3><p className="settled-description">{item.description}</p>
       <button type="button" className="copy-description" onClick={() => void navigator.clipboard?.writeText(item.description ?? '')}><Icon icon={ClipboardCopy} />Copy description</button></section>}
-    {(evidence.length > 0 || item.confidence !== undefined || item.readBy) && <details className="analysis-details" key={item.id}>
-      <summary>Analysis details</summary>
+    {/*
+      Opened and closed here rather than by the browser, so the panel knows
+      which it is and the next document's section is drawn the same way. A
+      section the browser opens by itself (find in page) is taken note of
+      for now, and not as the person's choice.
+    */}
+    {(evidence.length > 0 || item.confidence !== undefined || item.readBy) && <details className="analysis-details" open={analysisOpen}
+      onToggle={(event) => { if (event.currentTarget.open !== analysisOpen) setAnalysisOpen(event.currentTarget.open); }}>
+      <summary onClick={(event) => { event.preventDefault(); rememberAnalysis(!analysisOpen); }}>Analysis details</summary>
       {/*
         The model's figure for its own reading. It no longer has a column:
         a small model overstates it, and what decides review is the checks
-        above. Kept here for anyone who wants it.
+        above. Kept here for anyone who wants it, and named as the model's
+        own so it is not read as Intern's.
       */}
-      {item.confidence !== undefined && <p className={`confidence-readout confidence ${item.status}`}><span className="field-label">Model's confidence</span><ConfidenceMeter value={item.confidence} status={item.status} variant="panel" /></p>}
+      {item.confidence !== undefined && <p className={`confidence-readout confidence ${item.status}`}><span className="field-label">Model's own confidence</span><ConfidenceMeter value={item.confidence} status={item.status} variant="panel" /></p>}
+      {/*
+        "The model was unsure of its reading" above, and "100%" here: both
+        true, and a contradiction unless the panel says why. The review
+        reason comes from what Intern measured as the model wrote the date
+        and the parties, or from this figure when it is low - and then the
+        two agree and there is nothing to explain. The line says only that
+        they are different measures, not which one flagged this reading.
+      */}
+      {sureByItsOwnFigure && <p className="check-hint confidence-note" role="note" aria-label="About the model's own confidence">
+        This is the model's rating of its whole answer, and small models rate themselves high. Intern also measures how sure the model was of each word of the date and the parties as it wrote them, so a reading can be flagged as unsure while this figure is high.
+      </p>}
       {/*
         Which local model read it, in a quiet line: worth knowing when two
         models can, and the reason a reading may change by itself - one the
@@ -353,13 +464,13 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       {item.readBy && <p className="check-hint read-by" aria-label="Read by">{readByLine(item.readBy, !item.approved)}</p>}
       {evidence.length > 0 && <section className="evidence"><h3>Evidence</h3>
         <p className="section-lead">{verbatim
-          ? 'Lines from the document behind each part of this name.'
+          ? evidenceLead(evidence.map((entry) => entry.field))
           : 'The model\'s reading of the document, in its own words. These are not lines matched in the document, so check them against it.'}</p>
         <dl className="evidence-list">{evidence.map(({ label, field, quotes }) => {
           const doubted = flagged.includes(field);
           return <div className={`evidence-item${doubted ? ' flagged' : ''}`} key={label}>
             <dt className="field-label">{doubted && <Icon icon={CircleAlert} />}{label}{doubted && <span className="sr-only"> (check this)</span>}</dt>
-            <dd>{quotes.map((quote) => verbatim ? <q key={quote}>{quote}</q> : <span className="reading" key={quote}>{quote}</span>)}</dd>
+            <dd>{quotes.map((quote) => quoted(field) ? <q key={quote}>{quote}</q> : <span className="reading" key={quote}>{quote}</span>)}</dd>
           </div>;
         })}</dl></section>}
     </details>}
@@ -389,8 +500,8 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         {actions.approve && <button type="button" className={actions.retry?.primary ? undefined : 'primary'} disabled={busy} onClick={decides(approve)} aria-keyshortcuts="Control+Enter"><Icon icon={FileCheck2} />{item.status === 'ready' ? 'Apply rename' : 'Approve & rename'}<Shortcut keys="Ctrl+Enter" /></button>}
         {actions.keep && <>
           <button type="button" className="secondary-action" disabled={busy} onClick={decides(onKeep)} aria-keyshortcuts="Alt+K"><Icon icon={FileText} />Keep original<Shortcut keys="Alt+K" /></button>
-          <button type="button" className="icon-button more-actions" disabled={busy} aria-label="More review actions" aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>
-          {moreOpen && <div className="review-menu" role="group" aria-label="More review actions">
+          <button ref={moreButtonRef} type="button" className="icon-button more-actions" disabled={busy} aria-label="More review actions" aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>
+          {moreOpen && <div ref={moreMenuRef} className="review-menu" role="group" aria-label="More review actions">
             {actions.retry && <button type="button" disabled={busy} onClick={() => { setMoreOpen(false); onRetry(); }}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
             {actions.reanalyze && <button type="button" disabled={busy} onClick={() => { setMoreOpen(false); onReanalyze(); }}><Icon icon={RefreshCw} />Analyze again</button>}
             {remove && <button type="button" disabled={busy} onClick={decides(chooseRemove)} aria-keyshortcuts="Delete"><Icon icon={Trash2} />{remove.label}<Shortcut keys="Del" /></button>}
@@ -416,6 +527,19 @@ export function readByLine(reading: ModelReading, pending: boolean): string {
 }
 
 const FIELD_WORDS: Record<ReasonField, string> = { date: 'date', type: 'document type', parties: 'parties', description: 'description' };
+
+/**
+ * What a local reading's evidence is, said for the rows it has: the date and
+ * the document type are lines found in the document; the parties are names.
+ */
+function evidenceLead(fields: readonly ReasonField[]): string {
+  const lines = fields.filter((field) => field !== 'parties').map((field) => FIELD_WORDS[field]);
+  const names = fields.includes('parties');
+  return [
+    lines.length > 0 ? `Lines from the document behind the ${listOf(lines)}.` : '',
+    names ? `The parties are the names Intern read${lines.length > 0 ? ', not lines from the document' : '. They are not lines from the document'}.` : '',
+  ].filter(Boolean).join(' ');
+}
 
 /** "date", "date and parties", "date, document type and parties". */
 function listOf(words: string[]): string {

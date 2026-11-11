@@ -266,16 +266,100 @@ const INTRA_THREADS: usize = 2;
 /// than a machine running the local model can spare.
 const MAX_WORKERS: usize = 2;
 
-/// The OCR thread budget for a machine with `logical_cores`: at most half
-/// of them, so Windows and the model server stay responsive, in workers of
-/// [`INTRA_THREADS`] threads each, never more than [`MAX_WORKERS`] and
-/// never fewer than one.
+/// The OCR thread budget for a machine with `logical_cores`.
+///
+/// From four logical processors up, two pages at once on two threads each:
+/// the queue extracts a document and only then asks the model about it, so
+/// while pages are read the model server is idle and its processors are
+/// free. Below four, at most half of them, so Windows stays responsive, in
+/// workers of [`INTRA_THREADS`] threads each and never fewer than one. Were
+/// extraction ever to overlap the model's reading of another document, this
+/// would have to go back to half the machine. Whether a document's pages are
+/// in fact read two at a time is decided when it is read, by the memory
+/// there is then ([`pages_at_once`]); docs/ocr.md has what each costs and
+/// saves.
 pub fn thread_budget(logical_cores: usize) -> ThreadBudget {
+    if logical_cores >= MAX_WORKERS * INTRA_THREADS {
+        return ThreadBudget {
+            workers: MAX_WORKERS,
+            intra_threads: INTRA_THREADS,
+        };
+    }
     let budget = (logical_cores / 2).max(1);
     let intra_threads = INTRA_THREADS.min(budget);
     ThreadBudget {
         workers: (budget / intra_threads).clamp(1, MAX_WORKERS),
         intra_threads,
+    }
+}
+
+const MB: u64 = 1_000_000;
+const GIB: u64 = 1024 * 1024 * 1024;
+
+/// The worker's peak while two pages are read at once over all of
+/// InternBench (`VmHWM`): 1.30-1.42 GB in twelve runs, against 0.75-0.92 GB
+/// one page at a time (docs/ocr.md), with room above the highest.
+const TWO_PAGE_PEAK: u64 = 1_450 * MB;
+/// The weights a loaded accurate model keeps reading: 2.7 GB of its 5.7 GB
+/// file (`intern_engine::tiers::working_set`). On Linux they are page cache,
+/// which the available memory counts although the model needs them.
+const MODEL_WEIGHTS_IN_USE: u64 = 2_700 * MB;
+/// What the tier plan leaves for the person's own work
+/// (`intern_engine::tiers::HEADROOM`).
+const HEADROOM: u64 = GIB;
+
+/// Whether the available memory ([`crate::memory::available_bytes`]) counts
+/// the weights a loaded model keeps reading as available. Linux's
+/// `MemAvailable` does: they are page cache it could reclaim, though the
+/// model would read them straight back. Windows' available physical memory
+/// does not: they sit in the server's working set, which is on none of the
+/// lists it adds up. A 16 GiB Windows runner with the 9B loaded and a
+/// document just read had 5,410-5,570 MiB available with nothing else
+/// running, and 3,535 MiB with another process holding 2 GiB, while the
+/// server's working set was 8,107-8,110 MiB, 4.9 GB of it the mapped file
+/// (`bench/reports/windows-memory-2026-11-09`, runs 42573531984 and
+/// 42574460663).
+const AVAILABLE_COUNTS_MODEL_WEIGHTS: bool = !cfg!(windows);
+
+/// The memory that must be available for two pages at once, the model's
+/// weights added when the available memory counts them: the worker's
+/// two-page peak, those weights, and the person's headroom, rounded up to
+/// whole GiB.
+const fn two_pages_min_available(counts_model_weights: bool) -> u64 {
+    let weights = if counts_model_weights {
+        MODEL_WEIGHTS_IN_USE
+    } else {
+        0
+    };
+    (TWO_PAGE_PEAK + weights + HEADROOM).div_ceil(GIB) * GIB
+}
+
+/// Memory that must be available when a document's pages start to be read
+/// for two of them to be read at once: 5 GiB on Linux, the worker's
+/// two-page peak, the weights a loaded accurate model keeps reading, and the
+/// person's headroom, rounded up; 3 GiB on Windows, where the available
+/// memory already leaves the weights out.
+///
+/// The tier plan judges a model to fit with room for the worker reading one
+/// page at a time (`intern_engine::tiers::WORKER_PEAK`), not two, so on a
+/// machine near a model's memory floor a second set of sessions would come
+/// out of the person's headroom, or out of the model's weights. There pages
+/// are read one at a time, as a 4-core machine read them through alpha.16.
+/// Counting the weights on Windows too would have counted them twice: the
+/// runner above, at 5,410-5,570 MiB, would have been at the edge of 5 GiB
+/// with nothing else open, and below it with a browser, where alpha.14
+/// read two pages at once on any machine with eight logical processors.
+pub const TWO_PAGES_MIN_AVAILABLE: u64 = two_pages_min_available(AVAILABLE_COUNTS_MODEL_WEIGHTS);
+
+/// How many pages to read at once: the `workers` the thread budget allows
+/// when `available` bytes of memory are at least
+/// [`TWO_PAGES_MIN_AVAILABLE`], and one otherwise, or when the memory
+/// cannot be read.
+pub fn pages_at_once(workers: usize, available: Option<u64>) -> usize {
+    if available.is_some_and(|bytes| bytes >= TWO_PAGES_MIN_AVAILABLE) {
+        workers.max(1)
+    } else {
+        1
     }
 }
 
@@ -469,15 +553,49 @@ mod tests {
         assert_eq!(dictionary.classes(), 438);
     }
 
+    /// A second page is read at once only with the memory for it there: the
+    /// bar is a rounding up of the tier plan's headroom, the two-page peak
+    /// above the one page the plan counts, and, where the available memory
+    /// counts them, the model's weights - 5 GiB on Linux, 3 GiB on Windows.
     #[test]
-    fn ocr_threads_stay_within_half_the_machine() {
+    fn a_second_page_waits_for_the_memory_it_needs() {
+        const {
+            assert!(TWO_PAGE_PEAK > intern_engine::tiers::WORKER_PEAK);
+            assert!(
+                two_pages_min_available(true) >= TWO_PAGE_PEAK + MODEL_WEIGHTS_IN_USE + HEADROOM
+            );
+            assert!(two_pages_min_available(false) >= TWO_PAGE_PEAK + HEADROOM);
+        }
+        assert_eq!(two_pages_min_available(true), 5 * GIB);
+        assert_eq!(two_pages_min_available(false), 3 * GIB);
         assert_eq!(
-            thread_budget(4),
-            ThreadBudget {
-                workers: 1,
-                intra_threads: 2
-            }
+            TWO_PAGES_MIN_AVAILABLE,
+            if cfg!(windows) { 3 * GIB } else { 5 * GIB }
         );
+        assert_eq!(HEADROOM, intern_engine::tiers::HEADROOM);
+        assert_eq!(pages_at_once(2, Some(TWO_PAGES_MIN_AVAILABLE)), 2);
+        assert_eq!(pages_at_once(2, Some(TWO_PAGES_MIN_AVAILABLE - 1)), 1);
+        assert_eq!(pages_at_once(2, None), 1, "unknown memory: one page");
+        assert_eq!(pages_at_once(1, Some(u64::MAX)), 1);
+        assert_eq!(pages_at_once(0, Some(u64::MAX)), 1);
+    }
+
+    /// Two pages at once on two threads each from four logical processors
+    /// up - the model server is idle while a document is extracted - and
+    /// never more: memory, not threads, is what runs out first. Below four,
+    /// half the machine.
+    #[test]
+    fn ocr_reads_two_pages_at_once_from_four_logical_processors() {
+        for cores in [4, 5, 6] {
+            assert_eq!(
+                thread_budget(cores),
+                ThreadBudget {
+                    workers: 2,
+                    intra_threads: 2
+                },
+                "{cores}"
+            );
+        }
         assert_eq!(
             thread_budget(8),
             ThreadBudget {
@@ -499,8 +617,13 @@ mod tests {
                 intra_threads: 1
             }
         );
-        // A big machine reads two pages at once, not eight: memory, not
-        // threads, is what runs out first.
+        assert_eq!(
+            thread_budget(3),
+            ThreadBudget {
+                workers: 1,
+                intra_threads: 1
+            }
+        );
         assert_eq!(
             thread_budget(32),
             ThreadBudget {
@@ -510,10 +633,12 @@ mod tests {
         );
         for cores in 1..64 {
             let budget = thread_budget(cores);
-            assert!(
-                budget.workers * budget.intra_threads <= (cores / 2).max(1),
-                "{cores}"
-            );
+            let threads = budget.workers * budget.intra_threads;
+            if cores < 4 {
+                assert!(threads <= (cores / 2).max(1), "{cores}");
+            } else {
+                assert!(threads <= cores.min(4), "{cores}");
+            }
             assert!((1..=MAX_WORKERS).contains(&budget.workers), "{cores}");
         }
     }

@@ -408,6 +408,8 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
    this line against the Description label under it. */
 .inspector .confidence-readout { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; }
 .inspector .confidence-readout .confidence-meter--panel { max-width: 200px; }
+/* What the figure above is, when the review reason seems to contradict it; tucked under it. */
+.inspector .confidence-note { margin: -8px 0 16px; }
 
 /* What to check, first. The reason a document is in review used to come
    last, under the name, the description and the evidence - below the fold

@@ -17,7 +17,13 @@ const SENTENCES: Record<string, string> = {
   PARTY_MISSING: 'Only one side of the agreement was found. Check who the other party is.',
   DESCRIPTION_UNSUPPORTED: 'The description asserts something the document does not contain.',
   DESCRIPTION_INVALID: 'The description was not a single usable sentence.',
-  LOW_CONFIDENCE: 'The model reported low confidence in its own proposal.',
+  // Raised two ways: the model rated its own answer low, or - nearly always,
+  // for a local model - it rated it high and Intern measured doubt in the
+  // words of the date or a party's name as the model wrote them. This used to
+  // read "The model reported low confidence in its own proposal", beside a
+  // readout of the model's own figure at 100%. The sentence holds for both
+  // and says where to look; the panel says what the figure beside it is.
+  LOW_CONFIDENCE: 'The model was unsure of its reading. Check the name against the document, starting with the date and the parties.',
   MODEL_REQUESTED_REVIEW: 'The model asked for a person to look at this one.',
   PARSER_WARNING: 'Extraction reported a problem that could corrupt what was read.',
   DATE_IMPLAUSIBLE: 'The date\'s year looks wrong for a document, often a misread such as 2625 for 2025. Check it against the document.',

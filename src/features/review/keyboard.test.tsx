@@ -314,6 +314,125 @@ describe('keyboard review', () => {
     expect(inspector()).not.toHaveTextContent('of 6 to decide');
   });
 
+  // After every decision the caret is in the next name, where J is a letter.
+  // "Not this one yet" had no key: the link was three Shift+Tabs away.
+  it('alt_n_skips_to_the_next_undecided_from_the_name_without_deciding_or_typing', async () => {
+    const bridge = await start();
+    const filename = () => within(inspector()).getByLabelText('Filename');
+    const next = within(inspector()).getByRole('button', { name: 'Next undecided' });
+    expect(next).toHaveAttribute('aria-keyshortcuts', 'Alt+N');
+    expect(next).toHaveAttribute('title', expect.stringContaining('Alt+N'));
+
+    press('F2');
+    expect(filename()).toHaveFocus();
+    // Handled: nothing is typed into the name, on any platform's reading of Alt+N.
+    expect(fireEvent.keyDown(filename(), { key: 'n', code: 'KeyN', altKey: true })).toBe(false);
+    await waitFor(() => expect(filename()).toHaveValue('2024-02-09 Invoice INV-3301 from Fabrikam Inc'));
+    await waitFor(() => expect(filename()).toHaveFocus());
+    expect(inspector()).toHaveTextContent('2 of 6 to decide');
+    expect(queueCell('Scan 0102.pdf').closest('tr')).toHaveAttribute('aria-current', 'true');
+
+    // A Mac's Option+N arrives as a dead key, a Cyrillic layout's as its own
+    // letter: the key's place says which it is. From the description too.
+    const description = within(inspector()).getByLabelText('Description');
+    description.focus();
+    fireEvent.keyDown(description, { key: 'Dead', code: 'KeyN', altKey: true });
+    await waitFor(() => expect(filename()).toHaveValue('2024-03-30 Statement of Work with Litware Inc'));
+    fireEvent.keyDown(filename(), { key: 'т', code: 'KeyN', altKey: true });
+    await waitFor(() => expect(filename()).toHaveValue('2024-04-18 Lease Amendment for 500 Pine St'));
+    // Review first, then ready, then round to the ones skipped.
+    press('n', { altKey: true });
+    await waitFor(() => expect(filename()).toHaveValue('2024-03-14 Notice of Termination to Contoso Ltd'));
+    press('n', { altKey: true });
+    await waitFor(() => expect(filename()).toHaveValue('2024-04-02 Board Resolution of Tailspin Toys'));
+    press('N', { altKey: true });
+    await waitFor(() => expect(filename()).toHaveValue('2024-02-01 Engagement Letter with Northwind Traders'));
+    await waitFor(() => expect(filename()).toHaveFocus());
+
+    // Nothing was decided on the way, and all six are still to decide.
+    expect(bridge.approve).not.toHaveBeenCalled();
+    expect(bridge.keepOriginal).not.toHaveBeenCalled();
+    expect(bridge.remove).not.toHaveBeenCalled();
+    expect(inspector()).toHaveTextContent('1 of 6 to decide');
+  });
+
+  // Alt+N is pressed from the name, where corrections are typed. Leaving an
+  // item for later threw its typing away: back round to it, the proposal
+  // was in the field again.
+  it('alt_n_keeps_what_was_typed_for_when_review_comes_back_to_it', async () => {
+    const bridge = await start();
+    const filename = () => within(inspector()).getByLabelText('Filename');
+    const description = () => within(inspector()).getByLabelText('Description');
+    press('F2');
+    fireEvent.change(filename(), { target: { value: '2024-02-01 Engagement Letter with Northwind Traders LLC' } });
+    fireEvent.change(description(), { target: { value: 'Engagement letter, typed by hand.' } });
+
+    press('n', { altKey: true });
+    // The next item has its own proposal, not the name typed for the last.
+    await waitFor(() => expect(filename()).toHaveValue('2024-02-09 Invoice INV-3301 from Fabrikam Inc'));
+    expect(description()).not.toHaveValue('Engagement letter, typed by hand.');
+    for (let skipped = 0; skipped < 5; skipped += 1) press('n', { altKey: true });
+    await waitFor(() => expect(inspector()).toHaveTextContent('Scan 0101.pdf'));
+    expect(filename()).toHaveValue('2024-02-01 Engagement Letter with Northwind Traders LLC');
+    expect(description()).toHaveValue('Engagement letter, typed by hand.');
+
+    // And it is what is filed.
+    fireEvent.keyDown(filename(), { key: 'Enter' });
+    await waitFor(() => expect(bridge.approve).toHaveBeenCalledWith('scan-0101', '2024-02-01 Engagement Letter with Northwind Traders LLC.pdf', 'Engagement letter, typed by hand.'));
+  });
+
+  it('alt_n_is_only_that_chord_and_only_where_the_link_is', async () => {
+    await start();
+    const filename = () => within(inspector()).getByLabelText('Filename');
+    press('F2');
+    const stays = () => expect(filename()).toHaveValue('2024-02-01 Engagement Letter with Northwind Traders');
+
+    // A held chord would run through documents nobody looked at: swallowed, and it stays put.
+    expect(fireEvent.keyDown(filename(), { key: 'n', code: 'KeyN', altKey: true, repeat: true })).toBe(false);
+    stays();
+    // AltGr is Ctrl+Alt on Windows, and types a letter on some layouts; Shift makes another chord; a bare N is a letter.
+    for (const init of [{ altKey: true, ctrlKey: true }, { altKey: true, shiftKey: true }, { altKey: true, metaKey: true }, {}]) {
+      expect(fireEvent.keyDown(filename(), { key: 'n', code: 'KeyN', ...init }), JSON.stringify(init)).toBe(true);
+    }
+    // On a Dvorak keyboard the key in N's place types B: that is Alt+B.
+    expect(fireEvent.keyDown(filename(), { key: 'b', code: 'KeyN', altKey: true })).toBe(true);
+    stays();
+
+    // In the filter box, outside the panel, it is not the panel's key.
+    const box = screen.getByRole('searchbox', { name: 'Filter queue' });
+    box.focus();
+    expect(fireEvent.keyDown(box, { key: 'n', code: 'KeyN', altKey: true })).toBe(true);
+    stays();
+    // From a row, with the panel open, it is.
+    rowButton('Scan 0101.pdf').focus();
+    press('n', { altKey: true });
+    await waitFor(() => expect(filename()).toHaveValue('2024-02-09 Invoice INV-3301 from Fabrikam Inc'));
+
+    // With the panel closed there is no link to press, so the key does nothing.
+    fireEvent.click(detailsToggle());
+    expect(screen.queryByRole('complementary', { name: 'Review item' })).not.toBeInTheDocument();
+    rowButton('Scan 0102.pdf').focus();
+    expect(fireEvent.keyDown(rowButton('Scan 0102.pdf'), { key: 'n', code: 'KeyN', altKey: true })).toBe(true);
+    expect(queueCell('Scan 0102.pdf').closest('tr')).toHaveAttribute('aria-current', 'true');
+    expect(screen.queryByRole('complementary', { name: 'Review item' })).not.toBeInTheDocument();
+  });
+
+  it('alt_n_does_nothing_when_no_other_item_is_left_to_decide', async () => {
+    const base = createReviewBatchBridge({ items: [
+      { id: 'only', originalFilename: 'Scan 0201.pdf', status: 'review', proposedFilename: '2024-05-01 Letter.pdf', reason: 'Low confidence.', errorCode: 'LOW_CONFIDENCE' },
+      { id: 'later', originalFilename: 'Scan 0202.pdf', status: 'waiting' },
+    ] });
+    render(<App bridge={base} />);
+    await openDetails();
+    await waitFor(() => expect(inspector()).toHaveTextContent('Scan 0201.pdf'));
+    expect(within(inspector()).queryByRole('button', { name: 'Next undecided' })).not.toBeInTheDocument();
+    const filename = within(inspector()).getByLabelText('Filename');
+    filename.focus();
+    expect(fireEvent.keyDown(filename, { key: 'n', code: 'KeyN', altKey: true })).toBe(true);
+    expect(inspector()).toHaveTextContent('Scan 0201.pdf');
+    expect(filename).toHaveFocus();
+  });
+
   it('does nothing while a dialog is open over the queue', async () => {
     const bridge = await start();
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
@@ -321,6 +440,7 @@ describe('keyboard review', () => {
 
     fireEvent.keyDown(document.body, { key: 'j' });
     fireEvent.keyDown(document.body, { key: 'Enter', ctrlKey: true });
+    fireEvent.keyDown(document.body, { key: 'n', code: 'KeyN', altKey: true });
 
     expect(inspector()).toHaveTextContent('Scan 0101.pdf');
     expect(bridge.approve).not.toHaveBeenCalled();

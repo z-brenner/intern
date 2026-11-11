@@ -1,5 +1,5 @@
 import { CircleCheck, ClipboardCopy, Ellipsis, PanelRight, Trash2 } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { DropZone } from './components/DropZone';
 import { FolderSetupFlow } from './components/FolderSetupFlow';
@@ -132,9 +132,9 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const [moreOpen, setMoreOpen] = useState(false);
   const [lastUpdateCheck, setLastUpdateCheck] = useState<Date>();
   const [selectedId, setSelectedId] = useState<string>();
-  // The Details panel opens and closes only by its own buttons - the
-  // toolbar's Details toggle, its close button, and Enter or F2 on the
-  // selected item - never by selecting something. Selecting used to open it,
+  // The Details panel opens and closes only when asked - the toolbar's
+  // Details toggle, its close button, and Enter, F2 or a double-click on an
+  // item - never by selecting something. Selecting used to open it,
   // so every click in the table pushed the queue aside, and the selection
   // Intern seeds at launch opened it before anyone had asked for anything.
   // Wide, whether it is open is remembered from one launch to the next.
@@ -233,11 +233,20 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // A folder of four hundred documents is a wall of rows. The filter narrows
   // the current view by anything a person is likely to remember: the name the
   // file arrived with, the name it was given, or a word from its description.
-  const query = filter.trim().toLowerCase();
+  //
+  // The rows follow the box a moment behind it. Narrowed by the text as it
+  // is typed, every keystroke waited for the table: on a thousand rows the
+  // character typed took a third of a second to appear, and the ones after
+  // it queued up behind it. The box shows what was typed at once; the table,
+  // its counts and "No items match" are worked out from the deferred text in
+  // a pass that the next keystroke interrupts.
+  const deferredFilter = useDeferredValue(filter);
+  const query = deferredFilter.trim().toLowerCase();
   const readyFilter = readyOnly && view === 'queue';
   const shown = (list: QueueItem[]) => list.filter((item) => inCurrentView(item) && (!query || matchesQuery(item, query)) && (!readyFilter || renamesWithAllReady(item)));
   const visible = shown(items);
-  const filterShown = filtered.length > FILTER_THRESHOLD || query.length > 0;
+  // The box itself goes by what is in it now, not by what the rows have caught up with.
+  const filterShown = filtered.length > FILTER_THRESHOLD || filter.trim().length > 0;
   const selected = items.find((item) => item.id === selectedId);
   const panelOpen = Boolean(selected) && (narrowInspector ? detailsAskedFor : detailsOpen);
   const drawerOpen = panelOpen && narrowInspector;
@@ -315,8 +324,8 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     const cell = document.querySelector<HTMLElement>('.queue-grid [tabindex="0"]');
     setQueueFocus({ version: ++focusRestoreVersion.current, element: cell ?? detailsButton.current ?? undefined });
   };
-  // Enter on a cell, F2, and Next undecided: select the item, open the
-  // Details panel, and go straight to its name.
+  // Enter on a cell, a double-click on one, F2, and Next undecided: select
+  // the item, open the Details panel, and go straight to its name.
   const openItem = (item: QueueItem, trigger?: HTMLElement) => {
     seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = trigger ? { element: trigger, itemId: item.id } : rowTrigger(item.id); setSelectedId(item.id);
     rememberDetails(true);
@@ -746,6 +755,10 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     }).catch(() => { /* No drag events in this runtime; drops still land, unannounced. */ });
     return () => { active = false; stop?.(); setDrag({ dragging: false, count: 0 }); };
   }, [selection]);
+  // The panel's "Next undecided", and Alt+N: on to the next item still to
+  // decide, at its name, leaving the selected one as it is. Nothing when the
+  // selected item is the only one left.
+  const goToNextUndecided = nextToDecide && nextToDecide.id !== selected?.id ? () => openItem(nextToDecide) : undefined;
   useReviewShortcuts({
     enabled: modelReady(model.setup) && !folderSetupOpen && !settingsOpen && !historyOpen,
     rows: visible,
@@ -753,6 +766,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     inspector: inspectorHandle,
     onMove: moveSelection,
     onOpen: (item) => openItem(item),
+    onNext: goToNextUndecided,
     // Delete removes the panel's one item; with several rows of cells
     // selected it would read as removing them all, so it does nothing.
     selectionSpansRows: () => { const bounds = selectionBounds(selectionOf(gridStore.get()), visible); return Boolean(bounds && bounds.bottom > bounds.top); },
@@ -880,7 +894,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
           */}
           <button type="button" disabled={visible.length === 0} onClick={clipboard.copy}><Icon icon={ClipboardCopy} />{clipboard.hasSelection ? 'Copy selection' : 'Copy table'}</button>
           <button ref={detailsButton} type="button" className="details-toggle" aria-expanded={panelOpen} aria-controls={panelOpen ? REVIEW_PANEL_ID : undefined} disabled={!selected}
-            title={selected ? undefined : 'Select a row to see its details'} onClick={() => panelOpen ? closeDetails(true) : rememberDetails(true)}><Icon icon={PanelRight} />Details</button>
+            title={selected ? 'Show or hide details for the selected row. Enter, F2 or a double-click on a row opens them at its name.' : 'Select a row to see its details'} onClick={() => panelOpen ? closeDetails(true) : rememberDetails(true)}><Icon icon={PanelRight} />Details</button>
           {/*
             The way out of a folder chosen by mistake. Pointing the queue at a
             large directory used to be unrecoverable from inside the app:
@@ -916,7 +930,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       {items.length > 0 && (visible.length > 0
         ? <QueueTable items={visible} selectedId={selectedId} store={gridStore} onSelectRow={selectRow} onOpen={openItem} />
         : query
-          ? <p className="queue-filter-empty" role="status">No items match “{filter.trim()}”.</p>
+          ? <p className="queue-filter-empty" role="status">No items match “{deferredFilter.trim()}”.</p>
           : <ViewEmpty view={view} />)}
       <p className="item-count">{query || readyFilter ? `${visible.length} of ${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}` : `${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}`}</p>
       </DropZone>}</section>
@@ -934,7 +948,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       </div>}
       {panelOpen && selected && <ReviewInspector id={REVIEW_PANEL_ID} ref={inspectorHandle} busy={actionPending} drawer={drawerOpen} item={selected}
         position={undecided.length ? { index: undecided.findIndex((item) => item.id === selected.id) + 1 || undefined, total: undecided.length } : undefined}
-        onNext={nextToDecide && nextToDecide.id !== selected.id ? () => openItem(nextToDecide) : undefined}
+        onNext={goToNextUndecided}
         onClose={() => closeDetails()} onApprove={(filename, description) => void decide(selected, 'approve', () => bridge.approve(selected.id, filename, description))} onKeep={() => void decide(selected, 'keep', () => bridge.keepOriginal(selected.id))} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void retryItem(selected)} onReanalyze={() => void refreshAndClear(() => bridge.reanalyze(selected.id), 'Sent back to be analyzed again.')} onRemove={(confirmed) => void decide(selected, 'remove', () => confirmed ? bridge.remove(selected.id, { confirmed: true }) : bridge.remove(selected.id))} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} onOpen={() => void openDocument(selected.id, false)} onReveal={() => void openDocument(selected.id, true)} />}
     </div>
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))} onClose={closeHistory} />}
