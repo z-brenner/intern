@@ -454,7 +454,33 @@ fn relation_from_supported_roles(
             [] => unreachable!("an empty cast returned above"),
         },
         DocumentClass::Issued => {
-            if let Some(issuer) = with(&[PartyRole::Issuer]) {
+            // An issued document has one issuer. Where the document puts
+            // two parties in the issuer's place - a customer typed above a
+            // billhead stands where a letterhead does - and the first is
+            // the one the reply called the customer, the place has settled
+            // nothing between them. The name goes by the other, as the
+            // reply read the sides, and says that it rests on that reading.
+            let mut issuers = parties
+                .iter()
+                .filter(|party| party.supported_role() == Some(PartyRole::Issuer));
+            if let Some(issuer) = issuers.next() {
+                let billed = |party: &CastMember| {
+                    party
+                        .proposed_role
+                        .is_some_and(|role| RECEIVING.contains(&role))
+                };
+                if billed(issuer)
+                    && let Some(other) = issuers.find(|party| !billed(party))
+                {
+                    return Relation {
+                        on_proposed_roles: true,
+                        ..one(
+                            PartyRelation::From,
+                            other,
+                            "the issuer, of two in the issuer's place",
+                        )
+                    };
+                }
                 return one(PartyRelation::From, issuer, "the issuer");
             }
             // An order is issued by the side buying - its buyer, client or
@@ -1624,6 +1650,55 @@ mod tests {
             RelationCues::default(),
         );
         assert_eq!(invoice.parties, vec!["Ridgewell Textiles Ltd."]);
+    }
+
+    /// A page gives the issuer's place to one party. Where two hold it and
+    /// the first is the one the reply called the customer - typed above a
+    /// billhead, in the real set - the other is named, on the reply's
+    /// reading. An issuer that comes first is named as before, and so is a
+    /// first party with no other to give way to: the billhead's one party
+    /// the reply called its buyer, or two the reply both called customers.
+    #[test]
+    fn of_two_parties_in_the_issuers_place_the_replys_customer_gives_way() {
+        let member = |name: &str, proposed: PartyRole| CastMember {
+            name: name.to_owned(),
+            role: Some(PartyRole::Issuer),
+            role_supported: true,
+            proposed_role: Some(proposed),
+        };
+        let invoice = |parties: &[CastMember]| {
+            relation_from_roles(
+                DocumentClass::Issued,
+                Some("Invoice"),
+                parties,
+                RelationCues::default(),
+            )
+        };
+        for billed in [PartyRole::Client, PartyRole::Buyer, PartyRole::Recipient] {
+            let relation = invoice(&[
+                member("Ansel Pike", billed),
+                member("Halvorsen Printing House", PartyRole::Issuer),
+            ]);
+            assert_eq!(relation.relation, PartyRelation::From, "{billed:?}");
+            assert_eq!(relation.parties, vec!["Halvorsen Printing House"]);
+            assert!(relation.on_proposed_roles, "{}", relation.basis);
+        }
+        let in_order = invoice(&[
+            member("Kingsfold Community Bank", PartyRole::Issuer),
+            member("Pennywhistle Print Works LLC", PartyRole::Client),
+        ]);
+        assert_eq!(in_order.parties, vec!["Kingsfold Community Bank"]);
+        assert!(!in_order.on_proposed_roles, "{}", in_order.basis);
+        let alone = invoice(&[member("Corwin Haskell, Jr.", PartyRole::Buyer)]);
+        assert_eq!(alone.relation, PartyRelation::From);
+        assert_eq!(alone.parties, vec!["Corwin Haskell, Jr."]);
+        assert!(!alone.on_proposed_roles, "{}", alone.basis);
+        let both_billed = invoice(&[
+            member("Ansel Pike", PartyRole::Buyer),
+            member("Halvorsen Printing House", PartyRole::Recipient),
+        ]);
+        assert_eq!(both_billed.parties, vec!["Ansel Pike"]);
+        assert!(!both_billed.on_proposed_roles, "{}", both_billed.basis);
     }
 
     #[test]

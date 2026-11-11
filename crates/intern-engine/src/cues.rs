@@ -337,6 +337,20 @@ pub const ISSUER_CUES: &[&str] = &[
     "prepared by",
 ];
 
+/// Labels over the address a bill's payment is sent to: "Send Payment To:
+/// WBTV PO Box 14200". Whoever is paid issued the document, as on a "Remit
+/// To" line. Validation reads these beside [`ISSUER_CUES`] and the evidence
+/// index does not: it scores a unit by that list, and a longer one would
+/// change which units a prompt is given.
+pub const PAYMENT_ADDRESS_CUES: &[&str] = &[
+    "send payment to",
+    "send payments to",
+    "mail payment to",
+    "mail payments to",
+    "remit payment to",
+    "remit payments to",
+];
+
 // What follows is read only by the evidence index and the retriever.
 
 /// The words a company's or an institution's name ends on: legal forms
