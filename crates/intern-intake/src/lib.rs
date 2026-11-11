@@ -42,9 +42,9 @@ pub use descriptions::{DescriptionLedger, DescriptionRecord, FiledDocument, reco
 pub use filed::{FILED_RETENTION_SECONDS, FiledIndex, FiledMarker};
 pub use identity::MachineIdentity;
 pub use scan::{
-    DEFAULT_MIN_QUIET_SECONDS, DEFAULT_SCAN_INTERVAL, Hydration, IntakeAdmission, IntakeConfig,
-    IntakeHost, IntakeStatus, ItemState, SETTLING_SCAN_INTERVAL, StabilityTracker, SystemHydration,
-    is_conflict_copy,
+    ARRIVAL_BURST_WINDOW, ARRIVAL_PROBE_INTERVAL, DEFAULT_MIN_QUIET_SECONDS, DEFAULT_SCAN_INTERVAL,
+    Hydration, IntakeAdmission, IntakeConfig, IntakeHost, IntakeStatus, ItemState,
+    SETTLING_SCAN_INTERVAL, StabilityTracker, SystemHydration, is_conflict_copy,
 };
 pub use watcher::{
     ENQUEUE_RETRY_CAP_SECONDS, ENQUEUE_RETRY_SECONDS, HandOver, IntakeHandle, IntakeWatcher,

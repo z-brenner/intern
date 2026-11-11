@@ -3133,6 +3133,10 @@ fn intake_config(
     config.process_others_uploads = settings.process_others_uploads;
     config.backlog_file = Some(data_dir.join("intake-backlog.json"));
     config.retake_backlog = first_look;
+    // A folder on this computer's own disk is listed between scans, so a
+    // dropped document is seen in moments; a synced or shared one is
+    // scanned as before.
+    config.probe_arrivals_if_local(&intern_intake::detect_cloud_roots());
     config
 }
 
@@ -6596,6 +6600,29 @@ mod intake_tests {
             true,
         );
         assert!(first_look.retake_backlog);
+    }
+
+    /// A folder on this computer's own disk is looked at between scans for
+    /// documents that have just turned up; a network share is scanned on
+    /// the interval alone, as it always was.
+    #[test]
+    fn a_folder_on_this_computer_is_looked_at_between_scans_and_a_share_is_not() {
+        let config_for = |folder: &str| {
+            intake_config(
+                PathBuf::from(folder),
+                &AppSettings::default(),
+                Path::new("/home/pat/.local/share/intern"),
+                false,
+            )
+        };
+        assert_eq!(
+            config_for("/srv/scans").arrival_probe_interval,
+            Some(intern_intake::ARRIVAL_PROBE_INTERVAL)
+        );
+        assert_eq!(
+            config_for(r"\\fileserver\legal\intake").arrival_probe_interval,
+            None
+        );
     }
 
     /// The watcher claims by the same single list the queue admits by, so a
