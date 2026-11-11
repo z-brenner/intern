@@ -13,7 +13,10 @@ from all three, for the model qualification of November 2026; or sample-heldout4
 57 letters, notices, invoices, forms, memoranda and minutes, mostly under open licences, gathered
 after every rule written so far from collections none of the other four used and from issuers
 none of them used but the IRS (a sample notice in the first, a 1982 records form in the fifth);
-its report lists the issuers that earlier gold names as recipients or traps. A live
+its report lists the issuers that earlier gold names as recipients or traps; or sample-heldout5.json,
+the sixth, 55 letters, notices, forms, memoranda, minutes and invoices from US federal, state and local
+bodies, public bodies of five other countries, universities and archives, gathered after every rule
+written so far, with gold second-read by an independent reader. A live
 run then records and scores it like any corpus, with InternBench's own filename score:
 
     CORPUS=OUT_DIR/corpus GOLD=OUT_DIR/gold.json MANIFEST= MODEL=... LLAMA_SERVER=... \\
