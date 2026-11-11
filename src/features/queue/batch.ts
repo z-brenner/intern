@@ -7,6 +7,27 @@ const SAMPLE_SIZE = 8;
 const MIN_SAMPLES = 2;
 /** Estimates are padded: finishing early pleases, finishing late erodes trust. */
 const PADDING = 1.2;
+/** Where the last few documents' times are kept between launches, so a run's first document already has an estimate. */
+export const TIMINGS_KEY = 'intern.documentTimings';
+/** A stored time longer than this was a computer asleep, not a document being read. */
+const LONGEST_SAMPLE_MS = 60 * 60 * 1000;
+
+/**
+ * The times kept from earlier runs: the last few, each a plausible number
+ * of milliseconds. Storage that is missing, refuses, or holds something
+ * else is no samples, as it was before any were kept.
+ */
+function storedTimings(): number[] {
+  try {
+    const stored: unknown = JSON.parse(window.localStorage.getItem(TIMINGS_KEY) ?? '[]');
+    if (!Array.isArray(stored)) return [];
+    return stored.filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= LONGEST_SAMPLE_MS).slice(-SAMPLE_SIZE);
+  } catch { return []; }
+}
+
+function storeTimings(samples: number[]) {
+  try { window.localStorage.setItem(TIMINGS_KEY, JSON.stringify(samples.filter((value) => value <= LONGEST_SAMPLE_MS))); } catch { /* Not kept; this run still has them. */ }
+}
 
 export interface BatchProgress {
   /** Documents in this run: read already, being read, and waiting. */
@@ -24,7 +45,7 @@ export interface BatchProgress {
 /**
  * "about 4 min left": the median time per document over what is left, less
  * what the current one has already taken, padded and rounded up. Undefined
- * until two documents have been timed.
+ * until two documents have been timed, in this run or the ones before it.
  */
 export function estimateLeft(progress: BatchProgress, now: number): string | undefined {
   if (progress.perDocument === undefined) return undefined;
@@ -49,11 +70,21 @@ const reading = (item: QueueItem) => item.status === 'processing' && item.stage 
  * rounded up - per Nielsen Norman, an estimate that runs over is worse than
  * none - and only offered once two documents have been timed.
  *
+ * The last few times are kept between launches. A document takes about a
+ * minute on the accurate model, so a run of one or two never reached an
+ * estimate, and a longer one said nothing for its first two minutes; with
+ * the times of the documents read before, the first document of a run has
+ * one. They are the same computer and, nearly always, the same model, and
+ * the newest times push the oldest out as the run goes on.
+ *
  * `onFinished` is called once when a run with more than one document ends.
  */
 export function useBatchProgress(items: QueueItem[], onFinished?: (done: number) => void): BatchProgress | undefined {
   const since = useRef(new Map<string, number>());
-  const durations = useRef<number[]>([]);
+  const durations = useRef<number[] | undefined>(undefined);
+  // Read once, not at every render.
+  durations.current ??= storedTimings();
+  const samples = durations.current;
   const run = useRef<{ done: Set<string>; seen: Set<string> } | undefined>(undefined);
   const finished = useRef(onFinished);
   useEffect(() => { finished.current = onFinished; });
@@ -80,7 +111,8 @@ export function useBatchProgress(items: QueueItem[], onFinished?: (done: number)
           since.current.delete(item.id);
           // Back to waiting is a pause or a retry, not a reading finished.
           if (item.status !== 'waiting') {
-            durations.current = [...durations.current, at - started].slice(-SAMPLE_SIZE);
+            durations.current = [...(durations.current ?? []), at - started].slice(-SAMPLE_SIZE);
+            storeTimings(durations.current);
             current?.done.add(item.id);
             changed = true;
           }
@@ -104,7 +136,7 @@ export function useBatchProgress(items: QueueItem[], onFinished?: (done: number)
   const done = run.current?.done.size ?? 0;
   const total = done + remaining.length;
   const current = items.find(reading);
-  const sorted = [...durations.current].sort((a, b) => a - b);
+  const sorted = [...samples].sort((a, b) => a - b);
   return {
     total,
     done,
