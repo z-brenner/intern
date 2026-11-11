@@ -1651,6 +1651,38 @@ pub fn validate_facts_at(
             },
         );
     }
+    // A notice filed in a bankruptcy case is filed in its debtor's case:
+    // "In re: Delta Mills, Inc., et al., Debtors." The reply names who
+    // gives the notice and who it goes to - the creditors' committee that
+    // appears, the creditors that move, the trustee that appoints - and
+    // may leave the debtor out: the caption names it.
+    let debtor = (class == DocumentClass::Notice)
+        .then(|| caption_debtor(scope, &parties))
+        .flatten();
+    if let Some((name, unit)) = &debtor
+        && !parties
+            .iter()
+            .any(|party| normalize_loosely(&party.name) == normalize_loosely(name))
+    {
+        remember(
+            &Found {
+                support: Support::Context,
+                unit: Some(unit),
+                line: Some(name.clone()),
+                miscited: 0,
+            },
+            &mut references,
+        );
+        parties.insert(
+            0,
+            ValidatedParty {
+                name: display_name(name),
+                support: Support::Context,
+                evidence: vec![unit.id.clone()],
+                ..ValidatedParty::default()
+            },
+        );
+    }
     // Who the filename and the description can name: everyone but the
     // people copied and those who sign for a party, each with the role the
     // document supports.
@@ -1672,6 +1704,11 @@ pub fn validate_facts_at(
         }),
         between: between_cue(context, &cast),
         caption: caption_sides(scope, context, &cast),
+        debtor: debtor.and_then(|(name, _)| {
+            let name = normalize_loosely(&display_name(&name));
+            cast.iter()
+                .position(|party| normalize_loosely(&party.name) == name)
+        }),
     };
     let relation = relation_from_roles(class, document_type.as_deref(), &cast, cues);
     // A name that rests on roles the document did not support waits for
@@ -6744,6 +6781,137 @@ fn names_a_forum(loose: &str) -> bool {
                 !whole_positions(loose, words).is_empty()
             }
         })
+}
+
+/// Words a bankruptcy caption labels the party its case is about with.
+const DEBTOR_LABELS: &[&str] = &["debtor", "debtors"];
+
+/// How many lines and cells a bankruptcy caption can run for from its "In
+/// re" to the label that closes it: the debtor's name, which a table's
+/// cells may split, its chapter and case number, "Jointly Administered".
+const IN_RE_LINES: usize = 8;
+
+/// The debtor of the bankruptcy case a document is filed in, as its
+/// caption names it under a forum's heading on the first page: "In re:"
+/// opens the caption, the debtor's name follows, and the label "Debtor."
+/// or "Debtors." closes it, in a line or a cell of its own or after the
+/// name's comma ("In re: / DELTA MILLS, INC., et al., / Debtors."). The
+/// caption has no "v." and no second side: the case is the debtor's, and
+/// whoever files in it - a creditors' committee, a creditor, the trustee -
+/// files in the debtor's case.
+///
+/// The debtor is the first of `parties` the caption names there, by the
+/// name validation gave it; when the reply named none of them, the first
+/// organization the caption names there, as the caption writes it. Either
+/// comes with the unit that names it. An "In re" with no such label - "IN
+/// RE: ADAMS GOLF, INC., SECURITIES LITIGATION" - names a matter, not a
+/// debtor, and a "debtor" in the sentences under it is no label.
+fn caption_debtor<'a>(
+    scope: &ValidationScope<'a>,
+    parties: &[ValidatedParty],
+) -> Option<(String, &'a EvidenceUnit)> {
+    // The caption's lines, a table's cells each a line of their own, with
+    // the marks a caption's rule is drawn with left out: ")", "§", ":".
+    let caption = caption_units(scope);
+    let lines = caption
+        .iter()
+        .flat_map(|unit| {
+            unit.text
+                .lines()
+                .flat_map(|line| line.split('|'))
+                .map(move |cell| {
+                    let words = cell
+                        .split_whitespace()
+                        .filter(|word| !word.chars().all(|mark| matches!(mark, ')' | '§' | ':')))
+                        .collect::<Vec<_>>();
+                    (*unit, words)
+                })
+        })
+        .filter(|(_, words)| !words.is_empty())
+        .collect::<Vec<_>>();
+    let bare = |word: &str| {
+        word.trim_matches(|character: char| !character.is_alphanumeric())
+            .to_lowercase()
+    };
+    let opens = lines.iter().position(|(_, words)| match words.as_slice() {
+        [first, second, ..] => bare(first) == "in" && bare(second) == "re",
+        _ => false,
+    })?;
+    // The label alone on its line, or closing a line after the name's
+    // comma: "GSC GROUP, INC., et al., Debtors." A sentence that ends on
+    // "the Debtors." labels no one.
+    let label_at = |words: &[&str]| {
+        let (last, before) = words.split_last()?;
+        (DEBTOR_LABELS.contains(&bare(last).as_str())
+            && before.last().is_none_or(|word| word.ends_with(',')))
+        .then_some(before.len())
+    };
+    let (closes, label) = lines
+        .iter()
+        .enumerate()
+        .skip(opens)
+        .take(IN_RE_LINES)
+        .find_map(|(at, (_, words))| label_at(words).map(|label| (at, label)))?;
+    // What stands between "In re" and the label, each word with its unit.
+    let named = (opens..=closes)
+        .flat_map(|at| {
+            let (unit, words) = &lines[at];
+            let from = if at == opens { 2 } else { 0 };
+            let to = if at == closes { label } else { words.len() };
+            words
+                .get(from..to.max(from))
+                .unwrap_or_default()
+                .iter()
+                .map(move |word| (*unit, *word))
+        })
+        .collect::<Vec<_>>();
+    let written = named
+        .iter()
+        .map(|(_, word)| *word)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let loose = normalize_loosely(&written);
+    if let Some(party) = parties
+        .iter()
+        .filter_map(|party| {
+            whole_positions(&loose, &normalize_loosely(&party.name))
+                .first()
+                .map(|at| (*at, party))
+        })
+        .min_by_key(|(at, _)| *at)
+        .map(|(_, party)| party)
+    {
+        let unit = party
+            .evidence
+            .first()
+            .and_then(|id| scope.index.unit(id))
+            .or_else(|| named.first().map(|(unit, _)| *unit))?;
+        return Some((party.name.clone(), unit));
+    }
+    let organization = crate::index::organizations_in(&written)
+        .into_iter()
+        .find(|organization| !names_a_forum(organization))?;
+    // The organization's words as the caption writes them, a "The" before
+    // them the name's own.
+    (0..named.len()).find_map(|start| {
+        (start + 1..=named.len().min(start + 10)).find_map(|end| {
+            let span = named[start..end]
+                .iter()
+                .map(|(_, word)| *word)
+                .collect::<Vec<_>>()
+                .join(" ");
+            (normalize_loosely(&span) == organization).then(|| {
+                let span = span.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '"'));
+                let name = match start.checked_sub(1).map(|article| named[article].1) {
+                    Some(article) if article.eq_ignore_ascii_case("the") => {
+                        format!("{article} {span}")
+                    }
+                    _ => span.to_owned(),
+                };
+                (without_sentence_stop(&name), named[start].0)
+            })
+        })
+    })
 }
 
 /// Room an extension takes at the end of a filename, its dot included.
@@ -12734,6 +12902,180 @@ Dated: September 16, 2008",
                 )],
                 ..ModelFacts::default()
             },
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Lehigh Brothers Holdings Inc."],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+    }
+
+    /// A bankruptcy caption sets no two sides against each other: "In re:"
+    /// names the debtor, and "Debtors." closes the name. A notice filed in
+    /// the case is for the debtor, whatever the reply called it and
+    /// whether or not the reply named it: the creditors' committee that
+    /// appears, the movants that set a hearing and the creditors the
+    /// trustee appoints are not who the case is about. The caption's rule
+    /// may be drawn with ")" or "§", and a table's cells may split the
+    /// name. An "In re" that names a matter, with no label to close it, is
+    /// no debtor's, though the notice under it speaks of "the debtor".
+    #[test]
+    fn a_notice_in_a_bankruptcy_case_is_for_the_debtor_its_caption_names() {
+        let notice = |title: &'static str,
+                      dated: &'static str,
+                      date: &'static str,
+                      parties: Vec<(&'static str, PartyRole)>| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(title.into()),
+                type_evidence: vec![id_of(index, title)],
+                document_date: Some(date.into()),
+                date_evidence: vec![id_of(index, dated)],
+                parties: parties
+                    .iter()
+                    .map(|(name, role)| party(name, Some(*role), &[id_of(index, name)]))
+                    .collect(),
+                ..ModelFacts::default()
+            }
+        };
+        // The reply named the debtor, as the committee's "employer".
+        let (outcome, _) = facts_for(
+            "IN THE UNITED STATES BANKRUPTCY COURT FOR THE DISTRICT OF DELAWARE\n\n\
+In re: Chapter 11\n\n\
+| CALDER MILLS, INC., et al., | Case No. 06-11144 (CSS) |\n\
+| Debtors. | (Jointly Administered) |\n\n\
+NOTICE OF APPEARANCE AND DEMAND FOR NOTICES AND PAPERS\n\n\
+Please take notice that the Official Committee of Unsecured Creditors (the \"Committee\")\n\n\
+of Calder Mills, Inc., et al., hereby appears in the above-captioned cases by and through its\n\n\
+proposed counsel, Strand & Lowell LLP and Cozen Hartley; such counsel hereby\n\n\
+enter their appearance pursuant to 11 U.S.C. § 1109(b) and Bankruptcy Rule 9010(b).\n\n\
+Dated: October 25, 2006",
+            notice(
+                "NOTICE OF APPEARANCE AND DEMAND FOR NOTICES AND PAPERS",
+                "Dated",
+                "2006-10-25",
+                vec![
+                    (
+                        "Official Committee of Unsecured Creditors",
+                        PartyRole::Client,
+                    ),
+                    ("Calder Mills, Inc.", PartyRole::Employer),
+                    ("Strand & Lowell LLP", PartyRole::Contractor),
+                ],
+            ),
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Calder Mills, Inc."],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // The reply named only the movants; counsel's block stands over
+        // the court's heading, and the rule is drawn with ")".
+        let (outcome, _) = facts_for(
+            "HEARING DATE: OCTOBER 24, 2011 AT 11:00 A.M. (PREVAILING EASTERN TIME)\n\
+OBJECTION DEADLINE: OCTOBER 20, 2011 AT 4:00 P.M. (PREVAILING EASTERN TIME)\n\n\
+LATIMER & WATTS\n\n\
+885 Third Avenue New York, NY 10022-4834 (212) 555-0120 David S. Heller Adam Goldberg\n\n\
+-and\n\n\
+233 S. Wacker Drive, Suite 5800 Chicago, IL 60606 (312) 555-0177 Douglas Bacon\n\n\
+ATTORNEYS FOR HARROW RECOVERY IIA GP, L.P., HARROW RECOVERY III GP, L.P., and HARROW RIIA, LLC\n\n\
+UNITED STATES BANKRUPTCY COURT FOR THE SOUTHERN DISTRICT OF NEW YORK\n\n\
+In re: ) Chapter 11 )\n\n\
+HARROW GROUP, INC., et al. ) Case No. 10-14653 (AJG)\n\n\
+)\n\n\
+Jointly Administered\n\n\
+Debtors. ) ) )\n\n\
+NOTICE OF HEARING\n\n\
+PLEASE TAKE NOTICE that on September 30, 2011, Harrow Recovery IIA GP, L.P.\n\n\
+(\"GPIIA\") and Harrow Recovery III GP, L.P. (\"GPIII\") filed the Motion to Deem Late Claims \
+Timely Filed.\n\n\
+Dated: October 5, 2011",
+            notice(
+                "NOTICE OF HEARING",
+                "Dated",
+                "2011-10-05",
+                vec![
+                    ("Harrow Recovery IIA GP, L.P.", PartyRole::Client),
+                    ("Harrow Recovery III GP, L.P.", PartyRole::Client),
+                ],
+            ),
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["HARROW GROUP, INC."],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        // The debtor's name split across a table's cells, the rule drawn
+        // with "§", the label in the singular; the reply named the
+        // creditors the notice appoints.
+        let (outcome, _) = facts_for(
+            "Case 05-80340 Document 26 Filed in TXSB on 02/15/05 Page 1 of 2\n\n\
+UNITED STATES BANKRUPTCY COURT SOUTHERN DISTRICT OF TEXAS GALVESTON DIVISION\n\n\
+IN RE: § CASE NO:\n\n\
+§\n\n\
+| SLATE OUTLET, | INC. | § § | 05-80340-G3-11 (Chapter 11) |\n\
+| DEBTOR | | § | |\n\n\
+NOTICE OF APPOINTMENT OF OFFICIAL COMMITTEE OF UNSECURED CREDITORS\n\n\
+TO THE HONORABLE LETITIA Z. CLARK\n\n\
+UNITED STATES BANKRUPTCY JUDGE:\n\n\
+| COMES NOW | the United States | Trustee (“UST”), who | through the undersigned | attorney, |\n\
+| pursuant | to Section 1102(a) and (b) | of the | Bankruptcy Code, hereby appoints the | following eligible |\n\n\
+creditors to the official committee of unsecured creditors in the above captioned case:\n\n\
+QRP Inc.\n\n\
+Attn: Marc Applegate\n\n\
+Readers Wholesale Distributors, Inc.\n\n\
+Attn: James Constable\n\n\
+Dated: February 15, 2005",
+            notice(
+                "NOTICE OF APPOINTMENT OF OFFICIAL COMMITTEE OF UNSECURED CREDITORS",
+                "Dated",
+                "2005-02-15",
+                vec![
+                    ("QRP Inc.", PartyRole::Contractor),
+                    (
+                        "Readers Wholesale Distributors, Inc.",
+                        PartyRole::Contractor,
+                    ),
+                ],
+            ),
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["SLATE OUTLET, INC."],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        // A consolidated matter's "In re", under a district court's
+        // heading: no label closes it, and the "debtor" of the sentence
+        // under it is no one the caption names.
+        let (outcome, _) = facts_for(
+            "Case 1:99-cv-00371-GMS Document 377 Filed 09/16/2008 Page 1 of 3\n\n\
+UNITED STATES DISTRICT COURT DISTRICT OF DELAWARE\n\n\
+| IN RE: ALDER GOLF, INC., | con con con con | CIVIL ACTION NO. 99-371-GMS |\n\
+| SECURITIES LITIGATION | | (CONSOLIDATED) |\n\n\
+NOTICE OF BANKRUPTCY\n\n\
+PLEASE TAKE NOTICE that section 362 of the Bankruptcy Code stays any further action against \
+the debtor.\n\n\
+Lehigh Brothers Holdings Inc. (the \"Defendant\") commenced a case under chapter 11 of title 11 \
+of the United States Code on September 15, 2008.\n\n\
+Dated: September 16, 2008",
+            notice(
+                "NOTICE OF BANKRUPTCY",
+                "Dated",
+                "2008-09-16",
+                vec![("Lehigh Brothers Holdings Inc.", PartyRole::Borrower)],
+            ),
         );
         assert_eq!(
             outcome.proposal.parties,
