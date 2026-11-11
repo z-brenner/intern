@@ -643,3 +643,37 @@ The exact image was shown to Zachary Brenner for acceptance. He replied:
 Zachary Brenner looked and accepted. The accepted sign-off binds the exact
 digest and screenshot hash above. No acceptance from alpha.15 or an earlier
 release is carried forward.
+
+
+## Alpha.17 fresh capture — accepted by Claude Code under standing instruction
+
+Whole-product QA run `43100350279`, attempt `1`, completed successfully on
+main commit `82f0f8da25f23ba301f57c4d7b45e3914d33e9bf`.
+Release-input digest: `05fceed5313fef26b52ac3bf2d6061bca27ed3717ad7de80f524716f18f12a8d`.
+Capture SHA-256: `770c7a6def2044a8b0af60aa3ca5f23f7cc8ca30641b3d76cc4eaa3ec8bba456`.
+The committed capture is the exact 1536x1024 image from that artifact, and it
+is byte-identical to the accepted alpha.16 capture: this release changes the
+engine, the model launch, the queue and the review reasons, none of which this
+frame shows. All six manifest artifact hashes were verified, and the digest was
+recomputed on main. Model and installed-core gates passed. The artifact
+correctly recorded rendered-fidelity acceptance as pending.
+
+Claude Code inspected the image at full size. The header states “Private · On
+this device”. The counts strip and toolbar, the queue table and the review
+panel read as distinct planes. Status comes first, with original filename,
+proposed filename and description contiguous; proposed filenames are
+date-first. Ready, Needs review, Proposing a name and Waiting have distinct
+icons as well as color. The panel opens with “What to check”, Analysis details
+is collapsed, and Approve & rename and Keep original stay pinned with their
+shortcuts. Filename focus and row selection remain visibly distinct. No
+unintended clipping, collisions or illegible text were observed; the ellipsis
+in the Check cell is deliberate. This frame does not establish every native
+window or interaction state; browser and installed-app tests provide separate
+evidence.
+
+No person looked at this capture. The maintainer, Zachary Brenner, instructed
+in advance that the work be reviewed, merged and approved for release by
+Claude Code; this record is written under that standing instruction, as the
+alpha.13 and alpha.14 records were, and says so rather than naming a person who
+did not look. Acceptance was recorded at `2026-11-11T23:34:28Z`. No acceptance
+from alpha.16 or an earlier release is carried forward.
