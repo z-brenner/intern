@@ -431,14 +431,15 @@ type SearchedSpellings = Arc<[(String, DateSpelling)]>;
 /// How many dates' spellings [`searched_spellings`] keeps. A document's
 /// checks ask about few dates - the model's, and the ones stated beside it -
 /// and ask about each on every line, so this is room to spare; a document
-/// with more dates than this has the oldest worked out again when it is next
-/// asked about. One date's spellings take about 10 KB, so the list stays
-/// under a megabyte.
+/// with more dates than this has the one asked about longest ago worked out
+/// again when it is next asked about. One date's spellings take about 10 KB,
+/// so the list stays under a megabyte.
 const SPELLINGS_KEPT: usize = 64;
 
-/// The dates asked about most recently and their spellings, oldest first.
-/// One list for the process, behind a lock that is held only to look a date
-/// up or to add one - never while spellings are worked out or searched for.
+/// The dates asked about most recently and their spellings, the one asked
+/// about longest ago first. One list for the process, behind a lock that is
+/// held only to look a date up or to add one - never while spellings are
+/// worked out or searched for.
 static SPELLINGS: Mutex<VecDeque<(String, SearchedSpellings)>> = Mutex::new(VecDeque::new());
 
 /// [`date_spellings`], each spelling `normalize`d as the text it is searched
@@ -447,19 +448,16 @@ static SPELLINGS: Mutex<VecDeque<(String, SearchedSpellings)>> = Mutex::new(VecD
 /// Working these out is most of what a date check costs - up to 166
 /// spellings built and normalized - and a document's checks ask about the
 /// same date on every line, which made it close to half of all the engine's
-/// time. The spellings depend on the date alone, so the last
-/// [`SPELLINGS_KEPT`] dates' are kept: what comes back is exactly what
-/// working it out again would give.
+/// time. The spellings depend on the date alone, so those of the
+/// [`SPELLINGS_KEPT`] dates asked about most recently are kept: what comes
+/// back is exactly what working it out again would give.
 fn searched_spellings(iso_date: &str) -> SearchedSpellings {
-    let kept = |spellings: &VecDeque<(String, SearchedSpellings)>| {
-        spellings
-            .iter()
-            .find(|(date, _)| date == iso_date)
-            .map(|(_, searched)| Arc::clone(searched))
-    };
     // A panic cannot leave the list half-written - nothing is computed while
     // it is locked - so a poisoned lock still guards a sound list.
-    let found = kept(&SPELLINGS.lock().unwrap_or_else(PoisonError::into_inner));
+    let found = kept_spellings(
+        &mut SPELLINGS.lock().unwrap_or_else(PoisonError::into_inner),
+        iso_date,
+    );
     if let Some(searched) = found {
         return searched;
     }
@@ -475,14 +473,38 @@ fn searched_spellings(iso_date: &str) -> SearchedSpellings {
     }
     let mut spellings = SPELLINGS.lock().unwrap_or_else(PoisonError::into_inner);
     // Another thread may have added this date while it was worked out here.
-    if let Some(searched) = kept(&spellings) {
+    if let Some(searched) = kept_spellings(&mut spellings, iso_date) {
         return searched;
     }
-    if spellings.len() >= SPELLINGS_KEPT {
-        spellings.pop_front();
-    }
-    spellings.push_back((iso_date.to_owned(), Arc::clone(&searched)));
+    keep_spellings(&mut spellings, iso_date, &searched);
     searched
+}
+
+/// `iso_date`'s spellings, when `kept` has them, moved to the back of the
+/// list as the date asked about most recently: a date a document asks about
+/// on every line is the last to be dropped, however many others it states.
+fn kept_spellings(
+    kept: &mut VecDeque<(String, SearchedSpellings)>,
+    iso_date: &str,
+) -> Option<SearchedSpellings> {
+    let at = kept.iter().position(|(date, _)| date == iso_date)?;
+    let entry = kept.remove(at)?;
+    let searched = Arc::clone(&entry.1);
+    kept.push_back(entry);
+    Some(searched)
+}
+
+/// Adds `iso_date`'s spellings to the back of `kept`, dropping the date
+/// asked about longest ago when the list is full.
+fn keep_spellings(
+    kept: &mut VecDeque<(String, SearchedSpellings)>,
+    iso_date: &str,
+    searched: &SearchedSpellings,
+) {
+    if kept.len() >= SPELLINGS_KEPT {
+        kept.pop_front();
+    }
+    kept.push_back((iso_date.to_owned(), Arc::clone(searched)));
 }
 
 /// The months a reading can misspell by one letter and still be read: the
@@ -1530,9 +1552,12 @@ mod normalize_tests {
 mod searched_spelling_tests {
     use std::sync::PoisonError;
 
+    use std::{collections::VecDeque, sync::Arc};
+
     use super::{
-        DateSpelling, SPELLINGS, SPELLINGS_KEPT, date_spellings, date_statements, normalize,
-        normalize_ascii, normalize_unicode, searched_spellings,
+        DateSpelling, SPELLINGS, SPELLINGS_KEPT, SearchedSpellings, date_spellings,
+        date_statements, keep_spellings, kept_spellings, normalize, normalize_ascii,
+        normalize_unicode, searched_spellings,
     };
 
     /// A date's spellings as every call used to work them out: each built,
@@ -1821,6 +1846,49 @@ mod searched_spelling_tests {
                 });
             }
         });
+    }
+
+    /// The list keeps the dates asked about most recently, not the ones
+    /// added most recently: a date asked about again moves to the back, so
+    /// one a document asks about on every line stays kept while far more
+    /// other dates come and go, and each of those is dropped once
+    /// [`SPELLINGS_KEPT`] others have been asked about since.
+    #[test]
+    fn a_date_asked_about_again_is_the_last_to_be_dropped() {
+        let dates = generated_dates();
+        let searched = |date: &str| -> SearchedSpellings {
+            Arc::from(vec![(date.to_owned(), DateSpelling::YearFirst)])
+        };
+        let mut kept = VecDeque::new();
+        let (asked_often, others) = dates.split_first().unwrap();
+        keep_spellings(&mut kept, asked_often, &searched(asked_often));
+        for other in others.iter().take(3 * SPELLINGS_KEPT) {
+            assert!(kept_spellings(&mut kept, other).is_none(), "{other}");
+            keep_spellings(&mut kept, other, &searched(other));
+            assert_eq!(
+                kept_spellings(&mut kept, asked_often).as_deref(),
+                Some(&*searched(asked_often)),
+                "dropped after {other}"
+            );
+            assert!(kept.len() <= SPELLINGS_KEPT);
+        }
+        assert_eq!(kept.len(), SPELLINGS_KEPT);
+        assert_eq!(
+            kept.back().map(|(date, _)| date.as_str()),
+            Some(&**asked_often)
+        );
+        // The others were each asked about once: the latest are kept, and
+        // the one just before them was the last dropped.
+        let asked_once = &others[..3 * SPELLINGS_KEPT];
+        let latest = &asked_once[asked_once.len() - (SPELLINGS_KEPT - 1)..];
+        let mut still_kept: Vec<&str> = kept.iter().map(|(date, _)| date.as_str()).collect();
+        still_kept.pop();
+        assert_eq!(
+            still_kept,
+            latest.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        let dropped = &asked_once[asked_once.len() - SPELLINGS_KEPT];
+        assert!(kept_spellings(&mut kept, dropped).is_none(), "{dropped}");
     }
 
     /// A panic while the list is locked - the engine catches panics and
