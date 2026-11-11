@@ -338,8 +338,12 @@ pub const ISSUER_CUES: &[&str] = &[
 ];
 
 /// Labels over the address a bill's payment is sent to: "Send Payment To:
-/// WBTV PO Box 14200". Whoever is paid issued the document, as on a "Remit
-/// To" line. Validation reads these beside [`ISSUER_CUES`] and the evidence
+/// WBTV PO Box 14200". Validation reads the party on such a line as the
+/// issuer, as on a "Remit To" line: whoever is paid issued the document,
+/// as a station's own invoice is paid to the station. Not always: a
+/// factored or assigned invoice is paid to the factor ("This account has
+/// been assigned to ..."), which is no issuer, and neither list tells it
+/// apart. Validation reads these beside [`ISSUER_CUES`] and the evidence
 /// index does not: it scores a unit by that list, and a longer one would
 /// change which units a prompt is given.
 pub const PAYMENT_ADDRESS_CUES: &[&str] = &[

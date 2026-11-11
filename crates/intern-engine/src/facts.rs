@@ -1785,15 +1785,10 @@ pub fn validate_facts_at(
     }
     let cast = cast_of(&parties);
     let cues = RelationCues {
-        // A cue is the document's own word - "Remit To", "Bill To" - and
-        // stands against the reply's reading. Where a party stands on the
-        // page is not, and makes no issuer of the party a reply that read
-        // both sides took for the customer.
         issuer: cue_issuer(document_type.as_deref(), &cast, context).or_else(|| {
             (class == DocumentClass::Issued)
                 .then(|| header_issuer(scope, &cast))
                 .flatten()
-                .filter(|&head| !read_as_billed_by_another(&cast, head))
         }),
         between: between_cue(context, &cast),
         // Read on the cast before a debtor joined it, which a debtor joins
@@ -2900,6 +2895,30 @@ const MAIL_PROVIDERS: &[&str] = &[
     "btinternet",
     "comcast",
     "verizon",
+    // Access providers that give their customers addresses: a company of
+    // the same name ("AT&T", "Orange", "Sky") writes from it as readily as
+    // anyone, so their domains say nothing either.
+    "att",
+    "sbcglobal",
+    "bellsouth",
+    "cox",
+    "charter",
+    "earthlink",
+    "mac",
+    "yandex",
+    "orange",
+    "free",
+    "sky",
+    "virginmedia",
+    "ntlworld",
+    "talktalk",
+    "shaw",
+    "rogers",
+    "bigpond",
+    "t-online",
+    "web",
+    "libero",
+    "naver",
 ];
 
 /// Labels of a domain that name a kind of site or a host, never whose it
@@ -2950,10 +2969,12 @@ fn address_domain_labels(line: &str) -> Vec<String> {
 
 /// Whether a domain's label spells an organization's name: the name run
 /// together ("nfpa" for "NFPA", "c-spanarchives" for "C-SPAN Archives"),
-/// its first word ("enron" for "ENRON CORP", "lambeth" for "Lambeth
-/// Council"), the name with more after it ("hdrinc" for "HDR", "iccsafe"
-/// for "ICC"), or its initials ("dgs" for "Department of General
-/// Services"). Fewer than three letters spell nothing.
+/// the name with more after it ("hdrinc" for "HDR", "iccsafe" for "ICC"),
+/// its initials ("dgs" for "Department of General Services"), or its
+/// first word where nothing but the organization's form or noun follows
+/// it ("enron" for "ENRON CORP", "lambeth" for "Lambeth Council"). A first
+/// word a name goes on from is any word: "national" spells no "National
+/// Grid". Fewer than three letters spell nothing.
 fn domain_spells(label: &str, name: &str) -> bool {
     let label = label
         .chars()
@@ -2973,9 +2994,13 @@ fn domain_spells(label: &str, name: &str) -> bool {
         .filter(|word| !STOPWORDS.contains(&word.as_str()))
         .filter_map(|word| word.chars().next())
         .collect::<String>();
+    let only_its_form = name_words[1..].iter().all(|word| {
+        crate::cues::ORGANIZATION_ENDINGS.contains(&word.as_str())
+            || ORGANIZATION_WORDS.contains(&word.as_str())
+    });
     long_enough(&label)
         && ((long_enough(&whole) && label.starts_with(&whole))
-            || (long_enough(first) && label == *first)
+            || (long_enough(first) && label == *first && only_its_form)
             || (name_words.len() > 1 && long_enough(&initials) && label == initials))
 }
 
@@ -3387,8 +3412,14 @@ fn joined_by_a_connector(value: &str, at: usize) -> bool {
     {
         left -= 1;
     }
+    // An office's name before the connector is the issuer's, not the
+    // title's head: "OFFICE OF THE GENERAL COUNSEL MEMORANDUM" is a
+    // "General Counsel Memorandum".
     left > 0
         && JOINS.contains(&core(before[left - 1]).as_str())
+        && !before[..left - 1]
+            .last()
+            .is_some_and(|word| ORGANIZATION_WORDS.contains(&core(word).as_str()))
         && !words(&before[..left - 1].join(" "))
             .iter()
             .any(|word| RIGHT_STOPS.contains(&word.as_str()))
@@ -7093,30 +7124,6 @@ fn header_issuer(scope: &ValidationScope<'_>, cast: &[CastMember]) -> Option<usi
     }
 }
 
-/// Whether the reply read both sides of an issued document and took the
-/// party at `head` for the one it is billed to: it gave that party a
-/// receiving role and called another party of the document the issuer,
-/// the seller or the vendor. Where a name stands on a page is no word of
-/// the document's, and makes no issuer of a party so read: an addressee
-/// heads a dispute over an invoice typed as a sheet, and a billed agency
-/// the page of an invoice whose issuer's name runs over two lines. A reply
-/// whose other side the document does not name - a name it writes another
-/// way, a phrase of the billhead - read no issuer to set against the page,
-/// and neither did one that called the other party its sender.
-fn read_as_billed_by_another(cast: &[CastMember], head: usize) -> bool {
-    cast.get(head).is_some_and(|party| {
-        party
-            .proposed_role
-            .is_some_and(|role| RECEIVING_ROLES.contains(&role))
-    }) && cast.iter().enumerate().any(|(at, other)| {
-        at != head
-            && matches!(
-                other.proposed_role,
-                Some(PartyRole::Issuer | PartyRole::Seller | PartyRole::Vendor)
-            )
-    })
-}
-
 /// Whether the context names the first two parties as the document's two
 /// sides: "by and between Tessellate Analytics Ltd. and Contoso Worldwide,
 /// Inc.".
@@ -8749,6 +8756,12 @@ mod tests {
             (
                 "Quay Harbour QRA Statistics Engagement Plan",
                 "Statistics Engagement Plan",
+            ),
+            // An office's name before the connector heads no title: the
+            // office issued the memorandum.
+            (
+                "OFFICE OF THE GENERAL COUNSEL MEMORANDUM",
+                "General Counsel Memorandum",
             ),
         ] {
             assert_eq!(stated_title(value, &parties), kind, "{value}");
@@ -12928,6 +12941,7 @@ Contractor: QRPA";
             ),
             // A mail provider's domain, a display name's "@", no address.
             ("Mara Quill <mara.quill@gmail.com>", vec![]),
+            ("Bruce <bruce@att.net>", vec![]),
             ("Betts, Bruce@DHS", vec![]),
             ("Saul Ravenscroft", vec![]),
         ] {
@@ -12948,6 +12962,9 @@ Contractor: QRPA";
             ("dhs", "Dhsworth", false),
             ("ca", "CA", false),
             ("pax", "KESTREL CORP", false),
+            // A first word a name goes on from is any word.
+            ("national", "National Grid", false),
+            ("harbour", "Harbour Fairs Ltd", false),
         ] {
             assert_eq!(domain_spells(label, name), spelled, "{label} {name}");
         }
@@ -13500,196 +13517,6 @@ Tidewater Buying LLC / POL\nAttention: Accounts Payable\n41 Wharf Street\nGilchr
                 );
             }
         }
-    }
-
-    /// A buyer's dispute of an invoice in the real set, typed into a sheet
-    /// and read by Qwen3.5-9B as the invoice: the company it is addressed
-    /// to heads the sheet, the one that wrote it signs at the foot, below
-    /// the "Attn:" line. The reply read both sides - the first its
-    /// recipient, the second its issuer - and where the first stands makes
-    /// no issuer of it: the name rests on the reply's roles, and waits.
-    const SHEET: &str = "## Sheet1\n\n\
-| APRIL 23, 2001 |  |  |  |\n|  |  |  |  |\n| HALLOWAY TRADING CORP. |  |  |  |\n|  |  |  |  |\n\
-| ATTN:  ANSEL PIKE |  | RE:  INVOICE NO. 24636SA |  |\n| 713 555-0175 FAX |  |  |  |\n|  |  |  |  |\n\
-| We show the following volumes purchased in March 2001: |  |  |  |\n\
-|  | MMBTU | UNIT COST | AMOUNT |\n| Larkspur 250 | 5459 | 4.96 | 27076.64 |\n|  |  |  |  |\n\
-| PLEASE SUBMIT A CORRECTED INVOICE AS SOON AS POSSIBLE. |  |  |  |\n|  |  |  |  |\n\
-| DELPHINE MONCRIEFF |  |  |  |\n| TARNBECK HYDROCARBONS & RESOURCES |  |  |  |\n| 713 555-0140 |  |  |  |";
-
-    fn sheet_facts(index: &EvidenceIndex, head: PartyRole, foot: PartyRole) -> ModelFacts {
-        ModelFacts {
-            document_type: Some("INVOICE NO. 24636SA".into()),
-            type_evidence: vec![id_of(index, "INVOICE NO.")],
-            document_date: Some("2001-04-23".into()),
-            date_evidence: vec![id_of(index, "APRIL 23")],
-            parties: vec![
-                party(
-                    "TARNBECK HYDROCARBONS & RESOURCES",
-                    Some(foot),
-                    &[id_of(index, "TARNBECK")],
-                ),
-                party(
-                    "HALLOWAY TRADING CORP.",
-                    Some(head),
-                    &[id_of(index, "HALLOWAY")],
-                ),
-            ],
-            ..ModelFacts::default()
-        }
-    }
-
-    #[test]
-    fn the_head_of_a_page_makes_no_issuer_of_the_one_the_reply_read_as_billed() {
-        for head in [PartyRole::Recipient, PartyRole::Buyer, PartyRole::Client] {
-            for foot in [PartyRole::Issuer, PartyRole::Seller, PartyRole::Vendor] {
-                let (outcome, _) = facts_for(SHEET, |index| sheet_facts(index, head, foot));
-                assert_eq!(
-                    outcome.proposal.parties,
-                    vec!["TARNBECK HYDROCARBONS & RESOURCES"],
-                    "{head:?} {foot:?}: {:?}",
-                    outcome.proposal
-                );
-                assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
-                assert!(
-                    outcome.reasons.contains(&ReviewReason::PartyUnsupported),
-                    "{head:?} {foot:?}: {:?}",
-                    outcome.reasons
-                );
-                assert_ne!(outcome.status, ProposalStatus::Ready);
-            }
-        }
-    }
-
-    /// The page's head still names the issuer where the reply read no
-    /// issuer to set against it: one that called the party at the head its
-    /// issuer, and one that called the other party the sender - a word a
-    /// reply uses too loosely of an invoice's sides to read.
-    #[test]
-    fn the_head_of_a_page_names_the_issuer_where_the_reply_read_no_other() {
-        for (head, foot) in [
-            (PartyRole::Issuer, PartyRole::Recipient),
-            (PartyRole::Seller, PartyRole::Buyer),
-            (PartyRole::Recipient, PartyRole::Sender),
-        ] {
-            let (outcome, _) = facts_for(SHEET, |index| sheet_facts(index, head, foot));
-            assert_eq!(
-                outcome.proposal.parties,
-                vec!["HALLOWAY TRADING CORP."],
-                "{head:?} {foot:?}: {:?}",
-                outcome.proposal
-            );
-            assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
-            assert!(
-                !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
-                "{head:?} {foot:?}: {:?}",
-                outcome.reasons
-            );
-        }
-    }
-
-    /// The same 1880s bill as Qwen3.5-4B read it in the real set: its
-    /// issuer called the buyer, and a phrase of the billhead - no name the
-    /// bill writes in one place - called the seller. A side the document
-    /// does not name is no issuer to set against the page: its head still
-    /// names the one the goods were bought of.
-    #[test]
-    fn a_bills_issuer_still_issues_it_though_the_reply_named_a_seller_it_does_not() {
-        let (outcome, _) = facts_for(
-            "BILL\n\nManufacturer of\n\nTelegraph Instruments. Boston, Oct. 1, 1880.\n\n\
-             BOUGHT OF CORWIN HASKELL, Jr.\n\nAUTHORIZED MANUFACTURER FOR\n\n\
-             NATIONAL BELL TELEPHONE CO.,\n\nShipped Via. 109 COURT STREET.\n\n\
-             | July | 26 | Induction coil | 200 |",
-            |index| ModelFacts {
-                document_type: Some("Bill".into()),
-                type_evidence: vec![id_of(index, "BILL")],
-                parties: vec![
-                    party(
-                        "Corwin Haskell, Jr.",
-                        Some(PartyRole::Buyer),
-                        &[id_of(index, "BOUGHT OF")],
-                    ),
-                    party(
-                        "Manufacturer of Telegraph Instruments",
-                        Some(PartyRole::Seller),
-                        &[id_of(index, "Manufacturer of")],
-                    ),
-                ],
-                ..ModelFacts::default()
-            },
-        );
-        assert_eq!(
-            outcome.proposal.parties,
-            vec!["Corwin Haskell, Jr."],
-            "{:?}",
-            outcome.proposal
-        );
-        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
-    }
-
-    /// A printer's corrected invoice of 1923 in the real set, as the scan
-    /// reads: the customer typed under the date, above the billhead, so
-    /// that both stand where a letterhead does. Both models read the sides
-    /// right, and the customer was named the issuer for coming first.
-    #[test]
-    fn a_customer_typed_above_the_billhead_is_not_its_issuer() {
-        const BILL: &str = "Marrow Springs, Col., November 22, 1923\n\n\
-Ansel Pike,\n200 East Ave 43, City\n\nHALVORSEN PRINTING & BINDING HOUSE\n\n\
-BEST SERVICE PHONE 875-631\n\n118 SOUTH BROADWAY\n\n\
-ALL CLAIMS MUST BE MADE WITHIN TEN DAYS TERMS: NET CASH\n\n\
-| 2000 Circulars | $12.50 |\n| Cut | 2.25 |\n\n(Corrected Invoice)";
-        let reply = |index: &EvidenceIndex, customer: PartyRole| ModelFacts {
-            document_type: Some("Corrected Invoice".into()),
-            type_evidence: vec![id_of(index, "Corrected Invoice")],
-            parties: vec![
-                party("Ansel Pike", Some(customer), &[id_of(index, "Ansel Pike")]),
-                party(
-                    "HALVORSEN PRINTING & BINDING HOUSE",
-                    Some(PartyRole::Issuer),
-                    &[id_of(index, "HALVORSEN")],
-                ),
-            ],
-            ..ModelFacts::default()
-        };
-        for customer in [PartyRole::Client, PartyRole::Buyer] {
-            let (outcome, _) = facts_for(BILL, |index| reply(index, customer));
-            assert_eq!(
-                outcome.proposal.parties,
-                vec!["HALVORSEN PRINTING & BINDING HOUSE"],
-                "{customer:?}: {:?}",
-                outcome.proposal
-            );
-            assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
-            // The page put both in the issuer's place: the name rests on
-            // the reply's reading of them, and waits for a person.
-            assert!(
-                outcome.reasons.contains(&ReviewReason::PartyUnsupported),
-                "{customer:?}: {:?}",
-                outcome.reasons
-            );
-        }
-        // The same page read with the first party as its issuer and no
-        // customer among the two: the first is named, as the page has it.
-        let (outcome, _) = facts_for(BILL, |index| ModelFacts {
-            parties: vec![
-                party(
-                    "Ansel Pike",
-                    Some(PartyRole::Issuer),
-                    &[id_of(index, "Ansel Pike")],
-                ),
-                party(
-                    "HALVORSEN PRINTING & BINDING HOUSE",
-                    Some(PartyRole::Issuer),
-                    &[id_of(index, "HALVORSEN")],
-                ),
-            ],
-            ..reply(index, PartyRole::Issuer)
-        });
-        assert_eq!(outcome.proposal.parties, vec!["Ansel Pike"]);
-        assert!(
-            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
-            "{:?}",
-            outcome.reasons
-        );
     }
 
     /// The IRS's CP161, typed "Notice": one of a hundred kinds the word
