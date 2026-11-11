@@ -121,6 +121,11 @@ function notesProblems(root, version) {
   const problems = [];
   if (!notes.includes(`# Intern v${version}`)) problems.push(`${path} does not start its notes with "# Intern v${version}".`);
   if (!notes.includes('not Authenticode signed')) problems.push(`${path} does not say the installer is "not Authenticode signed", which every downloader needs to know before SmartScreen tells them.`);
+  // A word left to fill in later: the notes are published as written, and
+  // they are a release input, so filling it in after QA means QA again.
+  // Upper case only, so ordinary prose such as "pending" passes.
+  const placeholder = notes.match(/\b(?:PENDING|TODO|TBD|FIXME|XXX)\b/);
+  if (placeholder) problems.push(`${path} still holds a placeholder (${placeholder[0]}); it is published as written, and filling it in after QA means QA again.`);
   return problems;
 }
 

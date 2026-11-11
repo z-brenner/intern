@@ -152,6 +152,14 @@ describe('release preflight', () => {
     const untitled = await releaseCommit();
     await writeFile(join(untitled, 'docs', 'releases', `v${version}.md`), 'The installer is not Authenticode signed.\n');
     expect(preflightProblems(untitled)).toEqual([expect.stringContaining(`"# Intern v${version}"`)]);
+
+    const unfinished = await releaseCommit();
+    await writeFile(join(unfinished, 'docs', 'releases', `v${version}.md`), `# Intern v${version}\n\nFaster on Windows: PENDING-WINDOWS-SPEED.\n\nThe installer is not Authenticode signed.\n`);
+    expect(preflightProblems(unfinished)).toEqual([expect.stringContaining('still holds a placeholder (PENDING)')]);
+
+    const prose = await releaseCommit();
+    await writeFile(join(prose, 'docs', 'releases', `v${version}.md`), `# Intern v${version}\n\nA reading still pending is read again; a TODAY() cell is not a date.\n\nThe installer is not Authenticode signed.\n`);
+    expect(preflightProblems(prose)).toEqual([]);
   });
 
   it('version_mismatch_fails: one file left behind by the bump, or a workflow named for another release', async () => {

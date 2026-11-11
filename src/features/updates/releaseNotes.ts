@@ -5,8 +5,10 @@ export const releaseNotes: readonly ReleaseNotes[] = [
   {
     version: '0.1.0-alpha.17',
     changes: [
-      'The accurate model needs about 2.6 GB less memory and reads documents faster on most processors.',
-      'The first document after Intern starts is read sooner: the model’s instructions are kept between starts.',
+      'The accurate model holds about 2.7 GB less memory while it is loaded and reads documents faster on most processors.',
+      'The first document after Intern starts is read sooner on most computers: the model’s instructions are kept between starts.',
+      'A file dropped into a watched folder on this computer’s own disk is noticed within seconds.',
+      'On a slow computer, a reading that needs more than ten minutes is no longer abandoned.',
       'Fewer wrong names are filed without your check: a name is filed on its own only when the model is surer of it, so more documents wait for a quick look.',
       'Court filings, invoices, letters and emails are named right a little more often.',
       'Evidence in review now says when it is the document’s own lines, and which model read the document.',

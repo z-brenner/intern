@@ -21,6 +21,9 @@ with the pre-registration, matches the copies here). In short:
    candidate's engine, the eligible candidate that files the fewest wrong
    names wins; a tie goes to the one that files the most right names; if
    0.7 is among the tied best, nothing changes.
+3. Whatever is chosen, the release notes give the sixth set's right and
+   wrong names filed at 0.7 and for the choice, and say that one set of
+   this size cannot certify a rate (the alpha.17 notes do).
 
 The candidates: 0.7 and 0.8 as they are (`today`), and each with one extra
 rule - `R1` (a one-party "from" name raised only for its party not being in
@@ -56,8 +59,12 @@ after it changes no reading: its replays of every development set match).
 | C1@0.80 | 3 | 1 |
 | T1 (rejected), at 0.70 | 4 | 2-4 |
 
-Each also filed one name the gold does not score (`real6-form-06`). Of the
-45 scored names 19 are right; 11 readings carry no validation reason and
+Each also filed `real6-form-06`, a blank invoice template the gold gives
+no name and sends to review, under 2026-03-03, the date its TODAY() cell
+held, which the gold forbids, at a least token probability of 0.900. It is
+a wrong filing for every candidate, so it does not change the choice, and
+the table, which counts what the pre-registration counts (scored names),
+leaves it out. Of the 45 scored names 19 are right; 11 readings carry no validation reason and
 are judged by the gate alone:
 
 | Document | Least token probability | Name right | 0.7 | 0.8 |
@@ -99,9 +106,11 @@ baselines were written again at 0.8, and only readiness scores moved.
 
 ## What this does not show
 
-- 51 documents, 1 wrong filing against 2: no rate is certified by one set
-  of this size. Across all six real sets, 0.7 filed 18 right names and 3
-  wrong ones, 0.8 11 and 1.
+- 51 documents, 1 wrong filing against 2 among the scored names (2
+  against 3 with `real6-form-06`): no rate is certified by one set of
+  this size, and it is the set the gate was chosen on. Across all six real
+  sets, 0.7 filed 18 right names and 3 wrong ones, 0.8 11 and 1 (each one
+  more wrong with `real6-form-06`).
 - Filing is rare on real documents at either gate: most readings carry a
   validation reason and go to review regardless.
 - The cost is in documents a person must open: on InternBench, 10 more of
