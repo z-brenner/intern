@@ -981,14 +981,26 @@ lifetime with a short first document sends nothing. Restored, the file gives
 every lifetime the instructions such a document gives them, whatever is read
 first.
 
-That is a change for what was measured, too. Every live run of InternBench
-and the real-document sets starts with the benchmark's warm-up document, a
-short notice whose prompt is 637 tokens, so the instructions of every
-recorded reply were computed in pieces, the uneven way; the app, restored,
-computes them the even way, as it already did in any lifetime whose first
-document was long. The two give different replies to some documents: the
-purchase order above is one. No live run has yet been made in the even state,
-so the recorded accuracy figures describe the uneven one.
+That is a change for what was measured, too. Through alpha.16 every live run
+of InternBench and the real-document sets started with the benchmark's
+warm-up document as it then was, a short notice whose prompt is 637 tokens,
+so the instructions of every reply recorded until then - the committed
+InternBench recording (`bench/recording.json`) among them - were computed in
+pieces, the uneven way; the app, restored, computes them the even way, as it
+already did in any lifetime whose first document was long. The two give
+different replies to some documents: the purchase order above is one. The
+warm-up is now a notice of about 1,050 tokens (`WARM_UP_TEXT` in
+`intern-bench`), so a live run measures the even state. One has been made:
+the candidate benchmark's run 42625355879 at `a29e446`, both models over
+InternBench and four real-document sets, each log showing a warm-up of 1,056
+prompt tokens processed. Its recordings are that run's artifacts and are not
+committed, so the committed recording and the figures drawn from it still
+describe the uneven state. Its 9B InternBench recording and the committed
+one asked the same 77 prompts, over the same extracted text, of the same
+model, runtime and flags on the same runner CPU model (EPYC 7763): 36 of the
+77 replies are the same in both, and replayed through the engine as of this
+merge at the 0.7 gate they name 72 and 71 documents right, with 39 and 38
+ready and one wrong name filed in each.
 
 Measured on runners ([`bench/reports/cold-start-linux-cpu-2026-11-09`](../bench/reports/cold-start-linux-cpu-2026-11-09/README.md);
 the 9B on the AVX2 `haswell` backend, four threads, saved as the app saves):
