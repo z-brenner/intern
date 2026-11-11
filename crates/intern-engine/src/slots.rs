@@ -117,9 +117,16 @@ impl SlotIdentity<'_> {
 }
 
 /// The processor features that choose which of ggml's CPU backends a server
-/// loads, and so how it computes. Detectable on the Rust release the
-/// workspace pins; AVX-VNNI is not, and changes no result here (it only adds
-/// exact integer dot products the AVX2 path computes the same).
+/// loads, and so how it computes: every feature b11946's x86 scoring reads
+/// (`ggml-cpu/arch/x86/cpu-feats.cpp`), and AMX-TILE, which its
+/// `sapphirerapids` backend is built for beside AMX-INT8. Without AVX-VNNI
+/// and AMX an Alder Lake would share a name with a Haswell, and a Sapphire
+/// Rapids with a Zen 4, though each loads another backend (`alderlake`,
+/// `sapphirerapids`) - so a slot folder carried between them, in a roaming
+/// profile or a migrated virtual machine, would restore state another
+/// backend computed. The pinned Rust release cannot detect those three by
+/// name, so they are read from CPUID as ggml reads them
+/// (`x86_extended_features`).
 pub fn cpu_fingerprint() -> String {
     #[cfg(target_arch = "x86_64")]
     {
@@ -144,14 +151,49 @@ pub fn cpu_fingerprint() -> String {
             "avx512vl",
             "avx512vbmi",
             "avx512vnni",
-            "avx512bf16"
+            "avx512bf16",
+            "avx512cd",
+            "avx512dq"
         );
+        for name in x86_extended_features() {
+            features.push(' ');
+            features.push_str(name);
+        }
         features
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
         std::env::consts::ARCH.to_owned()
     }
+}
+
+/// AVX-VNNI (CPUID leaf 7 subleaf 1, EAX bit 4), AMX-TILE and AMX-INT8
+/// (leaf 7, EDX bits 24 and 25), as ggml reads them: from CPUID alone, when
+/// the processor has leaf 7.
+#[cfg(target_arch = "x86_64")]
+fn x86_extended_features() -> Vec<&'static str> {
+    // CPUID is part of every x86-64 processor. The intrinsic is unsafe on
+    // the pinned Rust release and safe on later ones.
+    #[allow(unsafe_code, unused_unsafe)]
+    fn cpuid(leaf: u32, subleaf: u32) -> std::arch::x86_64::CpuidResult {
+        // SAFETY: CPUID is available on every x86-64 processor, and any
+        // leaf may be asked for.
+        unsafe { std::arch::x86_64::__cpuid_count(leaf, subleaf) }
+    }
+    if cpuid(0, 0).eax < 7 {
+        return Vec::new();
+    }
+    let leaf_7 = cpuid(7, 0);
+    let leaf_7_1 = cpuid(7, 1);
+    [
+        ("avxvnni", leaf_7_1.eax, 4),
+        ("amx-tile", leaf_7.edx, 24),
+        ("amx-int8", leaf_7.edx, 25),
+    ]
+    .into_iter()
+    .filter(|&(_, register, bit)| register & (1 << bit) != 0)
+    .map(|(name, _, _)| name)
+    .collect()
 }
 
 /// Whether llama-server can be pointed at `directory`.
@@ -1523,5 +1565,35 @@ mod tests {
     #[test]
     fn the_cpu_fingerprint_names_the_architecture() {
         assert!(cpu_fingerprint().starts_with(std::env::consts::ARCH));
+    }
+
+    /// Every feature ggml's choice of backend reads that the kernel says
+    /// the processor has is named - AVX-VNNI and AMX among them, which the
+    /// pinned Rust release cannot detect by name. (The kernel may hide a
+    /// feature it does not support, never show one the processor lacks.)
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    #[test]
+    fn the_cpu_fingerprint_names_what_chooses_the_backend() {
+        let cpuinfo = fs::read_to_string("/proc/cpuinfo").unwrap();
+        let flags = cpuinfo
+            .lines()
+            .find(|line| line.starts_with("flags"))
+            .map(|line| line.split_whitespace().collect::<Vec<_>>())
+            .unwrap();
+        let fingerprint = cpu_fingerprint();
+        let named = fingerprint.split(' ').collect::<Vec<_>>();
+        for (flag, name) in [
+            ("avx_vnni", "avxvnni"),
+            ("amx_tile", "amx-tile"),
+            ("amx_int8", "amx-int8"),
+            ("avx512cd", "avx512cd"),
+            ("avx512dq", "avx512dq"),
+            ("avx512_bf16", "avx512bf16"),
+        ] {
+            if flags.contains(&flag) {
+                assert!(named.contains(&name), "{flag}: {fingerprint}");
+            }
+        }
+        eprintln!("{fingerprint}");
     }
 }
