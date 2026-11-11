@@ -6984,7 +6984,7 @@ fn caption_sides(
 /// caption names on it.
 fn caption_block_sides(caption: &[&EvidenceUnit], cast: &[CastMember]) -> Option<(usize, usize)> {
     let text = caption_text(caption);
-    let layout = CaptionLayout::of(&text)?;
+    let layout = CaptionLayout::of(&text, caption)?;
     let named_in = |side: std::ops::Range<usize>| {
         cast.iter()
             .enumerate()
@@ -7020,9 +7020,10 @@ struct CaptionLayout {
 }
 
 impl CaptionLayout {
-    /// The layout of a caption's text; `None` when it sets no two sides
-    /// against each other under a forum's heading.
-    fn of(text: &str) -> Option<Self> {
+    /// The layout of a caption's text, read from `caption`'s units; `None`
+    /// when it sets no two sides against each other under a forum's
+    /// heading.
+    fn of(text: &str, caption: &[&EvidenceUnit]) -> Option<Self> {
         // Where any of `words` stands in the caption, singular or plural.
         let positions = |words: &[&str], from: usize, to: usize| {
             words
@@ -7057,8 +7058,14 @@ impl CaptionLayout {
             // / Plaintiff, Case No. ... / ANIMATION STUDIOS ... /
             // Defendants." The bringing side's label is still the
             // caption's, under "v." instead of over it, and "v." still
-            // divides the sides.
-            (None, Some(answering)) if !positions(BRINGING_SIDE, versus, reach).is_empty() => {
+            // divides the sides - where the caption's lines set them out
+            // as a caption does: its "v." alone in a line or a cell, and
+            // each side's label set out in one ([`labels_a_side`]). A
+            // sentence's "against" and "the Lead Plaintiffs" divide nothing.
+            (None, Some(answering))
+                if !positions(BRINGING_SIDE, versus, reach).is_empty()
+                    && sides_set_out_in_cells(&caption_cells(caption)) =>
+            {
                 (versus, answering)
             }
             // One side labeled and the other's label nowhere: a body's
@@ -7231,6 +7238,19 @@ fn versus_alone(words: &[&str]) -> bool {
     matches!(words.as_slice(), [word] if VERSUS_WORDS.contains(&word.as_str()))
 }
 
+/// Whether a caption's cells set its two sides out against each other: a
+/// versus word alone in one ([`versus_alone`]), and a bringing side's and
+/// an answering side's label each set out in one ([`labels_a_side`]).
+fn sides_set_out_in_cells(cells: &[(&EvidenceUnit, Vec<&str>)]) -> bool {
+    cells.iter().any(|(_, words)| versus_alone(words))
+        && cells
+            .iter()
+            .any(|(_, words)| labels_a_side(words, BRINGING_SIDE))
+        && cells
+            .iter()
+            .any(|(_, words)| labels_a_side(words, ANSWERING_SIDE))
+}
+
 /// Whether a caption's cells set out a case as a caption does: an "In re"
 /// opens one, a versus word stands alone in one, or a side's label is set
 /// out in one ([`labels_a_side`]). A letter's inside address on a court's
@@ -7269,7 +7289,7 @@ fn caption_other_side<'a>(
 ) -> Option<(String, &'a EvidenceUnit, bool)> {
     let caption = caption_units(scope);
     let text = caption_text(&caption);
-    let layout = CaptionLayout::of(&text)?;
+    let layout = CaptionLayout::of(&text, &caption)?;
     let named_in = |side: std::ops::Range<usize>| {
         parties.iter().any(|party| {
             !party.copied
@@ -14318,6 +14338,50 @@ Dated: September 16, 2008",
             outcome.proposal
         );
         assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        // The same notice whose sentences also speak of "the Lead
+        // Plaintiffs", after its "against" or before "the Defendant": no
+        // label of the caption's is out of place, and the body's
+        // organization is no side.
+        for second in [
+            "PLEASE BE ADVISED that nothing herein stays the claims pending against Marlow \
+             Underwriters, Inc., which the Defendant does not own, and the Lead Plaintiffs may \
+             proceed on them.",
+            "PLEASE BE ADVISED that nothing herein stays the claims pending against Marlow \
+             Underwriters, Inc. and asserted by the Lead Plaintiffs, which the Defendant does \
+             not own.",
+        ] {
+            let (outcome, _) = facts_for(
+                &format!(
+                    "Case 1:99-cv-00371-GMS Document 377 Filed 09/16/2008 Page 1 of 3\n\n\
+UNITED STATES DISTRICT COURT DISTRICT OF DELAWARE\n\n\
+| IN RE: ALDER GOLF, INC., | con con con con | CIVIL ACTION NO. 99-371-GMS |\n\
+| SECURITIES LITIGATION | | (CONSOLIDATED) |\n\n\
+NOTICE OF BANKRUPTCY\n\n\
+PLEASE TAKE NOTICE that, on September 15, 2008 (the \"Commencement Date\"), Lehigh Brothers \
+Holdings Inc. (the \"Defendant\") commenced a case under chapter 11 of title 11 of the United \
+States Code.\n\n{second}\n\nDated: September 16, 2008"
+                ),
+                |index| ModelFacts {
+                    document_type: Some("NOTICE OF BANKRUPTCY".into()),
+                    type_evidence: vec![id_of(index, "NOTICE OF BANKRUPTCY")],
+                    document_date: Some("2008-09-16".into()),
+                    date_evidence: vec![id_of(index, "Dated")],
+                    parties: vec![party(
+                        "Lehigh Brothers Holdings Inc.",
+                        Some(PartyRole::Borrower),
+                        &[id_of(index, "Lehigh")],
+                    )],
+                    ..ModelFacts::default()
+                },
+            );
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["Lehigh Brothers Holdings Inc."],
+                "{second}: {:?}",
+                outcome.proposal
+            );
+            assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        }
     }
 
     /// A bankruptcy caption sets no two sides against each other: "In re:"
