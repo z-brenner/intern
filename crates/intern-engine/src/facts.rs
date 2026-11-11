@@ -1785,8 +1785,11 @@ pub fn validate_facts_at(
     };
     let relation = relation_from_roles(class, document_type.as_deref(), &cast, cues);
     // A name that rests on roles the document did not support waits for
-    // a person: the reply read the sides, the document did not say.
-    if relation.on_proposed_roles {
+    // a person: the reply read the sides, the document did not say. So
+    // does one the reply's own reading speaks against
+    // ([`Relation::doubtful`]): the document did not say, and the reply
+    // said otherwise.
+    if relation.on_proposed_roles || relation.doubtful {
         push(&mut reasons, ReviewReason::PartyUnsupported);
     }
     // An agreement has two sides at least. One that names only one has
@@ -11422,6 +11425,7 @@ LOAN CONDITION REPORT\n\n\
             basis: String::new(),
             on_proposed_roles: false,
             defaulted: false,
+            doubtful: false,
         };
         assert_eq!(
             fit_type(
@@ -11462,6 +11466,111 @@ This Sponsorship Agreement is made on July 16, 2012 by Peek Investments LLC.";
         assert_eq!(outcome.proposal.party_relation, PartyRelation::With);
         assert!(
             outcome.reasons.contains(&ReviewReason::PartyMissing),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// real5-notice-06's shape: a court's public notice whose reply named
+    /// the court alone, its name run across the two lines of its heading,
+    /// and called it the issuer, with no letterhead line that holds the
+    /// name to support the role. A notice naming one
+    /// party is "for" it by default, which a reply that read it as the
+    /// notice's issuer speaks against: the name is kept and waits for a
+    /// person. The same default for the operator an improvement notice is
+    /// served on, which the reply called the contractor, is as settled as
+    /// it was.
+    #[test]
+    fn a_notice_for_the_party_its_reply_called_the_issuer_goes_to_review() {
+        const NOTICE: &str = "- PUBLIC NOTICE -\n\n\
+REAPPOINTMENT OF COUNTY HEARING OFFICER\n\
+HARROW COUNTY WATER COURT\n\
+NORTHERN DIVISION OF MERIDEN\n\n\
+The current terms of the following hearing officers are due to expire on the\n\
+dates indicated:\n\
+Officer Odalys Brandt, Dalton\n\
+January 25, 2026\n\n\
+Comments from members of the bar and the public are invited as to whether the\n\
+incumbent hearing officers should be recommended for reappointment. Comments should be sent to:\n\
+Maren Achterberg\n\
+Clerk of Court\n\
+Harrow County Water Court\n\
+Northern Division of Meriden\n\
+410 Ferry Street, Room 12\n\
+Dalton, Meriden 75242\n\n\
+Notice Date: April 16, 2025";
+        let reply = |role: PartyRole| {
+            facts_for(NOTICE, |index| ModelFacts {
+                document_type: Some("PUBLIC NOTICE".into()),
+                type_evidence: vec![id_of(index, "PUBLIC NOTICE")],
+                document_date: Some("2025-04-16".into()),
+                date_evidence: vec![id_of(index, "Notice Date")],
+                parties: vec![party(
+                    "Harrow County Water Court Northern Division of Meriden",
+                    Some(role),
+                    &[id_of(index, "Clerk of Court")],
+                )],
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        let outcome = reply(PartyRole::Issuer);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Harrow County Water Court Northern Division of Meriden"],
+            "{:?}",
+            outcome.proposal
+        );
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        let facts = outcome.facts.expect("facts");
+        assert!(
+            facts
+                .relation_basis
+                .contains("though the reply called it the issuer"),
+            "{}",
+            facts.relation_basis
+        );
+        let outcome = reply(PartyRole::Client);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        const IMPROVEMENT: &str = "## Sheet1\n\n\
+| Details for Improvement Notice No. 04/17 |  |\n\
+| --- | --- |\n\
+| Notice Type | Improvement |\n\
+| Operator | Tarnwick Offshore (U.K.) Limited |\n\
+| Address | 1 Kingdom Street, |\n\
+| Details | On the installation Calder Deep the operator failed to ensure that a well \
+operation is conducted in pursuance of the plans stated in its notification. |\n\
+| Issue Date | 3 February 2017 |";
+        let (outcome, _) = facts_for(IMPROVEMENT, |index| ModelFacts {
+            document_type: Some("Improvement Notice".into()),
+            type_evidence: vec![id_of(index, "Details for Improvement")],
+            document_date: Some("2017-02-03".into()),
+            date_evidence: vec![id_of(index, "Issue Date")],
+            parties: vec![party(
+                "Tarnwick Offshore (U.K.) Limited",
+                Some(PartyRole::Contractor),
+                &[id_of(index, "| Operator")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Tarnwick Offshore (U.K.) Limited"]
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
             "{:?}",
             outcome.reasons
         );
