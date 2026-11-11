@@ -98,6 +98,9 @@ interface Props {
   onOpen(): void;
   onReveal(): void;
 }
+/** The name and description being edited, for one item and one revision of its proposal (`for`). */
+interface Draft { for: string; stem: string; description: string; edited: boolean }
+
 export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal }: Props) {
   // Exactly what the backend accepts for this item. Retry on an ordinary
   // review item, and nothing at all for a ready or waiting one, were the
@@ -122,7 +125,14 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // are put back while rendering instead, so no commit, and no handler or
   // shortcut taken from one, ever pairs an item with another's draft.
   const draftFor = `${item.id}\n${item.proposalRevision ?? ''}`;
-  const [draft, setDraft] = useState({ for: draftFor, stem: proposedStem, description: item.description ?? '' });
+  const [draft, setDraft] = useState<Draft>({ for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false });
+  // What was typed for an item left undecided - Alt+N, Next undecided, or
+  // another row - is set aside under the same item and revision, and is in
+  // the fields again when review comes back to it. It used to be thrown
+  // away, and Alt+N is pressed from inside the name, where corrections are
+  // typed. A new reading is a new revision: its own proposal is shown, not
+  // an edit of the one before.
+  const [setAside, setSetAside] = useState<ReadonlyMap<string, Draft>>(() => new Map());
   const [error, setError] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
@@ -137,12 +147,14 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     try { window.localStorage.setItem(ANALYSIS_DETAILS_KEY, open ? 'open' : 'closed'); } catch { /* Not remembered; it still opens now. */ }
   };
   if (draft.for !== draftFor) {
-    setDraft({ for: draftFor, stem: proposedStem, description: item.description ?? '' });
+    const kept = draft.edited ? new Map(setAside).set(draft.for, draft) : setAside;
+    if (kept !== setAside) setSetAside(kept);
+    setDraft(kept.get(draftFor) ?? { for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false });
     setError(''); setMoreOpen(false); setConfirmingRemove(false);
   }
   const { stem, description } = draft;
-  const setStem = (value: string) => setDraft((current) => ({ ...current, stem: value }));
-  const setDescription = (value: string) => setDraft((current) => ({ ...current, description: value }));
+  const setStem = (value: string) => setDraft((current) => ({ ...current, stem: value, edited: true }));
+  const setDescription = (value: string) => setDraft((current) => ({ ...current, description: value, edited: true }));
   const inspectorRef = useRef<HTMLElement>(null);
   const filenameRef = useRef<HTMLTextAreaElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);

@@ -1,8 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
+import { ReviewInspector } from '../../components/ReviewInspector';
 import { detailsToggle, openDetails, openRow, queueCell, selectRow as selectByName } from '../queue/gridTesting';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
+import type { QueueItem } from '../../types';
 
 describe('review actions', () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -319,6 +321,36 @@ describe('review actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pause queue' }));
 
     await waitFor(() => expect(filename).toHaveValue('My local draft'));
+  });
+
+  // Moving on (Alt+N, Next undecided, another row) threw the typing away.
+  // It is set aside for the item, and for the reading it was typed against.
+  it('keeps what was typed for an item left undecided, for that item and that reading only', () => {
+    const calls = { onClose: vi.fn(), onApprove: vi.fn(), onKeep: vi.fn(), onCancel: vi.fn(), onRetry: vi.fn(), onReanalyze: vi.fn(), onRemove: vi.fn(), onUndo: vi.fn(), onOpen: vi.fn(), onReveal: vi.fn() };
+    const lease: QueueItem = { id: 'lease', originalFilename: 'scan.pdf', status: 'review', proposedFilename: '2024-03-01 Lease.pdf', description: 'A lease.', confidence: 0.8, proposalRevision: '1' };
+    const invoice: QueueItem = { id: 'invoice', originalFilename: 'scan 2.pdf', status: 'review', proposedFilename: '2024-04-01 Invoice.pdf', description: 'An invoice.', confidence: 0.8, proposalRevision: '1' };
+    const view = render(<ReviewInspector item={lease} drawer={false} {...calls} />);
+    const filename = () => screen.getByLabelText('Filename');
+    const description = () => screen.getByLabelText('Description');
+    fireEvent.change(filename(), { target: { value: '2024-03-01 Lease of Unit 4' } });
+    fireEvent.change(description(), { target: { value: 'A lease of Unit 4.' } });
+
+    view.rerender(<ReviewInspector item={invoice} drawer={false} {...calls} />);
+    expect(filename()).toHaveValue('2024-04-01 Invoice');
+    expect(description()).toHaveValue('An invoice.');
+    view.rerender(<ReviewInspector item={lease} drawer={false} {...calls} />);
+    expect(filename()).toHaveValue('2024-03-01 Lease of Unit 4');
+    expect(description()).toHaveValue('A lease of Unit 4.');
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/ }));
+    expect(calls.onApprove).toHaveBeenLastCalledWith('2024-03-01 Lease of Unit 4.pdf', 'A lease of Unit 4.');
+
+    // Read again, it is a new proposal: shown as it is, not under the edit of the old one.
+    view.rerender(<ReviewInspector item={invoice} drawer={false} {...calls} />);
+    view.rerender(<ReviewInspector item={{ ...lease, proposedFilename: '2024-03-02 Lease Agreement.pdf', description: 'A lease agreement.', proposalRevision: '2' }} drawer={false} {...calls} />);
+    expect(filename()).toHaveValue('2024-03-02 Lease Agreement');
+    expect(description()).toHaveValue('A lease agreement.');
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/ }));
+    expect(calls.onApprove).toHaveBeenLastCalledWith('2024-03-02 Lease Agreement.pdf', 'A lease agreement.');
   });
 
   it('traps keyboard focus in settings and restores it to the invoking control', async () => {

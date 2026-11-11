@@ -356,6 +356,31 @@ describe('keyboard review', () => {
     expect(inspector()).toHaveTextContent('1 of 6 to decide');
   });
 
+  // Alt+N is pressed from the name, where corrections are typed. Leaving an
+  // item for later threw its typing away: back round to it, the proposal
+  // was in the field again.
+  it('alt_n_keeps_what_was_typed_for_when_review_comes_back_to_it', async () => {
+    const bridge = await start();
+    const filename = () => within(inspector()).getByLabelText('Filename');
+    const description = () => within(inspector()).getByLabelText('Description');
+    press('F2');
+    fireEvent.change(filename(), { target: { value: '2024-02-01 Engagement Letter with Northwind Traders LLC' } });
+    fireEvent.change(description(), { target: { value: 'Engagement letter, typed by hand.' } });
+
+    press('n', { altKey: true });
+    // The next item has its own proposal, not the name typed for the last.
+    await waitFor(() => expect(filename()).toHaveValue('2024-02-09 Invoice INV-3301 from Fabrikam Inc'));
+    expect(description()).not.toHaveValue('Engagement letter, typed by hand.');
+    for (let skipped = 0; skipped < 5; skipped += 1) press('n', { altKey: true });
+    await waitFor(() => expect(inspector()).toHaveTextContent('Scan 0101.pdf'));
+    expect(filename()).toHaveValue('2024-02-01 Engagement Letter with Northwind Traders LLC');
+    expect(description()).toHaveValue('Engagement letter, typed by hand.');
+
+    // And it is what is filed.
+    fireEvent.keyDown(filename(), { key: 'Enter' });
+    await waitFor(() => expect(bridge.approve).toHaveBeenCalledWith('scan-0101', '2024-02-01 Engagement Letter with Northwind Traders LLC.pdf', 'Engagement letter, typed by hand.'));
+  });
+
   it('alt_n_is_only_that_chord_and_only_where_the_link_is', async () => {
     await start();
     const filename = () => within(inspector()).getByLabelText('Filename');
