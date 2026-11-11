@@ -34,15 +34,15 @@ pipeline's, recorded live with Qwen3.5 9B after the second engine adaptation
 (`e64581e`, merged as `a7d3021`), and `fixtures/corpus-recording-digest.json`
 and `corpus-baseline-digest.json` the digest pipeline's, which a hosted model
 reads through, recorded the same day. Both are replayed with the accurate
-model's review gate, `--min-token-confidence 0.7`
+model's review gate, `--min-token-confidence 0.8`
 (`REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE` in `tiers.rs`), as the app reads,
 and their baselines were written at that gate. CI replays both:
 
 ```text
 intern-evaluate ... --replay fixtures/corpus-recording.json --baseline fixtures/corpus-baseline.json \
-  --min-token-confidence 0.7
+  --min-token-confidence 0.8
 intern-evaluate ... --pipeline digest --replay fixtures/corpus-recording-digest.json \
-  --baseline fixtures/corpus-baseline-digest.json --min-token-confidence 0.7
+  --baseline fixtures/corpus-baseline-digest.json --min-token-confidence 0.8
 ```
 
 ## What replay can and cannot tell you
@@ -145,7 +145,7 @@ pins, starts `llama-server` with the flags the app itself uses (one slot, CPU,
 8,192-token context, the model's own chat template, the prompt cache off,
 `-ub 256`), records with the token probabilities the review gate reads
 (`--token-confidence`), writes the baseline at the accurate model's gate
-(`--min-token-confidence 0.7`, as CI replays it), and stops the server. It records the evidence pipeline, the
+(`--min-token-confidence 0.8`, as CI replays it), and stops the server. It records the evidence pipeline, the
 default; the digest pipeline's recording is made the same way by
 `intern-evaluate --pipeline digest --record fixtures/corpus-recording-digest.json
 --write-baseline fixtures/corpus-baseline-digest.json`. Commit

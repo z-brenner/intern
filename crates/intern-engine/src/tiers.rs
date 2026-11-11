@@ -489,10 +489,19 @@ pub fn escalation_with(
 /// Calibrated by replay on the four real-document sets
 /// (`bench/reports/model-qualification-2026-11`): a larger model is surer of
 /// its wrong names than Qwen3.5 2B was, and the 2B's 0.5 let the 9B file
-/// 16 wrong names of 42 filed. At 0.6 it files 9 wrong of 28; at 0.7, 2 of
-/// 15; at 0.8, 1 of 7. On InternBench 0.7 keeps 37 of 77 names ready with
-/// one wrong, against 47 and one at 0.6.
-pub const REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE: f32 = 0.7;
+/// 16 wrong names of 42 filed. At 0.6 it filed 9 wrong of 28; at 0.7, 2 of
+/// 15; at 0.8, 1 of 7. It was 0.7 through alpha.16.
+///
+/// 0.8 from alpha.17, by a rule written down before the sixth real set was
+/// read (`bench/reports/review-gate-2026-11`): of the policies that filed no
+/// more wrong names than 0.7 on the development recordings, the one that
+/// filed the fewest wrong names on that unseen set. Replayed through this
+/// release's engine, 0.7 filed 4 right names and 2 wrong ones there, 0.8
+/// 3 and 1; on the five development sets and InternBench 0.7 filed 55 right
+/// and 2 wrong, 0.8 39 and none. A name filed wrong is renamed with no one
+/// looking; a right one held is a click. 51 documents cannot certify a
+/// rate, and the counts say so.
+pub const REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE: f32 = 0.8;
 
 /// The same for the quick model's readings. A quick reading always goes to
 /// a person ([`hold_fast_reading`]), so this decides only whether a cascade

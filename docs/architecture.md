@@ -789,8 +789,10 @@ judge it as they judge the 9B's, but whatever they make of it the queue holds
 it with `FAST_MODEL_READING` (`tiers::hold_fast_reading`), as the builds
 before alpha.13 held Bonsai's: on the four real-document sets the 4B filed
 a wrong name for about every right one at any gate threshold
-(`bench/reports/model-qualification-2026-11`), where the 9B at its 0.7
-gate files one wrong name in seven. What sets a quick reading apart beyond
+(`bench/reports/model-qualification-2026-11`), where the 9B at the 0.7
+gate it had then filed one wrong name in seven. Its gate is 0.8 from
+alpha.17 (`tiers::REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE`,
+[`bench/reports/review-gate-2026-11`](../bench/reports/review-gate-2026-11/README.md)). What sets a quick reading apart beyond
 that is whether it stands in: made while the accurate model was wanted and
 not installed yet, or did not fit in memory, it is provisional, and once the
 accurate model can read - its download verified, or memory back - the queue
