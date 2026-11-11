@@ -300,12 +300,16 @@ const GIB: u64 = 1024 * 1024 * 1024;
 /// InternBench (`VmHWM`): 1.30-1.42 GB in twelve runs, against 0.75-0.92 GB
 /// one page at a time (docs/ocr.md), with room above the highest.
 const TWO_PAGE_PEAK: u64 = 1_450 * MB;
-/// The weights a loaded accurate model keeps reading: its whole 5.68 GB
-/// file. It runs with `--no-repack` (`intern_engine::tiers::tier_server_flags`),
-/// so every weight matrix is read where the file maps it; with repacked
-/// weights it was 2.7 GB of the file, the rest copied out once and left. On
-/// Linux they are page cache, which the available memory counts although
-/// the model needs them.
+/// The weights a loaded accurate model keeps reading, counted as its whole
+/// 5.68 GB file, an upper bound. It runs with `--no-repack`
+/// (`intern_engine::tiers::tier_server_flags`), so every weight matrix is
+/// read where the file maps it: all of the file but the token embeddings,
+/// which are read a row at a time. About 4,880 MiB of the 5,417 MiB file
+/// stayed in the server's working set on a 16 GiB Windows runner (run
+/// 43063958237); counted as that, the bar below is 8 GiB all the same. With
+/// repacked weights it was 2.7 GB of the file, the rest copied out once and
+/// left. On Linux they are page cache, which the available memory counts
+/// although the model needs them.
 const MODEL_WEIGHTS_IN_USE: u64 = 5_680 * MB;
 /// What the tier plan leaves for the person's own work
 /// (`intern_engine::tiers::HEADROOM`).
@@ -574,6 +578,12 @@ mod tests {
             assert!(two_pages_min_available(false) >= TWO_PAGE_PEAK + HEADROOM);
         }
         assert_eq!(two_pages_min_available(true), 8 * GIB);
+        // Counted as the 4,880 MiB of the file the 9B kept in its working
+        // set on Windows, not the whole file, the bar is the same.
+        assert_eq!(
+            (TWO_PAGE_PEAK + 4_880 * 1024 * 1024 + HEADROOM).div_ceil(GIB) * GIB,
+            two_pages_min_available(true)
+        );
         assert_eq!(two_pages_min_available(false), 3 * GIB);
         assert_eq!(
             TWO_PAGES_MIN_AVAILABLE,

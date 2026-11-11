@@ -157,19 +157,23 @@ pub const fn resident_estimate(tier: ModelTier) -> u64 {
 /// With repacked weights that was less than [`resident_estimate`], because
 /// the mapped weights the CPU backend repacks are read once and never again,
 /// and the system reclaims those pages first. Measured for the 9B under a
-/// memory limit on Linux (`bench/reports/speed-linux-cpu-2026-11-05`): 3.4
-/// GB of anonymous memory and 2.7 GB of weights it keeps reading, about 6.2
-/// GB in all. At a 6 GB limit it read a document in 95 s against 72 s with
-/// no limit; at 5 GB it thrashed (421 s). With `--no-repack`
-/// ([`tier_server_flags`]) it keeps reading the whole mapped file instead,
-/// all of its resident set in use: 6,133-6,184 MiB at its peak
-/// (`bench/reports/speed-linux-cpu-2026-11-11`), about the same in all and
-/// within this figure; not measured under a limit. The 4B was not measured
-/// under a limit; its resident set stands in. On Windows the 9B's working
-/// set right after a document on a 16 GiB runner was 8,110 MiB with
-/// repacked weights, the touched originals included
-/// (`bench/reports/windows-memory-2026-11-09`), and 5,229-5,491 MiB without
-/// (run 43063958237); what it needs under a squeeze there is not measured.
+/// memory limit on Linux (`bench/reports/speed-linux-cpu-2026-11-05`), at a
+/// 6 GB limit: 3,317 MiB of anonymous memory and 2,726 MiB of weights it
+/// kept reading, 6,043 MiB in all (the report's "6.2 GB"). There it read a
+/// document in 95 s against 72 s with no limit; at 5 GB it thrashed
+/// (421 s). With `--no-repack` ([`tier_server_flags`]) it reads the
+/// originals in the mapped file in place of the copy: all of the file but
+/// the token embeddings, which are read a row at a time. About 4,880 MiB of
+/// the 5,417 MiB file stayed in its working set on Windows (run
+/// 43063958237); its peak resident set on Linux, 6,133-6,184 MiB
+/// (`bench/reports/speed-linux-cpu-2026-11-11`), is a high-water mark of
+/// whatever was ever resident. Both are within this figure; what it needs
+/// was not measured under a limit. The 4B was not measured under a limit;
+/// its resident set stands in. On Windows the 9B's working set right after
+/// a document on a 16 GiB runner was 8,110 MiB with repacked weights, the
+/// touched originals included (`bench/reports/windows-memory-2026-11-09`),
+/// and 5,490-5,491 MiB without (run 43063958237; 5,229-5,491 MiB from load
+/// to a minute idle); what it needs under a squeeze there is not measured.
 pub const fn working_set(tier: ModelTier) -> u64 {
     match tier {
         ModelTier::Fast => 4_700 * MIB,
@@ -188,20 +192,24 @@ pub const fn working_set(tier: ModelTier) -> u64 {
 /// reports as reclaimable. Crediting them again counted them twice, so a
 /// loaded quick model could make the accurate one look as if it fit on a
 /// machine that cannot hold it. Only the rest - the context, the compute
-/// buffers, the repacked weights - comes back on unload: 2,883 MiB for the
-/// 9B against 3,317 MiB of anonymous memory measured
-/// (`bench/reports/speed-linux-cpu-2026-11-05`).
+/// buffers, any repacked weights - comes back on unload: 2,883 MiB for the
+/// 9B against 3,317 MiB of anonymous memory measured with repacked weights
+/// (`bench/reports/speed-linux-cpu-2026-11-05`). The 9B runs with
+/// `--no-repack` from alpha.17, and its peak resident set less its file is
+/// about 0.7 GiB (`bench/reports/speed-linux-cpu-2026-11-11`), so on Linux
+/// this now credits it about 2 GiB too much (see [`resident_estimate`]).
 ///
 /// On Windows it is far short. The available physical memory counts the
 /// standby list, where a mapped file's cached pages wait, but not the pages
 /// a process has in its working set, and the server keeps the weights it
 /// has touched there until it exits or the system trims them. Measured on a
 /// 16 GiB runner (`bench/reports/windows-memory-2026-11-09`): right after a
-/// document the 9B's working set was 8,107-8,110 MiB and the 4B's
+/// document the 9B's working set was 8,107-8,110 MiB with repacked weights
+/// (5,490-5,491 MiB with `--no-repack`, run 43063958237) and the 4B's
 /// 4,513-4,514, against the 2,883 and 2,086 this credits. With 2 GiB held
-/// by another process, the plan's arithmetic on those numbers stands the
-/// loaded 9B down for the 4B before the next document, and the loaded 4B
-/// down for the 9B before the one after.
+/// by another process, the plan's arithmetic on the repacked numbers stands
+/// the loaded 9B down for the 4B before the next document, and the loaded
+/// 4B down for the 9B before the one after.
 pub const fn unload_gives_back(tier: ModelTier, model_file_bytes: u64) -> u64 {
     resident_estimate(tier).saturating_sub(model_file_bytes)
 }
@@ -248,7 +256,7 @@ pub const fn memory_for_plan(available: u64, loaded: Option<(ModelTier, u64)>) -
 ///
 /// The accurate model runs with `--no-repack`. llama.cpp otherwise copies
 /// every Q4_K weight matrix into an interleaved layout for its older x86
-/// GEMM, and that copy is about 2.6 GB of the 9B's private memory; without
+/// GEMM, and that copy is about 2.6 GiB of the 9B's private memory; without
 /// it the weights stay mapped from the file and b11946's tiled k-quant kernel
 /// reads them. Measured on the 9B with the recorded requests
 /// (`bench/reports/speed-linux-cpu-2026-11-11`), each runner its own

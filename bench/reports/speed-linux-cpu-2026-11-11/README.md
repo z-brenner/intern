@@ -14,7 +14,7 @@ the accurate tier as alpha.16 ships it, four threads, the app's flags
 
 On x86, llama.cpp copies every Q4_K weight matrix into an interleaved
 layout at load, for its older 8x8 GEMM (the "repack" buffer). For the 9B
-that copy is about 2.6 GB of the server's private memory, on top of the
+that copy is about 2.6 GiB of the server's private memory, on top of the
 mapped file. With `--no-repack` the weights are read where the file maps
 them, and prompt processing goes through the tiled k-quant kernel b11946
 already contains (ggml-org/llama.cpp#27851), which skips repacked weights.
@@ -62,30 +62,40 @@ five real sets (`battery.json`, `server_peak_rss_kb`):
 
 2,616 MiB (2.7 GB) less, about 30%. The model file is 5,417 MiB, so
 without repacking all but about 0.7 GiB of the resident set is the mapped
-file, which the server now reads on every token.
+file. The server now reads all of it but the token embeddings, which are
+read a row at a time, on every token: on Windows (below) about 4,880 MiB of
+the file stayed in its working set, the rest about the size of the
+embeddings. `VmHWM` is a high-water mark of whatever was ever resident, so
+it does not show what is in use.
 
 On Windows (`runtime-speed.yml` with `probe: memory`, run 43063958237, a
 16 GiB runner, four threads), the 9B's working set right after a document
-was 5,491 MiB, and 5,229-5,491 MiB from load to a minute idle, against
+was 5,490-5,491 MiB, and 5,229-5,491 MiB from load to a minute idle, against
 8,107-8,110 MiB right after a document with repacked weights
 (`bench/reports/windows-memory-2026-11-09`). The machine had 8,208 MiB
 available with it loaded and nothing else running (5,410-5,570 before),
 and 5,939 MiB with another process holding 2 GiB (3,535 before).
 
-The memory floors in `tiers.rs` are left as they are, and that is not
-conservatism: `MIN_AVAILABLE_FOR_ACCURATE` counts what the 9B must keep
-resident to read at its speed, 6.2 GB with repacked weights (3.4 GB of
-anonymous memory and the 2.7 GB of the file it kept reading; the rest of
-the file was the original of the copy, read once). Without the copy it
-keeps reading the whole file, and its peak resident set, 6,133-6,184 MiB,
-is about the same. What changed is memory it never needed. One bar did
-depend on the old layout: on Linux, where `MemAvailable` counts mapped
-weights as reclaimable, a second OCR page is read at once only with the
-weights the 9B keeps reading counted on top (`paddle::pages_at_once`).
-Those are now the whole 5.68 GB file, not 2.7 GB, and the bar rises from 5
-to 8 GiB. The fallback estimate of what unloading the 9B gives back
-(`tiers::resident_estimate`, used only when the live server cannot be read)
-is kept at its repacked figure; see its comment.
+The memory floors in `tiers.rs` are left as they are.
+`MIN_AVAILABLE_FOR_ACCURATE` counts what the 9B must keep resident to read
+at its speed, measured with repacked weights at a 6 GB memory limit: 6,043
+MiB, 3,317 MiB of anonymous memory and 2,726 MiB of the file it kept
+reading; the rest of the file was the original of the copy, read once
+(`speed-linux-cpu-2026-11-05`, which gives it as 6.2 GB, the KiB count read
+as GB). Without the copy it reads those originals in its place, all of the
+file but the token embeddings. Its working set on Windows peaked at about
+5,525 MiB, below that figure, and its peak resident set on Linux,
+6,133-6,184 MiB, is about the same; but what it needs without the copy was
+not measured under a limit, so the floors are kept rather than lowered, and
+may now carry more slack than before. One bar did depend on the old
+layout: on Linux, where `MemAvailable` counts mapped weights as
+reclaimable, a second OCR page is read at once only with the weights the
+9B keeps reading counted on top (`paddle::pages_at_once`). Those are now
+counted as the whole 5.68 GB file, an upper bound, not 2.7 GB, and the bar
+rises from 5 to 8 GiB; counting only the 4,880 MiB in its Windows working
+set would give 8 GiB too. The fallback estimate of what unloading the 9B
+gives back (`tiers::resident_estimate`, used only when the live server
+cannot be read) is kept at its repacked figure; see its comment.
 
 ## Names
 
@@ -107,6 +117,9 @@ processor makes. Within that drift, no difference in accuracy was found.
 ## Not measured
 
 - The fast model with `--no-repack`.
-- Windows: the speed (`runtime-speed.yml` run 43063962365 was still
-  running when this was written).
+- Windows: the speed with `--no-repack`. `runtime-speed.yml` run
+  43063962365, on a 4-logical-processor AMD EPYC 7763 with two server
+  threads, timed the 9B at 88-90 s a request and the 4B at 50 s, but that
+  workflow launches the server without `--no-repack`, so the run timed the
+  repacked launch; the Windows speed with `--no-repack` was not measured.
 - An Intel laptop with AVX-VNNI (above).

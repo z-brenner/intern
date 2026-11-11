@@ -765,11 +765,14 @@ after a document from 8,110 MiB to 5,491 MiB on a 16 GiB Windows runner
 on AMD Zen 4 and 5, 10-15% less on the AVX2 path most laptops load, and the
 same on an Intel Xeon with AMX; its names differed from the repacked run's
 no more than two repacked runs on different processors differ. The memory
-floors below are unchanged: the copy it drops was memory the 9B read once
-and never needed, and what it keeps reading - now its whole file, before
-2.7 GB of it and the copy - comes to about the same. Where the available
-memory counts the weights as reclaimable (Linux), the bar for reading two
-OCR pages at once counts the whole file now (8 GiB, [OCR](ocr.md)).
+floors below are unchanged. The copy it drops was what the 9B read on every
+token, beside originals in the file it read once at load; it now reads those
+originals in its place. What it needs reading them - all of its file but the
+token embeddings, where it read 2.7 GB of the file and the copy before - was
+not measured under a memory limit, so the floors are kept. Where the
+available memory counts the weights as reclaimable (Linux), the bar for
+reading two OCR pages at once counts the whole file now, an upper bound
+(8 GiB, [OCR](ocr.md)).
 
 ### Two models, one at a time
 
@@ -821,12 +824,15 @@ The memory guard: a model is loaded only when the machine reports enough
 available memory for it (`MemAvailable` on Linux, `GlobalMemoryStatusEx` on
 Windows; memory that cannot be read counts as enough): what its server must
 keep resident to read at its speed (Qwen3.5 4B about 4.7 GB, its whole
-resident set; Qwen3.5 9B about 6.2 GB, measured under a memory limit in
-`bench/reports/speed-linux-cpu-2026-11-05` with repacked weights: 3.4 GB of
-anonymous memory and the 2.7 GB of mapped weights it reads on every token,
+resident set; Qwen3.5 9B 6,043 MiB, measured at a 6 GB memory limit in
+`bench/reports/speed-linux-cpu-2026-11-05` with repacked weights: 3,317 MiB
+of anonymous memory and 2,726 MiB of mapped weights it read on every token,
 the rest of the mapped file being the original of what was repacked and
-reclaimable at no cost; with `--no-repack` it reads the whole file, and its
-peak resident set, all of it in use, was 6,133-6,184 MiB), the
+reclaimable at no cost; with `--no-repack` it reads all of the file but the
+token embeddings - about 4,880 of the 5,417 MiB file stayed in its working
+set on Windows, run 43063958237 - and its peak resident set on Linux, a
+high-water mark of whatever was ever resident, was 6,133-6,184 MiB; not
+measured under a limit), the
 parser worker's 0.71 GB OCR peak, and 1 GiB left for the person's own work -
 6.5 GiB for the quick model, 8 GiB for the accurate one. A 16 GB laptop has
 the latter with a browser open, and not with a browser and an office suite at
@@ -839,10 +845,13 @@ cache; on Windows its working set, since the available physical memory counts
 only the free, zero and standby lists, and the weights the server has touched
 stay in its working set until it exits or the system trims them. When the
 server cannot be read, an estimate stands in: the resident high-water mark
-less the model file (`tiers::unload_gives_back`), about right on Linux. On
-Windows that estimate is far short. On a 16 GiB runner the 9B's working set
-right after a document was 8,110 MiB with repacked weights (5,491 MiB
-without) where the estimate credits 2,883 MiB. By
+less the model file (`tiers::unload_gives_back`), measured with repacked
+weights. On Linux it is about right for the 4B. For the 9B, which runs with
+`--no-repack`, it is about 2 GiB high: its peak resident set less its file is
+about 0.7 GiB, against the 2,883 MiB credited. It is kept for Windows (see
+`tiers::resident_estimate`). On Windows that estimate is far short. On a
+16 GiB runner the 9B's working set right after a document was 8,110 MiB with
+repacked weights (5,491 MiB without) where the estimate credits 2,883 MiB. By
 `plan()`'s arithmetic on the probe's numbers, with 2 GiB held by another
 process, as a browser holds it, the estimate would have stood the loaded 9B
 down for the 4B before the next document and the loaded 4B down for the 9B

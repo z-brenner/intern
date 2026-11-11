@@ -367,14 +367,18 @@ beyond that: a document's pages are read two at a time only when, as they
 start, the available memory holds the two-page peak (1.45 GB, above the
 highest measured), the plan's 1 GiB of headroom, and on Linux the weights
 a loaded 9B keeps reading, rounded up to whole GiB: 8 GiB on Linux, 3 GiB
-on Windows. With `--no-repack` (alpha.17) the 9B reads its whole 5.68 GB
-file on every token; with repacked weights it read 2.7 GB of it and the bar
-was 5 GiB. The weights are counted on Linux only because only
-Linux counts them as available: `MemAvailable` takes them for page cache it
-could reclaim, while Windows' available physical memory leaves out the
-server's working set, weights and all. On a 16 GiB Windows runner with the
-9B loaded and a document just read, 5,410-5,570 MiB were available with
-nothing else running and 3,535 MiB with another process holding 2 GiB,
+on Windows. With `--no-repack` (alpha.17) the 9B reads all of its 5.68 GB
+file but the token embeddings, which it reads a row at a time: about 4,880
+MiB of the 5,417 MiB file stayed in its working set on a Windows runner
+(`runtime-speed.yml` run 43063958237). The bar counts the whole file, an
+upper bound, and would be 8 GiB with only that counted too. With repacked
+weights it read 2.7 GB of the file and the bar was 5 GiB. The weights are
+counted on Linux only because only Linux counts them as available:
+`MemAvailable` takes them for page cache it could reclaim, while Windows'
+available physical memory leaves out the server's working set, weights and
+all. On a 16 GiB Windows runner with the 9B loaded and a document just
+read, 5,410-5,570 MiB were available with nothing else running and
+3,535 MiB with another process holding 2 GiB,
 while the server's working set was 8,107-8,110 MiB
 (`runtime-speed.yml` runs 42573531984 and 42574460663, the memory probe;
 `bench/reports/windows-memory-2026-11-09`). Linux's bar of then, 5 GiB, there counts the
