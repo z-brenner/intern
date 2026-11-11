@@ -505,11 +505,26 @@ mod tests {
         assert_eq!(relation.parties[0].role, None);
         assert!(relation.parties[1].signatory);
         // Every score both records hold is the same; the facts add only the
-        // evidence pipeline's own support counts.
+        // evidence pipeline's own support counts, and the relation record
+        // none of its own.
         for (key, value) in &bare.scores {
             assert_eq!(record.scores.get(key), Some(value), "{key}");
         }
-        assert!(record.scores.keys().all(|key| !key.contains("relation")));
+        let added = record
+            .scores
+            .keys()
+            .filter(|key| !bare.scores.contains_key(*key))
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            added,
+            [
+                "facts_proposed",
+                "facts_unsupported",
+                "miscited_ids",
+                "unknown_ids"
+            ]
+        );
         let read: DocumentRecord =
             serde_json::from_value(serde_json::to_value(&record).unwrap()).unwrap();
         assert_eq!(read.relation, record.relation);
