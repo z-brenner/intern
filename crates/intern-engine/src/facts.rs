@@ -3039,10 +3039,9 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
                 let line = line.trim_matches(|c: char| c == '*' || c.is_whitespace());
                 let line_words = words(line);
                 let label = 1;
-                let head = line_words
-                    .get(label..)?
-                    .iter()
-                    .find(|word| names_a_kind(word))?;
+                let head = (label..line_words.len())
+                    .find(|&at| crate::phrases::names_a_kind_at(&line_words, at))
+                    .map(|at| &line_words[at])?;
                 let phrase = title_phrase(line, head)?;
                 let phrase_words = words(&phrase);
                 let numbered = |end: usize| {
@@ -3068,10 +3067,10 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
             }
             // The longest title any kind word on the line heads: "Lease
             // Agreement", not "Lease"; "Packing Slip", whatever follows.
-            words(&line)
-                .iter()
-                .filter(|word| names_a_kind(word))
-                .filter_map(|word| title_phrase(&line, word))
+            let line_words = words(&line);
+            (0..line_words.len())
+                .filter(|&at| crate::phrases::names_a_kind_at(&line_words, at))
+                .filter_map(|at| title_phrase(&line, &line_words[at]))
                 .max_by_key(|phrase| phrase.split_whitespace().count())
                 .map(|phrase| (phrase, line.trim().to_owned()))
         })
@@ -15107,6 +15106,99 @@ Dated: September 16, 2008",
             "{:?}",
             outcome.proposal
         );
+    }
+
+    /// A company's name that holds a kind a name is as readily made of is
+    /// no type: a reply that copied the letterhead's name as its type is
+    /// not supported by it, and the letter stands in as it does for any
+    /// other name ("Rapid Repair Plumbing"). A letterhead in capitals
+    /// titles nothing, and neither does a field the word labels
+    /// ("CITATION: R. v. ..."), as a "CASE REF:" field titles nothing.
+    #[test]
+    fn a_name_that_holds_a_kind_word_types_nothing() {
+        let letter = |head: &str| {
+            format!(
+                "{head}\n12 Quay Street\nLondon\n\n4 March 2024\n\nMs. Dana Whitlock\n\
+                 Harbour Fairs Ltd\n1 Pier Road\nLondon\n\nDear Ms. Whitlock:\n\n\
+                 Thank you for your order of stands for the summer fair, which we will deliver \
+                 on 1 May.\n\nYours sincerely,\n\nTom Hale"
+            )
+        };
+        let reply = |company: &'static str, typed: bool| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: typed.then(|| company.into()),
+                type_evidence: if typed {
+                    vec![id_of(index, company)]
+                } else {
+                    Vec::new()
+                },
+                document_date: Some("2024-03-04".into()),
+                date_evidence: vec![id_of(index, "4 March 2024")],
+                parties: vec![
+                    party(company, Some(PartyRole::Sender), &[id_of(index, company)]),
+                    party(
+                        "Harbour Fairs Ltd",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "Harbour Fairs Ltd")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            }
+        };
+        let (control, _) = facts_for(
+            &letter("Rapid Repair Plumbing"),
+            reply("Rapid Repair Plumbing", true),
+        );
+        assert_eq!(control.proposal.document_type.as_deref(), Some("Letter"));
+        assert!(control.reasons.contains(&ReviewReason::TypeUnsupported));
+        for company in [
+            "Citation Capital",
+            "Notification Services Inc",
+            "First Response Security Ltd",
+            "Circular Economy Scotland",
+            "Rapid Response Plumbing",
+        ] {
+            let (outcome, _) = facts_for(&letter(company), reply(company, true));
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Letter"),
+                "{company}: {:?}",
+                outcome.reasons
+            );
+            assert!(
+                outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+                "{company}: {:?}",
+                outcome.reasons
+            );
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview, "{company}");
+        }
+        // A letterhead in capitals, and no type from the reply.
+        for company in ["CITATION CAPITAL", "FIRST RESPONSE SECURITY"] {
+            let (outcome, _) = facts_for(&letter(company), reply(company, false));
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Letter"),
+                "{company}: {:?}",
+                outcome.reasons
+            );
+        }
+        // A court's decision that opens on its citation field.
+        let decision = |field: &str| {
+            format!(
+                "{field} R. v. HARLOW, 2021 ONCA 123\nDATE: 20210304\n\n\
+                 COURT OF APPEAL FOR ONTARIO\n\nBetween\n\nHer Majesty the Queen\n\n\
+                 Respondent\n\nand\n\nPeter Harlow\n\nAppellant"
+            )
+        };
+        let no_type = |_: &EvidenceIndex| ModelFacts::default();
+        let (control, _) = facts_for(&decision("CASE REF:"), no_type);
+        let (outcome, _) = facts_for(&decision("CITATION:"), no_type);
+        assert_eq!(
+            outcome.proposal.document_type, control.proposal.document_type,
+            "{:?}",
+            outcome.reasons
+        );
+        assert_ne!(outcome.proposal.document_type.as_deref(), Some("Citation"));
     }
 
     /// A safety agency's notice as the worker extracts it: the title under
