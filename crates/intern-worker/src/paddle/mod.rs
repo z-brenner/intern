@@ -307,9 +307,9 @@ const TWO_PAGE_PEAK: u64 = 1_450 * MB;
 /// which are read a row at a time. About 4,880 MiB of the 5,417 MiB file
 /// stayed in the server's working set on a 16 GiB Windows runner (run
 /// 43063958237); counted as that, the bar below is 8 GiB all the same. With
-/// repacked weights it was 2.7 GB of the file, the rest copied out once and
-/// left. On Linux they are page cache, which the available memory counts
-/// although the model needs them.
+/// repacked weights it was 2,726 MiB of the file, counted then as 2.7 GB,
+/// the rest copied out once and left. On Linux they are page cache, which
+/// the available memory counts although the model needs them.
 const MODEL_WEIGHTS_IN_USE: u64 = 5_680 * MB;
 /// What the tier plan leaves for the person's own work
 /// (`intern_engine::tiers::HEADROOM`).
@@ -323,9 +323,9 @@ const HEADROOM: u64 = GIB;
 /// lists it adds up. A 16 GiB Windows runner with the 9B loaded and a
 /// document just read had 5,410-5,570 MiB available with nothing else
 /// running, and 3,535 MiB with another process holding 2 GiB, while the
-/// server's working set was 8,107-8,110 MiB, 4.9 GB of it the mapped file
-/// (`bench/reports/windows-memory-2026-11-09`, runs 42573531984 and
-/// 42574460663). With `--no-repack` the working set was 5,491 MiB and
+/// server's working set was 8,107-8,110 MiB, about 4,880 MiB of it the
+/// mapped file (`bench/reports/windows-memory-2026-11-09`, runs 42573531984
+/// and 42574460663). With `--no-repack` the working set was 5,491 MiB and
 /// 8,208 MiB were available (run 43063958237).
 const AVAILABLE_COUNTS_MODEL_WEIGHTS: bool = !cfg!(windows);
 

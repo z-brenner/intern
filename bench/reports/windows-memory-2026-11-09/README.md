@@ -9,8 +9,9 @@ document. By `plan()`'s arithmetic on the measured numbers it does, for
 documents read back to back on a 16 GiB machine with about 10,000 to
 13,200 MiB (9.8 to 12.9 GiB) available before any model is loaded. The plan
 now credits the live server's working set instead, and asks a loaded 4B for
-1 GiB more than the floor before it makes way for the 9B; with the measured
-numbers the swap is gone. Figures are in MiB unless they say otherwise.
+1 GiB more than the floor before it makes way for the 9B (2 GiB from
+alpha.17: see the note under "The change"); with the measured numbers the
+swap is gone. Figures are in MiB unless they say otherwise.
 
 ## The mechanism
 
@@ -240,7 +241,8 @@ a document or A ≥ 8,787 after a minute idle with those numbers (9,655 and
 9,142 with pass 3's), all above where the 9B is stood down, so neither band
 is left in either run. In both runs the 4B was probed second, after the 9B,
 and more was available 3 s after its exit than before its load (1,181 MiB in
-pass 3, 1,449 MiB in run 43063958237), its own working set flat or falling:
+pass 3, 1,449 MiB in run 43063958237), its own working set flat or falling
+over its idle minute while the available memory rose by 581 and 685 MiB:
 part of its figure is the rest of the machine releasing memory, so the
 margin errs toward keeping the smaller model. The cost grows with it: a
 loaded 4B now stays until the plan's figure has 2,048 MiB more than the

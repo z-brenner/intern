@@ -244,8 +244,9 @@ pub const fn unload_gives_back(tier: ModelTier, model_file_bytes: u64) -> u64 {
 /// (the test `a_loaded_fast_model_makes_way_only_with_room_to_spare`).
 /// In both runs the 4B was probed second, after the 9B, and more memory was
 /// available 3 s after its exit than before its load (1,181 and 1,449 MiB),
-/// its own working set flat or falling: part of its figure is the rest of
-/// the machine releasing memory, so the margin errs toward keeping the
+/// its own working set flat or falling over its idle minute while the
+/// available memory rose by 581 and 685 MiB: part of its figure is the rest
+/// of the machine releasing memory, so the margin errs toward keeping the
 /// smaller model. The loaded 9B is still stood down at the floor itself:
 /// the margin keeps the smaller model longer, never the larger one. It also
 /// stops a machine whose memory drifts around the floor from swapping the

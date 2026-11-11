@@ -768,8 +768,8 @@ no more than two repacked runs on different processors differ. The memory
 floors below are unchanged. The copy it drops was what the 9B read on every
 token, beside originals in the file it read once at load; it now reads those
 originals in its place. What it needs reading them - all of its file but the
-token embeddings, where it read 2.7 GB of the file and the copy before - was
-not measured under a memory limit, so the floors are kept. Where the
+token embeddings, where it read 2,726 MiB of the file and the copy before -
+was not measured under a memory limit, so the floors are kept. Where the
 available memory counts the weights as reclaimable (Linux), the bar for
 reading two OCR pages at once counts the whole file now, an upper bound
 (8 GiB, [OCR](ocr.md)).

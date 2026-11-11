@@ -372,8 +372,9 @@ file but the token embeddings, which it reads a row at a time: about 4,880
 MiB of the 5,417 MiB file stayed in its working set on a Windows runner
 (`runtime-speed.yml` run 43063958237). The bar counts the whole file, an
 upper bound, and would be 8 GiB with only that counted too. With repacked
-weights it read 2.7 GB of the file and the bar was 5 GiB. The weights are
-counted on Linux only because only Linux counts them as available:
+weights it read 2,726 MiB of the file, counted as 2.7 GB, and the bar was
+5 GiB. The weights are counted on Linux only because only Linux counts them
+as available:
 `MemAvailable` takes them for page cache it could reclaim, while Windows'
 available physical memory leaves out the server's working set, weights and
 all. On a 16 GiB Windows runner with the 9B loaded and a document just
