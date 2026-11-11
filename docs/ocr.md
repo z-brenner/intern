@@ -328,7 +328,7 @@ of full-width lines from a 300 DPI page. So each page gets two threads,
 and never more than two pages are read at once. The output is the same in
 every row.
 
-Until alpha.15 a machine read as many pages at once as half its logical
+Through alpha.16 a machine read as many pages at once as half its logical
 processors allowed, so a 4-core machine read one page at a time, on half
 its processors, while the model server beside it sat idle: the queue
 extracts a document and only then asks the model about it. From four

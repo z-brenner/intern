@@ -344,7 +344,7 @@ const fn two_pages_min_available(counts_model_weights: bool) -> u64 {
 /// page at a time (`intern_engine::tiers::WORKER_PEAK`), not two, so on a
 /// machine near a model's memory floor a second set of sessions would come
 /// out of the person's headroom, or out of the model's weights. There pages
-/// are read one at a time, as a 4-core machine read them until alpha.15.
+/// are read one at a time, as a 4-core machine read them through alpha.16.
 /// Counting the weights on Windows too would have counted them twice: the
 /// runner above, at 5,410-5,570 MiB, would have been at the edge of 5 GiB
 /// with nothing else open, and below it with a browser, where alpha.14

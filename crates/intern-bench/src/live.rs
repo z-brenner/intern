@@ -71,9 +71,9 @@ pub struct LiveRun {
 /// state its replies are measured in. About 1,050 tokens with the
 /// instructions on Qwen3.5's tokenizer (counted with `llama-tokenize`),
 /// past the 737 the app's `-ub 256` needs and the 993 of llama.cpp's
-/// default 512. Until alpha.15 it was a
-/// four-sentence notice of 637 tokens, and every recorded live run was made
-/// with the instructions in pieces (docs/architecture.md).
+/// default 512. Through alpha.16 it was a four-sentence notice of 637
+/// tokens, and every live run recorded until then was made with the
+/// instructions in pieces (docs/architecture.md).
 const WARM_UP_TEXT: &str = "NOTICE OF OFFICE RELOCATION\n\n\
     Dated May 4, 2026\n\n\
     Brindlemoor Survey Partners LLP informs its clients that from June 1, 2026 its \
