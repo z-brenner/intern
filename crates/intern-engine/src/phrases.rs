@@ -1443,8 +1443,11 @@ mod tests {
             None
         );
         assert_eq!(
-            title_phrase("Subject: UPS Ship Notification, 1Z7261100192688747", "notification")
-                .as_deref(),
+            title_phrase(
+                "Subject: UPS Ship Notification, 1Z7261100192688747",
+                "notification"
+            )
+            .as_deref(),
             Some("Ship Notification")
         );
         // A kind that sets a name apart names one wherever it stands.
