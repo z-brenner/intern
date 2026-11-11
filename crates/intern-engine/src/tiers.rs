@@ -219,21 +219,39 @@ pub const fn unload_gives_back(tier: ModelTier, model_file_bytes: u64) -> u64 {
 ///
 /// Credited what stopping it gives back, a loaded model leaves the plan
 /// judging the machine about as it would be with nothing loaded, but not
-/// exactly, and not alike for the two models. On a 16 GiB Windows runner
-/// (`bench/reports/windows-memory-2026-11-09`) the plan's figure ran from
-/// 110 MiB under to 1,098 MiB over the memory available before that model
-/// was loaded, and with 2 GiB held by another process it came out higher
-/// with the 4B loaded than with the 9B: by 404 MiB with each right after a
-/// document, by 917 MiB with the 4B a minute idle. Where the 4B's figure
-/// is the higher, a machine with the 9B loaded and just short of the floor
-/// is judged to have room once the 4B is loaded, and the two swap, the 9B
-/// each time onto a machine that cannot hold it: before every document of
-/// a queue, or at every pause. Asked for this much more,
-/// the 4B stays until the room is plainly there. The loaded 9B is still
-/// stood down at the floor itself: the margin keeps the smaller model
-/// longer, never the larger one. It also stops a machine whose memory
-/// drifts around the floor from swapping the models back and forth.
-pub const UPGRADE_MARGIN: u64 = 1_024 * MIB;
+/// exactly, and not alike for the two models. Where the 4B's figure is the
+/// higher, a machine with the 9B loaded and near the floor is judged to
+/// have room once the 4B is loaded, and the two swap, the 9B each time onto
+/// a machine that cannot hold it: before every document of a queue, or at
+/// every pause. On 16 GiB Windows runners with 2 GiB held by another
+/// process, the plan's figure against the memory available before that
+/// model was loaded came out:
+///
+/// * with repacked weights (`bench/reports/windows-memory-2026-11-09`, pass
+///   3): +181 MiB with the 9B right after a document, +585 with the 4B
+///   right after a document and +1,098 a minute idle, so the 4B's was the
+///   higher by 404 and 917 MiB;
+/// * with the 9B's `--no-repack` (`runtime-speed.yml` run 43063958237):
+///   -141 MiB with the 9B right after a document, +768 with the 4B right
+///   after a document and +1,453 a minute idle, so the 4B's was the higher
+///   by 909 and 1,594 MiB. At 1,024 MiB, the margin from alpha.15 to
+///   alpha.16, a machine with between about 7,763 and 8,333 MiB available
+///   before any load would have the models swap at every pause.
+///
+/// The margin is the largest gap measured with room to spare, as 1,024 was
+/// for 917: carried to every machine as the report's bands are, either
+/// run's numbers bring the loaded 4B back only where the 9B would stay
+/// (the test `a_loaded_fast_model_makes_way_only_with_room_to_spare`).
+/// In both runs the 4B was probed second, after the 9B, and more memory was
+/// available 3 s after its exit than before its load (1,181 and 1,449 MiB),
+/// its own working set flat or falling: part of its figure is the rest of
+/// the machine releasing memory, so the margin errs toward keeping the
+/// smaller model. The loaded 9B is still stood down at the floor itself:
+/// the margin keeps the smaller model longer, never the larger one. It also
+/// stops a machine whose memory drifts around the floor from swapping the
+/// models back and forth. The cost: a loaded 4B, its readings provisional,
+/// stays until the plan's figure reaches the floor and this margin.
+pub const UPGRADE_MARGIN: u64 = 2_048 * MIB;
 
 /// The memory the plan judges the machine by: `available`, what the
 /// machine reports, plus, when a model is loaded, what stopping its server
@@ -975,60 +993,85 @@ mod tests {
         assert_eq!(first(Some((F, released + UPGRADE_MARGIN))), Some(A));
     }
 
-    /// Pass 3 of the Windows probe, with 2 GiB held by another process
-    /// (`bench/reports/windows-memory-2026-11-09`), carried to a machine
-    /// with `nothing` MiB available before any model is loaded, as the
-    /// report's bands carry it: each load takes from the available memory
-    /// what it took on the runner, and the server reports the working set it
-    /// reported. Credited that alone, a machine just short of the floor with
-    /// the 9B loaded is judged to have room once the 4B is loaded, and the
-    /// two swap, document after document or pause after pause. Asked for the
-    /// margin, the 4B stays.
+    /// The Windows probe's passes with 2 GiB held by another process, carried
+    /// to a machine with `nothing` MiB available before any model is loaded,
+    /// as the report's bands carry them: each load takes from the available
+    /// memory what it took on the runner, and the server reports the working
+    /// set it reported. Pass 3, with repacked weights
+    /// (`bench/reports/windows-memory-2026-11-09`), and the 9B with
+    /// `--no-repack` (`runtime-speed.yml` run 43063958237). Credited that
+    /// alone, a machine near the floor with the 9B loaded is judged to have
+    /// room once the 4B is loaded, and the two swap, document after document
+    /// or pause after pause; asked for alpha.16's 1,024 MiB, at every pause
+    /// still with `--no-repack`. Asked for the margin, the 4B stays.
     #[test]
     fn a_loaded_fast_model_makes_way_only_with_room_to_spare() {
         // MiB: what the load took from the available memory, and the
         // server's working set then. The 9B right after a document; the 4B
         // right after a document, and after a minute idle.
-        const ACCURATE_AFTER_A_DOCUMENT: (u64, u64) = (7_926, 8_107);
-        const FAST_AFTER_A_DOCUMENT: (u64, u64) = (3_929, 4_514);
-        const FAST_AFTER_A_MINUTE_IDLE: (u64, u64) = (3_347, 4_445);
+        const PASS_3: [(u64, u64); 3] = [(7_926, 8_107), (3_929, 4_514), (3_347, 4_445)];
+        const NO_REPACK: [(u64, u64); 3] = [(5_631, 5_490), (3_746, 4_514), (3_061, 4_514)];
+        const ALPHA_16_MARGIN: u64 = 1_024 * MIB;
         let first = |memory: u64| plan(Automatic, BOTH, Some(memory)).map(|plan| plan.first);
         // A machine with less than the 9B took has nothing left available.
         let available = |nothing: u64, takes: u64| nothing.saturating_sub(takes) * MIB;
-        let mut swaps_without_the_margin = [Vec::new(), Vec::new()];
-        for nothing in 7_000..10_000_u64 {
-            let (takes, holds) = ACCURATE_AFTER_A_DOCUMENT;
-            let with_accurate = memory_for_plan(available(nothing, takes), Some((A, holds * MIB)));
-            let stands_down = first(with_accurate) == Some(F);
-            assert_eq!(
-                stands_down,
-                (nothing + holds - takes) * MIB < MIN_AVAILABLE_FOR_ACCURATE,
-                "{nothing} MiB"
-            );
-            for (fast, swaps) in [FAST_AFTER_A_DOCUMENT, FAST_AFTER_A_MINUTE_IDLE]
-                .into_iter()
-                .zip(&mut swaps_without_the_margin)
-            {
-                let (takes, holds) = fast;
-                let with_fast = available(nothing, takes);
-                let comes_back = first(memory_for_plan(with_fast, Some((F, holds * MIB))));
-                assert!(
-                    !(stands_down && comes_back == Some(A)),
-                    "{nothing} MiB: the models swap"
+        // The machines on which the models swap, credited the working set
+        // alone and asked for alpha.16's margin: the first, the last and how
+        // many, after a document and after a minute idle. Asked for the
+        // margin, none.
+        let bands = |[accurate, after_a_document, after_a_minute_idle]: [(u64, u64); 3]| {
+            let mut swaps = [[Vec::new(), Vec::new()], [Vec::new(), Vec::new()]];
+            for nothing in 6_000..10_000_u64 {
+                let (takes, holds) = accurate;
+                let with_accurate =
+                    memory_for_plan(available(nothing, takes), Some((A, holds * MIB)));
+                let stands_down = first(with_accurate) == Some(F);
+                assert_eq!(
+                    stands_down,
+                    (nothing + holds - takes) * MIB < MIN_AVAILABLE_FOR_ACCURATE,
+                    "{nothing} MiB"
                 );
-                if stands_down && first(with_fast + holds * MIB) == Some(A) {
-                    swaps.push(nothing);
+                for (stage, (takes, holds)) in [after_a_document, after_a_minute_idle]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let with_fast = available(nothing, takes);
+                    let comes_back = first(memory_for_plan(with_fast, Some((F, holds * MIB))));
+                    assert!(
+                        !(stands_down && comes_back == Some(A)),
+                        "{nothing} MiB: the models swap"
+                    );
+                    for (margin, found) in [0, ALPHA_16_MARGIN].into_iter().zip(&mut swaps) {
+                        let figure = (with_fast + holds * MIB).saturating_sub(margin);
+                        if stands_down && first(figure) == Some(A) {
+                            found[stage].push(nothing);
+                        }
+                    }
                 }
             }
-        }
-        let band = |swaps: &[u64]| (swaps.first().copied(), swaps.last().copied(), swaps.len());
+            swaps.map(|stages| {
+                stages.map(|found| (found.first().copied(), found.last().copied(), found.len()))
+            })
+        };
         assert_eq!(
-            band(&swaps_without_the_margin[0]),
-            (Some(7_607), Some(8_010), 404)
+            bands(PASS_3),
+            [
+                [
+                    (Some(7_607), Some(8_010), 404),
+                    (Some(7_094), Some(8_010), 917)
+                ],
+                [(None, None, 0), (None, None, 0)],
+            ]
         );
         assert_eq!(
-            band(&swaps_without_the_margin[1]),
-            (Some(7_094), Some(8_010), 917)
+            bands(NO_REPACK),
+            [
+                [
+                    (Some(7_424), Some(8_332), 909),
+                    (Some(6_739), Some(8_332), 1_594)
+                ],
+                [(None, None, 0), (Some(7_763), Some(8_332), 570)],
+            ]
         );
     }
 

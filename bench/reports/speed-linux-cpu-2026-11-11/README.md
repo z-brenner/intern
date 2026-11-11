@@ -74,7 +74,15 @@ was 5,490-5,491 MiB, and 5,229-5,491 MiB from load to a minute idle, against
 8,107-8,110 MiB right after a document with repacked weights
 (`bench/reports/windows-memory-2026-11-09`). The machine had 8,208 MiB
 available with it loaded and nothing else running (5,410-5,570 before),
-and 5,939 MiB with another process holding 2 GiB (3,535 before).
+and 5,939 MiB with another process holding 2 GiB (3,535 before). With
+that 2 GiB held, the tier plan's figure against the memory available
+before each load came out 141 MiB under with the 9B right after a
+document and 1,453 MiB over with the 4B a minute idle: a 1,594 MiB gap,
+wider than the 1,024 MiB `tiers::UPGRADE_MARGIN` then asked of a loaded
+4B, which would have swapped the models at every pause on a machine with
+about 7,763 to 8,333 MiB available before any load. The margin is now
+2,048 MiB; see its comment and the note in
+`bench/reports/windows-memory-2026-11-09`.
 
 The memory floors in `tiers.rs` are left as they are.
 `MIN_AVAILABLE_FOR_ACCURATE` counts what the 9B must keep resident to read
