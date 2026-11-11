@@ -49,6 +49,7 @@ pub mod prompt;
 pub mod retrieve;
 pub mod server;
 pub mod setup;
+pub mod slots;
 pub mod structure;
 #[cfg(test)]
 mod test_support;

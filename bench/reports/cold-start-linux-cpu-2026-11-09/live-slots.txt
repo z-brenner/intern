@@ -1,0 +1,17 @@
+speed-battery.yml run 42613236166, job "The app's slot restore, live" (129146709134), commit d24fc11
+cargo test --locked -p intern-app --lib live_the_first_document_after_a_restart -- --nocapture --test-threads 1
+INTERN_LIVE_LLAMA_SERVER: llama.cpp b11946 ubuntu-x64 release (sha256 9e44e1a59e971f0de3fbf74fa46355ab48fed7bb51c1c16b56a96c355947f8dd)
+INTERN_LIVE_MODEL: Qwen3.5-4B-Q4_K_M.gguf (sha256 00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4)
+
+CPU(s):                                  4
+Model name:                              AMD EPYC 9V74 80-Core Processor
+Thread(s) per core:                      2
+0.00.008.072 I load_backend: loaded CPU backend from /home/runner/work/_temp/live-slots/llama/llama-b11946/libggml-cpu-zen4.so
+
+running 1 test
+test commands::runtime_tests::live_the_first_document_after_a_restart_finds_the_instructions_restored ... intern: the fast local model's instructions were saved for its next launch (492 tokens, 174210604 bytes, 36 ms)
+intern: the fast local model's instructions were restored (492 tokens, 174210604 bytes, 60 ms)
+slot file 174210604 bytes; start with the restore 3.01173903s; the agreement: cold 0 cached, 928 processed, 20816 ms; restored 477 cached, 451 processed, 10344 ms; steady 477 cached, 10372 ms
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 268 filtered out; finished in 205.55s

@@ -1,0 +1,89 @@
+{
+ "summary": {
+  "logical_processors": 4,
+  "mem_available_gib_min": 7.79,
+  "documents": 77,
+  "ocr_documents": 20,
+  "ocr_pages": 56,
+  "base": {
+   "wall_s": [
+    138.04,
+    153.03,
+    142.14
+   ],
+   "documents_s": [
+    138.0,
+    153.0,
+    142.1
+   ],
+   "ocr_documents_s": [
+    136.3,
+    151.7,
+    140.8
+   ],
+   "named_s": {
+    "scan-lease-25p": [
+     61.36,
+     67.013,
+     63.074
+    ],
+    "scan-agreement-10p": [
+     27.183,
+     32.072,
+     26.702
+    ]
+   },
+   "worker_peak_mb": [
+    747.3,
+    815.9,
+    812.6
+   ]
+  },
+  "head": {
+   "wall_s": [
+    97.24,
+    130.15,
+    139.11
+   ],
+   "documents_s": [
+    97.2,
+    130.0,
+    139.0
+   ],
+   "ocr_documents_s": [
+    95.9,
+    128.8,
+    137.9
+   ],
+   "named_s": {
+    "scan-lease-25p": [
+     33.938,
+     58.019,
+     56.107
+    ],
+    "scan-agreement-10p": [
+     14.78,
+     16.346,
+     30.043
+    ]
+   },
+   "worker_peak_mb": [
+    1382.2,
+    1368.4,
+    1421.3
+   ]
+  },
+  "ocr_documents_change": -0.1544,
+  "documents_change": -0.1545,
+  "readings_differing": [],
+  "failed": []
+ },
+ "order": [
+  "base-r1",
+  "head-r1",
+  "head-r2",
+  "base-r2",
+  "base-r3",
+  "head-r3"
+ ]
+}

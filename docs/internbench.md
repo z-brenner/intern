@@ -251,7 +251,59 @@ Inputs: `model_url` and `model_sha256` (as for a candidate above);
 the app's (a repeated flag's last value wins, so `--threads-batch 4`
 replaces the app's); `threads` (default 2, the app's rule on a 4-processor
 runner); `every` (default 2: every second recorded request, 13 of 26);
-`llama_release` (optional).
+`llama_release` (optional); `cold_start`, `cpu_variant`, `battery`,
+`ocr_pages`, `ocr_base` and `live_slots` (below).
+
+The battery warms every slot before it times anything, so the first
+document of a server lifetime - what a person waits on after sign-in and
+after every idle unload - is not in its numbers. `cold_start` adds that
+measurement before the battery, on fresh servers with the app's flags, an
+API key and a slot folder (`scripts/bonsai-eval/cold-start.py`): one server
+reads a recorded request unwarmed - one long enough to process the
+instructions in one piece, as the app requires before it saves (`0016`) -
+then the app's instructions-only request, and its slot is saved; then, twice over,
+a fresh server reads another request unwarmed, and a fresh server restores
+the saved slot and reads the same request; in the first round the
+unrestored server then reads a third request and the measured one again,
+the steady state. The summary gives `cache_n`, prompt tokens and prompt
+time for the unwarmed, restored and steady-state reads, the slot file's
+size, the save and restore times, whether the restored and unwarmed
+replies equal the steady-state reply, and the first-document saving (prompt
+time without the restore, less prompt time with it, less the restore).
+`cold-start.json` is in the artifact.
+
+`cpu_variant` (one of the release's x86 backends: `haswell` for AVX2,
+`alderlake` for AVX2 with AVX-VNNI, `icelake`, `zen4`, ...) runs every
+server of the job on that backend alone. ggml loads the best
+`libggml-cpu-*.so` it finds beside the executable that `/proc/self/exe`
+resolves to, so a folder of symbolic links still loads the release's own
+best; the job hard-links the release into a folder that holds only the
+named backend instead. A runner without the backend's instructions then
+has no CPU backend and the job fails. Every job records which backend the
+server loads - the `load_backend` lines of `llama-server -lv 4
+--list-devices`, kept as `cpu-backend.txt` - and the summary names the
+library (`libggml-cpu-haswell.so`, say), so a pin that did not take shows.
+Without `cpu_variant` a runner loads its own AVX-512 or AMX build, a path no
+laptop class without those instructions runs.
+
+Two more jobs run on runners of their own, and `battery: false` runs only
+them. `ocr_pages` times this commit's parser worker against `ocr_base`'s
+(default `main`) over InternBench: both are built on the runner from source
+with the features the package ships, the Linux runtime is staged as the
+package lays it out, and `scripts/bonsai-eval/ocr-pages.py` sends every
+document to each worker over the worker's own protocol, alternating base,
+head, head, base, base, head. The summary gives the whole set's time, the
+documents with OCR, the longest scans, and each worker's peak resident
+memory per run, and says whether every document was read the same by every
+run (a hash of each page's text, source and OCR confidence and of the
+document's warnings); `ocr-pages.json` and each run's timings are in the
+artifact (docs/ocr.md, "OCR concurrency"). `live_slots` builds the desktop
+crate's tests and runs the env-gated live test
+`live_the_first_document_after_a_restart_finds_the_instructions_restored`
+against the pinned `llama-server` and the model given, which must then be
+the pinned fast model; the job fails unless the test passed, and its log,
+with the line the test prints, is the artifact (docs/architecture.md, "The
+instructions across a restart").
 
 Inputs:
 

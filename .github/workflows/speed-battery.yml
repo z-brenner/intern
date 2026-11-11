@@ -7,6 +7,23 @@ name: Server speed battery on Linux
 # runner's CPU is whatever the fleet hands out (the summary names it): read
 # each job's baseline-to-variant ratio, never a time across jobs.
 # Laboratory measurement only: it gates nothing and publishes nothing.
+#
+# cold_start adds, before the battery, the request every server lifetime
+# starts with and the battery otherwise never times (it warms every slot
+# first): an unwarmed first request on a fresh server, with and without the
+# system-turn state restored from a slot file saved earlier in the same job,
+# as the app restores it at every model load (scripts/bonsai-eval/cold-start.py).
+# cpu_variant pins ggml's CPU backend to one variant, so a laptop class
+# (haswell: AVX2; alderlake: AVX2 with AVX-VNNI) is measured on a runner that
+# would otherwise load its own AVX-512 or AMX build.
+#
+# Two jobs of their own measure what the battery cannot, each on a fresh
+# runner: ocr_pages times this commit's parser worker against ocr_base's over
+# InternBench, alternated, with every document's reading compared
+# (scripts/bonsai-eval/ocr-pages.py, docs/ocr.md); live_slots runs the app's
+# own live slot-restore test (src-tauri/src/commands.rs, `live_the_first_
+# document_after_a_restart...`) on the model given, which must then be the
+# pinned fast model. battery: false runs only those.
 
 on:
   workflow_dispatch:
@@ -44,6 +61,44 @@ on:
         required: false
         default: ""
         type: string
+      cold_start:
+        description: >-
+          Also time an unwarmed first request on a fresh server, with and
+          without a slot restore (the app's first document after a load)
+        required: false
+        default: false
+        type: boolean
+      cpu_variant:
+        description: >-
+          Load only this ggml CPU backend (haswell, alderlake, icelake, ...);
+          empty for the one the runner's CPU picks
+        required: false
+        default: ""
+        type: string
+      battery:
+        description: Run the battery itself (off to run only the jobs below)
+        required: false
+        default: true
+        type: boolean
+      ocr_pages:
+        description: >-
+          Time this commit's parser worker against ocr_base's over
+          InternBench, alternated, and compare every document's reading
+        required: false
+        default: false
+        type: boolean
+      ocr_base:
+        description: The commit or branch whose parser worker ocr_pages compares with
+        required: false
+        default: main
+        type: string
+      live_slots:
+        description: >-
+          Run the app's own live slot-restore test on the model given (the
+          pinned fast model)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -65,6 +120,8 @@ jobs:
           THREADS: ${{ inputs.threads }}
           EVERY: ${{ inputs.every }}
           LLAMA_RELEASE: ${{ inputs.llama_release }}
+          CPU_VARIANT: ${{ inputs.cpu_variant }}
+          OCR_BASE: ${{ inputs.ocr_base }}
         run: |
           python3 -I - <<'EOF2'
           import json, os, re, sys
@@ -100,6 +157,13 @@ jobs:
               fail("every must be 1 to 9")
           if os.environ["LLAMA_RELEASE"] and not re.fullmatch(r"b[0-9]{4,6}", os.environ["LLAMA_RELEASE"]):
               fail("llama_release must look like b12078")
+          # The x86 variants the release builds (ggml/src/CMakeLists.txt at b11946).
+          variants_built = {"x64", "sse42", "sandybridge", "ivybridge", "piledriver", "haswell", "skylakex",
+                            "cannonlake", "cascadelake", "cooperlake", "icelake", "zen4", "alderlake", "sapphirerapids"}
+          if os.environ["CPU_VARIANT"] and os.environ["CPU_VARIANT"] not in variants_built:
+              fail(f"cpu_variant must be one of {', '.join(sorted(variants_built))}")
+          if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}", os.environ["OCR_BASE"]) or ".." in os.environ["OCR_BASE"]:
+              fail("ocr_base must be a commit or a branch name")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write("matrix=" + json.dumps({"include": variants}) + "\n")
           EOF2
@@ -107,6 +171,7 @@ jobs:
   battery:
     name: ${{ matrix.label }}
     needs: plan
+    if: inputs.battery
     runs-on: ubuntu-24.04
     timeout-minutes: 340
     strategy:
@@ -154,6 +219,31 @@ jobs:
           [ -n "$server" ] && [ -f "$server" ] || { echo "$archive carries no llama-server" >&2; exit 1; }
           chmod 0755 "$server"
           echo "LLAMA_SERVER=$server" >> "$GITHUB_ENV"
+      # ggml loads every libggml-cpu-*.so beside the executable it resolves
+      # through /proc/self/exe and keeps the best one this CPU runs, so a
+      # folder of symlinks still loads the original folder's best. Hard links
+      # are files of their own: a folder holding one variant loads only that
+      # one, or no CPU backend at all on a CPU without its features (the
+      # server then fails to start, and the job with it).
+      - name: Pin the CPU backend
+        if: inputs.cpu_variant != ''
+        env:
+          CPU_VARIANT: ${{ inputs.cpu_variant }}
+        run: |
+          source="$(dirname "$LLAMA_SERVER")"
+          pinned="$LAB/llama-$CPU_VARIANT"
+          [ -f "$source/libggml-cpu-$CPU_VARIANT.so" ] || { echo "the release carries no libggml-cpu-$CPU_VARIANT.so" >&2; exit 1; }
+          mkdir -p "$pinned"
+          cp -a --link "$source/." "$pinned/"
+          find "$pinned" -maxdepth 1 -name 'libggml-cpu-*.so' ! -name "libggml-cpu-$CPU_VARIANT.so" -delete
+          ls "$pinned" | grep '^libggml-cpu-' | tee "$OUT/cpu-backends.txt"
+          [ "$(grep -c . "$OUT/cpu-backends.txt")" = 1 ]
+          echo "LLAMA_SERVER=$pinned/$(basename "$LLAMA_SERVER")" >> "$GITHUB_ENV"
+      # At the app's log level the server does not say which backend it
+      # loaded; at debug level, listing the devices does.
+      - name: Record the CPU backend
+        run: |
+          "$LLAMA_SERVER" -lv 4 --list-devices 2>&1 | grep 'load_backend' | tee "$OUT/cpu-backend.txt"
       - name: Fetch and verify the model
         env:
           MODEL_URL: ${{ inputs.model_url }}
@@ -165,6 +255,16 @@ jobs:
             --output "$LAB/model/model.gguf" "$MODEL_URL"
           echo "$MODEL_SHA256  $LAB/model/model.gguf" | sha256sum --check --strict
           echo "MODEL=$LAB/model/model.gguf" >> "$GITHUB_ENV"
+      # Before the battery, so its servers are the first this job starts after
+      # the model's download: the page cache holds the file, as it does for an
+      # app that unloaded its model after ten idle minutes.
+      - name: Measure the cold start
+        if: inputs.cold_start
+        env:
+          THREADS: ${{ inputs.threads }}
+        run: |
+          python3 -I scripts/bonsai-eval/cold-start.py --server-bin "$LLAMA_SERVER" --model "$MODEL" \
+            --wire "$REQUESTS" --threads "$THREADS" --out "$OUT/cold-start"
       # Baseline, variant, baseline, variant: the app's flags each time, the
       # variant's appended (a repeated flag's last value wins in llama-server),
       # every slot warmed first, replies compared with the first baseline's.
@@ -195,6 +295,7 @@ jobs:
           VARIANT_ARGS: ${{ matrix.args }}
           THREADS: ${{ inputs.threads }}
           LLAMA_RELEASE: ${{ inputs.llama_release }}
+          CPU_VARIANT: ${{ inputs.cpu_variant }}
         run: |
           python3 -I - <<'EOF3'
           import json, os, re, statistics
@@ -240,6 +341,37 @@ jobs:
               cpu = None
           lines.append(f"- runner CPU: {cpu.group(1).strip() if cpu else 'unknown'}")
           lines.append(f"- llama-server: {os.environ['LLAMA_RELEASE'] or 'the pinned upstream build'}")
+          # The backend the server loads, as it says at debug level: the
+          # proof that cpu_variant took.
+          try:
+              with open(os.path.join(out, "cpu-backend.txt"), encoding="utf-8") as file:
+                  loaded = re.search(r"loaded CPU backend from \S*?(libggml-cpu-[A-Za-z0-9_]+\.so)", file.read())
+          except OSError:
+              loaded = None
+          variant = os.environ["CPU_VARIANT"]
+          lines.append(f"- CPU backend: {loaded.group(1) if loaded else 'not recorded'} ({'pinned by cpu_variant' if variant else 'the runner CPU picks'})")
+          try:
+              with open(os.path.join(out, "cold-start", "cold-start.json"), encoding="utf-8") as file:
+                  cold = json.load(file)["summary"]
+          except (OSError, KeyError, ValueError):
+              cold = None
+          if cold:
+              def same(flags):
+                  return "-" if flags is None else f"{sum(flags)}/{len(flags)}"
+              lines += [
+                  "",
+                  "#### Cold start: the first request a fresh server answers",
+                  "",
+                  "| first request | cache_n | prompt tokens | prompt (ms) | whole request (s) | reply identical to the steady state |",
+                  "| --- | --- | ---: | ---: | ---: | ---: |",
+                  f"| no restore | {cold['cold_cache_n']} | {cold['cold_prompt_n']} | {cold['cold_prompt_ms']} | {cold['cold_latency_s']} | {same(cold['cold_identical_to_steady'])} |",
+                  f"| slot restored | {cold['restored_cache_n']} | {cold['restored_prompt_n']} | {cold['restored_prompt_ms']} | {cold['restored_latency_s']} | {same(cold['restored_identical_to_steady'])} |",
+                  f"| steady state | {cold['steady_cache_n']} | - | {cold['steady_prompt_ms']} | - | - |",
+                  "",
+                  f"- first-document saving: {cold['first_document_saving_s']} s (prompt time without the restore, less with it, less the restore)",
+                  f"- slot file: {cold['slot_file_bytes']} bytes, {cold['saved_tokens']} tokens, saved in {cold['save_ms']} ms; restored in {cold['restore_ms']} ms ({cold['restore_wall_ms']} ms wall), all restores answered: {cold['restore_ok']}",
+                  f"- server start to healthy: {cold['load_s']} s mean",
+              ]
           lines.append("")
           text = "\n".join(lines)
           print(text)
@@ -257,5 +389,263 @@ jobs:
             ${{ runner.temp }}/speed-battery/out/**/replay.json
             ${{ runner.temp }}/speed-battery/out/**/server-command.txt
             ${{ runner.temp }}/speed-battery/out/**/llama-server.log
+            ${{ runner.temp }}/speed-battery/out/cold-start/cold-start.json
             ${{ runner.temp }}/speed-battery/out/lscpu.txt
+            ${{ runner.temp }}/speed-battery/out/cpu-backends.txt
+            ${{ runner.temp }}/speed-battery/out/cpu-backend.txt
             ${{ runner.temp }}/speed-battery/out/llama-release.sha256
+
+  # This commit's parser worker against ocr_base's, on one runner: both built
+  # here from source with the features the package ships, the runtime staged
+  # as the Linux package lays it out, InternBench generated, and the two
+  # workers alternated over three rounds (base, head, head, base, base, head).
+  ocr-pages:
+    name: OCR pages at once
+    needs: plan
+    if: inputs.ocr_pages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # The base's worker is built from its own tree.
+          fetch-depth: 0
+      - name: Lay out the lab directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/ocr-pages/out"
+          {
+            echo "LAB=$RUNNER_TEMP/ocr-pages"
+            echo "OUT=$RUNNER_TEMP/ocr-pages/out"
+          } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      # As candidate-bench.yml installs them: the worker is built against the
+      # libraries CI's Linux package job builds it against.
+      - name: Install the desktop shell's build and smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb dbus x11-utils tesseract-ocr
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-candidate-bench-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-candidate-bench-${{ runner.os }}-
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/intern-linux-assets-cache
+          key: linux-runtime-${{ runner.os }}-${{ hashFiles('scripts/fetch-linux-assets.sh', 'scripts/fetch-ocr-runtime.sh', 'src-tauri/resources/runtime-assets.json') }}
+      - run: npm ci
+      - name: Build this commit's parser worker
+        run: |
+          cargo build --locked --release -p intern-worker --features windows-native
+          cp target/release/intern-worker "$LAB/worker-head"
+          git rev-parse HEAD | tee "$OUT/head-commit.txt"
+      - name: Fetch and verify the pinned Linux runtime
+        run: scripts/fetch-linux-assets.sh "${{ runner.temp }}/intern-linux-assets-cache"
+      - name: Stage the runtime as the package lays it out
+        run: scripts/stage-linux-runtime.sh "$LAB/stage"
+      # In the same target directory, so only what differs is compiled again.
+      - name: Build the base's parser worker
+        env:
+          OCR_BASE: ${{ inputs.ocr_base }}
+        run: |
+          base="$(git rev-parse --verify --quiet "origin/$OCR_BASE^{commit}" || git rev-parse --verify "$OCR_BASE^{commit}")"
+          git worktree add --detach "$LAB/base" "$base"
+          echo "$base" | tee "$OUT/base-commit.txt"
+          cargo build --locked --release -p intern-worker --features windows-native \
+            --manifest-path "$LAB/base/Cargo.toml" --target-dir "$GITHUB_WORKSPACE/target"
+          cp target/release/intern-worker "$LAB/worker-base"
+      - name: Generate InternBench
+        run: node bench/generate.mjs
+      - name: Time the two workers, alternated
+        env:
+          INTERN_RUNTIME_DIR: ${{ runner.temp }}/ocr-pages/stage/runtime
+        run: |
+          lscpu | tee "$OUT/lscpu.txt"
+          python3 -I scripts/bonsai-eval/ocr-pages.py --base "$LAB/worker-base" --head "$LAB/worker-head" \
+            --corpus bench/generated --gold bench/gold.json --out "$OUT" --rounds 3
+      - name: Summarize
+        if: always()
+        run: |
+          python3 -I - <<'EOF4'
+          import json, os, re, statistics
+
+          out = os.environ["OUT"]
+          try:
+              with open(os.path.join(out, "ocr-pages.json"), encoding="utf-8") as file:
+                  summary = json.load(file)["summary"]
+          except (OSError, KeyError, ValueError):
+              summary = None
+          lines = ["### OCR pages at once: this commit's worker against the base's", ""]
+          if summary:
+              def runs(values):
+                  return ", ".join(f"{value}" for value in values)
+              lines += [
+                  "| worker | whole set (s) | the documents with OCR (s) | " + " | ".join(summary["base"]["named_s"]) + " | peak resident (MB) |",
+                  "| --- | ---: | ---: | " + " | ".join("---:" for _ in summary["base"]["named_s"]) + " | ---: |",
+              ]
+              for which in ("base", "head"):
+                  row = summary[which]
+                  lines.append(f"| {which} | {runs(row['documents_s'])} | {runs(row['ocr_documents_s'])} | "
+                               + " | ".join(runs(values) for values in row["named_s"].values())
+                               + f" | {runs(row['worker_peak_mb'])} |")
+              lines += [
+                  "",
+                  f"- the documents with OCR: {summary['ocr_documents']} ({summary['ocr_pages']} pages); head against base, mean: {summary['ocr_documents_change']:+.1%}",
+                  f"- every document: {summary['documents']}; head against base, mean: {summary['documents_change']:+.1%}",
+                  f"- readings that differ between any two runs: {summary['readings_differing'] or 'none'}; failed: {summary['failed'] or 'none'}",
+                  f"- logical processors: {summary['logical_processors']}; least memory available at a document's start: {summary['mem_available_gib_min']} GiB",
+              ]
+          else:
+              lines.append("- no summary was written")
+          try:
+              with open(os.path.join(out, "lscpu.txt"), encoding="utf-8") as file:
+                  cpu = re.search(r"^Model name:\s*(.+)$", file.read(), re.M)
+          except OSError:
+              cpu = None
+          lines.append(f"- runner CPU: {cpu.group(1).strip() if cpu else 'unknown'}")
+          text = "\n".join(lines) + "\n"
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as file:
+              file.write(text)
+          EOF4
+      - name: Upload the timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ocr-pages-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: ${{ runner.temp }}/ocr-pages/out/
+
+  # The app's own code, not a script that does as it does: the live test
+  # starts the pinned llama-server through RuntimeModel and LlamaLauncher three
+  # times, as an app would across restarts, reads the saved file back (its
+  # tokens and checkpoints), and prints what each lifetime's first document
+  # cost. Run it after any change of llama-server: the save's privacy check
+  # reads the file as b11946 writes it.
+  live-slots:
+    name: The app's slot restore, live
+    needs: plan
+    if: inputs.live_slots
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      # As in CI's Ubuntu Rust job, whose cache this restores.
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      LLAMA_UPSTREAM_RELEASE: b11946
+      LLAMA_UPSTREAM_SHA256: 9e44e1a59e971f0de3fbf74fa46355ab48fed7bb51c1c16b56a96c355947f8dd
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Lay out the lab directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/live-slots/out"
+          {
+            echo "LAB=$RUNNER_TEMP/live-slots"
+            echo "OUT=$RUNNER_TEMP/live-slots/out"
+          } >> "$GITHUB_ENV"
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      - name: Install the desktop shell's system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-ubuntu-nodebug-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-ubuntu-nodebug-${{ runner.os }}-
+      # Tauri's build script refuses to compile the desktop crate unless every
+      # sidecar and resource it bundles exists, as in CI's Ubuntu Rust job.
+      - name: Stage parser worker and placeholder sidecars for desktop compile checks
+        run: |
+          cargo build --locked -p intern-worker
+          mkdir -p src-tauri/binaries src-tauri/resources/licenses src-tauri/resources/tessdata src-tauri/resources/native/pdfium src-tauri/resources/native/sidecars src-tauri/resources/native/llama-upstream src-tauri/resources/ocr-models src-tauri/resources/runtime
+          cp target/debug/intern-worker src-tauri/binaries/intern-worker-x86_64-unknown-linux-gnu
+          install -m 755 /dev/null src-tauri/binaries/llama-server-x86_64-unknown-linux-gnu
+          install -m 755 /dev/null src-tauri/binaries/tesseract-x86_64-unknown-linux-gnu
+          touch src-tauri/resources/licenses/compile-placeholder.txt
+          touch src-tauri/resources/tessdata/compile-placeholder.traineddata
+          touch src-tauri/resources/native/pdfium/compile-placeholder.dll
+          touch src-tauri/resources/native/sidecars/compile-placeholder.dll
+          touch src-tauri/resources/native/llama-upstream/compile-placeholder.dll
+          touch src-tauri/resources/ocr-models/compile-placeholder.onnx
+          touch src-tauri/resources/runtime/compile-placeholder
+      - name: Build the app's tests
+        run: cargo test --locked -p intern-app --lib --no-run
+      - name: Fetch and verify llama-server
+        run: |
+          archive="llama-$LLAMA_UPSTREAM_RELEASE-bin-ubuntu-x64.tar.gz"
+          mkdir -p "$LAB/llama"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --retry 3 --retry-delay 10 \
+            --user-agent "Intern speed battery (https://github.com/z-brenner/intern)" \
+            --output "$LAB/llama/$archive" \
+            "https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_UPSTREAM_RELEASE/$archive"
+          echo "$LLAMA_UPSTREAM_SHA256  $LAB/llama/$archive" | sha256sum --check --strict
+          while IFS= read -r entry; do
+            case "/$entry/" in
+              //* | */../*) echo "unsafe archive entry in $archive: $entry" >&2; exit 1 ;;
+            esac
+          done < <(tar -tzf "$LAB/llama/$archive")
+          tar -xzf "$LAB/llama/$archive" -C "$LAB/llama"
+          server="$(find "$LAB/llama" -type f -name llama-server | head -n 1)"
+          [ -n "$server" ] && [ -f "$server" ] || { echo "$archive carries no llama-server" >&2; exit 1; }
+          chmod 0755 "$server"
+          echo "LLAMA_SERVER=$server" >> "$GITHUB_ENV"
+      - name: Fetch and verify the model
+        env:
+          MODEL_URL: ${{ inputs.model_url }}
+          MODEL_SHA256: ${{ inputs.model_sha256 }}
+        run: |
+          mkdir -p "$LAB/model"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --retry 3 --retry-delay 10 \
+            --user-agent "Intern speed battery (https://github.com/z-brenner/intern)" \
+            --output "$LAB/model/model.gguf" "$MODEL_URL"
+          echo "$MODEL_SHA256  $LAB/model/model.gguf" | sha256sum --check --strict
+          echo "MODEL=$LAB/model/model.gguf" >> "$GITHUB_ENV"
+      - name: Run the live slot-restore test
+        run: |
+          lscpu | tee "$OUT/lscpu.txt"
+          "$LLAMA_SERVER" -lv 4 --list-devices 2>&1 | grep 'load_backend' | tee "$OUT/cpu-backend.txt"
+          INTERN_LIVE_LLAMA_SERVER="$LLAMA_SERVER" INTERN_LIVE_MODEL="$MODEL" \
+            cargo test --locked -p intern-app --lib live_the_first_document_after_a_restart \
+            -- --nocapture --test-threads 1 2>&1 | tee "$OUT/live-slots.log"
+          grep -q 'test result: ok. 1 passed' "$OUT/live-slots.log"
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "### The app's slot restore, live"
+            echo
+            grep -E '^(slot file|intern: )|test result' "$OUT/live-slots.log" | sed 's/^/    /' || echo "- nothing was logged"
+            echo
+            echo "- runner CPU: $(sed -n 's/^Model name:[[:space:]]*//p' "$OUT/lscpu.txt")"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: live-slots-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: ${{ runner.temp }}/live-slots/out/
