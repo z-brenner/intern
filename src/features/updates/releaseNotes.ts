@@ -3,6 +3,17 @@ export interface ReleaseNotes { version: string; changes: readonly string[] }
 
 export const releaseNotes: readonly ReleaseNotes[] = [
   {
+    version: '0.1.0-alpha.17',
+    changes: [
+      'Evidence in review now says when it is the document’s own lines, and which model read the document.',
+      'The “model unsure” reason says what to check, and no longer contradicts the confidence shown beside it.',
+      'Analysis details stay open or closed as you left them while you move through review.',
+      'Alt+N skips to the next document to decide, a double-click on a row opens its details, and Escape closes the More menu.',
+      'Long queues respond faster while Intern is reading and while you type in the filter.',
+      'The progress bar moves while a document is read, and estimates the time left from the first document.',
+    ],
+  },
+  {
     version: '0.1.0-alpha.16',
     changes: [
       'Status now comes first in Queue and Completed, so you can copy filenames and descriptions together.',

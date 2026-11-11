@@ -89,6 +89,24 @@ describe('update summary', () => {
     }
   });
 
+  // The next release's notes are written before its version is: they must
+  // not be shown by the build that is installed now, and must be what an
+  // update to that release shows.
+  it('keeps a later release\'s notes for the update that installs it', () => {
+    const later = releaseNotes.filter((release) => changesSince(packageInfo.version, release.version).length > 0 && release.version !== packageInfo.version);
+    const shownNow = [...changesSince(undefined, packageInfo.version), ...changesSince('0.1.0-alpha.1', packageInfo.version)];
+    for (const release of later) {
+      for (const change of release.changes) expect(shownNow).not.toContain(change);
+      expect(changesSince(packageInfo.version, release.version)).toEqual(expect.arrayContaining([...release.changes]));
+    }
+    // Newest first in the file, oldest first in the summary of several.
+    const alpha17 = releaseNotes.find((release) => release.version === '0.1.0-alpha.17')!;
+    const alpha16 = releaseNotes.find((release) => release.version === '0.1.0-alpha.16')!;
+    expect(releaseNotes.indexOf(alpha17)).toBeLessThan(releaseNotes.indexOf(alpha16));
+    expect(changesSince('0.1.0-alpha.16', '0.1.0-alpha.17')).toEqual([...alpha17.changes]);
+    expect(changesSince('0.1.0-alpha.15', '0.1.0-alpha.17')).toEqual([...alpha16.changes, ...alpha17.changes]);
+  });
+
   it('includes skipped releases and compares alpha numbers numerically', () => {
     const notes = [
       { version: '0.1.0-alpha.9', changes: ['Old'] },
