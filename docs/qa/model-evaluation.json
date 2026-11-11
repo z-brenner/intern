@@ -6,7 +6,7 @@
     {
       "description": "Employment Agreement between Northstar Lantern Works LLC and Mira Vale.",
       "digest_characters": 222,
-      "extraction_millis": 151,
+      "extraction_millis": 43,
       "facts": {
         "document_class": "agreement",
         "evidence": [
@@ -127,32 +127,32 @@
         "contextTier": "whole",
         "contextUnits": 5,
         "digestCharacters": 222,
-        "distillMicros": 5036,
+        "distillMicros": 3719,
         "estimatedPromptTokens": 671,
-        "indexMicros": 4659,
+        "indexMicros": 3329,
         "indexUnits": 5,
-        "inferenceMillis": 60266,
+        "inferenceMillis": 63851,
         "model": {
           "cachedTokens": 0,
           "generatedTokens": 82,
-          "generationMicros": 18529050,
-          "prefillMicros": 41693418,
+          "generationMicros": 37835498,
+          "prefillMicros": 25989796,
           "promptTokens": 602
         },
-        "namingMicros": 538,
+        "namingMicros": 1657,
         "promptCharacters": 2271,
-        "promptMicros": 37,
+        "promptMicros": 208,
         "redistillations": 0,
-        "retrievalMicros": 377,
+        "retrievalMicros": 390,
         "sourceCharacters": 174,
-        "validationMicros": 20954
+        "validationMicros": 8238
       },
       "token_confidence": null
     },
     {
       "description": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024 between Cedar Finch Properties Llc and Orion Glass Studio inc for Property 47 Juniper Loop.",
       "digest_characters": 133,
-      "extraction_millis": 1090,
+      "extraction_millis": 1262,
       "facts": {
         "document_class": "agreement",
         "evidence": [
@@ -286,32 +286,32 @@
         "contextTier": "whole",
         "contextUnits": 2,
         "digestCharacters": 133,
-        "distillMicros": 583,
+        "distillMicros": 384,
         "estimatedPromptTokens": 634,
-        "indexMicros": 579,
+        "indexMicros": 377,
         "indexUnits": 2,
-        "inferenceMillis": 27904,
+        "inferenceMillis": 48652,
         "model": {
           "cachedTokens": 477,
           "generatedTokens": 94,
-          "generationMicros": 21425868,
-          "prefillMicros": 6474078,
+          "generationMicros": 43089706,
+          "prefillMicros": 5557655,
           "promptTokens": 85
         },
-        "namingMicros": 345,
+        "namingMicros": 52,
         "promptCharacters": 2182,
-        "promptMicros": 22,
+        "promptMicros": 25,
         "redistillations": 0,
-        "retrievalMicros": 4,
+        "retrievalMicros": 7,
         "sourceCharacters": 118,
-        "validationMicros": 13302
+        "validationMicros": 2824
       },
       "token_confidence": null
     },
     {
       "description": "Services Agreement between Lumen Kite Cooperative and Solstice Index LLC for Aurora Catalog Project.",
       "digest_characters": 241,
-      "extraction_millis": 668,
+      "extraction_millis": 922,
       "facts": {
         "document_class": "agreement",
         "evidence": [
@@ -434,32 +434,32 @@
         "contextTier": "whole",
         "contextUnits": 6,
         "digestCharacters": 241,
-        "distillMicros": 1667,
+        "distillMicros": 1186,
         "estimatedPromptTokens": 673,
-        "indexMicros": 1659,
+        "indexMicros": 1174,
         "indexUnits": 6,
-        "inferenceMillis": 27899,
+        "inferenceMillis": 43411,
         "model": {
           "cachedTokens": 477,
           "generatedTokens": 81,
-          "generationMicros": 18741909,
-          "prefillMicros": 9153371,
+          "generationMicros": 36965090,
+          "prefillMicros": 6440199,
           "promptTokens": 131
         },
-        "namingMicros": 373,
+        "namingMicros": 57,
         "promptCharacters": 2290,
-        "promptMicros": 27,
+        "promptMicros": 30,
         "redistillations": 0,
-        "retrievalMicros": 8,
+        "retrievalMicros": 12,
         "sourceCharacters": 194,
-        "validationMicros": 16087
+        "validationMicros": 2013
       },
       "token_confidence": null
     },
     {
       "description": "Mutual Non-Disclosure Agreement between Fable Harbor Labs LLC and Copper Wren Design Inc for Project Marigold.",
       "digest_characters": 310,
-      "extraction_millis": 24,
+      "extraction_millis": 4,
       "facts": {
         "document_class": "agreement",
         "evidence": [
@@ -510,10 +510,10 @@
         "subject": "Project Marigold",
         "support": {
           "document_date": "cited",
-          "document_type": "context",
+          "document_type": "cited",
           "identifier": "absent",
           "key_facts": [],
-          "miscited_ids": 1,
+          "miscited_ids": 0,
           "parties": [
             "cited",
             "cited"
@@ -574,32 +574,32 @@
         "contextTier": "whole",
         "contextUnits": 6,
         "digestCharacters": 310,
-        "distillMicros": 1432,
+        "distillMicros": 756,
         "estimatedPromptTokens": 692,
-        "indexMicros": 1419,
+        "indexMicros": 743,
         "indexUnits": 6,
-        "inferenceMillis": 29515,
+        "inferenceMillis": 46145,
         "model": {
           "cachedTokens": 477,
           "generatedTokens": 85,
-          "generationMicros": 19451375,
-          "prefillMicros": 10058646,
+          "generationMicros": 39090244,
+          "prefillMicros": 7048851,
           "promptTokens": 143
         },
-        "namingMicros": 222,
+        "namingMicros": 65,
         "promptCharacters": 2359,
-        "promptMicros": 41,
+        "promptMicros": 56,
         "redistillations": 0,
         "retrievalMicros": 13,
         "sourceCharacters": 274,
-        "validationMicros": 9254
+        "validationMicros": 1336
       },
       "token_confidence": null
     },
     {
       "description": "Invoice INV-2048 from Nimbus Orchard Supply Co. to Atlas Threadworks LLC, totaling $1,248.00.",
       "digest_characters": 190,
-      "extraction_millis": 4,
+      "extraction_millis": 5,
       "facts": {
         "document_class": "issued",
         "evidence": [
@@ -613,13 +613,13 @@
             "id": "p1.b3",
             "page": 1,
             "source": "native",
-            "text": "Nimbus Orchard Supply Co."
+            "text": "Bill to Atlas Threadworks LLC"
           },
           {
             "id": "p1.b3",
             "page": 1,
             "source": "native",
-            "text": "Bill to Atlas Threadworks LLC"
+            "text": "Nimbus Orchard Supply Co."
           },
           {
             "id": "p1.b1",
@@ -641,20 +641,20 @@
             "evidence": [
               "p1.b3"
             ],
-            "name": "Nimbus Orchard Supply Co.",
-            "proposed_role": "issuer",
-            "role": null,
-            "role_support": "unsupported",
+            "name": "Atlas Threadworks LLC",
+            "proposed_role": "customer",
+            "role": "customer",
+            "role_support": "cited",
             "support": "cited"
           },
           {
             "evidence": [
               "p1.b3"
             ],
-            "name": "Atlas Threadworks LLC",
-            "proposed_role": "customer",
-            "role": "customer",
-            "role_support": "cited",
+            "name": "Nimbus Orchard Supply Co.",
+            "proposed_role": "issuer",
+            "role": null,
+            "role_support": "unsupported",
             "support": "cited"
           }
         ],
@@ -727,25 +727,25 @@
         "contextTier": "whole",
         "contextUnits": 5,
         "digestCharacters": 190,
-        "distillMicros": 1258,
+        "distillMicros": 743,
         "estimatedPromptTokens": 667,
-        "indexMicros": 1249,
+        "indexMicros": 731,
         "indexUnits": 5,
-        "inferenceMillis": 29712,
+        "inferenceMillis": 43122,
         "model": {
           "cachedTokens": 477,
-          "generatedTokens": 90,
-          "generationMicros": 20457424,
-          "prefillMicros": 9249222,
+          "generatedTokens": 82,
+          "generationMicros": 36855557,
+          "prefillMicros": 6260086,
           "promptTokens": 130
         },
-        "namingMicros": 264,
+        "namingMicros": 68,
         "promptCharacters": 2239,
-        "promptMicros": 34,
+        "promptMicros": 58,
         "redistillations": 0,
-        "retrievalMicros": 9,
+        "retrievalMicros": 12,
         "sourceCharacters": 146,
-        "validationMicros": 9519
+        "validationMicros": 1359
       },
       "token_confidence": null
     },
@@ -856,32 +856,32 @@
         "contextTier": "whole",
         "contextUnits": 3,
         "digestCharacters": 165,
-        "distillMicros": 538,
+        "distillMicros": 548,
         "estimatedPromptTokens": 643,
-        "indexMicros": 530,
+        "indexMicros": 538,
         "indexUnits": 3,
-        "inferenceMillis": 21403,
+        "inferenceMillis": 34324,
         "model": {
           "cachedTokens": 477,
           "generatedTokens": 66,
-          "generationMicros": 14927176,
-          "prefillMicros": 6471302,
+          "generationMicros": 29159692,
+          "prefillMicros": 5157992,
           "promptTokens": 89
         },
-        "namingMicros": 88,
+        "namingMicros": 31,
         "promptCharacters": 2214,
-        "promptMicros": 42,
+        "promptMicros": 39,
         "redistillations": 0,
-        "retrievalMicros": 8,
+        "retrievalMicros": 10,
         "sourceCharacters": 144,
-        "validationMicros": 3577
+        "validationMicros": 682
       },
       "token_confidence": null
     },
     {
       "description": "DElIvery RECeIPt DR-771 from Violet cartography Studio to Pine Echo Couriers Llc.",
       "digest_characters": 110,
-      "extraction_millis": 1219,
+      "extraction_millis": 1492,
       "facts": {
         "document_class": "issued",
         "evidence": [
@@ -1007,30 +1007,30 @@
         "contextTier": "whole",
         "contextUnits": 3,
         "digestCharacters": 110,
-        "distillMicros": 452,
+        "distillMicros": 289,
         "estimatedPromptTokens": 630,
-        "indexMicros": 447,
+        "indexMicros": 282,
         "indexUnits": 3,
-        "inferenceMillis": 27003,
+        "inferenceMillis": 46292,
         "model": {
           "cachedTokens": 477,
           "generatedTokens": 90,
-          "generationMicros": 20354960,
-          "prefillMicros": 6644641,
+          "generationMicros": 41105275,
+          "prefillMicros": 5182229,
           "promptTokens": 90
         },
-        "namingMicros": 136,
+        "namingMicros": 30,
         "promptCharacters": 2159,
-        "promptMicros": 61,
+        "promptMicros": 30,
         "redistillations": 0,
-        "retrievalMicros": 5,
+        "retrievalMicros": 7,
         "sourceCharacters": 88,
-        "validationMicros": 6450
+        "validationMicros": 998
       },
       "token_confidence": null
     },
     {
-      "extraction_millis": 4,
+      "extraction_millis": 3,
       "file": "encrypted.pdf",
       "parser_error": "PASSWORD_PROTECTED",
       "readiness": "failed",
@@ -1052,7 +1052,7 @@
     {
       "description": "MOONLIT ARCHIVE PROJECT JOURNAL covering Fictional observation 001.",
       "digest_characters": 120,
-      "extraction_millis": 15,
+      "extraction_millis": 17,
       "facts": {
         "document_class": "record",
         "evidence": [
@@ -1136,32 +1136,32 @@
         "contextTier": "whole",
         "contextUnits": 3,
         "digestCharacters": 120,
-        "distillMicros": 45240,
+        "distillMicros": 25749,
         "estimatedPromptTokens": 636,
-        "indexMicros": 45230,
+        "indexMicros": 25733,
         "indexUnits": 300,
-        "inferenceMillis": 21843,
+        "inferenceMillis": 35307,
         "model": {
           "cachedTokens": 477,
           "generatedTokens": 68,
-          "generationMicros": 15190367,
-          "prefillMicros": 6647262,
+          "generationMicros": 30244073,
+          "prefillMicros": 5056790,
           "promptTokens": 92
         },
-        "namingMicros": 587,
+        "namingMicros": 648,
         "promptCharacters": 2171,
-        "promptMicros": 35,
+        "promptMicros": 44,
         "redistillations": 0,
-        "retrievalMicros": 10,
+        "retrievalMicros": 16,
         "sourceCharacters": 9592,
-        "validationMicros": 6475
+        "validationMicros": 818
       },
       "token_confidence": null
     },
     {
       "description": "PURCHASE ORDER PO-310 from EMBER POST MANUFACTURING LLC.",
       "digest_characters": 92,
-      "extraction_millis": 1100,
+      "extraction_millis": 1427,
       "facts": {
         "document_class": "issued",
         "evidence": [
@@ -1261,32 +1261,32 @@
         "contextTier": "whole",
         "contextUnits": 3,
         "digestCharacters": 92,
-        "distillMicros": 309,
+        "distillMicros": 195,
         "estimatedPromptTokens": 624,
-        "indexMicros": 301,
+        "indexMicros": 188,
         "indexUnits": 3,
-        "inferenceMillis": 24436,
+        "inferenceMillis": 39761,
         "model": {
           "cachedTokens": 477,
           "generatedTokens": 79,
-          "generationMicros": 18016900,
-          "prefillMicros": 6415446,
+          "generationMicros": 34452250,
+          "prefillMicros": 5303740,
           "promptTokens": 90
         },
-        "namingMicros": 23,
+        "namingMicros": 35,
         "promptCharacters": 2141,
-        "promptMicros": 37,
+        "promptMicros": 32,
         "redistillations": 0,
-        "retrievalMicros": 8,
+        "retrievalMicros": 7,
         "sourceCharacters": 70,
-        "validationMicros": 1844
+        "validationMicros": 1440
       },
       "token_confidence": null
     },
     {
       "description": "PACKING SLIP PS-311 from QUARTZ MEADOW RETAIL LLC.",
       "digest_characters": 78,
-      "extraction_millis": 390,
+      "extraction_millis": 489,
       "facts": {
         "document_class": "issued",
         "evidence": [
@@ -1330,11 +1330,11 @@
         "relation_basis": "issued: the issuer",
         "subject": null,
         "support": {
-          "document_date": "cited",
+          "document_date": "context",
           "document_type": "cited",
           "identifier": "absent",
           "key_facts": [],
-          "miscited_ids": 0,
+          "miscited_ids": 1,
           "parties": [
             "cited"
           ],
@@ -1394,32 +1394,32 @@
         "contextTier": "whole",
         "contextUnits": 2,
         "digestCharacters": 78,
-        "distillMicros": 847,
+        "distillMicros": 261,
         "estimatedPromptTokens": 620,
-        "indexMicros": 843,
+        "indexMicros": 256,
         "indexUnits": 2,
-        "inferenceMillis": 23737,
+        "inferenceMillis": 40680,
         "model": {
           "cachedTokens": 477,
           "generatedTokens": 80,
-          "generationMicros": 17952621,
-          "prefillMicros": 5780712,
+          "generationMicros": 36040717,
+          "prefillMicros": 4635277,
           "promptTokens": 78
         },
-        "namingMicros": 140,
+        "namingMicros": 36,
         "promptCharacters": 2127,
-        "promptMicros": 24,
+        "promptMicros": 26,
         "redistillations": 0,
-        "retrievalMicros": 4,
+        "retrievalMicros": 5,
         "sourceCharacters": 63,
-        "validationMicros": 5831
+        "validationMicros": 700
       },
       "token_confidence": null
     },
     {
       "description": "Document concerning Harbor Comet Repairs LLC.",
       "digest_characters": 53,
-      "extraction_millis": 983,
+      "extraction_millis": 1203,
       "facts": {
         "document_class": "unknown",
         "evidence": [
@@ -1495,32 +1495,32 @@
         "contextTier": "whole",
         "contextUnits": 2,
         "digestCharacters": 53,
-        "distillMicros": 147,
+        "distillMicros": 139,
         "estimatedPromptTokens": 608,
-        "indexMicros": 143,
+        "indexMicros": 134,
         "indexUnits": 2,
-        "inferenceMillis": 11884,
+        "inferenceMillis": 17415,
         "model": {
           "cachedTokens": 477,
           "generatedTokens": 30,
-          "generationMicros": 6834463,
-          "prefillMicros": 5045776,
+          "generationMicros": 13225819,
+          "prefillMicros": 4184921,
           "promptTokens": 65
         },
-        "namingMicros": 9,
+        "namingMicros": 10,
         "promptCharacters": 2102,
-        "promptMicros": 26,
+        "promptMicros": 27,
         "redistillations": 0,
-        "retrievalMicros": 4,
+        "retrievalMicros": 5,
         "sourceCharacters": 38,
-        "validationMicros": 249
+        "validationMicros": 172
       },
       "token_confidence": null
     },
     {
       "description": "STATEMENT OF WORK between Ridgeline Cartography LLC and Contoso Worldwide, Inc., reference SOW-2026-004, fixed fee of $248,000.",
       "digest_characters": 2981,
-      "extraction_millis": 23,
+      "extraction_millis": 29,
       "facts": {
         "document_class": "agreement",
         "evidence": [
@@ -1655,32 +1655,32 @@
         "contextTier": "dense",
         "contextUnits": 27,
         "digestCharacters": 2981,
-        "distillMicros": 29267,
+        "distillMicros": 22916,
         "estimatedPromptTokens": 1548,
-        "indexMicros": 26571,
+        "indexMicros": 20981,
         "indexUnits": 142,
-        "inferenceMillis": 79257,
+        "inferenceMillis": 73300,
         "model": {
           "cachedTokens": 477,
           "generatedTokens": 87,
-          "generationMicros": 20922054,
-          "prefillMicros": 58328768,
+          "generationMicros": 39356331,
+          "prefillMicros": 33936692,
           "promptTokens": 859
         },
-        "namingMicros": 4023,
+        "namingMicros": 2122,
         "promptCharacters": 5036,
-        "promptMicros": 51,
+        "promptMicros": 58,
         "redistillations": 0,
-        "retrievalMicros": 2696,
+        "retrievalMicros": 1935,
         "sourceCharacters": 29285,
-        "validationMicros": 180863
+        "validationMicros": 26084
       },
       "token_confidence": null
     },
     {
       "description": "Notice of Termination to John Smith regarding termination of the Employment Agreement.",
       "digest_characters": 1408,
-      "extraction_millis": 6,
+      "extraction_millis": 7,
       "facts": {
         "document_class": "notice",
         "evidence": [
@@ -1807,32 +1807,32 @@
         "contextTier": "whole",
         "contextUnits": 11,
         "digestCharacters": 1408,
-        "distillMicros": 4754,
+        "distillMicros": 3132,
         "estimatedPromptTokens": 1051,
-        "indexMicros": 4734,
+        "indexMicros": 3092,
         "indexUnits": 11,
-        "inferenceMillis": 49395,
+        "inferenceMillis": 55206,
         "model": {
           "cachedTokens": 477,
           "generatedTokens": 85,
-          "generationMicros": 19616314,
-          "prefillMicros": 29773745,
+          "generationMicros": 37382286,
+          "prefillMicros": 17814971,
           "promptTokens": 437
         },
-        "namingMicros": 1215,
+        "namingMicros": 243,
         "promptCharacters": 3457,
-        "promptMicros": 28,
+        "promptMicros": 57,
         "redistillations": 0,
-        "retrievalMicros": 20,
+        "retrievalMicros": 40,
         "sourceCharacters": 1331,
-        "validationMicros": 22048
+        "validationMicros": 4016
       },
       "token_confidence": null
     },
     {
       "description": "First Amendment to Consulting Agreement between Contoso Worldwide, Inc. and Jane Ellery for Amendment to Fees and Term, retainer of $9,500.",
       "digest_characters": 3261,
-      "extraction_millis": 6,
+      "extraction_millis": 7,
       "facts": {
         "document_class": "amendment",
         "evidence": [
@@ -1959,32 +1959,32 @@
         "contextTier": "whole",
         "contextUnits": 16,
         "digestCharacters": 3261,
-        "distillMicros": 7729,
+        "distillMicros": 4661,
         "estimatedPromptTokens": 1608,
-        "indexMicros": 7693,
+        "indexMicros": 4604,
         "indexUnits": 16,
-        "inferenceMillis": 76763,
+        "inferenceMillis": 73157,
         "model": {
           "cachedTokens": 477,
           "generatedTokens": 84,
-          "generationMicros": 19853363,
-          "prefillMicros": 56903848,
+          "generationMicros": 39613621,
+          "prefillMicros": 33536022,
           "promptTokens": 846
         },
-        "namingMicros": 2588,
+        "namingMicros": 477,
         "promptCharacters": 5310,
-        "promptMicros": 33,
+        "promptMicros": 63,
         "redistillations": 0,
-        "retrievalMicros": 36,
+        "retrievalMicros": 57,
         "sourceCharacters": 3182,
-        "validationMicros": 27891
+        "validationMicros": 5043
       },
       "token_confidence": null
     },
     {
       "description": "Invoice from Acme Corporation to Contoso Worldwide, Inc. for annual platform subscription and services, invoice INV-7741, totaling $56,700.",
       "digest_characters": 767,
-      "extraction_millis": 4,
+      "extraction_millis": 5,
       "facts": {
         "document_class": "issued",
         "evidence": [
@@ -2121,32 +2121,32 @@
         "contextTier": "whole",
         "contextUnits": 14,
         "digestCharacters": 767,
-        "distillMicros": 2480,
+        "distillMicros": 1410,
         "estimatedPromptTokens": 896,
-        "indexMicros": 2431,
+        "indexMicros": 1391,
         "indexUnits": 14,
-        "inferenceMillis": 43221,
+        "inferenceMillis": 52053,
         "model": {
           "cachedTokens": 477,
-          "generatedTokens": 81,
-          "generationMicros": 18687498,
-          "prefillMicros": 24528755,
+          "generatedTokens": 79,
+          "generationMicros": 36508054,
+          "prefillMicros": 15539222,
           "promptTokens": 365
         },
-        "namingMicros": 656,
+        "namingMicros": 151,
         "promptCharacters": 2816,
-        "promptMicros": 46,
+        "promptMicros": 65,
         "redistillations": 0,
-        "retrievalMicros": 49,
+        "retrievalMicros": 19,
         "sourceCharacters": 641,
-        "validationMicros": 30579
+        "validationMicros": 3040
       },
       "token_confidence": null
     },
     {
-      "description": "SETTLEMENT AGREEMENT AND MUTUAL RELEASE between Harborline Freight Systems LLC and Quill and Vane Advisory Group, Inc. for dispute concerning invoices, totaling $312,500.",
+      "description": "SETTLEMENT AGREEMENT AND MUTUAL RELEASE between Harborline Freight Systems LLC and Quill and Vane Advisory Group, Inc. for dispute concerning invoices issued under a logistics service, totaling $312,500.",
       "digest_characters": 1229,
-      "extraction_millis": 18,
+      "extraction_millis": 15,
       "facts": {
         "document_class": "agreement",
         "evidence": [
@@ -2212,7 +2212,7 @@
           }
         ],
         "relation_basis": "agreement: the first two parties",
-        "subject": "dispute concerning invoices",
+        "subject": "dispute concerning invoices issued under a logistics service",
         "support": {
           "document_date": "cited",
           "document_type": "cited",
@@ -2233,7 +2233,7 @@
       "proposal": {
         "confidence": 1.0,
         "date_role": "effective",
-        "description": "SETTLEMENT AGREEMENT AND MUTUAL RELEASE between Harborline Freight Systems LLC and Quill and Vane Advisory Group, Inc. for dispute concerning invoices, totaling $312,500.",
+        "description": "SETTLEMENT AGREEMENT AND MUTUAL RELEASE between Harborline Freight Systems LLC and Quill and Vane Advisory Group, Inc. for dispute concerning invoices issued under a logistics service, totaling $312,500.",
         "document_date": "2026-07-22",
         "document_type": "SETTLEMENT AGREEMENT",
         "evidence": {
@@ -2279,32 +2279,32 @@
         "contextTier": "normal",
         "contextUnits": 10,
         "digestCharacters": 1229,
-        "distillMicros": 21867,
+        "distillMicros": 15607,
         "estimatedPromptTokens": 974,
-        "indexMicros": 20955,
+        "indexMicros": 14523,
         "indexUnits": 71,
-        "inferenceMillis": 46133,
+        "inferenceMillis": 59605,
         "model": {
           "cachedTokens": 477,
-          "generatedTokens": 88,
-          "generationMicros": 20042961,
-          "prefillMicros": 26085390,
+          "generatedTokens": 93,
+          "generationMicros": 43597311,
+          "prefillMicros": 16000397,
           "promptTokens": 385
         },
-        "namingMicros": 1799,
+        "namingMicros": 1010,
         "promptCharacters": 3283,
-        "promptMicros": 28,
+        "promptMicros": 48,
         "redistillations": 0,
-        "retrievalMicros": 912,
+        "retrievalMicros": 1084,
         "sourceCharacters": 14837,
-        "validationMicros": 39768
+        "validationMicros": 5491
       },
       "token_confidence": null
     },
     {
       "description": "Document.",
       "digest_characters": 319,
-      "extraction_millis": 4,
+      "extraction_millis": 5,
       "facts": {
         "document_class": "unknown",
         "evidence": [],
@@ -2314,17 +2314,13 @@
         "relation_basis": "no parties",
         "subject": null,
         "support": {
-          "document_date": "unsupported",
+          "document_date": "absent",
           "document_type": "absent",
           "identifier": "absent",
           "key_facts": [],
           "miscited_ids": 1,
-          "parties": [
-            "unsupported",
-            "unsupported",
-            "unsupported"
-          ],
-          "subject": "cited",
+          "parties": [],
+          "subject": "context",
           "unknown_ids": 0
         }
       },
@@ -2348,8 +2344,7 @@
       "readiness": "needs_review",
       "review_reasons": [
         "type_missing",
-        "date_unsupported",
-        "party_unsupported",
+        "date_missing",
         "description_invalid"
       ],
       "scores": {
@@ -2369,32 +2364,32 @@
         "contextTier": "whole",
         "contextUnits": 3,
         "digestCharacters": 319,
-        "distillMicros": 372,
+        "distillMicros": 505,
         "estimatedPromptTokens": 687,
-        "indexMicros": 361,
+        "indexMicros": 492,
         "indexUnits": 3,
-        "inferenceMillis": 27528,
+        "inferenceMillis": 20757,
         "model": {
           "cachedTokens": 477,
-          "generatedTokens": 79,
-          "generationMicros": 18387112,
-          "prefillMicros": 9137261,
+          "generatedTokens": 31,
+          "generationMicros": 14483964,
+          "prefillMicros": 6268040,
           "promptTokens": 127
         },
-        "namingMicros": 35,
+        "namingMicros": 33,
         "promptCharacters": 2368,
-        "promptMicros": 29,
+        "promptMicros": 46,
         "redistillations": 0,
-        "retrievalMicros": 11,
+        "retrievalMicros": 13,
         "sourceCharacters": 297,
-        "validationMicros": 3094
+        "validationMicros": 388
       },
       "token_confidence": null
     },
     {
       "description": "Quarterly Business Review for Contoso Worldwide, Inc., prepared by Ridgeline Cartography LLC.",
       "digest_characters": 453,
-      "extraction_millis": 4,
+      "extraction_millis": 3,
       "facts": {
         "document_class": "record",
         "evidence": [
@@ -2513,32 +2508,32 @@
         "contextTier": "whole",
         "contextUnits": 11,
         "digestCharacters": 453,
-        "distillMicros": 2337,
+        "distillMicros": 1230,
         "estimatedPromptTokens": 756,
-        "indexMicros": 2316,
+        "indexMicros": 1212,
         "indexUnits": 11,
-        "inferenceMillis": 35071,
+        "inferenceMillis": 50280,
         "model": {
           "cachedTokens": 477,
           "generatedTokens": 88,
-          "generationMicros": 20371387,
-          "prefillMicros": 14695859,
+          "generationMicros": 40622886,
+          "prefillMicros": 9652478,
           "promptTokens": 213
         },
-        "namingMicros": 481,
+        "namingMicros": 97,
         "promptCharacters": 2502,
-        "promptMicros": 37,
+        "promptMicros": 48,
         "redistillations": 0,
-        "retrievalMicros": 21,
+        "retrievalMicros": 18,
         "sourceCharacters": 365,
-        "validationMicros": 5503
+        "validationMicros": 1036
       },
       "token_confidence": null
     },
     {
       "description": "Order Form between Tessellate Analytics Ltd. and Contoso Worldwide, Inc. for Order Form for Subscription, annual fee of $96,000.",
       "digest_characters": 477,
-      "extraction_millis": 4,
+      "extraction_millis": 3,
       "facts": {
         "document_class": "form",
         "evidence": [
@@ -2585,7 +2580,7 @@
               "p1.b2"
             ],
             "name": "Contoso Worldwide, Inc.",
-            "proposed_role": "contractor",
+            "proposed_role": "buyer",
             "role": null,
             "role_support": "unsupported",
             "support": "cited"
@@ -2659,25 +2654,25 @@
         "contextTier": "whole",
         "contextUnits": 7,
         "digestCharacters": 477,
-        "distillMicros": 3741,
+        "distillMicros": 1063,
         "estimatedPromptTokens": 758,
-        "indexMicros": 3724,
+        "indexMicros": 1051,
         "indexUnits": 7,
-        "inferenceMillis": 31549,
+        "inferenceMillis": 44188,
         "model": {
           "cachedTokens": 477,
-          "generatedTokens": 77,
-          "generationMicros": 17575739,
-          "prefillMicros": 13967135,
+          "generatedTokens": 76,
+          "generationMicros": 35068167,
+          "prefillMicros": 9114257,
           "promptTokens": 202
         },
-        "namingMicros": 706,
+        "namingMicros": 126,
         "promptCharacters": 2526,
-        "promptMicros": 40,
+        "promptMicros": 32,
         "redistillations": 0,
-        "retrievalMicros": 17,
+        "retrievalMicros": 12,
         "sourceCharacters": 427,
-        "validationMicros": 20916
+        "validationMicros": 2585
       },
       "token_confidence": null
     }
@@ -2732,10 +2727,10 @@
     },
     "inference_millis": {
       "count": 19,
-      "max": 79257,
-      "mean": 36553,
-      "median": 29515,
-      "min": 11884
+      "max": 73300,
+      "mean": 46710,
+      "median": 46145,
+      "min": 17415
     },
     "parties_correct": {
       "correct": 15,
@@ -2770,10 +2765,10 @@
     },
     "total_millis": {
       "count": 19,
-      "max": 79280,
-      "mean": 36854,
-      "median": 29539,
-      "min": 12867
+      "max": 73329,
+      "mean": 47076,
+      "median": 46149,
+      "min": 18618
     },
     "type_correct": {
       "correct": 17,
@@ -2787,12 +2782,12 @@
     }
   },
   "status": "completed",
-  "commit": "a70010d9b016b01bd5319bb985d50c2bd9abcac8",
-  "release_inputs_sha256": "93a0d6399cd29afac4809ee548c8aa89f6b3f0c1b4f9d3ef91fb2b8fdc7a1c9f",
+  "commit": "82f0f8da25f23ba301f57c4d7b45e3914d33e9bf",
+  "release_inputs_sha256": "05fceed5313fef26b52ac3bf2d6061bca27ed3717ad7de80f524716f18f12a8d",
   "runner": {
     "os": "Microsoft Windows NT 10.0.26100.0",
     "logical_processors": 4,
-    "ci_run_id": "42665012237",
+    "ci_run_id": "43100350279",
     "ci_run_attempt": "1"
   },
   "acceptance": {
@@ -2808,6 +2803,6 @@
   "model_sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
   "model_bytes": 5680522464,
   "threads": 2,
-  "peak_model_rss_bytes": 8511688704,
-  "wall_clock_seconds": 700.9
+  "peak_model_rss_bytes": 5755928576,
+  "wall_clock_seconds": 894.7
 }
