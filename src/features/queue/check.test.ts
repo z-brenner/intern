@@ -14,7 +14,7 @@ describe('the Check column', () => {
   });
 
   it('leads with the reason about a part of the name, and counts the rest', () => {
-    expect(shortReason(['LOW_CONFIDENCE', 'PARTY_UNSUPPORTED'])).toEqual({ text: 'Party not found', more: 1 });
+    expect(shortReason(['LOW_CONFIDENCE', 'PARTY_UNSUPPORTED'])).toEqual({ text: 'Party uncertain', more: 1 });
     expect(shortReason(['LOW_CONFIDENCE'])).toEqual({ text: 'Model unsure of its reading', more: 0 });
     expect(shortReason(['NOT_A_CODE'])).toBeUndefined();
   });
@@ -27,7 +27,7 @@ describe('the Check column', () => {
       'DATE_IS_DEADLINE', 'DATE_AMBIGUOUS', 'FAST_MODEL_READING',
     ];
     for (const code of codes) expect(shortReason([code]), code).toBeDefined();
-    expect(shortReason(['PARTY_MISSING'])).toEqual({ text: 'Other party not found', more: 0 });
+    expect(shortReason(['PARTY_MISSING'])).toEqual({ text: 'Party missing', more: 0 });
     expect(itemFlaggedFields(review({ reasonCodes: ['PARTY_MISSING'] }))).toEqual(['parties']);
   });
 

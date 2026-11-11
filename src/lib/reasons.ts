@@ -13,8 +13,13 @@ const SENTENCES: Record<string, string> = {
   TYPE_MISSING: 'No specific document type was identified.',
   TYPE_UNSUPPORTED: 'The proposed document type does not appear verbatim in the document.',
   TYPE_INFERRED: 'The model gave no document type, so the document\'s own title was used; check that it names the document.',
-  PARTY_UNSUPPORTED: 'A proposed party could not be found in the document.',
-  PARTY_MISSING: 'Only one side of the agreement was found. Check who the other party is.',
+  // Both are raised in more cases than a party missing from the text
+  // (ReviewReason in domain.rs): a name the document does not settle - a
+  // default the reading speaks against, a group of recipients such as "all
+  // staff" - and a document with no issuer or no party at all. Each sentence
+  // holds for every case and says where to look.
+  PARTY_UNSUPPORTED: 'The document does not settle the proposed party: it may not appear there, or may stand for a group rather than one party. Check who the document is from, to or between.',
+  PARTY_MISSING: 'A party the name needs was not found, such as the other side of an agreement or who issued the document. Check who the document is from, to or between.',
   DESCRIPTION_UNSUPPORTED: 'The description asserts something the document does not contain.',
   DESCRIPTION_INVALID: 'The description was not a single usable sentence.',
   // Raised two ways: the model rated its own answer low, or - nearly always,
@@ -175,8 +180,8 @@ const SHORT: Record<string, string> = {
   TYPE_MISSING: 'No document type',
   TYPE_UNSUPPORTED: 'Type not in document',
   TYPE_INFERRED: 'Type taken from its title',
-  PARTY_UNSUPPORTED: 'Party not found',
-  PARTY_MISSING: 'Other party not found',
+  PARTY_UNSUPPORTED: 'Party uncertain',
+  PARTY_MISSING: 'Party missing',
   DESCRIPTION_UNSUPPORTED: 'Description not supported',
   DESCRIPTION_INVALID: 'Description unusable',
   LOW_CONFIDENCE: 'Model unsure of its reading',
