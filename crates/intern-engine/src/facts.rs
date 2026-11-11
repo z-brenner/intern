@@ -7428,8 +7428,46 @@ fn caption_debtor<'a>(
 ) -> Option<(String, &'a EvidenceUnit)> {
     // The caption's lines, a table's cells each a line of their own, with
     // the marks a caption's rule is drawn with left out: ")", "§", ":".
+    // Of a table's row, only its left column, where the debtor's name
+    // stands: its first cell, and the cells a name runs on into ("|
+    // SLATE OUTLET, | INC. |"). A row whose first cell is empty has none,
+    // and a later cell that holds a figure or opens on a bracket is the
+    // right column's - the case's number, its chapter, "(Jointly
+    // Administered)", the motion a hearing is "Related to". The caption
+    // ends before a line its signature is "Dated" on.
     let caption = caption_units(scope);
-    let lines = caption_cells(&caption);
+    let lines = caption
+        .iter()
+        .flat_map(|unit| unit.text.lines().map(move |line| (*unit, line)))
+        .take_while(|(_, line)| {
+            line.split_whitespace()
+                .next()
+                .is_none_or(|first| caption_word(first) != "dated")
+        })
+        .flat_map(|(unit, line)| {
+            let cells = match line.trim().strip_prefix('|') {
+                Some(row) => row
+                    .trim_end_matches(|c: char| c == '|' || c.is_whitespace())
+                    .split('|')
+                    .map(caption_cell_words)
+                    .enumerate()
+                    .take_while(|(at, words)| {
+                        words.first().is_some_and(|first| {
+                            *at == 0
+                                || (!first.starts_with('(')
+                                    && !words
+                                        .iter()
+                                        .any(|word| word.chars().any(|c| c.is_ascii_digit())))
+                        })
+                    })
+                    .map(|(_, words)| words)
+                    .collect::<Vec<_>>(),
+                None => vec![caption_cell_words(line)],
+            };
+            cells.into_iter().map(move |words| (unit, words))
+        })
+        .filter(|(_, words)| !words.is_empty())
+        .collect::<Vec<_>>();
     let bare = caption_word;
     let opens = lines.iter().position(|(_, words)| match words.as_slice() {
         [first, second, ..] => bare(first) == "in" && bare(second) == "re",
@@ -7437,10 +7475,12 @@ fn caption_debtor<'a>(
     })?;
     // The label alone on its line, or closing a line after the name's
     // comma: "GSC GROUP, INC., et al., Debtors." A sentence that ends on
-    // "the Debtors." labels no one.
+    // "the Debtors." labels no one. An individual's case writes it
+    // "Debtor(s).".
     let label_at = |words: &[&str]| {
         let (last, before) = words.split_last()?;
-        (DEBTOR_LABELS.contains(&bare(last).as_str())
+        let label = bare(last);
+        ((DEBTOR_LABELS.contains(&label.as_str()) || label == "debtor(s")
             && before.last().is_none_or(|word| word.ends_with(',')))
         .then_some(before.len())
     };
@@ -7499,7 +7539,8 @@ fn caption_debtor<'a>(
                 .collect::<Vec<_>>()
                 .join(" ");
             (normalize_loosely(&span) == organization).then(|| {
-                let span = span.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '"'));
+                let span =
+                    span.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '"' | '(' | ')'));
                 let name = match start.checked_sub(1).map(|article| named[article].1) {
                     Some(article) if article.eq_ignore_ascii_case("the") => {
                         format!("{article} {span}")
@@ -14587,6 +14628,76 @@ Dated: September 16, 2008",
             outcome.proposal
         );
         assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        // An individual's case labels its debtor "Debtor(s)."; the
+        // movant's motion in the right-hand column is no debtor.
+        let individual = |debtor: &str, label: &str| {
+            format!(
+                "UNITED STATES BANKRUPTCY COURT\nDISTRICT OF NEW JERSEY\n\n\
+| In re: | Chapter 13 |\n\
+| {debtor} | Case No. 24-11111 (ABC) |\n\
+| | Related to Docket No. 45 (Motion of Wells Fargo Bank, N.A.) |\n\
+| {label} | |\n\n\
+NOTICE OF HEARING\n\n\
+PLEASE TAKE NOTICE that Marrow Supply Co. will move for relief on May 1, 2024.\n\n\
+Dated: April 2, 2024"
+            )
+        };
+        let marrow = |index: &EvidenceIndex| ModelFacts {
+            document_type: Some("NOTICE OF HEARING".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF HEARING")],
+            document_date: Some("2024-04-02".into()),
+            date_evidence: vec![id_of(index, "Dated")],
+            parties: vec![party(
+                "Marrow Supply Co.",
+                Some(PartyRole::Client),
+                &[id_of(index, "Marrow Supply")],
+            )],
+            ..ModelFacts::default()
+        };
+        for label in ["Debtor(s).", "Debtor."] {
+            let (outcome, _) = facts_for(&individual("ACME ROOFING LLC,", label), marrow);
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["ACME ROOFING LLC"],
+                "{label}: {:?}",
+                outcome.proposal
+            );
+            assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        }
+        // A person's case: no organization stands in the left column.
+        let (outcome, _) = facts_for(&individual("JOHN Q. PUBLIC,", "Debtor."), marrow);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Marrow Supply Co."],
+            "{:?}",
+            outcome.proposal
+        );
+        // A case named at the foot of the page, under its signature's
+        // date, is no caption of the notice.
+        let (outcome, _) = facts_for(
+            "UNITED STATES BANKRUPTCY COURT\nDISTRICT OF DELAWARE\n\n\
+NOTICE OF CHANGE OF ADDRESS\n\n\
+PLEASE TAKE NOTICE that Quillon Ridge Partners LLP has moved its offices.\n\n\
+Dated: April 2, 2024\nIn re Acme Widget Corp.,\nDebtor.",
+            |index| ModelFacts {
+                document_type: Some("NOTICE OF CHANGE OF ADDRESS".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF CHANGE")],
+                document_date: Some("2024-04-02".into()),
+                date_evidence: vec![id_of(index, "Dated")],
+                parties: vec![party(
+                    "Quillon Ridge Partners LLP",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "Quillon")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Quillon Ridge Partners LLP"],
+            "{:?}",
+            outcome.proposal
+        );
     }
 
     /// An adversary proceeding filed in a bankruptcy case sets out its own
