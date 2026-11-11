@@ -1030,11 +1030,7 @@ a file saved under the old ones. A file is only ever restored into a server that
 would have computed the same state, so the first document's reply is the one it
 would have got as the second. A launch removes its tier's files for any other
 configuration, and any save a stopped server left unfinished (saves are
-written as `.part` and renamed), so there is at most one file per tier: two
-files and 348 MB at most, beside the models in the app's local data. An
-uninstall leaves the folder, as it leaves the models and the rest of Intern's
-own data, and the installer's hooks never touch it; deleted by hand, it costs
-the next first document of each model the speed-up and is saved again. Every
+written as `.part` and renamed), so there is at most one file per tier. Every
 failure costs only the speed-up: a restore that fails removes the file and the
 next document saves a new one; a save is skipped with less than 2 GiB free.
 On Windows a folder outside ASCII is never passed (the server checks the
