@@ -45,7 +45,7 @@ use unicode_normalization::char::is_combining_mark;
 
 use crate::compose::{
     CastMember, DescriptionFacts, Relation, RelationCues, SUBSTANTIVE, amount_label, describe,
-    identifier_word, money_in, relation_from_roles,
+    identifier_word, money_in, names_a_published_release, relation_from_roles,
 };
 use crate::cues::{CUSTOMER_CUES, ISSUER_CUES, PAYMENT_ADDRESS_CUES, STOPWORDS, TYPE_NOUNS};
 use crate::distill::normalize_heading;
@@ -1782,6 +1782,19 @@ pub fn validate_facts_at(
             cast.iter()
                 .position(|party| normalize_loosely(&party.name) == name)
         }),
+    };
+    // A release the type names as published - an enforcement release, a
+    // press release - is a record of what it announces, about its subject
+    // ([`DocumentClass::of`]). One whose document names its first two
+    // parties as its two sides, "by and between", is an agreement after
+    // all, and is named between them as a release a party gives is.
+    let class = if class == DocumentClass::Record
+        && cues.between
+        && names_a_published_release(document_type.as_deref())
+    {
+        DocumentClass::Agreement
+    } else {
+        class
     };
     let relation = relation_from_roles(class, document_type.as_deref(), &cast, cues);
     // A name that rests on roles the document did not support waits for
@@ -11485,6 +11498,119 @@ This Sponsorship Agreement is made on July 16, 2012 by Peek Investments LLC.";
             outcome.reasons.contains(&ReviewReason::PartyMissing),
             "{:?}",
             outcome.reasons
+        );
+    }
+
+    /// real5-notice-11's shape: a regulator's enforcement release, its
+    /// office's letterhead over the release's title and date. A release an
+    /// organization publishes is a record of what it announces, about its
+    /// subject, not an agreement between the first two parties it names:
+    /// it is "for" the company it penalizes, and its title loses the date
+    /// it is set beside. A general release that names its two sides "by
+    /// and between" stays an agreement between them, and so does a
+    /// published release whose document names its two sides that way.
+    #[test]
+    fn a_published_release_is_a_record_for_its_subject() {
+        const RELEASE: &str = "DEPARTMENT OF THE EXCHEQUER\n\
+OFFICE OF FOREIGN ASSETS REVIEW\n\
+Enforcement Release: December 4, 2025\n\
+OFAR Imposes $7,139,305 Penalty on Westmere Holdings, Inc.\n\
+for Violating Sanctions and Reporting Obligations\n\
+The Office of Foreign Assets Review (OFAR) has issued a Penalty Notice imposing a $7,139,305\n\
+penalty on Westmere Holdings, Inc., a property management company based in Dalton, for violating\n\
+sanctions and for failing to file reports of blocked assets. Between April 2018 and May 2020,\n\
+Westmere received 24 payments on behalf of a company owned by a blocked person.";
+        let (outcome, _) = facts_for(RELEASE, |index| ModelFacts {
+            document_type: Some("Enforcement Release: December 4, 2025".into()),
+            type_evidence: vec![id_of(index, "Enforcement Release")],
+            document_date: Some("2025-12-04".into()),
+            date_evidence: vec![id_of(index, "Enforcement Release")],
+            parties: vec![
+                party(
+                    "Westmere Holdings, Inc.",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "OFAR Imposes")],
+                ),
+                party(
+                    "DEPARTMENT OF THE EXCHEQUER",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "DEPARTMENT OF")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Enforcement Release")
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Westmere Holdings, Inc."],
+            "{:?}",
+            outcome.facts
+        );
+        assert_eq!(
+            outcome.facts.as_ref().map(|facts| facts.document_class),
+            Some(DocumentClass::Record)
+        );
+
+        const GENERAL: &str = "GENERAL RELEASE\n\n\
+This General Release is made on March 3, 2024 by and between Corvane Media Group LLC and \
+Pellham Tobacco Company. For good and valuable consideration, each releases the other from \
+all claims arising from the distribution agreement.";
+        let (outcome, _) = facts_for(GENERAL, |index| ModelFacts {
+            document_type: Some("General Release".into()),
+            type_evidence: vec![id_of(index, "GENERAL RELEASE")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "This General")],
+            parties: vec![
+                party(
+                    "Corvane Media Group LLC",
+                    None,
+                    &[id_of(index, "This General")],
+                ),
+                party(
+                    "Pellham Tobacco Company",
+                    None,
+                    &[id_of(index, "This General")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Corvane Media Group LLC", "Pellham Tobacco Company"]
+        );
+
+        const ANNOUNCED: &str = "PRESS RELEASE\n\n\
+March 3, 2024\n\n\
+This settlement and release is made by and between Corvane Media Group LLC and Pellham \
+Tobacco Company, who each release the other from all claims.";
+        let (outcome, _) = facts_for(ANNOUNCED, |index| ModelFacts {
+            document_type: Some("Press Release".into()),
+            type_evidence: vec![id_of(index, "PRESS RELEASE")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "March 3")],
+            parties: vec![
+                party(
+                    "Corvane Media Group LLC",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "This settlement")],
+                ),
+                party(
+                    "Pellham Tobacco Company",
+                    None,
+                    &[id_of(index, "This settlement")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        assert_eq!(
+            outcome.facts.as_ref().map(|facts| facts.document_class),
+            Some(DocumentClass::Agreement)
         );
     }
 

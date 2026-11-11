@@ -25,6 +25,13 @@ const MIN_DESCRIPTION_WORDS: usize = 6;
 /// A subject shortened to fit keeps at most this many words.
 const SHORT_SUBJECT_WORDS: usize = 6;
 
+/// The kinds of release an organization publishes - a regulator's notice
+/// of an enforcement action, a press office's announcement - as a type
+/// names them. Each is a record of what it announces, about its subject;
+/// only a release a party gives ("General Release", "Release of Claims")
+/// is an agreement.
+const PUBLISHED_RELEASES: &[&str] = &["enforcement release", "press release", "news release"];
+
 impl DocumentClass {
     /// The class of a validated document type. Families whose names contain
     /// other families' words are tested first: an addendum is an amendment
@@ -36,6 +43,7 @@ impl DocumentClass {
         };
         let lowered = document_type.to_lowercase();
         let has = |words: &[&str]| words.iter().any(|word| contains_word(&lowered, word));
+        let published = has(PUBLISHED_RELEASES);
         if has(&["amendment", "addendum", "modification", "change order"]) {
             Self::Amendment
         } else if has(&["notice", "notification", "claim"]) {
@@ -82,10 +90,12 @@ impl DocumentClass {
             "licence",
             "deed",
             "promissory note",
-            "release",
             "waiver",
-        ]) {
+        ]) || (!published && has(&["release"]))
+        {
             Self::Agreement
+        } else if published {
+            Self::Record
         } else if has(&["email", "e-mail"]) {
             Self::Email
         } else if has(&["letter", "memo", "memorandum"]) {
@@ -123,6 +133,18 @@ impl DocumentClass {
             Self::Unknown
         }
     }
+}
+
+/// Whether a type names a release an organization publishes
+/// ([`PUBLISHED_RELEASES`]), which [`DocumentClass::of`] sorts with the
+/// records.
+pub(crate) fn names_a_published_release(document_type: Option<&str>) -> bool {
+    document_type.is_some_and(|value| {
+        let lowered = value.to_lowercase();
+        PUBLISHED_RELEASES
+            .iter()
+            .any(|kind| contains_word(&lowered, kind))
+    })
 }
 
 /// Whether `phrase` stands in `text` as whole words.
@@ -2031,6 +2053,25 @@ mod tests {
             ),
             ("Quarterly Business Review", DocumentClass::Record),
             ("Billboard Placement Brief", DocumentClass::Unknown),
+            // A release a party gives is an agreement; one an organization
+            // publishes is a record of what it announces.
+            ("General Release", DocumentClass::Agreement),
+            ("Release of Claims", DocumentClass::Agreement),
+            (
+                "Separation Agreement and General Release",
+                DocumentClass::Agreement,
+            ),
+            ("Enforcement Release", DocumentClass::Record),
+            (
+                "Enforcement Release: December 4, 2025",
+                DocumentClass::Record,
+            ),
+            ("Press Release", DocumentClass::Record),
+            ("News Release", DocumentClass::Record),
+            (
+                "Settlement Agreement and Press Release",
+                DocumentClass::Agreement,
+            ),
         ] {
             assert_eq!(DocumentClass::of(Some(kind)), class, "{kind}");
         }
