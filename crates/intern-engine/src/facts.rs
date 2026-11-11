@@ -6200,6 +6200,15 @@ fn addressee_field<'a>(scope: &ValidationScope<'a>) -> Option<(String, &'a Evide
                             .is_none_or(|next| !next.is_alphanumeric())
                 })
                 .max_by_key(|known| known.len())?;
+            // A name its own colon follows is the label of the next field,
+            // which the layout ran into this one: "To: Inspection Number:
+            // 1695478" names no one.
+            if value
+                .split_once(':')
+                .is_some_and(|(label, _)| words(label) == words(named))
+            {
+                return None;
+            }
             let span = written_span(unit, named)?;
             (!is_first_name_alone(&span)).then(|| (span, unit, line.to_owned()))
         })
@@ -13059,6 +13068,82 @@ Rickmansworth,
                 Some(head),
                 "{:?}",
                 outcome.proposal
+            );
+        }
+    }
+
+    /// A safety agency's notice as the worker extracts it: the title under
+    /// the letterhead, then a "To:" field the layout ran into the next
+    /// column's "Inspection Number: ...". The label of that field is nobody
+    /// the notice is to; a name with its address after it still is.
+    #[test]
+    fn a_to_field_run_into_the_next_fields_label_names_no_one() {
+        let notice = |to: &str| {
+            format!(
+                "U.S. Department of Works\n\nWorkplace Safety Administration\n\
+                 1141 Harbour Drive\nSuite 1006\nMobile, AL 36609\n\n\
+                 Notice of Proposed Penalty\n\n{to}\n\n\
+                 | Rowan Brick Company, Inc. | Inspection Date(s): 08/30/2023 | - | 01/02/2024 |\n\
+                 | and its successors | Issuance Date: | 02/20/2024 |\n\n\
+                 3409 Water Avenue\nSelma, AL 36703\n\n\
+                 This Notice of Proposed Penalty describes violations of the Workplace Safety \
+                 Act of 1970."
+            )
+        };
+        let reply = |index: &EvidenceIndex| ModelFacts {
+            document_type: Some("Notice of Proposed Penalty".into()),
+            type_evidence: vec![id_of(index, "Notice of Proposed")],
+            document_date: Some("2024-02-20".into()),
+            date_evidence: vec![id_of(index, "Issuance Date")],
+            parties: vec![
+                party(
+                    "Rowan Brick Company, Inc.",
+                    Some(PartyRole::Employer),
+                    &[id_of(index, "Rowan Brick")],
+                ),
+                party(
+                    "U.S. Department of Works",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "Department of Works")],
+                ),
+            ],
+            ..ModelFacts::default()
+        };
+        let (outcome, _) = facts_for(&notice("To: Inspection Number: 1695478"), reply);
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|party| party.contains("Inspection")),
+            "{:?}",
+            outcome.proposal
+        );
+        let (outcome, _) = facts_for(
+            &notice("To: Jordan Avery, 3409 Water Avenue, Selma, AL 36703"),
+            reply,
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Jordan Avery"],
+            "{:?}",
+            outcome.proposal
+        );
+        // The field alone.
+        for (to, named) in [
+            ("To: Inspection Number: 1695478", None),
+            (
+                "To: Jordan Avery, 3409 Water Avenue, Selma, AL 36703",
+                Some("Jordan Avery"),
+            ),
+        ] {
+            let index = index_of(&notice(to));
+            let context = whole(&index);
+            let scope = ValidationScope::new(&index, &context, &[]);
+            assert_eq!(
+                addressee_field(&scope).map(|(name, _, _)| name).as_deref(),
+                named,
+                "{to}"
             );
         }
     }
