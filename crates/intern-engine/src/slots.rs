@@ -12,11 +12,13 @@
 //! file after the first document it reads, and every later launch restores
 //! that file before the first document arrives. The file's name says
 //! everything the saved state depends on ([`SlotIdentity`]), so a file is
-//! only ever restored into a server that would have computed the same state
-//! itself, and the next document's reply is the one it would have got
-//! anyway. Anything that goes wrong costs only the speed-up: a restore that
-//! fails leaves the server processing the system turn as it always did, and
-//! the file is removed so the next document saves a good one.
+//! restored only into a server of the configuration that saved it, and the
+//! next document's reply is the one it would have got anyway. Anything that
+//! goes wrong costs only the speed-up: a restore that fails leaves the
+//! server processing the system turn as it always did, and the file is
+//! removed so the next document saves a good one; a file changed on disk
+//! without changing its length restores, and the self-test that follows a
+//! new build or model catches it ([`forget`]).
 
 use std::{
     collections::HashMap,
@@ -194,6 +196,37 @@ fn x86_extended_features() -> Vec<&'static str> {
     .filter(|&(_, register, bit)| register & (1 << bit) != 0)
     .map(|(name, _, _)| name)
     .collect()
+}
+
+/// Removes every saved state `label`'s server keeps in `directory`, for
+/// whatever configuration it was saved, and says whether there was one.
+///
+/// For a server that failed the self-test with a saved state restored: a
+/// state that restores whole can still be wrong - a file damaged after it
+/// was saved without changing its length, which the read-back cannot see -
+/// and the self-test is what finds that. Without the file the next launch
+/// processes the instructions itself, as it did before slot files, so the
+/// model is judged on its own reading and a bad file cannot keep a good
+/// model set aside.
+pub fn forget(directory: &Path, label: &str) -> bool {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return false;
+    };
+    let own = format!("{label}-");
+    let mut forgot = false;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let saved = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(&own))
+            && path.extension() == Some(OsStr::new(SLOT_EXTENSION))
+            && entry.file_type().is_ok_and(|kind| kind.is_file());
+        if saved && fs::remove_file(&path).is_ok() {
+            forgot = true;
+        }
+    }
+    forgot
 }
 
 /// Whether llama-server can be pointed at `directory`.
@@ -1139,6 +1172,32 @@ mod tests {
             runtime_build(&format!("http://{}", server.address), "secret").unwrap(),
             "b11946-8ca4060b"
         );
+    }
+
+    /// After a failed self-test, every state the label saved is removed,
+    /// whatever it was saved for; another label's, and a save under way,
+    /// are left alone.
+    #[test]
+    fn a_label_forgets_its_saved_states_and_no_one_elses() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = |name: &str| directory.path().join(name);
+        for name in [
+            "accurate-0123456789abcdef.bin",
+            "accurate-fedcba9876543210.bin",
+            "fast-0123456789abcdef.bin",
+            "accurate-0123456789abcdef.bin.part",
+            "accurately-0123456789abcdef.bin",
+        ] {
+            fs::write(file(name), b"state").unwrap();
+        }
+        assert!(forget(directory.path(), "accurate"));
+        assert!(!file("accurate-0123456789abcdef.bin").exists());
+        assert!(!file("accurate-fedcba9876543210.bin").exists());
+        assert!(file("fast-0123456789abcdef.bin").exists());
+        assert!(file("accurate-0123456789abcdef.bin.part").exists());
+        assert!(file("accurately-0123456789abcdef.bin").exists());
+        assert!(!forget(directory.path(), "accurate"));
+        assert!(!forget(&directory.path().join("missing"), "fast"));
     }
 
     /// A file the server will not read is removed, and the lifetime saves a

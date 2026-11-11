@@ -346,6 +346,14 @@ trait RuntimeLauncher: Send + Sync {
         manifest: &ModelManifest,
         tier: ModelTier,
     ) -> Result<LaunchedRuntime, CommandError>;
+
+    /// Removes the state of `tier`'s instructions that a launch restores
+    /// ([`intern_engine::slots::forget`]), and says whether there was one:
+    /// a model that fails its self-test is tested once more without it
+    /// before it is set aside. Nothing is saved by default.
+    fn forget_saved_state(&self, _tier: ModelTier) -> bool {
+        false
+    }
 }
 
 /// A runtime that has started and answered its health check.
@@ -483,9 +491,19 @@ impl RuntimeLauncher for LlamaLauncher {
             after_read,
         })
     }
+
+    fn forget_saved_state(&self, tier: ModelTier) -> bool {
+        self.forget_saved(tier)
+    }
 }
 
 impl LlamaLauncher {
+    fn forget_saved(&self, tier: ModelTier) -> bool {
+        self.slot_directory
+            .as_deref()
+            .is_some_and(|directory| intern_engine::slots::forget(directory, tier.as_str()))
+    }
+
     /// Restores the system turn's state a server of this configuration
     /// saved after an earlier launch's first document, and says how to save
     /// it after this launch's first document when there was none.
@@ -1433,6 +1451,9 @@ impl RuntimeModel {
             return Ok(());
         }
         let mut first_error = None;
+        // A tier tested again without its saved instructions after failing
+        // with them; it is tested so once at most.
+        let mut retested = Vec::new();
         for tier in self.installed_tiers_quick() {
             match self.verify_tier(tier) {
                 Ok(()) if tier == ModelTier::Accurate => {
@@ -1501,6 +1522,17 @@ impl RuntimeModel {
                     let _ = self.stop_runtime();
                     if cancellation.is_canceled() {
                         return Err(error);
+                    }
+                    // Read on a restored state, the self-test judged the
+                    // file as much as the model: tested once more without
+                    // it, the model is set aside only for its own reading.
+                    if !retested.contains(&tier) && self.launcher.forget_saved_state(tier) {
+                        eprintln!(
+                            "intern: the {} local model failed its self-test with its saved instructions restored; they were removed and it is tested again without them",
+                            tier.as_str()
+                        );
+                        retested.push(tier);
+                        continue;
                     }
                     self.set_failure(tier, error.code.clone());
                     // Either model that fails leaves the reading to the
@@ -1711,51 +1743,67 @@ impl RuntimeModel {
             return Ok(());
         }
         let not_ready = || ReadFailure::Failed(ModelFailure::retryable("MODEL_NOT_READY"));
-        self.stop_runtime().map_err(|_| not_ready())?;
-        let vouched = self.check(tier).self_tested || self.stamped(tier) == Some(true);
-        match self.start(&lifecycle, tier) {
-            Ok(Launch::Started) => {}
-            Ok(Launch::Held) => return Err(ReadFailure::Failed(self.overtaken())),
-            Err(error) => {
-                eprintln!(
-                    "intern: the {} local model could not be started: {}",
-                    tier.as_str(),
-                    error.code
-                );
-                self.unstamp_tier(tier);
-                // Set aside, the document is planned again onto the other
-                // model; left in place, every document would wait up to
-                // three minutes for this one to fail to start again.
-                return Err(if self.set_aside_after_start_failure(tier, &error) {
-                    ReadFailure::Unusable
-                } else {
-                    not_ready()
-                });
+        // Tested once more without its saved instructions after failing
+        // with them, at most once.
+        let mut retested = false;
+        loop {
+            self.stop_runtime().map_err(|_| not_ready())?;
+            let vouched = self.check(tier).self_tested || self.stamped(tier) == Some(true);
+            match self.start(&lifecycle, tier) {
+                Ok(Launch::Started) => {}
+                Ok(Launch::Held) => return Err(ReadFailure::Failed(self.overtaken())),
+                Err(error) => {
+                    eprintln!(
+                        "intern: the {} local model could not be started: {}",
+                        tier.as_str(),
+                        error.code
+                    );
+                    self.unstamp_tier(tier);
+                    // Set aside, the document is planned again onto the other
+                    // model; left in place, every document would wait up to
+                    // three minutes for this one to fail to start again.
+                    return Err(if self.set_aside_after_start_failure(tier, &error) {
+                        ReadFailure::Unusable
+                    } else {
+                        not_ready()
+                    });
+                }
             }
-        }
-        if vouched {
-            self.update_check(tier, |check| check.self_tested = true);
-            return Ok(());
-        }
-        let before = self.file_state(tier);
-        match self.semantic_self_test(&CancellationToken::new()) {
-            Ok(()) => {
-                self.passed_self_test(tier, before.as_ref());
-                Ok(())
+            if vouched {
+                self.update_check(tier, |check| check.self_tested = true);
+                return Ok(());
             }
-            // Stopped under the self-test on purpose - a hosted model chosen,
-            // or shutdown - which says nothing about the model.
-            Err(_) if !self.running() => Err(ReadFailure::Failed(self.overtaken())),
-            Err(error) => {
-                eprintln!(
-                    "intern: the {} local model failed its self-test: {}",
-                    tier.as_str(),
-                    error.message
-                );
-                self.unstamp_tier(tier);
-                let _ = self.stop_runtime();
-                self.set_failure(tier, error.code);
-                Err(ReadFailure::Unusable)
+            let before = self.file_state(tier);
+            match self.semantic_self_test(&CancellationToken::new()) {
+                Ok(()) => {
+                    self.passed_self_test(tier, before.as_ref());
+                    return Ok(());
+                }
+                // Stopped under the self-test on purpose - a hosted model
+                // chosen, or shutdown - which says nothing about the model.
+                Err(_) if !self.running() => return Err(ReadFailure::Failed(self.overtaken())),
+                Err(error) => {
+                    eprintln!(
+                        "intern: the {} local model failed its self-test: {}",
+                        tier.as_str(),
+                        error.message
+                    );
+                    self.unstamp_tier(tier);
+                    let _ = self.stop_runtime();
+                    // As in a verified start: with its saved instructions
+                    // gone, the model is started and tested again for the
+                    // document that asked, and set aside only if it fails on
+                    // its own.
+                    if !retested && self.launcher.forget_saved_state(tier) {
+                        eprintln!(
+                            "intern: its saved instructions were removed; it is tested again without them"
+                        );
+                        retested = true;
+                        continue;
+                    }
+                    self.set_failure(tier, error.code);
+                    return Err(ReadFailure::Unusable);
+                }
             }
         }
     }
@@ -1798,8 +1846,11 @@ impl RuntimeModel {
                                 running.generation,
                             ))
                         });
-                    // Still holding the engine for reading: nothing unloads
-                    // the model under a save of its slot.
+                    // Still holding the engine for reading, so the idle
+                    // unload, which only takes it when it is free, waits for
+                    // the save. A cancel stops the server without waiting;
+                    // the save then fails, its partial file is removed, and
+                    // the next lifetime saves again.
                     if let (Ok(analysis), Some(after_read)) = (&result, &running.after_read) {
                         after_read(analysis);
                     }
@@ -8651,6 +8702,11 @@ mod runtime_tests {
         /// The tier of every document read to the end, in order, as the
         /// runtime's after-read step saw them.
         after_reads: Mutex<Vec<ModelTier>>,
+        /// The tiers whose server finds a saved state of its instructions
+        /// at launch, as a slot file is restored.
+        saved_state: Mutex<std::collections::BTreeSet<ModelTier>>,
+        /// A restored state reads wrong: a file damaged after it was saved.
+        damaged_state: AtomicBool,
     }
 
     impl Rig {
@@ -8672,6 +8728,8 @@ mod runtime_tests {
                 refused: AtomicUsize::new(0),
                 server_memory: Mutex::new(std::collections::BTreeMap::new()),
                 after_reads: Mutex::new(Vec::new()),
+                saved_state: Mutex::new(std::collections::BTreeSet::new()),
+                damaged_state: AtomicBool::new(false),
             })
         }
 
@@ -8782,6 +8840,8 @@ mod runtime_tests {
         server: Arc<FakeServer>,
         rig: Arc<Rig>,
         tier: ModelTier,
+        /// Its server restored a saved state of the instructions at launch.
+        restored: bool,
     }
 
     impl Proposer for FakeProposer {
@@ -8789,6 +8849,7 @@ mod runtime_tests {
             self.rig.proposals.fetch_add(1, Ordering::SeqCst);
             let accurate = *self.rig.accurate_reply.lock().unwrap();
             let reply = match (self.tier, accurate) {
+                _ if self.restored && self.rig.damaged_state.load(Ordering::SeqCst) => Reply::Wrong,
                 (ModelTier::Accurate, Some(reply)) => reply,
                 _ => *self.rig.reply.lock().unwrap(),
             };
@@ -8845,6 +8906,7 @@ mod runtime_tests {
             self.rig.most_alive.fetch_max(alive, Ordering::SeqCst);
             let server = Arc::new(FakeServer::default());
             let rig = Arc::clone(&self.rig);
+            let restored = self.rig.saved_state.lock().unwrap().contains(&tier);
             Ok(LaunchedRuntime {
                 process: Box::new(FakeProcess {
                     server: Arc::clone(&server),
@@ -8855,11 +8917,16 @@ mod runtime_tests {
                     server,
                     rig: Arc::clone(&self.rig),
                     tier,
+                    restored,
                 })),
                 after_read: Some(Arc::new(move |_: &intern_engine::DocumentAnalysis| {
                     rig.after_reads.lock().unwrap().push(tier);
                 })),
             })
+        }
+
+        fn forget_saved_state(&self, tier: ModelTier) -> bool {
+            self.rig.saved_state.lock().unwrap().remove(&tier)
         }
     }
 
@@ -9323,6 +9390,73 @@ mod runtime_tests {
         let rig = Rig::new();
         verified(&install.runtime(&rig, "1.1.0"));
         assert!(install.stamp().is_file());
+    }
+
+    /// A model that fails its self-test with a saved state of its
+    /// instructions restored is tested once more without it: a damaged file
+    /// costs the speed-up, not the model. One that fails on its own is set
+    /// aside as before, after that one retest.
+    #[test]
+    fn a_saved_state_that_fails_the_self_test_is_removed_and_the_model_tested_again() {
+        let install = Install::new("slot-self-test");
+        verified(&install.runtime(&Rig::new(), "1.0.0"));
+
+        // A new build self-tests again, on a damaged saved state.
+        let rig = Rig::new();
+        rig.saved_state.lock().unwrap().insert(ModelTier::Fast);
+        rig.damaged_state.store(true, Ordering::SeqCst);
+        let runtime = install.runtime(&rig, "1.1.0");
+        verified(&runtime);
+        assert_eq!(launched(&rig), [ModelTier::Fast, ModelTier::Fast]);
+        assert!(rig.saved_state.lock().unwrap().is_empty());
+        assert!(runtime.running());
+        assert!(install.stamp().is_file());
+
+        // A model that is wrong on its own is set aside after one retest.
+        let rig = Rig::new();
+        rig.saved_state.lock().unwrap().insert(ModelTier::Fast);
+        rig.reply(Reply::Wrong);
+        let runtime = install.runtime(&rig, "1.2.0");
+        let error = runtime
+            .start_verified(&CancellationToken::new())
+            .unwrap_err();
+        assert_eq!(error.code, "MODEL_SELF_TEST_FAILED");
+        assert_eq!(launched(&rig), [ModelTier::Fast, ModelTier::Fast]);
+        assert!(!runtime.running());
+
+        // With no saved state there is no retest.
+        let rig = Rig::new();
+        rig.reply(Reply::Wrong);
+        install
+            .runtime(&rig, "1.3.0")
+            .start_verified(&CancellationToken::new())
+            .unwrap_err();
+        assert_eq!(launched(&rig), [ModelTier::Fast]);
+    }
+
+    /// The first document to load a model whose restored state fails the
+    /// self-test is read by that model once the state is gone, not by the
+    /// other model, and the model is not set aside.
+    #[test]
+    fn a_first_load_on_a_damaged_saved_state_retests_without_it() {
+        let install = Install::new("slot-first-load");
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        let (setup, _states) = manager(&runtime, ModelSource::Local);
+        settle(&setup);
+        install.install_accurate();
+        runtime.remember_verified(ModelTier::Accurate);
+        rig.saved_state.lock().unwrap().insert(ModelTier::Accurate);
+        rig.damaged_state.store(true, Ordering::SeqCst);
+
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!(reading.tier, ModelTier::Accurate);
+        assert_eq!(runtime.tier_failure(ModelTier::Accurate), None);
+        assert!(rig.saved_state.lock().unwrap().is_empty());
+        assert_eq!(
+            launched(&rig),
+            [ModelTier::Fast, ModelTier::Accurate, ModelTier::Accurate]
+        );
     }
 
     #[test]

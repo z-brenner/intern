@@ -1032,9 +1032,10 @@ before the document with the template switches they are rendered with
 paths (threads, context, batch size, flags), the processor features that
 choose ggml's CPU backend, and the version of the rules above for what a save
 keeps and when (`SLOT_SCHEME`), so a release that changes them never restores
-a file saved under the old ones. A file is only ever restored into a server that
-would have computed the same state, so the first document's reply is the one it
-would have got as the second. A launch removes its tier's files for any other
+a file saved under the old ones. A file is restored only into a server of the
+configuration that saved it, so the first document's reply is the one it would
+have got as the second; what the name cannot cover - a file changed on disk
+after it was saved, without changing its length - the self-test catches. A launch removes its tier's files for any other
 configuration, and any save a stopped server left unfinished (saves are
 written as `.part` and renamed), so there is at most one file per tier. Every
 failure costs only the speed-up: a restore that fails removes the file and the
@@ -1046,7 +1047,11 @@ would otherwise still restore in part - b11946 loads the model's state, finds
 no checkpoint list after it, and answers as if it had restored the file -
 and stay, read at every launch for none of the speed-up. Such a file is
 removed (and the slot emptied, when the server read part of it), so the next
-document saves a whole one.
+document saves a whole one. A model that fails its self-test with a file
+restored has every file of its tier removed and is started and tested once
+more without one (`slots::forget`); only a model that fails again, reading the
+instructions itself, is set aside. So a damaged file costs the speed-up and
+one more self-test, never the model.
 On Windows a folder outside ASCII is never passed (the server checks the
 folder with `std::filesystem` from UTF-8 text, which Windows' C++ library
 reads in the ANSI code page). And before every launch the server itself is
