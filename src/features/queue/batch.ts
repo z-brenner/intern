@@ -46,11 +46,15 @@ export interface BatchProgress {
  * "about 4 min left": the median time per document over what is left, less
  * what the current one has already taken, padded and rounded up. Undefined
  * until two documents have been timed, in this run or the ones before it.
+ *
+ * A clock that reads earlier than the document's start - the strip's own,
+ * which stands still between runs until its next tick - counts as none of
+ * it taken: the wait before a run is not time still to come.
  */
 export function estimateLeft(progress: BatchProgress, now: number): string | undefined {
   if (progress.perDocument === undefined) return undefined;
   const left = progress.total - progress.done;
-  const elapsed = progress.startedAt === undefined ? 0 : now - progress.startedAt;
+  const elapsed = progress.startedAt === undefined ? 0 : Math.max(0, now - progress.startedAt);
   const ms = (Math.max(0, progress.perDocument - elapsed) + Math.max(0, left - 1) * progress.perDocument) * PADDING;
   const minutes = Math.ceil(ms / 60_000);
   return minutes <= 1 ? 'about a minute left' : `about ${minutes} min left`;

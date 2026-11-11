@@ -76,6 +76,28 @@ describe('the queue run', () => {
     expect(JSON.parse(window.localStorage.getItem(TIMINGS_KEY)!)).toEqual([4_000, 5_000, 6_000, 7_000, 8_000, 9_000, 10_000, 11_000]);
   });
 
+  // The strip keeps its own clock, which stands still between runs. Opened
+  // at launch and given files half an hour later, it said "about 40 min
+  // left" for a run of three one-minute documents until the clock next
+  // ticked: the half hour of waiting counted as time still to come.
+  it('estimates a run that starts long after the strip was drawn from the run, not from the wait before it', () => {
+    window.localStorage.setItem(TIMINGS_KEY, JSON.stringify([60_000, 60_000, 60_000]));
+    function Strip({ items }: { items: QueueItem[] }) {
+      return <QueueProgress progress={useBatchProgress(items)} paused={false} />;
+    }
+    const view = render(<Strip items={[doc('a', 'review')]} />);
+    expect(screen.queryByLabelText('Queue progress')).not.toBeInTheDocument();
+
+    act(() => { vi.setSystemTime(30 * 60_000); });
+    view.rerender(<Strip items={[doc('a', 'review'), doc('b', 'processing'), doc('c', 'waiting'), doc('d', 'waiting')]} />);
+    // Three to read, none of the first taken yet: (60 + 2 x 60) x 1.2 = 216s, rounded up.
+    expect(screen.getByLabelText('Queue progress')).toHaveTextContent('Reading b.pdf (0:00) · 0 of 3 done · about 4 min left');
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(screen.getByLabelText('Queue progress')).toHaveTextContent('Reading b.pdf (0:01) · 0 of 3 done · about 4 min left');
+    // Read straight from a clock behind the start, it claims nothing still to come.
+    expect(estimateLeft({ total: 3, done: 0, current: doc('b', 'processing'), startedAt: 30 * 60_000, perDocument: 60_000 }, 0)).toBe('about 4 min left');
+  });
+
   it('takes one stored time for an anecdote, and anything else in storage for nothing', () => {
     const first = () => renderHook(() => useBatchProgress([doc('a', 'processing'), doc('b', 'waiting')])).result.current!;
     window.localStorage.setItem(TIMINGS_KEY, JSON.stringify([60_000]));
