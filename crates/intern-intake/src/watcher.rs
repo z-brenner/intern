@@ -462,8 +462,13 @@ fn run(
             .filter(|every| arriving == 0 && *every < interval);
         // On a folder slow to list the looks come further apart, and on one
         // slow enough not before the scan that is due.
-        let look_in =
-            |after, listing_took| Instant::now().checked_add(next_look_after(after, listing_took));
+        let look_in = |after, listing_took| {
+            Instant::now().checked_add(next_look_after(
+                after,
+                listing_took,
+                config.arrival_probe_load,
+            ))
+        };
         let mut next_look = look_every.and_then(|every| look_in(every, listing_took));
         loop {
             let until = next_look.map_or(deadline, |look| look.min(deadline));

@@ -1257,6 +1257,12 @@ fn looking_rig(backlog_files: &[&str], configure: impl FnOnce(&mut IntakeConfig)
             config.min_quiet_seconds = DEFAULT_MIN_QUIET_SECONDS;
             config.arrival_probe_interval = Some(Duration::from_millis(10));
             config.arrival_burst_window = Duration::from_millis(10);
+            // These tests are about what the looks see, not how far apart a
+            // slow folder spaces them (`a_folder_slow_to_list_is_looked_at_less_often`
+            // in scan.rs). On a busy runner a listing timed by the wall clock
+            // measured over 50 ms once, and at a hundred times that the next
+            // look came after the test had stopped waiting (CI run 43092511537).
+            config.arrival_probe_load = 1;
             configure(config);
         },
     )

@@ -82,6 +82,12 @@ pub struct IntakeConfig {
     pub arrival_probe_interval: Option<Duration>,
     /// See [`ARRIVAL_BURST_WINDOW`]. Injectable like the intervals.
     pub arrival_burst_window: Duration,
+    /// See [`ARRIVAL_PROBE_LOAD`]. Injectable like the intervals: a listing
+    /// is timed by the wall clock, so on a machine busy enough to keep the
+    /// watcher waiting for a core a listing of three files can measure tens
+    /// of milliseconds, and a test of something else would wait on looks
+    /// spaced seconds apart.
+    pub arrival_probe_load: u32,
 }
 
 impl IntakeConfig {
@@ -97,6 +103,7 @@ impl IntakeConfig {
             retake_backlog: false,
             arrival_probe_interval: None,
             arrival_burst_window: ARRIVAL_BURST_WINDOW,
+            arrival_probe_load: ARRIVAL_PROBE_LOAD,
         }
     }
 
@@ -561,10 +568,10 @@ impl ArrivalProbe {
 }
 
 /// How long the look between scans waits before it lists the folder again:
-/// `every`, or [`ARRIVAL_PROBE_LOAD`] times as long as the last listing
-/// took, whichever is longer.
-pub(crate) fn next_look_after(every: Duration, listing_took: Duration) -> Duration {
-    every.max(listing_took.saturating_mul(ARRIVAL_PROBE_LOAD))
+/// `every`, or `load` ([`ARRIVAL_PROBE_LOAD`] unless a test sets another)
+/// times as long as the last listing took, whichever is longer.
+pub(crate) fn next_look_after(every: Duration, listing_took: Duration, load: u32) -> Duration {
+    every.max(listing_took.saturating_mul(load))
 }
 
 /// A file only becomes claimable once it has been observed with an
@@ -1076,26 +1083,51 @@ mod tests {
     /// between its scans at all.
     #[test]
     fn a_folder_slow_to_list_is_looked_at_less_often() {
-        let every = ARRIVAL_PROBE_INTERVAL;
-        assert_eq!(next_look_after(every, Duration::ZERO), every);
-        assert_eq!(next_look_after(every, Duration::from_millis(2)), every);
-        assert_eq!(next_look_after(every, every / ARRIVAL_PROBE_LOAD), every);
+        // The app's folders keep the bound; only a test sets another.
         assert_eq!(
-            next_look_after(every, Duration::from_millis(47)),
+            IntakeConfig::new("intake", Vec::new()).arrival_probe_load,
+            ARRIVAL_PROBE_LOAD
+        );
+        let every = ARRIVAL_PROBE_INTERVAL;
+        assert_eq!(
+            next_look_after(every, Duration::ZERO, ARRIVAL_PROBE_LOAD),
+            every
+        );
+        assert_eq!(
+            next_look_after(every, Duration::from_millis(2), ARRIVAL_PROBE_LOAD),
+            every
+        );
+        assert_eq!(
+            next_look_after(every, every / ARRIVAL_PROBE_LOAD, ARRIVAL_PROBE_LOAD),
+            every
+        );
+        assert_eq!(
+            next_look_after(every, Duration::from_millis(47), ARRIVAL_PROBE_LOAD),
             Duration::from_millis(4_700)
         );
-        assert!(next_look_after(every, Duration::from_millis(200)) >= DEFAULT_SCAN_INTERVAL);
+        assert!(
+            next_look_after(every, Duration::from_millis(200), ARRIVAL_PROBE_LOAD)
+                >= DEFAULT_SCAN_INTERVAL
+        );
         // The burst window stretches the same way.
         assert_eq!(
-            next_look_after(ARRIVAL_BURST_WINDOW, Duration::from_millis(5)),
+            next_look_after(
+                ARRIVAL_BURST_WINDOW,
+                Duration::from_millis(5),
+                ARRIVAL_PROBE_LOAD
+            ),
             ARRIVAL_BURST_WINDOW
         );
         assert_eq!(
-            next_look_after(ARRIVAL_BURST_WINDOW, Duration::from_millis(20)),
+            next_look_after(
+                ARRIVAL_BURST_WINDOW,
+                Duration::from_millis(20),
+                ARRIVAL_PROBE_LOAD
+            ),
             Duration::from_secs(2)
         );
         assert_eq!(
-            next_look_after(every, Duration::MAX),
+            next_look_after(every, Duration::MAX, ARRIVAL_PROBE_LOAD),
             Duration::MAX,
             "no overflow"
         );
