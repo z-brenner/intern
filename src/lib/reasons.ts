@@ -14,12 +14,29 @@ const SENTENCES: Record<string, string> = {
   TYPE_UNSUPPORTED: 'The proposed document type does not appear verbatim in the document.',
   TYPE_INFERRED: 'The model gave no document type, so the document\'s own title was used; check that it names the document.',
   // Both are raised in more cases than a party missing from the text
-  // (ReviewReason in domain.rs): a name the document does not settle - a
-  // default the reading speaks against, a group of recipients such as "all
-  // staff" - and a document with no issuer or no party at all. Each sentence
-  // holds for every case and says where to look.
-  PARTY_UNSUPPORTED: 'The document does not settle the proposed party: it may not appear there, or may stand for a group rather than one party. Check who the document is from, to or between.',
-  PARTY_MISSING: 'A party the name needs was not found, such as the other side of an agreement or who issued the document. Check who the document is from, to or between.',
+  // (ReviewReason in domain.rs; raised in facts.rs and validate.rs, on the
+  // relation compose.rs reads). PARTY_UNSUPPORTED: most often a name that
+  // rests on sides only the model's reading gave, the document's wording
+  // saying nothing of them (Relation::on_proposed_roles; 99 of the 160 in
+  // the 9B's replays of InternBench and the real sets); then a party the
+  // model named that the document does not contain, a placeholder, or one
+  // capitalized word such as a first name, each left out of the name, which
+  // may then have no party at all; a default the model's own reading speaks
+  // against - a document "for" the party the model called its issuer or
+  // sender, or the first of several parties the model told no further
+  // apart, kept only for coming first (Relation::doubtful); a release named
+  // between two of its parties, by their order alone or as a published
+  // release whose text sets out two sides; and a name to or for a group of
+  // recipients such as "all staff", in its parties or in its type.
+  // PARTY_MISSING: an agreement or an amendment naming one side, an
+  // invoice, a receipt or an order left naming no one, or any document left
+  // naming no one because every party the model gave was set aside (copied,
+  // signing for another, staff of an organization no single line names).
+  // Neither sentence assumes the name has a party; each opens on what holds
+  // in every case. The two usually come together, and the place to look,
+  // PARTY_CHECK below, follows the last of them only.
+  PARTY_UNSUPPORTED: 'Intern could not confirm from the document which party this name should give. Most often the document does not say which side a party is on, so the side rests on the model\'s reading alone. A party the model named may also be absent from the document, or be one word such as a first name, and is then left out of the name. Or the name may give a party picked only for coming first or against the model\'s own reading, a release between two of its parties, or a group of recipients such as “all staff”.',
+  PARTY_MISSING: 'The name lacks a party it needs, such as the other side of an agreement or who issued the document.',
   DESCRIPTION_UNSUPPORTED: 'The description asserts something the document does not contain.',
   DESCRIPTION_INVALID: 'The description was not a single usable sentence.',
   // Raised two ways: the model rated its own answer low, or - nearly always,
@@ -110,6 +127,24 @@ const SENTENCES: Record<string, string> = {
 };
 
 /**
+ * Where to look about the parties, after PARTY_UNSUPPORTED's sentence or
+ * PARTY_MISSING's. The two usually arrive together (all three PARTY_MISSING
+ * readings in the 9B's replays came with PARTY_UNSUPPORTED), and the same
+ * instruction after each made one text repeat itself.
+ */
+const PARTY_CHECK = 'Check who the document is from, to, for or between.';
+
+/**
+ * The closing sentence a code shares with others. humanizeReason says it
+ * once, after the last code in a list that ends on it; a code with none
+ * reads as its sentence alone.
+ */
+const CLOSINGS: Record<string, string> = {
+  PARTY_UNSUPPORTED: PARTY_CHECK,
+  PARTY_MISSING: PARTY_CHECK,
+};
+
+/**
  * What the "queue stopped" banner says for a pause, where the sentence for the
  * same code on a single document would say the wrong thing. A document's
  * sentence tells a person to retry that document, or that Intern will retry
@@ -154,7 +189,12 @@ export function humanizeReason(reason: string): string {
   if (parts.length === 0 || !parts.every((part) => SENTENCES[part.toUpperCase()] !== undefined)) {
     return reason;
   }
-  return parts.map((part) => SENTENCES[part.toUpperCase()]).join(' ');
+  const codes = parts.map((part) => part.toUpperCase());
+  return codes.map((code, index) => {
+    const closing = CLOSINGS[code];
+    const saidLater = closing !== undefined && codes.slice(index + 1).some((later) => CLOSINGS[later] === closing);
+    return closing === undefined || saidLater ? SENTENCES[code] : `${SENTENCES[code]} ${closing}`;
+  }).join(' ');
 }
 
 /**

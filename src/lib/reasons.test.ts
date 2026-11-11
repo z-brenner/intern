@@ -62,6 +62,36 @@ describe('humanizeReason', () => {
     expect(sentence).not.toMatch(/reported|low confidence/i);
   });
 
+  // The two party codes usually arrive together, in either order, and end on
+  // the same instruction. It is said once, after the last of them, and each
+  // still ends on it alone.
+  it('says where to look about the parties once, after the last party sentence', () => {
+    const check = 'Check who the document is from, to, for or between.';
+    for (const code of ['PARTY_UNSUPPORTED', 'PARTY_MISSING']) {
+      const sentence = humanizeReason(code);
+      expect(sentence.endsWith(` ${check}`), sentence).toBe(true);
+      expect(sentence.split(check), code).toHaveLength(2);
+    }
+    const missing = 'The name lacks a party it needs, such as the other side of an agreement or who issued the document.';
+    for (const reason of ['DATE_AMBIGUOUS, PARTY_UNSUPPORTED, PARTY_MISSING, LOW_CONFIDENCE', 'PARTY_MISSING, PARTY_UNSUPPORTED, LOW_CONFIDENCE']) {
+      const text = humanizeReason(reason);
+      expect(text.split(check), reason).toHaveLength(2);
+      expect(text, reason).toContain(`${check} The model was unsure of its reading.`);
+      expect(text, reason).toContain(missing);
+    }
+    expect(humanizeReason('PARTY_UNSUPPORTED, PARTY_MISSING')).toBe(`${humanizeReason('PARTY_UNSUPPORTED').slice(0, -check.length)}${missing} ${check}`);
+  });
+
+  // PARTY_UNSUPPORTED is raised most often for a side only the model's
+  // reading gave (99 of 160 in the 9B's replays), not a party the document
+  // lacks, and also for a name with no party left in it; the sentence says
+  // so and assumes no party.
+  it('names the usual cause of an uncertain party, and does not assume the name has one', () => {
+    const sentence = humanizeReason('PARTY_UNSUPPORTED');
+    expect(sentence).toMatch(/^Intern could not confirm from the document which party this name should give\. Most often the document does not say which side a party is on/);
+    expect(sentence).not.toMatch(/the party in this name|the proposed party/);
+  });
+
   it('tolerates lowercase codes from other serializations', () => {
     expect(humanizeReason('date_unsupported')).toContain('verbatim');
   });
