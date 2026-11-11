@@ -3788,7 +3788,8 @@ impl LetterLayout {
         // the greeting: a memo opening "Dear colleagues" may date a section
         // below it. A greeting over a letter's sign-off is a letter whether
         // or not its dateline was found: a scan may run the date into its
-        // letterhead.
+        // letterhead, and an agency's letter may carry its date only on
+        // the signature page appended to it.
         self.dateline.is_some_and(|dateline| dateline < salutation)
             || scope.index.units().iter().any(|unit| {
                 if unit.running || unit.ordinal > salutation {
@@ -3802,7 +3803,31 @@ impl LetterLayout {
                 };
                 above.iter().any(|line| is_dateline(line))
             })
-            || signs_off(scope)
+            || self.signs_off_below_salutation(scope)
+    }
+
+    /// Whether the letter signs off anywhere below its greeting: a closing
+    /// on a line of its own ("Sincerely,", "Yours sincerely,") in a later
+    /// unit, or a later line of the greeting's. A letter's last page is not
+    /// always its closing's: an electronic-signature page, an annex or an
+    /// enclosure follows the signature, and a word processor's file is one
+    /// page however long. The greeting on the first page says where the
+    /// letter starts, so the closing is the letter's wherever it stands.
+    fn signs_off_below_salutation(self, scope: &ValidationScope<'_>) -> bool {
+        let Some((salutation, at)) = self.salutation else {
+            return false;
+        };
+        scope.index.units().iter().any(|unit| {
+            if unit.running || unit.ordinal < salutation {
+                return false;
+            }
+            let below = if unit.ordinal == salutation {
+                at + 1
+            } else {
+                0
+            };
+            unit.text.lines().skip(below).any(is_closing)
+        })
     }
 
     /// Whether a unit stands before the dateline, where a letterhead can.
@@ -11736,6 +11761,110 @@ The merger needs a majority of votes cast.";
         ] {
             assert_eq!(is_dateline(line), dateline, "{line}");
         }
+    }
+
+    /// A letter's closing is not always on its last page. An agency's
+    /// letter ends "Sincerely," on its last page of text and an
+    /// electronic-signature page follows; a word processor's letter is one
+    /// page, the statement it encloses after its signatures. Under a
+    /// greeting on the first page the closing makes it a letter wherever it
+    /// stands. With no greeting nothing says where a letter starts, and
+    /// only a closing at the document's end counts.
+    #[test]
+    fn a_letter_signs_off_before_its_signature_page_or_its_enclosure() {
+        let pages = |texts: &[&str]| {
+            EvidenceIndex::build(&DocumentSource::from_pages(
+                texts
+                    .iter()
+                    .enumerate()
+                    .map(|(at, text)| {
+                        crate::domain::SourcePage::new(at + 1, *text, PageOrigin::PlainText)
+                    })
+                    .collect(),
+            ))
+        };
+        // As the worker extracts an agency's letter: letterhead and inside
+        // address in one paragraph, no dateline, the only date on the
+        // signature page appended after the closing's page.
+        let index = pages(&[
+            "DEPARTMENT OF HARBOURS & WATERWAYS Coastal Service\nPort Licensing \
+             Administration\nSilver Spring, MD 20993\nMara T. Quill, PhD\nVice President, \
+             Regulatory Affairs\nKestrel Outfitters, Inc.\n780 Dedham Street, Suite 800\n\
+             Canton, MA 02021\n\nRE: Licence 208090\n\nDear Dr. Quill:\n\nAs part of its \
+             monitoring programme, the Port Licensing Administration has reviewed an exhibit \
+             booth submitted by Kestrel Outfitters, Inc.",
+            "The violations discussed in this letter do not necessarily constitute an \
+             exhaustive list.\n\nSincerely,\n\n{See appended electronic signature page}\n\n\
+             Jonah Reed, RPh\nRegulatory Review Officer\nOffice of Licence Promotion",
+            "This is a representation of an electronic record that was signed\n\n\
+             electronically and this page is the manifestation of the electronic\n\n\
+             signature.\n\n/s/\n\nJONAH P REED\n\n02/09/2018",
+        ]);
+        let facts = ModelFacts {
+            document_type: Some("Letter from the Office of Licence Promotion to Kestrel".into()),
+            type_evidence: vec![id_of(&index, "DEPARTMENT OF HARBOURS")],
+            document_date: Some("2018-02-09".into()),
+            date_evidence: vec![id_of(&index, "02/09/2018")],
+            parties: vec![
+                party(
+                    "Kestrel Outfitters, Inc.",
+                    Some(PartyRole::Client),
+                    &[id_of(&index, "DEPARTMENT OF HARBOURS")],
+                ),
+                party(
+                    "Port Licensing Administration",
+                    Some(PartyRole::Issuer),
+                    &[id_of(&index, "DEPARTMENT OF HARBOURS")],
+                ),
+            ],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Letter"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["Kestrel Outfitters, Inc."]);
+        assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
+        // A word processor's file is one page: the points the letter
+        // encloses run on for more lines than a letter's end is read for.
+        let enclosure = (1..=40)
+            .map(|at| format!("{at}. Our members will lead by example in clause {at}."))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let untyped = |_: &EvidenceIndex| ModelFacts::default();
+        let (outcome, _) = facts_for(
+            &format!(
+                "1 Quay Road\n\nLondon\n\nTel: 020 7946 0000\n\nMara Quill MP\n\n\
+                 Dear Mara Quill MP,\n\nWe write jointly to update you on our work.\n\n\
+                 Yours sincerely,\n\nJonah Reed\n\n{enclosure}"
+            ),
+            untyped,
+        );
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some("Letter"));
+        // No greeting: a dated paper that quotes a closing before its last
+        // lines is no letter by this.
+        let (outcome, _) = facts_for(
+            &format!(
+                "4 January 2017\n\nThe Committee has asked me to draw your attention to \
+                 their report.\n\nYours faithfully,\n\nLesley Bainsfair\n\n{enclosure}"
+            ),
+            untyped,
+        );
+        assert_eq!(outcome.proposal.document_type, None);
+        // A closing over the greeting is not the letter's own: the page
+        // quotes the end of another letter before it greets anyone.
+        let (outcome, _) = facts_for(
+            &format!(
+                "Yours sincerely,\n\nLesley Bainsfair\n\nDear Mara Quill MP,\n\nWe write \
+                 jointly to update you on our work.\n\n{enclosure}"
+            ),
+            untyped,
+        );
+        assert_eq!(outcome.proposal.document_type, None);
     }
 
     /// An email by its header block and a notice by its heading stand in
