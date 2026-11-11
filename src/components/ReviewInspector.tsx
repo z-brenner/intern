@@ -15,10 +15,11 @@ import type { ModelReading, QueueItem } from '../types';
 /**
  * Below this the model's own figure already says it was unsure, and is by
  * itself why the engine sends a reading to review (READY_CONFIDENCE in
- * validate.rs). At or above it, a reading flagged as unsure was flagged by
- * what Intern measured, and the figure needs a word of explanation.
+ * validate.rs, which a test holds this to). At or above it, a reading
+ * flagged as unsure was flagged by what Intern measured, and the figure
+ * needs a word of explanation.
  */
-const SELF_RATED_UNSURE = 0.6;
+export const SELF_RATED_UNSURE = 0.6;
 
 /** Where "Analysis details" being open or closed is remembered, between documents and between launches. */
 export const ANALYSIS_DETAILS_KEY = 'intern.analysisDetails';

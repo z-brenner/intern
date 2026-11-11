@@ -1,12 +1,13 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
-import { ANALYSIS_DETAILS_KEY } from '../../components/ReviewInspector';
+import { ANALYSIS_DETAILS_KEY, SELF_RATED_UNSURE } from '../../components/ReviewInspector';
 import { openRow } from '../queue/gridTesting';
 import { createInMemoryBridge, createReviewBatchBridge } from '../../lib/inMemoryBridge';
 import { humanizeReason } from '../../lib/reasons';
 import { TauriBridge } from '../../lib/tauriBridge';
 import type { QueueItem } from '../../types';
+import validateSource from '../../../crates/intern-engine/src/validate.rs?raw';
 
 const ambiguous: QueueItem = {
   id: 'ambiguous',
@@ -167,6 +168,24 @@ describe('what to check', () => {
     // Without that reason there is nothing to reconcile, and no note. (The
     // section is still open: it stays as it was left from one document to the next.)
     await openRow(screen.getByRole('row', { name: /Scan 0104.pdf/i }));
+    expect(within(panel).getByText("Model's own confidence")).toBeVisible();
+    expect(within(panel).queryByRole('note', { name: "About the model's own confidence" })).not.toBeInTheDocument();
+  });
+
+  // The note is left out where the model's own figure is itself the cause.
+  // That line is the engine's, so the panel's copy of it is held to it.
+  it('draws the line for the note where the engine sends a low self-rating to review', async () => {
+    const declared = /pub const READY_CONFIDENCE: f32 = ([0-9.]+);/.exec(validateSource)?.[1];
+    expect(declared, 'READY_CONFIDENCE is declared in intern-engine').toBeDefined();
+    expect(SELF_RATED_UNSURE).toBe(Number(declared));
+
+    const at = (id: string, name: string, confidence: number): QueueItem => ({ ...ambiguous, id, originalFilename: name, confidence, reason: humanizeReason('LOW_CONFIDENCE'), reasonCodes: ['LOW_CONFIDENCE'] });
+    render(<App bridge={createInMemoryBridge({ items: [at('on', 'Scan 0201.pdf', SELF_RATED_UNSURE), at('under', 'Scan 0202.pdf', SELF_RATED_UNSURE - 0.01)] })} />);
+    const panel = await openRow(await screen.findByRole('row', { name: /Scan 0201.pdf/i }));
+    fireEvent.click(within(panel).getByText('Analysis details'));
+    // On the line the engine did not flag the figure, so something else did.
+    expect(within(panel).getByRole('note', { name: "About the model's own confidence" })).toBeInTheDocument();
+    await openRow(screen.getByRole('row', { name: /Scan 0202.pdf/i }));
     expect(within(panel).getByText("Model's own confidence")).toBeVisible();
     expect(within(panel).queryByRole('note', { name: "About the model's own confidence" })).not.toBeInTheDocument();
   });
