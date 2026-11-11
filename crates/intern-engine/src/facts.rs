@@ -615,7 +615,7 @@ pub fn validate_facts_at(
     if let Some(value) = document_type.as_deref()
         && no_kind_of_its_own(Some(value))
         && head_before_party(value, &names)
-            .is_some_and(|(head, introduced)| introduced && !has_a_kind(&words(&head)))
+            .is_some_and(|(head, introduced)| introduced && !heads_by_its_own_kind(&head))
         && layout.laid_out_as_letter(scope)
     {
         document_type = Some("Letter".to_owned());
@@ -3188,13 +3188,30 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
             value = phrase;
         }
     }
-    // A party's name, and the connector that introduces it.
+    // A party's name, and the connector that introduces it, where what
+    // is left names a kind of its own.
     if let Some((head, _)) = head_before_party(&value, parties)
+        && heads_by_its_own_kind(&head)
         && let Some(kept) = keep(&head.split_whitespace().collect::<Vec<_>>())
     {
         value = kept;
     }
     value
+}
+
+/// Whether the head a title keeps before a party's name
+/// ([`head_before_party`]) names a kind of its own: one that sets a name
+/// apart ("Newsletter" of "Newsletter of the Saltmarsh Point Homeowners
+/// Association", "Notice" of "Notice to the QRA of ..."). A response, a
+/// notification, a citation or a circular cut from what it answers or
+/// tells ("Response" of "Response to the ONS Engagement on Adjustment of
+/// Migration Statistics") is a word a name holds as readily, alone: it
+/// says what the paper does with the party, not what the paper is, and a
+/// letter so titled is a letter.
+fn heads_by_its_own_kind(head: &str) -> bool {
+    words(head)
+        .iter()
+        .any(|word| crate::phrases::sets_a_name_apart(word))
 }
 
 /// The head of a title that names a party the reply named after its first
