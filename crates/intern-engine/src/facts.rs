@@ -45,7 +45,7 @@ use unicode_normalization::char::is_combining_mark;
 
 use crate::compose::{
     CastMember, DescriptionFacts, Relation, RelationCues, SUBSTANTIVE, amount_label, describe,
-    identifier_word, money_in, relation_from_roles,
+    identifier_word, money_in, names_a_published_release, relation_from_roles,
 };
 use crate::cues::{CUSTOMER_CUES, ISSUER_CUES, PAYMENT_ADDRESS_CUES, STOPWORDS, TYPE_NOUNS};
 use crate::distill::normalize_heading;
@@ -1801,10 +1801,28 @@ pub fn validate_facts_at(
                 .position(|party| normalize_loosely(&party.name) == name)
         }),
     };
+    // A release the type names as published - an enforcement release, a
+    // press release - is a record of what it announces, about its subject
+    // ([`DocumentClass::of`]). One whose document names its first two
+    // parties as its two sides, "by and between", may be an agreement after
+    // all, and is named between them as a release a party gives is - or
+    // may be an announcement that quotes the agreement it announces. The
+    // type and the text disagree, and the name waits for a person.
+    let published_between = class == DocumentClass::Record
+        && cues.between
+        && names_a_published_release(document_type.as_deref());
+    let class = if published_between {
+        DocumentClass::Agreement
+    } else {
+        class
+    };
     let relation = relation_from_roles(class, document_type.as_deref(), &cast, cues);
     // A name that rests on roles the document did not support waits for
-    // a person: the reply read the sides, the document did not say.
-    if relation.on_proposed_roles {
+    // a person: the reply read the sides, the document did not say. So
+    // does one the reply's own reading speaks against
+    // ([`Relation::doubtful`]): the document did not say, and the reply
+    // said otherwise.
+    if relation.on_proposed_roles || relation.doubtful || published_between {
         push(&mut reasons, ReviewReason::PartyUnsupported);
     }
     // An agreement has two sides at least. One that names only one has
@@ -1819,6 +1837,44 @@ pub fn validate_facts_at(
     // lost the party its name is for, which a person must supply.
     if class == DocumentClass::Issued && relation.parties.is_empty() {
         push(&mut reasons, ReviewReason::PartyMissing);
+    }
+    // Any document left naming no one, though the reply named parties the
+    // document holds - each set aside as copied, as signing for another,
+    // or as staff of an organization no single line names (a memorandum's
+    // "FROM: Name, Acting Director, Office of ..." under a letterhead of
+    // two offices) - has lost the party its name is for, which a person
+    // must supply. A reason already raised about the parties says so.
+    if relation.parties.is_empty()
+        && !parties.is_empty()
+        && !reasons.iter().any(|reason| {
+            matches!(
+                reason,
+                ReviewReason::PartyUnsupported | ReviewReason::PartyMissing
+            )
+        })
+    {
+        push(&mut reasons, ReviewReason::PartyMissing);
+    }
+    // A memorandum or a circular sent to a class of recipients - "TO:
+    // Regional Directors, Officers-in-Charge, and Resident Officers", "To:
+    // All FHA-Approved Mortgagees", "MEMORANDUM FOR HEADS OF EXECUTIVE
+    // DEPARTMENTS AND AGENCIES" - says whom it went to, never one party it
+    // can be filed by: a name "to" or "for" such a class, in its parties or
+    // in its type, waits for a person, who files it by the office it comes
+    // from. Any other kind is held only for a class it addresses as one
+    // ([`opens_on_a_class`]: an annual report's "Fellow Shareholders"):
+    // a notice's or a certificate's party ending on a plural is a firm as
+    // often as not ("Brandt Achterberg Solicitors").
+    let to_a_class = matches!(relation.relation, PartyRelation::To | PartyRelation::For)
+        && relation.parties.iter().any(|name| {
+            if class == DocumentClass::Letter {
+                names_a_class_of_recipients(name)
+            } else {
+                opens_on_a_class(name)
+            }
+        });
+    if to_a_class || document_type.as_deref().is_some_and(memorandum_to_a_class) {
+        push(&mut reasons, ReviewReason::PartyUnsupported);
     }
 
     // The subject, the identifier and the key facts: every number and name
@@ -6075,6 +6131,185 @@ const JOB_TITLE_WORDS: &[&str] = &[
     "governor",
     "mayor",
 ];
+
+/// Words a class of recipients opens with: "All FHA-Approved Mortgagees",
+/// "Each Participating Lender", "Fellow Shareholders".
+const CLASS_OPENERS: &[&str] = &["all", "each", "every", "any", "fellow"];
+
+/// Nouns a class of recipients is headed by besides the posts
+/// [`JOB_TITLE_WORDS`] names, in the plural ("Mortgagees", "Interested
+/// Parties") or as a body of people ("Staff", "Faculty").
+const RECIPIENT_CLASSES: &[&str] = &[
+    "members",
+    "mortgagees",
+    "holders",
+    "shareholders",
+    "stockholders",
+    "policyholders",
+    "stakeholders",
+    "employees",
+    "staff",
+    "faculty",
+    "students",
+    "residents",
+    "tenants",
+    "customers",
+    "clients",
+    "suppliers",
+    "contractors",
+    "providers",
+    "lenders",
+    "borrowers",
+    "creditors",
+    "investors",
+    "licensees",
+    "registrants",
+    "grantees",
+    "applicants",
+    "participants",
+    "parties",
+];
+
+/// Words that say which members of a class a memorandum is sent to, and
+/// never whose name a party bears: "*Regional* Directors", "*Department*
+/// and *Agency* Heads", "*Interested* Parties", "*Company* Secretaries". A
+/// head of anything else before its plural is a name: "Irwin Mitchell
+/// Solicitors", "Pinnacle Property Managers".
+const CLASS_MODIFIERS: &[&str] = &[
+    "regional",
+    "resident",
+    "executive",
+    "senior",
+    "deputy",
+    "acting",
+    "financial",
+    "department",
+    "departmental",
+    "agency",
+    "division",
+    "branch",
+    "office",
+    "field",
+    "district",
+    "area",
+    "local",
+    "state",
+    "federal",
+    "county",
+    "program",
+    "programme",
+    "project",
+    "network",
+    "board",
+    "committee",
+    "company",
+    "participating",
+    "interested",
+    "affected",
+    "eligible",
+    "approved",
+    "licensed",
+    "registered",
+    "current",
+    "prospective",
+];
+
+/// Words that end the head of a class of recipients: what follows them
+/// says which ("Heads *of* Executive Departments"). "And" joins the head's
+/// own nouns ("Department and Agency Heads", "Faculty and Staff").
+const CLASS_HEAD_ENDS: &[&str] = &["of", "for", "to", "in", "at", "on", "under", "with"];
+
+/// The head of a would-be class of recipients: its words before a comma or
+/// a word that says which, past a leading "the".
+fn class_head(name: &str) -> Vec<String> {
+    let head = name.split(',').next().unwrap_or_default();
+    words(head)
+        .into_iter()
+        .skip_while(|word| word == "the")
+        .take_while(|word| !CLASS_HEAD_ENDS.contains(&word.as_str()))
+        .collect()
+}
+
+/// Whether a word heads a class of recipients: a holding or a post in the
+/// plural, or a body of people.
+fn is_class_noun(word: &str) -> bool {
+    RECIPIENT_CLASSES.contains(&word) || is_plural_post(word)
+}
+
+/// Whether `name` opens on a word that addresses a class - "All", "Each",
+/// "Fellow" - and is headed by a class noun, singular after "Each": "All
+/// FHA-Approved Mortgagees", "Each Participating Lender", "Fellow
+/// Shareholders". A name that merely opens on such a word is none: "All
+/// Seasons Landscaping", "Every Mother Counts". It is the class any kind
+/// of document can be addressed to.
+fn opens_on_a_class(name: &str) -> bool {
+    if is_organization_name(name) {
+        return false;
+    }
+    match class_head(name).as_slice() {
+        [first, .., last] if CLASS_OPENERS.contains(&first.as_str()) => {
+            is_class_noun(last)
+                || is_class_noun(&format!("{last}s"))
+                || JOB_TITLE_WORDS.contains(&last.as_str())
+        }
+        _ => false,
+    }
+}
+
+/// Whether `name` names a class of recipients rather than one party: it
+/// opens on a class ([`opens_on_a_class`]), or its head is a class noun
+/// that only words saying which members precede ([`CLASS_MODIFIERS`]):
+/// "Heads of Executive Departments and Agencies", "Regional Directors,
+/// Officers-in-Charge, and Resident Officers", "Department and Agency
+/// Heads", "Interested Parties", "Staff". An organization's name is none
+/// ("Board of Directors", "Hardware Suppliers Ltd"), and neither is a
+/// firm's or a person's that ends on a plural ("Irwin Mitchell
+/// Solicitors", "Julie Heads").
+fn names_a_class_of_recipients(name: &str) -> bool {
+    if is_organization_name(name) {
+        return false;
+    }
+    if opens_on_a_class(name) {
+        return true;
+    }
+    match class_head(name).split_last() {
+        Some((last, before)) => {
+            is_class_noun(last)
+                && before.iter().all(|word| {
+                    word == "and"
+                        || CLASS_MODIFIERS.contains(&word.as_str())
+                        || JOB_TITLE_WORDS.contains(&word.as_str())
+                        || is_class_noun(word)
+                })
+        }
+        None => false,
+    }
+}
+
+/// Whether a word is a post in the plural: "directors", "officers",
+/// "secretaries", "heads".
+fn is_plural_post(word: &str) -> bool {
+    word.strip_suffix("ies")
+        .map(|stem| format!("{stem}y"))
+        .or_else(|| word.strip_suffix('s').map(str::to_owned))
+        .is_some_and(|stem| JOB_TITLE_WORDS.contains(&stem.as_str()))
+}
+
+/// Whether a type names a memorandum or a circular by the class it is
+/// sent to: "Memorandum for Heads of Executive Departments and Agencies",
+/// "Circular to All Licensed Banks".
+fn memorandum_to_a_class(document_type: &str) -> bool {
+    let type_words = words(document_type);
+    type_words.iter().enumerate().any(|(at, word)| {
+        matches!(
+            word.as_str(),
+            "memorandum" | "memoranda" | "memo" | "circular"
+        ) && type_words
+            .get(at + 1)
+            .is_some_and(|next| matches!(next.as_str(), "for" | "to"))
+            && names_a_class_of_recipients(&type_words[at + 2..].join(" "))
+    })
+}
 
 /// Whether a person signs for one of `organizations`: a unit names them,
 /// then a job title, then the organization - "Harriet Voss, Vice President
@@ -11650,6 +11885,7 @@ LOAN CONDITION REPORT\n\n\
             basis: String::new(),
             on_proposed_roles: false,
             defaulted: false,
+            doubtful: false,
         };
         assert_eq!(
             fit_type(
@@ -11690,6 +11926,713 @@ This Sponsorship Agreement is made on July 16, 2012 by Peek Investments LLC.";
         assert_eq!(outcome.proposal.party_relation, PartyRelation::With);
         assert!(
             outcome.reasons.contains(&ReviewReason::PartyMissing),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// real5-memo-01's shape: a memorandum whose "TO:" line names the
+    /// class of officials it is sent to. The label supports the reply's
+    /// addressee, but a class of recipients is no party a document is
+    /// filed by: the name waits for a person. The same memorandum to one
+    /// named organization is filed to it as before.
+    #[test]
+    fn a_memorandum_to_a_class_of_recipients_goes_to_review() {
+        const MEMO: &str = "OFFICE OF THE GENERAL COUNSEL\n\
+MEMORANDUM GC 25-05 February 14, 2025\n\n\
+TO: Regional Directors, Officers-in-Charge, and Resident Officers\n\
+FROM: Odalys B. Brandt, Acting General Counsel\n\
+SUBJECT: Rescission of Certain General Counsel Memoranda\n\n\
+Since assuming the role of Acting General Counsel, I have conducted a comprehensive review \
+of active General Counsel Memoranda and determined that the following actions are warranted.";
+        let reply = |text: &str, addressee: &str| {
+            facts_for(text, |index| ModelFacts {
+                document_type: Some("MEMORANDUM".into()),
+                type_evidence: vec![id_of(index, "MEMORANDUM GC")],
+                document_date: Some("2025-02-14".into()),
+                date_evidence: vec![id_of(index, "MEMORANDUM GC")],
+                parties: vec![party(
+                    addressee,
+                    Some(PartyRole::Addressee),
+                    &[id_of(index, "TO:")],
+                )],
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        let outcome = reply(
+            MEMO,
+            "Regional Directors, Officers-in-Charge, and Resident Officers",
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        for class in [
+            "Department and Agency Heads",
+            "Interested Parties",
+            "Faculty and Staff",
+            "All Staff",
+        ] {
+            let text = MEMO.replace(
+                "Regional Directors, Officers-in-Charge, and Resident Officers",
+                class,
+            );
+            let outcome = reply(&text, class);
+            assert!(
+                outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+                "{class}: {:?} {:?}",
+                outcome.proposal,
+                outcome.reasons
+            );
+        }
+        let named = MEMO.replace(
+            "Regional Directors, Officers-in-Charge, and Resident Officers",
+            "Corvane Media Group LLC",
+        );
+        let outcome = reply(&named, "Corvane Media Group LLC");
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["Corvane Media Group LLC"]);
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// A class of recipients opens on "All", "Each" or "Fellow" before a
+    /// class noun, or is headed by a class noun - a post or a holding in
+    /// the plural, a body of people - that only words saying which members
+    /// precede, "and" joining them; an organization's name, a firm's or a
+    /// person's that ends on a plural, or a body's is none. A memorandum's
+    /// type can name the class it is for; another kind's title naming a
+    /// class ("Notice to All Interested Parties of Intent to Terminate
+    /// Receivership") is its own.
+    #[test]
+    fn a_class_of_recipients_is_told_from_a_party() {
+        for class in [
+            "All FHA-Approved Mortgagees",
+            "All Staff",
+            "All Licensees",
+            "Regional Directors, Officers-in-Charge, and Resident Officers",
+            "Heads of Executive Departments and Agencies",
+            "the Heads of Executive Departments and Agencies",
+            "Department and Agency Heads",
+            "Fellow Shareholders",
+            "Each Participating Lender",
+            "Company Secretaries",
+            "Chief Financial Officers",
+            "Board Members",
+            "Interested Parties",
+            "Faculty and Staff",
+            "Staff",
+            "Licensees",
+            "Stakeholders",
+            "Students",
+            "Policyholders",
+            "Participating Lenders",
+            "Network Providers",
+        ] {
+            assert!(names_a_class_of_recipients(class), "{class}");
+        }
+        for party in [
+            "Board of Directors",
+            "Hardware Suppliers Ltd",
+            "Kestrel Point Developers LLC",
+            "Odalys Brandt",
+            "Office of the General Counsel",
+            "Visiting Committee on Advanced Technology",
+            "Irwin Mitchell Solicitors",
+            "Brandt Achterberg Solicitors",
+            "Summit Wealth Advisors",
+            "Apex Consulting Engineers",
+            "Co-op Funeral Directors",
+            "Hamptons Estate Agents",
+            "Pinnacle Property Managers",
+            "All Seasons Landscaping",
+            "All Star Plumbing",
+            "Every Mother Counts",
+            "Kansas City Chiefs",
+            "Allied Suppliers",
+            "Julie Heads",
+            "All",
+            "",
+        ] {
+            assert!(!names_a_class_of_recipients(party), "{party}");
+        }
+        // Any kind of document is held for a class it addresses as one; a
+        // plural head alone holds only a memorandum's or a letter's name.
+        for class in [
+            "All FHA-Approved Mortgagees",
+            "Fellow Shareholders",
+            "Each Participating Lender",
+        ] {
+            assert!(opens_on_a_class(class), "{class}");
+        }
+        for name in [
+            "Regional Directors, Officers-in-Charge, and Resident Officers",
+            "Interested Parties",
+            "All Seasons Landscaping",
+            "Every Mother Counts",
+        ] {
+            assert!(!opens_on_a_class(name), "{name}");
+        }
+        assert!(memorandum_to_a_class(
+            "Memorandum for Heads of Executive Departments and Agencies"
+        ));
+        assert!(memorandum_to_a_class(
+            "Memorandum for Department and Agency Heads"
+        ));
+        assert!(memorandum_to_a_class("Memo to All Staff"));
+        assert!(memorandum_to_a_class("Memorandum to Staff"));
+        assert!(memorandum_to_a_class("Circular to Licensees"));
+        assert!(!memorandum_to_a_class("Memorandum"));
+        assert!(!memorandum_to_a_class("Memo to File"));
+        assert!(!memorandum_to_a_class("Memorandum for the Record"));
+        assert!(!memorandum_to_a_class("Memorandum of Understanding"));
+        assert!(!memorandum_to_a_class(
+            "Memorandum for Kestrel Point Developers LLC"
+        ));
+        assert!(!memorandum_to_a_class(
+            "Notice to All Interested Parties of Intent to Terminate Receivership"
+        ));
+    }
+
+    /// A notice to a firm whose name ends on a plural post, and a
+    /// certificate for an insured whose name opens on "All", are filed by
+    /// their parties as before: neither is a class of recipients, and only
+    /// a memorandum or a letter is held for a plural head alone.
+    #[test]
+    fn a_firm_named_like_a_class_is_no_class_of_recipients() {
+        const NOTICE: &str = "NOTICE OF RENT REVIEW\n\n\
+Date: 3 March 2024\n\n\
+To: Brandt Achterberg Solicitors\n\
+From: Harrow & Pike Estates Ltd\n\n\
+Under clause 4 of the lease of 14 Mill Lane, Dalton, the rent will be reviewed on 25 March 2024 \
+and the landlord proposes a new annual rent of 18,000 pounds.";
+        let (outcome, _) = facts_for(NOTICE, |index| ModelFacts {
+            document_type: Some("Notice of Rent Review".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF RENT")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "Date: 3 March")],
+            parties: vec![
+                party(
+                    "Brandt Achterberg Solicitors",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "To:")],
+                ),
+                party(
+                    "Harrow & Pike Estates Ltd",
+                    Some(PartyRole::Sender),
+                    &[id_of(index, "From:")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Brandt Achterberg Solicitors"]
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        const CERTIFICATE: &str = "CERTIFICATE OF LIABILITY INSURANCE\n\n\
+Date: 03/03/2024\n\n\
+INSURED: All Seasons Landscaping\n\
+HOLDER: Calloway Crossing Shopping Center LLC\n\n\
+This certificate is issued as a matter of information only.";
+        let (outcome, _) = facts_for(CERTIFICATE, |index| ModelFacts {
+            document_type: Some("Certificate of Liability Insurance".into()),
+            type_evidence: vec![id_of(index, "CERTIFICATE OF")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "Date:")],
+            parties: vec![
+                party(
+                    "All Seasons Landscaping",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "INSURED:")],
+                ),
+                party(
+                    "Calloway Crossing Shopping Center LLC",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "HOLDER:")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(outcome.proposal.parties, vec!["All Seasons Landscaping"]);
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// real5-notice-11's shape: a regulator's enforcement release, its
+    /// office's letterhead over the release's title and date. A release an
+    /// organization publishes is a record of what it announces, about its
+    /// subject, not an agreement between the first two parties it names:
+    /// it is "for" the company it penalizes, and its title loses the date
+    /// it is set beside. A general release that names its two sides "by
+    /// and between" stays an agreement between them and files. A published
+    /// release whose document names two sides that way is named between
+    /// them too, and one under a word no list holds ("Media Release")
+    /// between its first two parties, but neither the type nor the text
+    /// settles which it is, and both wait for a person.
+    #[test]
+    fn a_published_release_is_a_record_for_its_subject() {
+        const RELEASE: &str = "DEPARTMENT OF THE EXCHEQUER\n\
+OFFICE OF FOREIGN ASSETS REVIEW\n\
+Enforcement Release: December 4, 2025\n\
+OFAR Imposes $7,139,305 Penalty on Westmere Holdings, Inc.\n\
+for Violating Sanctions and Reporting Obligations\n\
+The Office of Foreign Assets Review (OFAR) has issued a Penalty Notice imposing a $7,139,305\n\
+penalty on Westmere Holdings, Inc., a property management company based in Dalton, for violating\n\
+sanctions and for failing to file reports of blocked assets. Between April 2018 and May 2020,\n\
+Westmere received 24 payments on behalf of a company owned by a blocked person.";
+        let (outcome, _) = facts_for(RELEASE, |index| ModelFacts {
+            document_type: Some("Enforcement Release: December 4, 2025".into()),
+            type_evidence: vec![id_of(index, "Enforcement Release")],
+            document_date: Some("2025-12-04".into()),
+            date_evidence: vec![id_of(index, "Enforcement Release")],
+            parties: vec![
+                party(
+                    "Westmere Holdings, Inc.",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "OFAR Imposes")],
+                ),
+                party(
+                    "DEPARTMENT OF THE EXCHEQUER",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "DEPARTMENT OF")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Enforcement Release")
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Westmere Holdings, Inc."],
+            "{:?}",
+            outcome.facts
+        );
+        assert_eq!(
+            outcome.facts.as_ref().map(|facts| facts.document_class),
+            Some(DocumentClass::Record)
+        );
+
+        const GENERAL: &str = "GENERAL RELEASE\n\n\
+This General Release is made on March 3, 2024 by and between Corvane Media Group LLC and \
+Pellham Tobacco Company. For good and valuable consideration, each releases the other from \
+all claims arising from the distribution agreement.";
+        let (outcome, _) = facts_for(GENERAL, |index| ModelFacts {
+            document_type: Some("General Release".into()),
+            type_evidence: vec![id_of(index, "GENERAL RELEASE")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "This General")],
+            parties: vec![
+                party(
+                    "Corvane Media Group LLC",
+                    None,
+                    &[id_of(index, "This General")],
+                ),
+                party(
+                    "Pellham Tobacco Company",
+                    None,
+                    &[id_of(index, "This General")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Corvane Media Group LLC", "Pellham Tobacco Company"]
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        // A release published under another word than the three a type is
+        // read by is an agreement by "release" alone; its document names no
+        // two sides, and the name its first two parties are joined in by
+        // their order waits for a person.
+        const MEDIA: &str = "MINISTER FOR TRADE\n\n\
+MEDIA RELEASE\n\n\
+3 March 2024\n\n\
+New export deal for Corvane Media Group\n\n\
+The Minister for Trade today welcomed the agreement reached with Pellham Tobacco Company, which \
+will see Corvane Media Group export its services to twelve new markets.";
+        let (outcome, _) = facts_for(MEDIA, |index| ModelFacts {
+            document_type: Some("Media Release".into()),
+            type_evidence: vec![id_of(index, "MEDIA RELEASE")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "3 March 2024")],
+            parties: vec![
+                party(
+                    "Corvane Media Group",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "New export")],
+                ),
+                party(
+                    "Pellham Tobacco Company",
+                    Some(PartyRole::Other),
+                    &[id_of(index, "The Minister")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        const ANNOUNCED: &str = "PRESS RELEASE\n\n\
+March 3, 2024\n\n\
+This settlement and release is made by and between Corvane Media Group LLC and Pellham \
+Tobacco Company, who each release the other from all claims.";
+        let (outcome, _) = facts_for(ANNOUNCED, |index| ModelFacts {
+            document_type: Some("Press Release".into()),
+            type_evidence: vec![id_of(index, "PRESS RELEASE")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "March 3")],
+            parties: vec![
+                party(
+                    "Corvane Media Group LLC",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "This settlement")],
+                ),
+                party(
+                    "Pellham Tobacco Company",
+                    None,
+                    &[id_of(index, "This settlement")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        assert_eq!(
+            outcome.facts.as_ref().map(|facts| facts.document_class),
+            Some(DocumentClass::Agreement)
+        );
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// real5-notice-06's shape: a court's public notice whose reply named
+    /// the court alone, its name run across the two lines of its heading,
+    /// and called it the issuer, with no letterhead line that holds the
+    /// name to support the role. A notice naming one
+    /// party is "for" it by default, which a reply that read it as the
+    /// notice's issuer speaks against: the name is kept and waits for a
+    /// person. The same default for the operator an improvement notice is
+    /// served on, which the reply called the contractor, is as settled as
+    /// it was.
+    #[test]
+    fn a_notice_for_the_party_its_reply_called_the_issuer_goes_to_review() {
+        const NOTICE: &str = "- PUBLIC NOTICE -\n\n\
+REAPPOINTMENT OF COUNTY HEARING OFFICER\n\
+HARROW COUNTY WATER COURT\n\
+NORTHERN DIVISION OF MERIDEN\n\n\
+The current terms of the following hearing officers are due to expire on the\n\
+dates indicated:\n\
+Officer Odalys Brandt, Dalton\n\
+January 25, 2026\n\n\
+Comments from members of the bar and the public are invited as to whether the\n\
+incumbent hearing officers should be recommended for reappointment. Comments should be sent to:\n\
+Maren Achterberg\n\
+Clerk of Court\n\
+Harrow County Water Court\n\
+Northern Division of Meriden\n\
+410 Ferry Street, Room 12\n\
+Dalton, Meriden 75242\n\n\
+Notice Date: April 16, 2025";
+        let (outcome, _) = facts_for(NOTICE, |index| ModelFacts {
+            document_type: Some("PUBLIC NOTICE".into()),
+            type_evidence: vec![id_of(index, "PUBLIC NOTICE")],
+            document_date: Some("2025-04-16".into()),
+            date_evidence: vec![id_of(index, "Notice Date")],
+            parties: vec![party(
+                "Harrow County Water Court Northern Division of Meriden",
+                Some(PartyRole::Issuer),
+                &[id_of(index, "Clerk of Court")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Harrow County Water Court Northern Division of Meriden"],
+            "{:?}",
+            outcome.proposal
+        );
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        let facts = outcome.facts.expect("facts");
+        assert!(
+            facts
+                .relation_basis
+                .contains("though the reply called it the issuer"),
+            "{}",
+            facts.relation_basis
+        );
+        // A reply that called the court the client says nothing against
+        // "for" and is not held by this rule, though the name is as wrong:
+        // that is a gap this rule leaves, not a name it files on purpose,
+        // and this test pins none.
+
+        const IMPROVEMENT: &str = "## Sheet1\n\n\
+| Details for Improvement Notice No. 04/17 |  |\n\
+| --- | --- |\n\
+| Notice Type | Improvement |\n\
+| Operator | Tarnwick Offshore (U.K.) Limited |\n\
+| Address | 1 Kingdom Street, |\n\
+| Details | On the installation Calder Deep the operator failed to ensure that a well \
+operation is conducted in pursuance of the plans stated in its notification. |\n\
+| Issue Date | 3 February 2017 |";
+        let (outcome, _) = facts_for(IMPROVEMENT, |index| ModelFacts {
+            document_type: Some("Improvement Notice".into()),
+            type_evidence: vec![id_of(index, "Details for Improvement")],
+            document_date: Some("2017-02-03".into()),
+            date_evidence: vec![id_of(index, "Issue Date")],
+            parties: vec![party(
+                "Tarnwick Offshore (U.K.) Limited",
+                Some(PartyRole::Contractor),
+                &[id_of(index, "| Operator")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Tarnwick Offshore (U.K.) Limited"]
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// real5-office-01's shape: minutes whose reply named three of the
+    /// people its attendance table lists and called each the client. No
+    /// role tells them apart, so the record's default would file the
+    /// minutes "for" whoever the table names first: the name waits for a
+    /// person instead, and so it does where a letterhead names the body
+    /// that keeps the minutes. A report whose reply told its client from
+    /// its contractor keeps the default as it was.
+    #[test]
+    fn a_record_for_the_first_of_several_alike_goes_to_review() {
+        const MINUTES: &str = "**MINUTES**\n\n\
+**THURSDAY 14 JUNE 2018**\n\n\
+**Attendees**\n\n\
+| Professor Odalys Brandt | Professor Teodor Lindqvist |\n\
+| --- | --- |\n\
+| Maren Achterberg | Professor Ines Calloway MBE |\n\
+| Tegwen Morrow | Callum Hartsfield |\n\n\
+**Minute**\n\n\
+1. **Chair\u{2019}s welcome and introductions**\n\n\
+   - 1.1 Professor Odalys Brandt provided an introduction to the review.";
+        let (outcome, _) = facts_for(MINUTES, |index| ModelFacts {
+            document_type: Some("MINUTES".into()),
+            type_evidence: vec![id_of(index, "**MINUTES**")],
+            document_date: Some("2018-06-14".into()),
+            date_evidence: vec![id_of(index, "THURSDAY")],
+            parties: vec![
+                party(
+                    "Professor Odalys Brandt",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "| Professor Odalys")],
+                ),
+                party(
+                    "Professor Teodor Lindqvist",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "| Professor Odalys")],
+                ),
+                party(
+                    "Maren Achterberg",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "| Professor Odalys")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(outcome.proposal.parties, vec!["Odalys Brandt"]);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        // The same minutes under the letterhead of the body that keeps them,
+        // which the reply called the issuer: the attendees are the
+        // letterhead's counterpart, and the first of them is no more the
+        // one the minutes are for.
+        const LETTERHEAD: &str = "HALVERSTON COOPERATIVE GROCERS\n\n\
+MINUTES OF THE BOARD MEETING\n\n\
+14 June 2018\n\n\
+Present: Odalys Brandt, Teodor Lindqvist, Maren Achterberg\n\n\
+1. The chair welcomed the members and the minutes of the last meeting were approved.\n\
+2. The board approved the budget for the coming year.";
+        let (outcome, _) = facts_for(LETTERHEAD, |index| ModelFacts {
+            document_type: Some("Minutes of the Board Meeting".into()),
+            type_evidence: vec![id_of(index, "MINUTES OF THE")],
+            document_date: Some("2018-06-14".into()),
+            date_evidence: vec![id_of(index, "14 June")],
+            parties: vec![
+                party(
+                    "Halverston Cooperative Grocers",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "HALVERSTON")],
+                ),
+                party(
+                    "Odalys Brandt",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "Present:")],
+                ),
+                party(
+                    "Teodor Lindqvist",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "Present:")],
+                ),
+                party(
+                    "Maren Achterberg",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "Present:")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(outcome.proposal.parties, vec!["Odalys Brandt"]);
+        let basis = outcome
+            .facts
+            .as_ref()
+            .map(|facts| facts.relation_basis.clone())
+            .unwrap_or_default();
+        assert!(basis.contains("provider's counterpart"), "{basis}");
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        const REPORT: &str = "Site Completion Report\n\n\
+Prepared 14 March 2025\n\n\
+This report records the closure of the former range site. Kestrel Point Developers LLC \
+engaged Alder Geosciences, Inc. to carry out the works described below.";
+        let (outcome, _) = facts_for(REPORT, |index| ModelFacts {
+            document_type: Some("Site Completion Report".into()),
+            type_evidence: vec![id_of(index, "Site Completion")],
+            document_date: Some("2025-03-14".into()),
+            date_evidence: vec![id_of(index, "Prepared")],
+            parties: vec![
+                party(
+                    "Kestrel Point Developers LLC",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "This report")],
+                ),
+                party(
+                    "Alder Geosciences, Inc.",
+                    Some(PartyRole::Contractor),
+                    &[id_of(index, "This report")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Kestrel Point Developers LLC"],
+            "{:?}",
+            outcome.facts
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// real5-memo-03's shape: a memorandum under a letterhead of two
+    /// offices, whose reply named only the official on its "FROM:" line.
+    /// The official holds a post and signs for an organization, so is no
+    /// party of their own, and no single organization heads the page to
+    /// stand in: the name is left with no party, which waits for a person.
+    /// A reply that named no one leaves nothing missing: a memorandum may
+    /// be filed by its kind and date alone.
+    #[test]
+    fn a_name_left_with_no_party_the_reply_named_goes_to_review() {
+        const MEMO: &str = "EXECUTIVE OFFICE OF THE GOVERNOR\n\
+OFFICE OF BUDGET AND PLANNING\n\
+MERIDEN CITY, 20503\n\n\
+January 29, 2025\n\n\
+M-25-14\n\n\
+MEMORANDUM FOR HEADS OF STATE DEPARTMENTS AND AGENCIES\n\n\
+FROM: Odalys B. Brandt, Acting Director, Office of Budget and Planning\n\n\
+SUBJECT: Rescission of M-25-13\n\n\
+Memorandum M-25-13 is rescinded. If you have questions about implementing it, please \
+contact your agency counsel.";
+        let reply = |named: bool| {
+            facts_for(MEMO, |index| ModelFacts {
+                document_type: Some("MEMORANDUM".into()),
+                type_evidence: vec![id_of(index, "MEMORANDUM FOR")],
+                document_date: Some("2025-01-29".into()),
+                date_evidence: vec![id_of(index, "January 29")],
+                parties: if named {
+                    vec![party(
+                        "Odalys B. Brandt",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "FROM:")],
+                    )]
+                } else {
+                    Vec::new()
+                },
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        let outcome = reply(true);
+        assert!(
+            outcome.proposal.parties.is_empty(),
+            "{:?}",
+            outcome.proposal
+        );
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyMissing),
+            "{:?}",
+            outcome.reasons
+        );
+        let outcome = reply(false);
+        assert!(
+            outcome.proposal.parties.is_empty(),
+            "{:?}",
+            outcome.proposal
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyMissing),
             "{:?}",
             outcome.reasons
         );
@@ -15306,6 +16249,62 @@ Dated: April 2, 2024"
         for reason in [ReviewReason::TypeUnsupported, ReviewReason::TypeInferred] {
             assert!(!outcome.reasons.contains(&reason), "{:?}", outcome.reasons);
         }
+    }
+
+    /// real5-memo-10's shape: minutes titled by the day of the meeting
+    /// they record. The reply copied the title line whole, date and all;
+    /// the type is its kind phrase, which stops at the weekday the date
+    /// opens with and leaves no "of the" dangling before it: "Minutes", not
+    /// "Minutes of the Wednesday". Minutes titled by the meeting itself
+    /// keep their title.
+    #[test]
+    fn a_type_never_keeps_the_weekday_its_date_opens_with() {
+        const MINUTES: &str = "HALVERSTON COMMITTEE ON MARINE STANDARDS (HCMS or Committee)\n\
+MINUTES OF THE WEDNESDAY, FEBRUARY 14, 2024\n\
+WEBINAR MEETING\n\n\
+ATTENDANCE: Brandt, Odalys Lindqvist, Teodor\n\n\
+The Committee met by webinar. Dr. Maren Achterberg, Chair, opened the meeting.";
+        let (outcome, _) = facts_for(MINUTES, |index| ModelFacts {
+            document_type: Some(
+                "Minutes of the Wednesday, February 14, 2024 Webinar Meeting".into(),
+            ),
+            type_evidence: vec![id_of(index, "MINUTES OF THE")],
+            document_date: Some("2024-02-14".into()),
+            date_evidence: vec![id_of(index, "MINUTES OF THE")],
+            parties: vec![party(
+                "Halverston Committee on Marine Standards",
+                Some(PartyRole::Client),
+                &[id_of(index, "HALVERSTON")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Minutes"),
+            "{:?}",
+            outcome.proposal
+        );
+
+        const REGULAR: &str = "MINUTES OF THE REGULAR MEETING OF THE BOARD OF DIRECTORS\n\n\
+Held on March 3, 2024 at the offices of Corvane Media Group LLC.";
+        let (outcome, _) = facts_for(REGULAR, |index| ModelFacts {
+            document_type: Some("MINUTES OF THE REGULAR MEETING OF THE BOARD OF DIRECTORS".into()),
+            type_evidence: vec![id_of(index, "MINUTES OF THE")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "Held on")],
+            parties: vec![party(
+                "Corvane Media Group LLC",
+                Some(PartyRole::Issuer),
+                &[id_of(index, "Held on")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Minutes of the Regular Meeting of the Board of Directors"),
+            "{:?}",
+            outcome.proposal
+        );
     }
 
     /// A response, a citation with its notification of penalty and a
