@@ -525,6 +525,13 @@ pub fn validate_facts_at(
     let mut type_title = None;
     let mut type_unit = None;
     let proposed_type = content(facts.document_type.as_deref(), scope);
+    // A title phrase runs on through "of the ..." to a party's name; a
+    // party is no part of a type.
+    let names = facts
+        .parties
+        .iter()
+        .map(|party| party.name.as_str())
+        .collect::<Vec<_>>();
     let (mut document_type, type_supported) = match proposed_type {
         None => (None, true),
         Some(value) => match read_type(scope, &facts.type_evidence, value) {
@@ -532,13 +539,6 @@ pub fn validate_facts_at(
                 support.document_type = found.support;
                 remember(&found, &mut references);
                 type_line = found.line.clone();
-                // A title phrase runs on through "of the ..." to a party's
-                // name; a party is no part of a type.
-                let names = facts
-                    .parties
-                    .iter()
-                    .map(|party| party.name.as_str())
-                    .collect::<Vec<_>>();
                 let phrase = stated_title(&without_identifier(&phrase), &names);
                 type_title = Some(phrase.clone());
                 type_unit = found.unit.map(|unit| unit.ordinal);
@@ -551,11 +551,6 @@ pub fn validate_facts_at(
                 type_unit = found.unit.map(|unit| unit.ordinal);
                 let kept = marks_its_line_holds(value, found.line.as_deref().unwrap_or_default());
                 type_line = found.line.clone();
-                let names = facts
-                    .parties
-                    .iter()
-                    .map(|party| party.name.as_str())
-                    .collect::<Vec<_>>();
                 let kept = stated_title(&without_identifier(&kept), &names);
                 (Some(titled(&kept)), true)
             }
@@ -608,6 +603,25 @@ pub fn validate_facts_at(
             type_line = None;
             push(&mut reasons, ReviewReason::TypeInferred);
         }
+    }
+    // A letter's title may say whom it answers and nothing of what it is:
+    // "Response to the ONS Engagement on Adjustment of Migration
+    // Statistics", the reply's "ONS" among its parties. A party is no part
+    // of a type, the kinds after the party's name are the party's papers,
+    // and the head left before it ("Response") names no kind of document.
+    // "Letter" stands in, for a person to complete, as it does for a
+    // letter typed by what it talks about. A head that names a kind
+    // ("Notice to ...", "Newsletter of ...") is the type, as above.
+    if let Some(value) = document_type.as_deref()
+        && no_kind_of_its_own(Some(value))
+        && head_before_party(value, &names)
+            .is_some_and(|(head, introduced)| introduced && !has_a_kind(&words(&head)))
+        && layout.laid_out_as_letter(scope)
+    {
+        document_type = Some("Letter".to_owned());
+        type_title = None;
+        type_line = None;
+        push(&mut reasons, ReviewReason::TypeInferred);
     }
     // "Never 'Document', 'Agreement' or 'Letter' alone", as the prompt
     // says: a bare generic word that no title of the document completed
@@ -2904,11 +2918,27 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
         }
     }
     // A party's name, and the connector that introduces it.
-    let value_words = words(&value);
+    if let Some((head, _)) = head_before_party(&value, parties)
+        && let Some(kept) = keep(&head.split_whitespace().collect::<Vec<_>>())
+    {
+        value = kept;
+    }
+    value
+}
+
+/// The head of a title that names a party the reply named after its first
+/// word: the title up to the party's name and the words that introduce it
+/// ("Newsletter" of "Newsletter of the Saltmarsh Point Homeowners
+/// Association", "Response" of "Response to the ONS Engagement on
+/// Adjustment of Migration Statistics"), and whether a connector
+/// introduces the party there, as "of" and "to" do. `None` when the title
+/// names no party past its first word.
+fn head_before_party(value: &str, parties: &[&str]) -> Option<(String, bool)> {
     const INTRODUCES: &[&str] = &[
         "of", "for", "by", "from", "to", "with", "between", "and", "the",
     ];
-    let cut = parties
+    let value_words = words(value);
+    let mut at = parties
         .iter()
         .filter_map(|party| {
             let party_words = words(party);
@@ -2920,29 +2950,26 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
                 .next()
         })
         .filter(|&at| at > 0)
-        .min();
-    if let Some(mut at) = cut {
-        while at > 1 && INTRODUCES.contains(&value_words[at - 1].as_str()) {
-            at -= 1;
-        }
-        // The token the cut word opens: a token may hold several words
-        // ("Girafa.com,") or none ("-").
-        let tokens = value.split_whitespace().collect::<Vec<_>>();
-        let mut seen = 0;
-        let token_at = tokens
-            .iter()
-            .position(|token| {
-                let count = words(token).len();
-                let opens = seen == at && count > 0;
-                seen += count;
-                opens
-            })
-            .unwrap_or(tokens.len());
-        if let Some(kept) = keep(&tokens[..token_at]) {
-            value = kept;
-        }
+        .min()?;
+    let mut introduced = false;
+    while at > 1 && INTRODUCES.contains(&value_words[at - 1].as_str()) {
+        introduced |= value_words[at - 1] != "the";
+        at -= 1;
     }
-    value
+    // The token the cut word opens: a token may hold several words
+    // ("Girafa.com,") or none ("-").
+    let tokens = value.split_whitespace().collect::<Vec<_>>();
+    let mut seen = 0;
+    let token_at = tokens
+        .iter()
+        .position(|token| {
+            let count = words(token).len();
+            let opens = seen == at && count > 0;
+            seen += count;
+            opens
+        })
+        .unwrap_or(tokens.len());
+    Some((tokens[..token_at].join(" "), introduced))
 }
 
 /// Whether the kind phrase that opens at word `at` of a title is what a
@@ -13459,6 +13486,84 @@ Rickmansworth,
         ] {
             assert!(outcome.reasons.contains(&reason), "{:?}", outcome.reasons);
         }
+    }
+
+    /// A letter's title that says whom it answers names no kind of its
+    /// own: the reply's party stands in it after a head that is no kind of
+    /// document, and the kind after the party's name is the party's paper.
+    /// "Letter" stands in and the name waits for a person. A head that names
+    /// a kind is the type, a title on a paper that is no letter stays whole,
+    /// and so does one whose party the reply did not name.
+    #[test]
+    fn a_letter_titled_by_whom_it_answers_stands_in_as_a_letter() {
+        // As the worker extracts a word processor's letter: the letterhead
+        // a table's cell, a date field, the title in bold over the greeting.
+        let letter = |title: &str, greeting: &str, closing: &str| {
+            format!(
+                "|  |  |\n| --- | --- |\n|  | **Harbour Advisory Committee**<br>1st Floor, Quay \
+                 Building <br>2 Marsh Street<br>London |\n\nDate: 24th October 2019\n\n\
+                 **{title}**\n\n{greeting}The Harbour Advisory Committee (HAC) appreciates the \
+                 opportunity to provide feedback on the recent adjustments to the QRA Harbour \
+                 Statistics.\n\n{closing}Professor Mara Quill"
+            )
+        };
+        let reply = |title: &'static str, recipient: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(title.into()),
+                type_evidence: vec![id_of(index, title)],
+                document_date: Some("2019-10-24".into()),
+                date_evidence: vec![id_of(index, "24th October 2019")],
+                parties: vec![
+                    party(
+                        "Harbour Advisory Committee",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "**Harbour Advisory Committee**")],
+                    ),
+                    party(
+                        recipient,
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "appreciates the opportunity")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            }
+        };
+        const ANSWER: &str = "Response to the QRA Engagement on Adjustment of Harbour Statistics";
+        let (outcome, _) = facts_for(
+            &letter(ANSWER, "Dear Sir/Madam,\n\n", "Yours Sincerely\n\n"),
+            reply(ANSWER, "QRA"),
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Letter"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["QRA"]);
+        for reason in [ReviewReason::TypeInferred, ReviewReason::TypeMissing] {
+            assert!(outcome.reasons.contains(&reason), "{:?}", outcome.reasons);
+        }
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        // A head that names a kind is the letter's type, the party cut
+        // from it.
+        const NOTICE: &str = "Notice to the QRA of Adjustment of Harbour Statistics";
+        let (outcome, _) = facts_for(
+            &letter(NOTICE, "Dear Sir/Madam,\n\n", "Yours Sincerely\n\n"),
+            reply(NOTICE, "QRA"),
+        );
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some("Notice"));
+        // No greeting and no closing: no letter, and the paper keeps its
+        // own title.
+        let (outcome, _) = facts_for(&letter(ANSWER, "", ""), reply(ANSWER, "QRA"));
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some(ANSWER));
+        // A reply that named no party the title names: the title is all
+        // the type there is.
+        let (outcome, _) = facts_for(
+            &letter(ANSWER, "Dear Sir/Madam,\n\n", "Yours Sincerely\n\n"),
+            reply(ANSWER, "Quay Regulation Authority"),
+        );
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some(ANSWER));
     }
 
     /// A "The" that opens a name's line is the name's own; one in a sentence
