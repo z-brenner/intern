@@ -1730,12 +1730,33 @@ pub fn validate_facts_at(
             },
         );
     }
+    // Who the filename and the description can name: everyone but the
+    // people copied and those who sign for a party, each with the role the
+    // document supports.
+    let cast_of = |parties: &[ValidatedParty]| {
+        parties
+            .iter()
+            .filter(|party| !party.copied && !party.signatory)
+            .map(|party| CastMember {
+                name: party.name.clone(),
+                role: party.role,
+                role_supported: party.role.is_some(),
+                proposed_role: party.proposed_role,
+            })
+            .collect::<Vec<_>>()
+    };
+    // The two sides of the case, as the caption sets them out, read
+    // before any debtor joins the cast.
+    let sides = caption_sides(scope, context, &cast_of(&parties));
     // A notice filed in a bankruptcy case is filed in its debtor's case:
     // "In re: Delta Mills, Inc., et al., Debtors." The reply names who
     // gives the notice and who it goes to - the creditors' committee that
     // appears, the creditors that move, the trustee that appoints - and
-    // may leave the debtor out: the caption names it.
-    let debtor = (class == DocumentClass::Notice)
+    // may leave the debtor out: the caption names it. An adversary
+    // proceeding in the case sets out its own two sides under the "In
+    // re" ("OFFICIAL COMMITTEE ..., Plaintiff, v. BETA LENDING INC.,
+    // Defendant."), and its notice is between them, not the debtor's.
+    let debtor = (class == DocumentClass::Notice && sides.is_none())
         .then(|| caption_debtor(scope, &parties))
         .flatten();
     if let Some((name, unit)) = &debtor
@@ -1762,19 +1783,7 @@ pub fn validate_facts_at(
             },
         );
     }
-    // Who the filename and the description can name: everyone but the
-    // people copied and those who sign for a party, each with the role the
-    // document supports.
-    let cast = parties
-        .iter()
-        .filter(|party| !party.copied && !party.signatory)
-        .map(|party| CastMember {
-            name: party.name.clone(),
-            role: party.role,
-            role_supported: party.role.is_some(),
-            proposed_role: party.proposed_role,
-        })
-        .collect::<Vec<_>>();
+    let cast = cast_of(&parties);
     let cues = RelationCues {
         // A cue is the document's own word - "Remit To", "Bill To" - and
         // stands against the reply's reading. Where a party stands on the
@@ -1787,7 +1796,10 @@ pub fn validate_facts_at(
                 .filter(|&head| !read_as_billed_by_another(&cast, head))
         }),
         between: between_cue(context, &cast),
-        caption: caption_sides(scope, context, &cast),
+        // Read on the cast before a debtor joined it, which a debtor joins
+        // only where the caption sets out no sides: its places are the
+        // cast's.
+        caption: sides,
         debtor: debtor.and_then(|(name, _)| {
             let name = normalize_loosely(&display_name(&name));
             cast.iter()
@@ -6949,16 +6961,20 @@ fn caption_sides(
     if !versus {
         return None;
     }
+    // A name that completes another's after "of" is no side of its own:
+    // "OFFICIAL COMMITTEE OF UNSECURED CREDITORS OF ACME WIDGET CORP.,
+    // Plaintiff" labels the committee, not the debtor it is a committee of.
     let labeled = |name: &str, side: &[&str]| {
         let name = normalize_loosely(name);
         segments.iter().any(|text| {
             whole_positions(text, &name).into_iter().any(|at| {
                 let before = text[..at].split_whitespace().next_back();
                 let after = text[at + name.len()..].split_whitespace().next();
-                [before, after]
-                    .into_iter()
-                    .flatten()
-                    .any(|word| side.contains(&word))
+                before != Some("of")
+                    && [before, after]
+                        .into_iter()
+                        .flatten()
+                        .any(|word| side.contains(&word))
             })
         })
     };
@@ -7042,10 +7058,28 @@ impl CaptionLayout {
             .flat_map(|word| whole_positions(text, word))
             .filter(|at| *at > forum)
             .min()?;
+        // An adversary proceeding's caption stands under its bankruptcy
+        // case's "In re ... Debtors.": the debtor is the case's, and the
+        // bringing side's names start after its label.
+        let start = whole_positions(text, "in re")
+            .into_iter()
+            .find(|at| (forum..versus).contains(at))
+            .and_then(|opens| {
+                DEBTOR_LABELS
+                    .iter()
+                    .flat_map(|label| {
+                        whole_positions(text, label)
+                            .into_iter()
+                            .map(move |at| at + label.len())
+                    })
+                    .filter(|end| (opens..versus).contains(end))
+                    .min()
+            })
+            .unwrap_or(forum);
         // The bringing side's label closes its names, before "v."; the
         // answering side's follows "v." within the caption.
         let reach = (versus + CAPTION_REACH).min(text.len());
-        let bringing_label = positions(BRINGING_SIDE, forum, versus).into_iter().max();
+        let bringing_label = positions(BRINGING_SIDE, start, versus).into_iter().max();
         let answering_label = positions(ANSWERING_SIDE, versus, reach).into_iter().min();
         let (bringing_end, answering_end) = match (bringing_label, answering_label) {
             (Some(bringing), Some(answering)) => (bringing, answering),
@@ -7073,7 +7107,7 @@ impl CaptionLayout {
             _ => return None,
         };
         Some(Self {
-            bringing: forum..bringing_end,
+            bringing: start..bringing_end,
             answering: versus..answering_end,
             answering_closed: answering_label.is_some(),
         })
@@ -14556,6 +14590,102 @@ Dated: September 16, 2008",
             outcome.proposal
         );
         assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+    }
+
+    /// An adversary proceeding filed in a bankruptcy case sets out its own
+    /// two sides under the case's "In re ... Debtors.": its notice is
+    /// between them, as the reply named them, and the debtor - whose name
+    /// may end the plaintiff's, a committee "of" it - is no side and not
+    /// whom the notice is for.
+    #[test]
+    fn an_adversary_proceeding_in_a_bankruptcy_case_is_between_its_sides() {
+        let notice = |plaintiff_line: &str| {
+            format!(
+                "UNITED STATES BANKRUPTCY COURT\nDISTRICT OF DELAWARE\n\n\
+| In re: | Chapter 11 |\n\
+| ACME WIDGET CORP., et al., | Case No. 24-10001 (ABC) |\n\
+| Debtors. | (Jointly Administered) |\n\n\
+{plaintiff_line}\n\nPlaintiff,\n\nv.\n\nBETA LENDING INC.,\n\nDefendant.\n\n\
+Adv. Proc. No. 24-50002 (ABC)\n\n\
+NOTICE OF HEARING\n\n\
+PLEASE TAKE NOTICE that a hearing on the motion will be held on May 1, 2024.\n\n\
+Dated: April 2, 2024"
+            )
+        };
+        for (plaintiff_line, plaintiff) in [
+            (
+                "OFFICIAL COMMITTEE OF UNSECURED CREDITORS OF ACME WIDGET CORP.,",
+                "Official Committee of Unsecured Creditors",
+            ),
+            (
+                "MARLOW TRUSTEE SERVICES LLC, as Chapter 7 Trustee,",
+                "Marlow Trustee Services LLC",
+            ),
+        ] {
+            let (outcome, _) = facts_for(&notice(plaintiff_line), |index| ModelFacts {
+                document_type: Some("NOTICE OF HEARING".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF HEARING")],
+                document_date: Some("2024-04-02".into()),
+                date_evidence: vec![id_of(index, "Dated")],
+                parties: vec![
+                    party(
+                        plaintiff,
+                        Some(PartyRole::Client),
+                        &[id_of(index, &plaintiff_line[..12])],
+                    ),
+                    party(
+                        "Beta Lending Inc.",
+                        Some(PartyRole::Client),
+                        &[id_of(index, "BETA LENDING")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.party_relation,
+                PartyRelation::Between,
+                "{plaintiff}: {:?}",
+                outcome.proposal
+            );
+            assert_eq!(
+                outcome.proposal.parties,
+                vec![plaintiff, "Beta Lending Inc."],
+                "{:?}",
+                outcome.proposal
+            );
+        }
+        // The reply named the debtor too, whose name ends the committee's.
+        const COMMITTEE: &str = "OFFICIAL COMMITTEE OF UNSECURED CREDITORS OF ACME WIDGET CORP.,";
+        let (outcome, _) = facts_for(&notice(COMMITTEE), |index| ModelFacts {
+            document_type: Some("NOTICE OF HEARING".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF HEARING")],
+            document_date: Some("2024-04-02".into()),
+            date_evidence: vec![id_of(index, "Dated")],
+            parties: vec![
+                party(
+                    "Acme Widget Corp.",
+                    Some(PartyRole::Employer),
+                    &[id_of(index, "| ACME WIDGET")],
+                ),
+                party(
+                    "Official Committee of Unsecured Creditors",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "OFFICIAL COMMITTEE")],
+                ),
+                party(
+                    "Beta Lending Inc.",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "BETA LENDING")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Official Committee of Unsecured Creditors", "Beta Lending Inc."],
+            "{:?}",
+            outcome.proposal
+        );
     }
 
     /// A body's name ends on its noun ("Committee", "Board") or puts it
