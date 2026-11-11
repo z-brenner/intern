@@ -64,7 +64,7 @@ use crate::infer::{
     infer_date_role_as, reads_as_signature_date, reads_as_signature_date_as, repair_issued_relation,
 };
 use crate::phrases::{
-    gives_notice, has_a_kind, head_noun, is_form_code, is_placeholder, is_reference,
+    RIGHT_STOPS, gives_notice, has_a_kind, head_noun, is_form_code, is_placeholder, is_reference,
     label_and_value, names_a_kind, opens_with_party_label, phrase_positions, possessive_side,
     same_word, subject_value, tidy_case, title_phrase, trim_name, without_identifier, words,
 };
@@ -525,6 +525,13 @@ pub fn validate_facts_at(
     let mut type_title = None;
     let mut type_unit = None;
     let proposed_type = content(facts.document_type.as_deref(), scope);
+    // A title phrase runs on through "of the ..." to a party's name; a
+    // party is no part of a type.
+    let names = facts
+        .parties
+        .iter()
+        .map(|party| party.name.as_str())
+        .collect::<Vec<_>>();
     let (mut document_type, type_supported) = match proposed_type {
         None => (None, true),
         Some(value) => match read_type(scope, &facts.type_evidence, value) {
@@ -532,13 +539,6 @@ pub fn validate_facts_at(
                 support.document_type = found.support;
                 remember(&found, &mut references);
                 type_line = found.line.clone();
-                // A title phrase runs on through "of the ..." to a party's
-                // name; a party is no part of a type.
-                let names = facts
-                    .parties
-                    .iter()
-                    .map(|party| party.name.as_str())
-                    .collect::<Vec<_>>();
                 let phrase = stated_title(&without_identifier(&phrase), &names);
                 type_title = Some(phrase.clone());
                 type_unit = found.unit.map(|unit| unit.ordinal);
@@ -551,11 +551,6 @@ pub fn validate_facts_at(
                 type_unit = found.unit.map(|unit| unit.ordinal);
                 let kept = marks_its_line_holds(value, found.line.as_deref().unwrap_or_default());
                 type_line = found.line.clone();
-                let names = facts
-                    .parties
-                    .iter()
-                    .map(|party| party.name.as_str())
-                    .collect::<Vec<_>>();
                 let kept = stated_title(&without_identifier(&kept), &names);
                 (Some(titled(&kept)), true)
             }
@@ -609,6 +604,25 @@ pub fn validate_facts_at(
             push(&mut reasons, ReviewReason::TypeInferred);
         }
     }
+    // A letter's title may say whom it answers and nothing of what it is:
+    // "Response to the ONS Engagement on Adjustment of Migration
+    // Statistics", the reply's "ONS" among its parties. A party is no part
+    // of a type, the kinds after the party's name are the party's papers,
+    // and the head left before it ("Response") names no kind of document.
+    // "Letter" stands in, for a person to complete, as it does for a
+    // letter typed by what it talks about. A head that names a kind
+    // ("Notice to ...", "Newsletter of ...") is the type, as above.
+    if let Some(value) = document_type.as_deref()
+        && no_kind_of_its_own(Some(value))
+        && head_before_party(value, &names)
+            .is_some_and(|(head, introduced)| introduced && !has_a_kind(&words(&head)))
+        && layout.laid_out_as_letter(scope)
+    {
+        document_type = Some("Letter".to_owned());
+        type_title = None;
+        type_line = None;
+        push(&mut reasons, ReviewReason::TypeInferred);
+    }
     // "Never 'Document', 'Agreement' or 'Letter' alone", as the prompt
     // says: a bare generic word that no title of the document completed
     // (read_type has tried) names no kind a person could file by, so the
@@ -659,6 +673,25 @@ pub fn validate_facts_at(
                 None => {}
             },
         }
+    }
+    // An email's "Subject:" names its matter, as a letter's "Re:" does: the
+    // agreement it sends for signature, the guide it attaches. A type read
+    // from the header block's subject line says what the message is about,
+    // and the message is an email. A notice or an invoice sent as an
+    // email is still one - a carrier's "Ship Notification", a system's
+    // "Invoice #IN0260" - and keeps the kind its subject gives.
+    if type_line
+        .as_deref()
+        .is_some_and(|line| is_email_subject(scope, line))
+        && !matches!(
+            DocumentClass::of(document_type.as_deref()),
+            DocumentClass::Issued | DocumentClass::Notice | DocumentClass::Email
+        )
+    {
+        document_type = Some("Email".to_owned());
+        type_title = None;
+        type_line = None;
+        push(&mut reasons, ReviewReason::TypeInferred);
     }
 
     // The date.
@@ -1098,6 +1131,41 @@ pub fn validate_facts_at(
             {
                 party.role = Some(labeled);
                 party.document_role = Some(labeled);
+            }
+        }
+    }
+    // An email's header block says who sent it and to whom, in the
+    // domains of its "From:" and "To:" addresses: "@ups.com" to
+    // "@enron.com", "@dgs.ca.gov" to "@nfpa.org". A party whose name one
+    // side's domain spells, and the other's does not, is on that side,
+    // whatever the reply called it: the roles an email's body gives its
+    // parties - the "Contractor:" of the contract it attaches, the company
+    // a shipment was sent "at the request of" - are the matter's, not the
+    // email's.
+    if class == DocumentClass::Email
+        && let Some(sides) = EmailSides::of(scope)
+    {
+        for party in &mut parties {
+            if party.copied {
+                continue;
+            }
+            let Some((role, unit, line)) = sides.side_of(&party.name) else {
+                continue;
+            };
+            remember(
+                &Found {
+                    support: Support::Context,
+                    unit: Some(unit),
+                    line: Some(line.to_owned()),
+                    miscited: 0,
+                },
+                &mut references,
+            );
+            party.role = Some(role);
+            party.role_support = Support::Context;
+            party.document_role = Some(role);
+            if !party.evidence.contains(&unit.id) {
+                party.evidence.push(unit.id.clone());
             }
         }
     }
@@ -2699,6 +2767,158 @@ fn email_header<'a>(scope: &ValidationScope<'a>) -> Option<(&'a EvidenceUnit, St
     })
 }
 
+/// Whether `line` is the "Subject:" line of the email's header block
+/// ([`email_header_block`]).
+fn is_email_subject(scope: &ValidationScope<'_>, line: &str) -> bool {
+    let subject = |held: &str| {
+        held.split_once(':')
+            .is_some_and(|(label, _)| label.trim().eq_ignore_ascii_case("subject"))
+    };
+    subject(line)
+        && email_header_block(scope)
+            .is_some_and(|block| block.iter().any(|(_, held)| held.trim() == line.trim()))
+}
+
+/// Mail providers, whose domains name no organization: an address there
+/// says nothing of whom its holder writes for.
+const MAIL_PROVIDERS: &[&str] = &[
+    "gmail",
+    "googlemail",
+    "outlook",
+    "hotmail",
+    "live",
+    "msn",
+    "yahoo",
+    "ymail",
+    "aol",
+    "icloud",
+    "protonmail",
+    "proton",
+    "gmx",
+    "btinternet",
+    "comcast",
+    "verizon",
+];
+
+/// Labels of a domain that name a kind of site or a host, never whose it
+/// is: "com", "gov", "www", "mail".
+const DOMAIN_KINDS: &[&str] = &[
+    "com", "org", "net", "gov", "edu", "mil", "int", "info", "biz", "www", "mail", "email", "smtp",
+    "mx",
+];
+
+/// The fewest letters a domain's label or a name must share for the label
+/// to spell the name: two letters are a country's or a state's code.
+const DOMAIN_NAME_LETTERS: usize = 3;
+
+/// The labels of the domains a header line's addresses are at that can
+/// name an organization: "dgs" of "Betts, Bruce@DGS
+/// <Bruce.Betts@dgs.ca.gov>", "enron" of "<susan.bailey@enron.com>",
+/// "icc-es" and "iccsafe" of a line with both. The last label names no one
+/// ("com", "uk"), nor does a kind of site, a two-letter code or a mail
+/// provider; an address has a dot in its domain, which a display name's
+/// "Bruce@DGS" has not.
+fn address_domain_labels(line: &str) -> Vec<String> {
+    let mut labels = Vec::new();
+    for token in line.split(|character: char| {
+        character.is_whitespace() || matches!(character, '<' | '>' | '(' | ')' | ',' | ';' | '"')
+    }) {
+        let Some((mailbox, domain)) = token.rsplit_once('@') else {
+            continue;
+        };
+        let domain = domain
+            .trim_matches(|character: char| !character.is_alphanumeric())
+            .to_lowercase();
+        let parts = domain.split('.').collect::<Vec<_>>();
+        if mailbox.is_empty() || parts.len() < 2 {
+            continue;
+        }
+        for label in &parts[..parts.len() - 1] {
+            if label.chars().count() >= DOMAIN_NAME_LETTERS
+                && !DOMAIN_KINDS.contains(label)
+                && !MAIL_PROVIDERS.contains(label)
+                && !labels.iter().any(|known| known == label)
+            {
+                labels.push((*label).to_owned());
+            }
+        }
+    }
+    labels
+}
+
+/// Whether a domain's label spells an organization's name: the name run
+/// together ("nfpa" for "NFPA", "c-spanarchives" for "C-SPAN Archives"),
+/// its first word ("enron" for "ENRON CORP", "lambeth" for "Lambeth
+/// Council"), the name with more after it ("hdrinc" for "HDR", "iccsafe"
+/// for "ICC"), or its initials ("dgs" for "Department of General
+/// Services"). Fewer than three letters spell nothing.
+fn domain_spells(label: &str, name: &str) -> bool {
+    let label = label
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect::<String>();
+    let mut name_words = words(name);
+    if name_words.first().is_some_and(|word| word == "the") {
+        name_words.remove(0);
+    }
+    let Some(first) = name_words.first() else {
+        return false;
+    };
+    let long_enough = |text: &str| text.chars().count() >= DOMAIN_NAME_LETTERS;
+    let whole = name_words.concat();
+    let initials = name_words
+        .iter()
+        .filter(|word| !STOPWORDS.contains(&word.as_str()))
+        .filter_map(|word| word.chars().next())
+        .collect::<String>();
+    long_enough(&label)
+        && ((long_enough(&whole) && label.starts_with(&whole))
+            || (long_enough(first) && label == *first)
+            || (name_words.len() > 1 && long_enough(&initials) && label == initials))
+}
+
+/// The two sides of an email as its header block's addresses give them:
+/// the organizations its "From:" and its "To:" domains can name, and those
+/// two lines with their units.
+struct EmailSides<'a> {
+    from: (Vec<String>, &'a EvidenceUnit, String),
+    to: (Vec<String>, &'a EvidenceUnit, String),
+}
+
+impl<'a> EmailSides<'a> {
+    /// `None` without a header block ([`email_header_block`]) that holds
+    /// both lines.
+    fn of(scope: &ValidationScope<'a>) -> Option<Self> {
+        let block = email_header_block(scope)?;
+        let field = |wanted: &str| {
+            block.iter().find_map(|(unit, line)| {
+                let (label, value) = line.split_once(':')?;
+                label
+                    .trim()
+                    .eq_ignore_ascii_case(wanted)
+                    .then(|| (address_domain_labels(value), *unit, line.clone()))
+            })
+        };
+        Some(Self {
+            from: field("from")?,
+            to: field("to")?,
+        })
+    }
+
+    /// The side `name` is on - the sender's when a "From:" domain spells
+    /// it, the recipient's when a "To:" domain does - with the header line
+    /// that shows it. `None` when neither does, or both do: a message
+    /// within one organization says nothing of sides.
+    fn side_of(&self, name: &str) -> Option<(PartyRole, &'a EvidenceUnit, &str)> {
+        let spelled = |labels: &[String]| labels.iter().any(|label| domain_spells(label, name));
+        match (spelled(&self.from.0), spelled(&self.to.0)) {
+            (true, false) => Some((PartyRole::Sender, self.from.1, self.from.2.as_str())),
+            (false, true) => Some((PartyRole::Recipient, self.to.1, self.to.2.as_str())),
+            _ => None,
+        }
+    }
+}
+
 /// The context's title units: the units at the head of its first page and
 /// its first headings, in document order - a letterhead's company aside.
 fn title_units<'s, 'a>(
@@ -2901,7 +3121,8 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
     // Objection Letter"), all of which name the kind. Never what a
     // connector joins: an "Approval of Closure Plan" is an approval, and
     // the plan is what it approves.
-    const JOINS: &[&str] = &["of", "to", "for", "on", "under", "by"];
+    // Nor what it joins past an article or a name set in capitals
+    // ([`joined_by_a_connector`]).
     let value_words = words(&value);
     if let Some(head) = head_noun(&value_words).map(str::to_owned)
         && let Some(phrase) = title_phrase(&value, &head)
@@ -2910,7 +3131,7 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
         && let Some(at) = phrase_positions(&value_words, &phrase_words)
             .into_iter()
             .next()
-        && !(at > 0 && JOINS.contains(&value_words[at - 1].as_str()))
+        && !joined_by_a_connector(&value, at)
     {
         // The tokens outside the phrase: a token may hold several words.
         let end = at + phrase_words.len();
@@ -2945,11 +3166,27 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
         }
     }
     // A party's name, and the connector that introduces it.
-    let value_words = words(&value);
+    if let Some((head, _)) = head_before_party(&value, parties)
+        && let Some(kept) = keep(&head.split_whitespace().collect::<Vec<_>>())
+    {
+        value = kept;
+    }
+    value
+}
+
+/// The head of a title that names a party the reply named after its first
+/// word: the title up to the party's name and the words that introduce it
+/// ("Newsletter" of "Newsletter of the Saltmarsh Point Homeowners
+/// Association", "Response" of "Response to the ONS Engagement on
+/// Adjustment of Migration Statistics"), and whether a connector
+/// introduces the party there, as "of" and "to" do. `None` when the title
+/// names no party past its first word.
+fn head_before_party(value: &str, parties: &[&str]) -> Option<(String, bool)> {
     const INTRODUCES: &[&str] = &[
         "of", "for", "by", "from", "to", "with", "between", "and", "the",
     ];
-    let cut = parties
+    let value_words = words(value);
+    let mut at = parties
         .iter()
         .filter_map(|party| {
             let party_words = words(party);
@@ -2961,29 +3198,82 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
                 .next()
         })
         .filter(|&at| at > 0)
-        .min();
-    if let Some(mut at) = cut {
-        while at > 1 && INTRODUCES.contains(&value_words[at - 1].as_str()) {
-            at -= 1;
-        }
-        // The token the cut word opens: a token may hold several words
-        // ("Girafa.com,") or none ("-").
-        let tokens = value.split_whitespace().collect::<Vec<_>>();
-        let mut seen = 0;
-        let token_at = tokens
-            .iter()
-            .position(|token| {
-                let count = words(token).len();
-                let opens = seen == at && count > 0;
-                seen += count;
-                opens
-            })
-            .unwrap_or(tokens.len());
-        if let Some(kept) = keep(&tokens[..token_at]) {
-            value = kept;
-        }
+        .min()?;
+    let mut introduced = false;
+    while at > 1 && INTRODUCES.contains(&value_words[at - 1].as_str()) {
+        introduced |= value_words[at - 1] != "the";
+        at -= 1;
     }
-    value
+    // The token the cut word opens: a token may hold several words
+    // ("Girafa.com,") or none ("-").
+    let tokens = value.split_whitespace().collect::<Vec<_>>();
+    let mut seen = 0;
+    let token_at = tokens
+        .iter()
+        .position(|token| {
+            let count = words(token).len();
+            let opens = seen == at && count > 0;
+            seen += count;
+            opens
+        })
+        .unwrap_or(tokens.len());
+    Some((tokens[..token_at].join(" "), introduced))
+}
+
+/// Whether the kind phrase that opens at word `at` of a title is what a
+/// connector joins to the title's head: right after the connector ("Approval
+/// *of* Closure Plan"), or past an article or a name set in capitals
+/// ("Response *to* the ONS Engagement on Adjustment of Migration
+/// Statistics", "Approval *of* SEP Completion Report"). The head says what
+/// the document is - a response, an approval - and the phrase what it
+/// answers or approves, so the phrase is no type on its own. A sentence is
+/// no title, and its connector joins nothing to one: "Receipt is
+/// acknowledged *of* the Letter of Notification" still reads as the letter
+/// it acknowledges.
+fn joined_by_a_connector(value: &str, at: usize) -> bool {
+    const JOINS: &[&str] = &["of", "to", "for", "on", "under", "by"];
+    const ARTICLES: &[&str] = &["the", "a", "an"];
+    let value_words = words(value);
+    if at > 0 && JOINS.contains(&value_words[at - 1].as_str()) {
+        return true;
+    }
+    let tokens = value.split_whitespace().collect::<Vec<_>>();
+    // The tokens before the phrase: a token may hold several words
+    // ("Girafa.com,") or none ("-").
+    let mut seen = 0;
+    let mut before = Vec::new();
+    for token in &tokens {
+        let count = words(token).len();
+        if seen + count > at {
+            break;
+        }
+        if count > 0 {
+            before.push(*token);
+        }
+        seen += count;
+    }
+    let core = |token: &str| {
+        normalize(token)
+            .trim_matches(|character: char| !character.is_alphanumeric())
+            .to_owned()
+    };
+    // A title set all in capitals sets no name apart by them.
+    let in_capitals = |token: &str| {
+        token.chars().any(char::is_alphabetic) && !token.chars().any(char::is_lowercase)
+    };
+    let all_capitals = tokens.iter().all(|token| in_capitals(token));
+    let mut left = before.len();
+    while left > 0
+        && (ARTICLES.contains(&core(before[left - 1]).as_str())
+            || (!all_capitals && in_capitals(before[left - 1])))
+    {
+        left -= 1;
+    }
+    left > 0
+        && JOINS.contains(&core(before[left - 1]).as_str())
+        && !words(&before[..left - 1].join(" "))
+            .iter()
+            .any(|word| RIGHT_STOPS.contains(&word.as_str()))
 }
 
 fn titled(value: &str) -> String {
@@ -3830,7 +4120,8 @@ impl LetterLayout {
         // the greeting: a memo opening "Dear colleagues" may date a section
         // below it. A greeting over a letter's sign-off is a letter whether
         // or not its dateline was found: a scan may run the date into its
-        // letterhead.
+        // letterhead, and an agency's letter may carry its date only on
+        // the signature page appended to it.
         self.dateline.is_some_and(|dateline| dateline < salutation)
             || scope.index.units().iter().any(|unit| {
                 if unit.running || unit.ordinal > salutation {
@@ -3844,7 +4135,31 @@ impl LetterLayout {
                 };
                 above.iter().any(|line| is_dateline(line))
             })
-            || signs_off(scope)
+            || self.signs_off_below_salutation(scope)
+    }
+
+    /// Whether the letter signs off anywhere below its greeting: a closing
+    /// on a line of its own ("Sincerely,", "Yours sincerely,") in a later
+    /// unit, or a later line of the greeting's. A letter's last page is not
+    /// always its closing's: an electronic-signature page, an annex or an
+    /// enclosure follows the signature, and a word processor's file is one
+    /// page however long. The greeting on the first page says where the
+    /// letter starts, so the closing is the letter's wherever it stands.
+    fn signs_off_below_salutation(self, scope: &ValidationScope<'_>) -> bool {
+        let Some((salutation, at)) = self.salutation else {
+            return false;
+        };
+        scope.index.units().iter().any(|unit| {
+            if unit.running || unit.ordinal < salutation {
+                return false;
+            }
+            let below = if unit.ordinal == salutation {
+                at + 1
+            } else {
+                0
+            };
+            unit.text.lines().skip(below).any(is_closing)
+        })
     }
 
     /// Whether a unit stands before the dateline, where a letterhead can.
@@ -4144,26 +4459,67 @@ fn is_date_number(word: &str) -> bool {
     !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
 }
 
-/// Whether a unit is a date and nothing else - "March 2, 2026" - as a
-/// letter's dateline is written.
+/// The days of the week, as a dateline writes one before its date
+/// ("Thursday 10 September 2020", "Thurs., Sept. 10, 2020").
+const WEEKDAYS: &[&str] = &[
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+    "mon",
+    "tue",
+    "tues",
+    "wed",
+    "weds",
+    "thu",
+    "thur",
+    "thurs",
+    "fri",
+    "sat",
+    "sun",
+];
+
+/// The marks a word processor's file sets around a line in bold or in
+/// italics ("**Thursday 10 September 2020**").
+const EMPHASIS_MARKS: [char; 2] = ['*', '_'];
+
+/// A dateline's words without the day of the week it opens on: the day
+/// says nothing the date does not, and only the date's own words are read.
+fn without_weekday(line_words: &[String]) -> &[String] {
+    match line_words.split_first() {
+        Some((first, rest)) if WEEKDAYS.contains(&first.as_str()) => rest,
+        _ => line_words,
+    }
+}
+
+/// Whether a unit is a date and nothing else - "March 2, 2026", "Thursday
+/// 10 September 2020" - as a letter's dateline is written.
 fn is_bare_date(unit: &EvidenceUnit) -> bool {
     unit.label.is_none()
-        && !unit.features.dates.is_empty()
-        && words(&unit.text)
+        && (!unit.features.dates.is_empty() || is_dateline(&unit.text))
+        && without_weekday(&words(&unit.text))
             .iter()
             .all(|word| names_a_month(word) || is_date_number(word))
 }
 
 /// Whether a line is a letter's dateline: a written date and nothing else,
 /// or a "Date:" field holding one - "June 16, 2023", "Date: 28 March 2023",
-/// "Dec. 26, 1907", "18th October 2019".
+/// "Dec. 26, 1907", "18th October 2019" - with or without the day of the
+/// week before it ("Thursday 10 September 2020").
 fn is_dateline(line: &str) -> bool {
+    // A word processor's file marks a line set in bold or italics
+    // ("**10 September 2020**"): the marks are no part of the date.
+    let line = &line.replace(EMPHASIS_MARKS, " ");
     let line_words = words(line);
     // An agency's letter dates itself as released, issued or sent.
     let rest = match line_words.first().map(String::as_str) {
         Some("date" | "dated" | "released" | "issued" | "sent") => &line_words[1..],
         _ => &line_words[..],
     };
+    let rest = without_weekday(rest);
     let written = !rest.is_empty()
         && rest.len() <= 4
         && rest.iter().any(|word| names_a_month(word))
@@ -7881,6 +8237,38 @@ mod tests {
         }
     }
 
+    /// A kind a connector joins to the title's head past an article or a
+    /// name set in capitals is what the document answers or approves, not
+    /// what it is: the title stays whole, as it does when the kind follows
+    /// the connector directly. A sentence is no title, and the kind phrase
+    /// it runs on to still reads.
+    #[test]
+    fn a_stated_title_keeps_what_its_connector_joins_past_an_article_or_a_name() {
+        let parties = ["Harbour Advisory Committee"];
+        for kept in [
+            "Response to the QRA Engagement on Adjustment of Harbour Statistics",
+            "RESPONSE TO THE QRA ENGAGEMENT ON ADJUSTMENT OF HARBOUR STATISTICS",
+            "Approval of SEP Completion Report",
+            "Details for the Improvement Notice",
+        ] {
+            assert_eq!(stated_title(kept, &parties), kept);
+        }
+        for (value, kind) in [
+            (
+                "Receipt is acknowledged of the Letter of Notification",
+                "Letter of Notification",
+            ),
+            // No connector before the name in capitals: the line's kind
+            // phrase, as ever.
+            (
+                "Quay Harbour QRA Statistics Engagement Plan",
+                "Statistics Engagement Plan",
+            ),
+        ] {
+            assert_eq!(stated_title(value, &parties), kind, "{value}");
+        }
+    }
+
     /// "Report generated: ..." is the stamp a system put on a sheet, not
     /// its title: the heading above it names the kind.
     #[test]
@@ -11215,6 +11603,255 @@ From: Saul Ravenscroft\nSent: Monday, March 9, 2026\nTo: Signe Holmqvist\nSubjec
         assert!(outcome.reasons.contains(&ReviewReason::TypeUnsupported));
     }
 
+    /// An email's header block says who sent it and to whom in the domains
+    /// of its addresses. The reply may read the sides from the body - the
+    /// company a carrier's notice was sent "at the request of", the
+    /// "Contractor:" of a contract the message attaches - and the header
+    /// puts them right. A message within one organization, and a name no
+    /// domain spells, are left as the reply read them.
+    #[test]
+    fn an_emails_header_addresses_say_who_sent_it_and_to_whom() {
+        // A carrier's notification as the worker extracts an .eml file:
+        // the reply called the customer's company the sender.
+        let (outcome, _) = facts_for(
+            "From: <pkginfo@pax.com>\nTo: <susan.bailey@kestrel.com>\nDate: Wed, 20 Mar 2002 \
+             15:48:51 -0800 (PST)\nSubject: PAX Ship Notification, 1Z7261100192688747\n\n\
+             ***Do not reply to this email.  PAX and KESTREL CORP will not receive your reply.\n\n\
+             At the request of KESTREL CORP, this notice confirms the following shipment has \
+             been sent.",
+            |index| ModelFacts {
+                document_type: Some("email".into()),
+                type_evidence: vec![id_of(index, "From: <pkginfo")],
+                document_date: Some("2002-03-20".into()),
+                date_evidence: vec![id_of(index, "Date: Wed")],
+                parties: vec![party(
+                    "KESTREL CORP",
+                    Some(PartyRole::Sender),
+                    &[id_of(index, "At the request")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::To,
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(outcome.proposal.parties.len(), 1);
+        assert!(!outcome.reasons.contains(&ReviewReason::PartyUnsupported));
+        // An Outlook message: display names before the addresses, a "Cc:"
+        // line, and the body's roles for the contract it is about.
+        const MESSAGE: &str = "From: Betts, Bruce@DHS <Bruce.Betts@dhs.ca.gov>\n\
+To: drose@qrpa.org <drose@qrpa.org>\n\
+Cc: de la Motte, Leann@DHS <Leann.delaMotte@dhs.ca.gov>\n\
+Date: Tue, 5 Apr 2016 14:42:09 +0000\n\
+Subject: Harbour Code Publication\n\n\
+Good Morning Debra,\n\n\
+I am the Acquisition Analyst assigned to assist with the execution of Contract #3188107 \
+for the Department of Harbour Services.\n\n\
+Please complete and return the following documents to me via email.\n\n\
+Contractor: QRPA";
+        let sides = |index: &EvidenceIndex| ModelFacts {
+            document_type: Some("email".into()),
+            type_evidence: vec![id_of(index, "From: Betts")],
+            document_date: Some("2016-04-05".into()),
+            date_evidence: vec![id_of(index, "Date: Tue")],
+            parties: vec![
+                party(
+                    "QRPA",
+                    Some(PartyRole::Buyer),
+                    &[id_of(index, "Contractor: QRPA")],
+                ),
+                party(
+                    "Department of Harbour Services",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "I am the Acquisition")],
+                ),
+            ],
+            ..ModelFacts::default()
+        };
+        let (outcome, _) = facts_for(MESSAGE, sides);
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::From,
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Department of Harbour Services"]
+        );
+        let roles = |outcome: &ValidationOutcome| {
+            outcome
+                .facts
+                .as_ref()
+                .expect("facts")
+                .parties
+                .iter()
+                .map(|party| (party.name.clone(), party.document_role))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            roles(&outcome),
+            vec![
+                ("QRPA".to_owned(), Some(PartyRole::Recipient)),
+                (
+                    "Department of Harbour Services".to_owned(),
+                    Some(PartyRole::Sender)
+                ),
+            ]
+        );
+        // The same message sent within the department: both domains spell
+        // "DHS", so the header gives it no side.
+        let (outcome, _) = facts_for(
+            &MESSAGE
+                .replace("drose@qrpa.org", "drose@dhs.ca.gov")
+                .replace("Department of Harbour Services", "DHS"),
+            |index| ModelFacts {
+                document_type: Some("email".into()),
+                type_evidence: vec![id_of(index, "From: Betts")],
+                parties: vec![party(
+                    "DHS",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "I am the Acquisition")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(roles(&outcome), vec![("DHS".to_owned(), None)]);
+        for (line, labels) in [
+            ("Betts, Bruce@DHS <Bruce.Betts@dhs.ca.gov>", vec!["dhs"]),
+            ("<susan.bailey@kestrel.com>", vec!["kestrel"]),
+            (
+                "Mark Johnson (mjohnson@icc-es.org) <mjohnson@icc-es.org>, Dave Walls \
+                 <dwalls@iccsafe.org>",
+                vec!["icc-es", "iccsafe"],
+            ),
+            (
+                "Jillian Holford <Jillian.Holford@royalquay.gov.uk>",
+                vec!["royalquay"],
+            ),
+            // A mail provider's domain, a display name's "@", no address.
+            ("Mara Quill <mara.quill@gmail.com>", vec![]),
+            ("Betts, Bruce@DHS", vec![]),
+            ("Saul Ravenscroft", vec![]),
+        ] {
+            assert_eq!(address_domain_labels(line), labels, "{line}");
+        }
+        for (label, name, spelled) in [
+            ("kestrel", "KESTREL CORP", true),
+            ("qrpa", "QRPA", true),
+            ("dhs", "Department of Harbour Services", true),
+            ("hdrinc", "HDR", true),
+            ("icc-es", "ICC", true),
+            ("c-spanarchives", "C-SPAN Archives", true),
+            ("lambeth", "The Lambeth Council", true),
+            // A first word the label only starts with, initials of one
+            // word, two letters, another organization.
+            ("generalservices", "General Dynamics", false),
+            ("kestrel", "Kestrelbank Outfitters", false),
+            ("dhs", "Dhsworth", false),
+            ("ca", "CA", false),
+            ("pax", "KESTREL CORP", false),
+        ] {
+            assert_eq!(domain_spells(label, name), spelled, "{label} {name}");
+        }
+    }
+
+    /// An email's "Subject:" names what the message is about. A reply that
+    /// typed the email by it - the agreement it sends for signature - gets
+    /// "Email" for a person to confirm. A notice or an invoice sent as an
+    /// email keeps the kind its subject gives, and a letter's "Subject:"
+    /// line, with no header block around it, still names the letter.
+    #[test]
+    fn an_emails_subject_names_its_matter_not_its_kind() {
+        let message = |subject: &str| {
+            format!(
+                "From: Betts, Bruce@DHS <Bruce.Betts@dhs.ca.gov>\n\
+                 To: drose@qrpa.org <drose@qrpa.org>\n\
+                 Cc: de la Motte, Leann@DHS <Leann.delaMotte@dhs.ca.gov>\n\
+                 Date: Tue, 5 Apr 2016 14:42:09 +0000\n\
+                 Subject: {subject}\n\n\
+                 Good Morning Debra,\n\n\
+                 I have attached the documents for the Department of Harbour Services. Please \
+                 complete and return them to me via email.\n\nContractor: QRPA"
+            )
+        };
+        let typed = |kind: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(kind.into()),
+                type_evidence: vec![id_of(index, "Subject:")],
+                document_date: Some("2016-04-05".into()),
+                date_evidence: vec![id_of(index, "Date: Tue")],
+                parties: vec![
+                    party(
+                        "Department of Harbour Services",
+                        Some(PartyRole::Employer),
+                        &[id_of(index, "I have attached")],
+                    ),
+                    party(
+                        "QRPA",
+                        Some(PartyRole::Contractor),
+                        &[id_of(index, "Contractor: QRPA")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            }
+        };
+        const AGREEMENT: &str = "2016 Harbour Code Publication Agreement";
+        let (outcome, _) = facts_for(&message(AGREEMENT), typed(AGREEMENT));
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Email"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::TypeInferred));
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Department of Harbour Services"]
+        );
+        // An invoice or a notice that arrives as an email is still one.
+        for (subject, kind, class) in [
+            (
+                "Invoice for Harbour Code Printing",
+                "Invoice",
+                DocumentClass::Issued,
+            ),
+            (
+                "Notice of Shipment 1Z7261100192688747",
+                "Notice of Shipment",
+                DocumentClass::Notice,
+            ),
+        ] {
+            let (outcome, _) = facts_for(&message(subject), typed(kind));
+            assert_eq!(
+                DocumentClass::of(outcome.proposal.document_type.as_deref()),
+                class,
+                "{subject}: {:?}",
+                outcome.proposal.document_type
+            );
+        }
+        // A letter's "Subject:" line stands in no header block.
+        let (outcome, _) = facts_for(
+            "Harbour Advisory Committee\n\n5 April 2016\n\nSubject: Offer of Employment\n\n\
+             Dear Ms. Rose,\n\nWe are pleased to offer you the post of analyst.\n\n\
+             Yours sincerely,\n\nBruce Betts",
+            |index| ModelFacts {
+                document_type: Some("Offer of Employment".into()),
+                type_evidence: vec![id_of(index, "Subject:")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Offer of Employment")
+        );
+    }
+
     #[test]
     fn a_field_label_is_no_part_of_the_name_it_labels() {
         assert!(is_role_word("name"));
@@ -12254,6 +12891,12 @@ ALL CLAIMS MUST BE MADE WITHIN TEN DAYS TERMS: NET CASH\n\n\
              Lesley Bainsfair\nHead of Secretariat",
             "| Dear | Mr. | Pilcher: |\n| This | refers | to | the | October | 26, | 1992 | \
              redistricting | plan |\n\nSincerely,\n\nJohn R. Dunne\nAssistant Attorney General",
+            // A word processor's letter, its dateline opening on the day of
+            // the week, each line a paragraph set in bold.
+            "**1 Quay Road**\n\n**London**\n\n**SW1A 2HQ**\n\n**Thursday 10 September 2020**\n\n\
+             **Tel: 020 7946 0000**\n\n**Mara Quill MP**\n\n**Chair, Harbour Party**\n\n\
+             Dear Mara Quill MP,\n\nI hope you are well. We write jointly to update you on \
+             our work.",
         ] {
             let (outcome, _) = facts_for(text, untyped);
             assert_eq!(
@@ -12301,6 +12944,14 @@ ALL CLAIMS MUST BE MADE WITHIN TEN DAYS TERMS: NET CASH\n\n\
             ("Date: 28 March 2023", true),
             ("Released January 3, 2024", true),
             ("02/09/2018", true),
+            ("Thursday 10 September 2020", true),
+            ("**Thursday 10 September 2020**", true),
+            ("FRIDAY, JUNE 8, 2007", true),
+            ("Date: Thurs., Sept. 10, 2020", true),
+            ("Thursday", false),
+            ("Thursday 10 September", false),
+            ("10 September 2020 Thursday meeting", false),
+            ("Sat on 10 September 2020", false),
             ("June 16, 2023 at noon", false),
             ("Released for public availability", false),
             ("Invoice 02/09/2018", false),
@@ -12308,6 +12959,110 @@ ALL CLAIMS MUST BE MADE WITHIN TEN DAYS TERMS: NET CASH\n\n\
         ] {
             assert_eq!(is_dateline(line), dateline, "{line}");
         }
+    }
+
+    /// A letter's closing is not always on its last page. An agency's
+    /// letter ends "Sincerely," on its last page of text and an
+    /// electronic-signature page follows; a word processor's letter is one
+    /// page, the statement it encloses after its signatures. Under a
+    /// greeting on the first page the closing makes it a letter wherever it
+    /// stands. With no greeting nothing says where a letter starts, and
+    /// only a closing at the document's end counts.
+    #[test]
+    fn a_letter_signs_off_before_its_signature_page_or_its_enclosure() {
+        let pages = |texts: &[&str]| {
+            EvidenceIndex::build(&DocumentSource::from_pages(
+                texts
+                    .iter()
+                    .enumerate()
+                    .map(|(at, text)| {
+                        crate::domain::SourcePage::new(at + 1, *text, PageOrigin::PlainText)
+                    })
+                    .collect(),
+            ))
+        };
+        // As the worker extracts an agency's letter: letterhead and inside
+        // address in one paragraph, no dateline, the only date on the
+        // signature page appended after the closing's page.
+        let index = pages(&[
+            "DEPARTMENT OF HARBOURS & WATERWAYS Coastal Service\nPort Licensing \
+             Administration\nSilver Spring, MD 20993\nMara T. Quill, PhD\nVice President, \
+             Regulatory Affairs\nKestrel Outfitters, Inc.\n780 Dedham Street, Suite 800\n\
+             Canton, MA 02021\n\nRE: Licence 208090\n\nDear Dr. Quill:\n\nAs part of its \
+             monitoring programme, the Port Licensing Administration has reviewed an exhibit \
+             booth submitted by Kestrel Outfitters, Inc.",
+            "The violations discussed in this letter do not necessarily constitute an \
+             exhaustive list.\n\nSincerely,\n\n{See appended electronic signature page}\n\n\
+             Jonah Reed, RPh\nRegulatory Review Officer\nOffice of Licence Promotion",
+            "This is a representation of an electronic record that was signed\n\n\
+             electronically and this page is the manifestation of the electronic\n\n\
+             signature.\n\n/s/\n\nJONAH P REED\n\n02/09/2018",
+        ]);
+        let facts = ModelFacts {
+            document_type: Some("Letter from the Office of Licence Promotion to Kestrel".into()),
+            type_evidence: vec![id_of(&index, "DEPARTMENT OF HARBOURS")],
+            document_date: Some("2018-02-09".into()),
+            date_evidence: vec![id_of(&index, "02/09/2018")],
+            parties: vec![
+                party(
+                    "Kestrel Outfitters, Inc.",
+                    Some(PartyRole::Client),
+                    &[id_of(&index, "DEPARTMENT OF HARBOURS")],
+                ),
+                party(
+                    "Port Licensing Administration",
+                    Some(PartyRole::Issuer),
+                    &[id_of(&index, "DEPARTMENT OF HARBOURS")],
+                ),
+            ],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Letter"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["Kestrel Outfitters, Inc."]);
+        assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
+        // A word processor's file is one page: the points the letter
+        // encloses run on for more lines than a letter's end is read for.
+        let enclosure = (1..=40)
+            .map(|at| format!("{at}. Our members will lead by example in clause {at}."))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let untyped = |_: &EvidenceIndex| ModelFacts::default();
+        let (outcome, _) = facts_for(
+            &format!(
+                "1 Quay Road\n\nLondon\n\nTel: 020 7946 0000\n\nMara Quill MP\n\n\
+                 Dear Mara Quill MP,\n\nWe write jointly to update you on our work.\n\n\
+                 Yours sincerely,\n\nJonah Reed\n\n{enclosure}"
+            ),
+            untyped,
+        );
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some("Letter"));
+        // No greeting: a dated paper that quotes a closing before its last
+        // lines is no letter by this.
+        let (outcome, _) = facts_for(
+            &format!(
+                "4 January 2017\n\nThe Committee has asked me to draw your attention to \
+                 their report.\n\nYours faithfully,\n\nLesley Bainsfair\n\n{enclosure}"
+            ),
+            untyped,
+        );
+        assert_eq!(outcome.proposal.document_type, None);
+        // A closing over the greeting is not the letter's own: the page
+        // quotes the end of another letter before it greets anyone.
+        let (outcome, _) = facts_for(
+            &format!(
+                "Yours sincerely,\n\nLesley Bainsfair\n\nDear Mara Quill MP,\n\nWe write \
+                 jointly to update you on our work.\n\n{enclosure}"
+            ),
+            untyped,
+        );
+        assert_eq!(outcome.proposal.document_type, None);
     }
 
     /// An email by its header block and a notice by its heading stand in
@@ -14152,6 +14907,84 @@ Dated: September 16, 2008",
         ] {
             assert!(outcome.reasons.contains(&reason), "{:?}", outcome.reasons);
         }
+    }
+
+    /// A letter's title that says whom it answers names no kind of its
+    /// own: the reply's party stands in it after a head that is no kind of
+    /// document, and the kind after the party's name is the party's paper.
+    /// "Letter" stands in and the name waits for a person. A head that names
+    /// a kind is the type, a title on a paper that is no letter stays whole,
+    /// and so does one whose party the reply did not name.
+    #[test]
+    fn a_letter_titled_by_whom_it_answers_stands_in_as_a_letter() {
+        // As the worker extracts a word processor's letter: the letterhead
+        // a table's cell, a date field, the title in bold over the greeting.
+        let letter = |title: &str, greeting: &str, closing: &str| {
+            format!(
+                "|  |  |\n| --- | --- |\n|  | **Harbour Advisory Committee**<br>1st Floor, Quay \
+                 Building <br>2 Marsh Street<br>London |\n\nDate: 24th October 2019\n\n\
+                 **{title}**\n\n{greeting}The Harbour Advisory Committee (HAC) appreciates the \
+                 opportunity to provide feedback on the recent adjustments to the QRA Harbour \
+                 Statistics.\n\n{closing}Professor Mara Quill"
+            )
+        };
+        let reply = |title: &'static str, recipient: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(title.into()),
+                type_evidence: vec![id_of(index, title)],
+                document_date: Some("2019-10-24".into()),
+                date_evidence: vec![id_of(index, "24th October 2019")],
+                parties: vec![
+                    party(
+                        "Harbour Advisory Committee",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "**Harbour Advisory Committee**")],
+                    ),
+                    party(
+                        recipient,
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "appreciates the opportunity")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            }
+        };
+        const ANSWER: &str = "Response to the QRA Engagement on Adjustment of Harbour Statistics";
+        let (outcome, _) = facts_for(
+            &letter(ANSWER, "Dear Sir/Madam,\n\n", "Yours Sincerely\n\n"),
+            reply(ANSWER, "QRA"),
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Letter"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["QRA"]);
+        for reason in [ReviewReason::TypeInferred, ReviewReason::TypeMissing] {
+            assert!(outcome.reasons.contains(&reason), "{:?}", outcome.reasons);
+        }
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        // A head that names a kind is the letter's type, the party cut
+        // from it.
+        const NOTICE: &str = "Notice to the QRA of Adjustment of Harbour Statistics";
+        let (outcome, _) = facts_for(
+            &letter(NOTICE, "Dear Sir/Madam,\n\n", "Yours Sincerely\n\n"),
+            reply(NOTICE, "QRA"),
+        );
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some("Notice"));
+        // No greeting and no closing: no letter, and the paper keeps its
+        // own title.
+        let (outcome, _) = facts_for(&letter(ANSWER, "", ""), reply(ANSWER, "QRA"));
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some(ANSWER));
+        // A reply that named no party the title names: the title is all
+        // the type there is.
+        let (outcome, _) = facts_for(
+            &letter(ANSWER, "Dear Sir/Madam,\n\n", "Yours Sincerely\n\n"),
+            reply(ANSWER, "Quay Regulation Authority"),
+        );
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some(ANSWER));
     }
 
     /// A "The" that opens a name's line is the name's own; one in a sentence
