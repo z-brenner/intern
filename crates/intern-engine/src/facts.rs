@@ -3331,8 +3331,14 @@ fn joined_by_a_connector(value: &str, at: usize) -> bool {
     {
         left -= 1;
     }
+    // An office's name before the connector is the issuer's, not the
+    // title's head: "OFFICE OF THE GENERAL COUNSEL MEMORANDUM" is a
+    // "General Counsel Memorandum".
     left > 0
         && JOINS.contains(&core(before[left - 1]).as_str())
+        && !before[..left - 1]
+            .last()
+            .is_some_and(|word| ORGANIZATION_WORDS.contains(&core(word).as_str()))
         && !words(&before[..left - 1].join(" "))
             .iter()
             .any(|word| RIGHT_STOPS.contains(&word.as_str()))
@@ -8514,6 +8520,12 @@ mod tests {
             (
                 "Quay Harbour QRA Statistics Engagement Plan",
                 "Statistics Engagement Plan",
+            ),
+            // An office's name before the connector heads no title: the
+            // office issued the memorandum.
+            (
+                "OFFICE OF THE GENERAL COUNSEL MEMORANDUM",
+                "General Counsel Memorandum",
             ),
         ] {
             assert_eq!(stated_title(value, &parties), kind, "{value}");
