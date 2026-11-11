@@ -47,7 +47,7 @@ use crate::compose::{
     CastMember, DescriptionFacts, Relation, RelationCues, SUBSTANTIVE, amount_label, describe,
     identifier_word, money_in, relation_from_roles,
 };
-use crate::cues::{CUSTOMER_CUES, ISSUER_CUES, STOPWORDS, TYPE_NOUNS};
+use crate::cues::{CUSTOMER_CUES, ISSUER_CUES, PAYMENT_ADDRESS_CUES, STOPWORDS, TYPE_NOUNS};
 use crate::distill::normalize_heading;
 use crate::domain::{
     DateRole, DocumentClass, Evidence, EvidenceRef, FactSupport, ModelFacts, ModelProposal,
@@ -4345,9 +4345,12 @@ fn unit_supports_role(
             .lines()
             .any(|line| crate::infer::cue_labels(&normalize_loosely(line), loose, cues))
     };
+    // The line that says where payment goes names the issuing side as a
+    // "Remit To" line does: "Send Payment To: WFAA P.O. Box 637386".
+    let on_issuer_line = || on_cue_line(ISSUER_CUES) || on_cue_line(PAYMENT_ADDRESS_CUES);
     match role {
-        PartyRole::Issuer => on_cue_line(ISSUER_CUES),
-        PartyRole::Vendor | PartyRole::Seller if cues => on_cue_line(ISSUER_CUES),
+        PartyRole::Issuer => on_issuer_line(),
+        PartyRole::Vendor | PartyRole::Seller if cues => on_issuer_line(),
         PartyRole::Customer => on_cue_line(CUSTOMER_CUES),
         PartyRole::Recipient | PartyRole::Buyer | PartyRole::Client if cues => {
             on_cue_line(CUSTOMER_CUES)
@@ -11211,6 +11214,124 @@ The merger needs a majority of votes cast.";
             "{:?}",
             outcome.proposal
         );
+    }
+
+    /// A broadcast station's invoice as its billing system prints it and
+    /// the worker reads it, in the real sets: the station on the line that
+    /// says where payment goes, the agency it bills in an address block
+    /// with no label on its own lines.
+    const STATION_INVOICE: &str = "INVOICE\n\nProperty\n\n\
+| KQRD | Invoice # |\n| 14 Signal Hill Road | Invoice Date |\n| Marrow Springs, CO 80513 | Invoice Month |\n\n\
+Billing Address:\n\n\
+Tidewater Buying LLC / POL\nAttention: Accounts Payable\n41 Wharf Street\nGilchrist Harbor, ME 04112\n\n\
+Send Payment To: KQRD P.O. Box 4410 Marrow Springs, CO 80513\n\nKQRD\n\n\
+2884942-1\n05/26/24\nMay 2024\n\n\
+| Order # | 2884942 |\n| Flight Dates | 05/06/24 - 05/24/24 |\n\n\
+| Spots: # | Ch | Day | Air Date | Rate |\n| 1 | KQRD | M | 05/06/24 | $1,300.00 |";
+
+    fn station_invoice_facts(
+        index: &EvidenceIndex,
+        station: PartyRole,
+        agency: PartyRole,
+    ) -> ModelFacts {
+        ModelFacts {
+            document_type: Some("INVOICE".into()),
+            type_evidence: vec![id_of(index, "INVOICE")],
+            parties: vec![
+                party(
+                    "Tidewater Buying LLC",
+                    Some(agency),
+                    &[id_of(index, "Tidewater")],
+                ),
+                party("KQRD", Some(station), &[id_of(index, "| KQRD |")]),
+            ],
+            ..ModelFacts::default()
+        }
+    }
+
+    /// The line that says where payment goes supports the party on it as
+    /// the seller the reply called it, so the name rests on the document
+    /// and not on the reply's roles; and it makes that party the issuer
+    /// where the reply read the two sides the wrong way round, as
+    /// Qwen3.5-4B did the station and its agency.
+    #[test]
+    fn the_party_payment_is_sent_to_issued_the_invoice() {
+        for (station, agency) in [
+            (PartyRole::Seller, PartyRole::Buyer),
+            (PartyRole::Issuer, PartyRole::Client),
+            (PartyRole::Buyer, PartyRole::Seller),
+            (PartyRole::Recipient, PartyRole::Sender),
+        ] {
+            let (outcome, _) = facts_for(STATION_INVOICE, |index| {
+                station_invoice_facts(index, station, agency)
+            });
+            assert_eq!(
+                outcome.proposal.party_relation,
+                PartyRelation::From,
+                "{station:?}: {:?}",
+                outcome.proposal
+            );
+            assert_eq!(outcome.proposal.parties, vec!["KQRD"], "{station:?}");
+            assert!(
+                !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+                "{station:?}: {:?}",
+                outcome.reasons
+            );
+            let facts = outcome.facts.expect("facts");
+            let named = facts
+                .parties
+                .iter()
+                .find(|party| party.name == "KQRD")
+                .expect("the station");
+            assert!(
+                matches!(
+                    named.role,
+                    Some(PartyRole::Seller | PartyRole::Issuer | PartyRole::Vendor)
+                ),
+                "{station:?}: {:?}",
+                named.role
+            );
+        }
+    }
+
+    /// The label alone on its line gives no one a role: the billing system
+    /// prints its labels apart from their values ("Billing Address:" right
+    /// over the payment line), and the block that follows "Send Payment
+    /// To:" in the text may be the customer's address. The agency under it
+    /// is not the seller on the document's word, though the reply called it
+    /// that.
+    #[test]
+    fn a_payment_label_alone_on_its_line_gives_no_one_a_role() {
+        const PAGE: &str = "INVOICE\n\nBilling Address:\n\nSend Payment To:\n\n\
+Tidewater Buying LLC / POL\nAttention: Accounts Payable\n41 Wharf Street\nGilchrist Harbor, ME 04112\n\n\
+| Order # | 2884942 |\n| Flight Dates | 05/06/24 - 05/24/24 |\n\n\
+| Spots: # | Ch | Day | Air Date | Rate |\n| 1 | KQRD | M | 05/06/24 | $1,300.00 |";
+        let (outcome, _) = facts_for(PAGE, |index| ModelFacts {
+            document_type: Some("INVOICE".into()),
+            type_evidence: vec![id_of(index, "INVOICE")],
+            parties: vec![
+                party(
+                    "Tidewater Buying LLC",
+                    Some(PartyRole::Seller),
+                    &[id_of(index, "Tidewater")],
+                ),
+                party(
+                    "KQRD",
+                    Some(PartyRole::Buyer),
+                    &[id_of(index, "| 1 | KQRD")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        let facts = outcome.facts.as_ref().expect("facts");
+        let agency = facts
+            .parties
+            .iter()
+            .find(|party| party.name.starts_with("Tidewater"))
+            .expect("the agency");
+        assert_eq!(agency.role_support, Support::Unsupported, "{agency:?}");
+        assert_eq!(agency.role, None, "{agency:?}");
+        assert_eq!(agency.document_role, None, "{agency:?}");
     }
 
     /// The IRS's CP161, typed "Notice": one of a hundred kinds the word
