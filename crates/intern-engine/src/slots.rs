@@ -507,9 +507,27 @@ impl SlotKeeper {
 
     /// Puts the saved state back into the server's slot, before its first
     /// document. Asks nothing of a server when there is no file.
+    ///
+    /// A file a crash cut short, or left with a zero-filled tail, still
+    /// restores in part: b11946 loads the model's state, finds no checkpoint
+    /// list after it, and answers as if all was well, having read less than
+    /// the file. Kept, such a file would cost every later launch its reading
+    /// and the speed-up for good. So the file is read back first
+    /// ([`saved_state_reach`]), and the server must say it read all of it;
+    /// otherwise the slot is emptied, as a fresh server's is, and the file
+    /// is removed, so the next document saves a whole one.
     pub fn restore(&self) -> Restore {
-        if !self.path().is_file() {
+        let path = self.path();
+        let Some(length) = fs::metadata(&path)
+            .ok()
+            .filter(fs::Metadata::is_file)
+            .map(|metadata| metadata.len())
+        else {
             return Restore::NoFile;
+        };
+        if saved_state_reach(&path).is_none() {
+            let _ = fs::remove_file(&path);
+            return Restore::Failed;
         }
         #[derive(Deserialize)]
         struct Restored {
@@ -522,7 +540,7 @@ impl SlotKeeper {
             restore_ms: f64,
         }
         match self.slot_action::<Restored>("restore", &self.file_name) {
-            Ok(restored) => {
+            Ok(restored) if restored.n_read == length => {
                 self.unsaved.store(false, Ordering::SeqCst);
                 Restore::Restored {
                     tokens: restored.n_restored,
@@ -530,11 +548,25 @@ impl SlotKeeper {
                     millis: restored.timings.restore_ms,
                 }
             }
+            Ok(_) => {
+                self.erase();
+                let _ = fs::remove_file(&path);
+                Restore::Failed
+            }
             Err(_) => {
-                let _ = fs::remove_file(self.path());
+                let _ = fs::remove_file(&path);
                 Restore::Failed
             }
         }
+    }
+
+    /// Empties the server's slot, as a server that restored nothing holds it.
+    fn erase(&self) {
+        let _ = self
+            .http
+            .post(format!("{}/slots/0?action=erase", self.endpoint))
+            .bearer_auth(&self.api_key)
+            .send();
     }
 
     /// Saves the slot once per server lifetime, after its first document,
@@ -646,10 +678,19 @@ impl SlotKeeper {
                 request_tokens,
             };
         }
+        // The server wrote the file without syncing it; synced before it is
+        // renamed, a crash just after leaves it whole or not there. Should
+        // either sync fail, the check before a restore catches what is left.
+        let _ = fs::OpenOptions::new()
+            .write(true)
+            .open(&partial)
+            .and_then(|file| file.sync_all());
         if !(partial.is_file() && fs::rename(&partial, self.path()).is_ok()) {
             let _ = fs::remove_file(&partial);
             return Save::Failed;
         }
+        #[cfg(unix)]
+        let _ = fs::File::open(&self.directory).and_then(|folder| folder.sync_all());
         Save::Saved {
             tokens: saved.n_saved,
             bytes: saved.n_written,
@@ -784,13 +825,14 @@ mod tests {
         file
     }
 
-    /// What the fake server saves, and what its instructions-only request
-    /// processed.
+    /// What the fake server saves, what its instructions-only request
+    /// processed, and how much less than the whole file a restore reads.
     #[derive(Clone)]
     struct Saving {
         n_saved: u64,
         file: Vec<u8>,
         processed: u64,
+        restore_reads_short: u64,
     }
 
     /// As b11946 saves after the instructions-only request: its tokens,
@@ -800,11 +842,13 @@ mod tests {
             n_saved: REQUEST_TOKENS,
             file: slot_file(488, b"state", Some(&[(477, 64), (484, 64)])),
             processed: 11,
+            restore_reads_short: 0,
         }
     }
 
     /// A fake llama-server's slot endpoints over `directory`: a save writes
-    /// the named file there as the real one does, a restore reads it.
+    /// the named file there as the real one does, a restore reads it and
+    /// says how much of it it read, and an erase empties the slot.
     fn fake_llama(
         directory: &Path,
         key: &'static str,
@@ -846,14 +890,21 @@ mod tests {
                     )
                 }
                 ("POST", "/slots/0?action=restore", Some(name)) => {
-                    if restore_fails || !directory.join(&name).is_file() {
+                    let Ok(on_disk) = fs::metadata(directory.join(&name)) else {
+                        return (400, r#"{"error":"Unable to restore slot"}"#.to_owned());
+                    };
+                    if restore_fails {
                         return (400, r#"{"error":"Unable to restore slot"}"#.to_owned());
                     }
+                    let read = on_disk.len() - saving.restore_reads_short;
                     (
                         200,
-                        json!({"id_slot":0,"filename":name,"n_restored":REQUEST_TOKENS,"n_read":written,"timings":{"restore_ms":183.4}})
+                        json!({"id_slot":0,"filename":name,"n_restored":REQUEST_TOKENS,"n_read":read,"timings":{"restore_ms":183.4}})
                             .to_string(),
                     )
+                }
+                ("POST", "/slots/0?action=erase", _) => {
+                    (200, r#"{"id_slot":0,"n_erased":488}"#.to_owned())
                 }
                 _ => (404, "{}".to_owned()),
             }
@@ -1015,7 +1066,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let server = fake_llama(directory.path(), "secret", true);
         let keeper = keeper(&server, directory.path());
-        fs::write(keeper.path(), b"truncated").unwrap();
+        fs::write(keeper.path(), as_b11946().file).unwrap();
         assert_eq!(keeper.restore(), Restore::Failed);
         assert!(!keeper.path().exists());
         assert!(matches!(
@@ -1023,6 +1074,59 @@ mod tests {
             Save::Saved { .. }
         ));
         assert_eq!(fs::read(keeper.path()).unwrap(), as_b11946().file);
+    }
+
+    /// A file a crash cut short, or left with zeros where its checkpoint
+    /// list should be, is never handed to the server: it is removed, and
+    /// the lifetime saves a whole one. One the server reads only part of,
+    /// answering as if it had restored it, is removed as well, and the slot
+    /// emptied of what was read.
+    #[test]
+    fn a_file_that_does_not_restore_whole_is_replaced() {
+        let whole = as_b11946().file;
+        let list = whole.len() - (8 + 4 + 2 * (8 + 4 + 4 + 8 + 64 + 16));
+        let mut zero_tail = whole.clone();
+        zero_tail[list..].fill(0);
+        for torn in [
+            whole[..whole.len() - 1].to_vec(),
+            whole[..list].to_vec(),
+            zero_tail,
+            Vec::new(),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let server = fake_llama(directory.path(), "secret", false);
+            let keeper = keeper(&server, directory.path());
+            fs::write(keeper.path(), &torn).unwrap();
+            assert_eq!(keeper.restore(), Restore::Failed, "{} bytes", torn.len());
+            assert!(!keeper.path().exists());
+            assert!(server.requests().is_empty(), "the server is not asked");
+            assert!(matches!(
+                keeper.save_once(LONG_FIRST_REQUEST),
+                Save::Saved { .. }
+            ));
+            assert_eq!(fs::read(keeper.path()).unwrap(), whole);
+        }
+
+        // b11946 reading the model's state and no checkpoint list after it.
+        let directory = tempfile::tempdir().unwrap();
+        let read_short = Saving {
+            restore_reads_short: (whole.len() - list) as u64,
+            ..as_b11946()
+        };
+        let server = fake_llama_saving(directory.path(), "secret", false, read_short);
+        let keeper = keeper(&server, directory.path());
+        fs::write(keeper.path(), &whole).unwrap();
+        assert_eq!(keeper.restore(), Restore::Failed);
+        assert!(!keeper.path().exists());
+        let requests = server.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].path, "/slots/0?action=restore");
+        assert_eq!(requests[1].path, "/slots/0?action=erase");
+        assert_eq!(requests[1].authorization.as_deref(), Some("Bearer secret"));
+        assert!(matches!(
+            keeper.save_once(LONG_FIRST_REQUEST),
+            Save::Saved { .. }
+        ));
     }
 
     /// A lifetime whose instructions were not processed in one piece -

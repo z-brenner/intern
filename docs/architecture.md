@@ -1033,6 +1033,14 @@ configuration, and any save a stopped server left unfinished (saves are
 written as `.part` and renamed), so there is at most one file per tier. Every
 failure costs only the speed-up: a restore that fails removes the file and the
 next document saves a new one; a save is skipped with less than 2 GiB free.
+A file is synced to disk before it is renamed into place, and read back
+before every restore as before it was kept; the server must also say it read
+the whole file. A file a crash cut short or left with a zero-filled tail
+would otherwise still restore in part - b11946 loads the model's state, finds
+no checkpoint list after it, and answers as if it had restored the file -
+and stay, read at every launch for none of the speed-up. Such a file is
+removed (and the slot emptied, when the server read part of it), so the next
+document saves a whole one.
 On Windows a folder outside ASCII is never passed (the server checks the
 folder with `std::filesystem` from UTF-8 text, which Windows' C++ library
 reads in the ANSI code page). And before every launch the server itself is
