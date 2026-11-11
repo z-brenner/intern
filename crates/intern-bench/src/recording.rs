@@ -163,6 +163,9 @@ pub struct Exchange {
     pub wall_micros: u64,
 }
 
+// Nearly every recorded reply is `Proposed`, so boxing its fields would move
+// the same bytes to the heap and save nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum RecordedReply {
