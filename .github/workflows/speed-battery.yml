@@ -582,7 +582,6 @@ jobs:
           cargo build --locked -p intern-worker
           mkdir -p src-tauri/binaries src-tauri/resources/licenses src-tauri/resources/tessdata src-tauri/resources/native/pdfium src-tauri/resources/native/sidecars src-tauri/resources/native/llama-upstream src-tauri/resources/ocr-models src-tauri/resources/runtime
           cp target/debug/intern-worker src-tauri/binaries/intern-worker-x86_64-unknown-linux-gnu
-          install -m 755 /dev/null src-tauri/binaries/llama-server-x86_64-unknown-linux-gnu
           install -m 755 /dev/null src-tauri/binaries/tesseract-x86_64-unknown-linux-gnu
           touch src-tauri/resources/licenses/compile-placeholder.txt
           touch src-tauri/resources/tessdata/compile-placeholder.traineddata
