@@ -122,12 +122,32 @@ the two repacked runs' are to each other. Its two extra wrong filings
 least probable token crossed the 0.7 gate, the kind of change any other
 processor makes. Within that drift, no difference in accuracy was found.
 
+## Windows, one runner
+
+Measured after the release candidate's QA, because that run's model
+evaluation decoded at half the rate of alpha.15's QA on another runner
+(2.12-2.29 against 4.16-4.48 tokens a second) while prefill got faster.
+`runtime-speed.yml` with `probe: no-repack` (run 43113377135,
+`windows-no-repack.json`) launches the 9B as the app does, alternately
+without and with `--no-repack`, twice each, on every third recorded
+request, on one runner: an Intel Xeon Platinum 8370C (AVX-512, no AMX),
+four logical processors, two server threads.
+
+| Run | Time per request | Prefill (median) | Decode (median) |
+| --- | ---: | ---: | ---: |
+| repacked-1 | 86.4 s | 45.5 s | 3.13 tokens/s |
+| `--no-repack`-1 | 80.9 s | 39.0 s | 2.66 tokens/s |
+| repacked-2 | 83.3 s | 43.6 s | 3.17 tokens/s |
+| `--no-repack`-2 | 82.3 s | 40.0 s | 2.66 tokens/s |
+
+About 4% less time per request (84.9 s against 81.6 s on the means of the
+pairs): prefill 11% faster (39.5 s against 44.6 s), decode 16% slower (2.66 against 3.15 tokens a second), where on Linux decode moved
+-4% to +13%. The QA difference was the runner: alpha.16's own QA, repacked,
+decoded at 2.94 tokens a second on its runner, alpha.15's at 4.38.
+
 ## Not measured
 
 - The fast model with `--no-repack`.
-- Windows: the speed with `--no-repack`. `runtime-speed.yml` run
-  43063962365, on a 4-logical-processor AMD EPYC 7763 with two server
-  threads, timed the 9B at 88-90 s a request and the 4B at 50 s, but that
-  workflow launches the server without `--no-repack`, so the run timed the
-  repacked launch; the Windows speed with `--no-repack` was not measured.
+- Windows on an AMD processor, and the speed of the whole app on Windows
+  (below, one Intel runner and the recorded requests alone).
 - An Intel laptop with AVX-VNNI (above).
