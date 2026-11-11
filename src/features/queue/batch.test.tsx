@@ -67,13 +67,13 @@ describe('the queue run', () => {
     expect(result.current).toMatchObject({ done: 1, perDocument: 80_000 });
 
     // Only the last eight are kept.
-    window.localStorage.setItem(TIMINGS_KEY, JSON.stringify([1_000, 2_000, 3_000, 4_000, 5_000, 6_000, 7_000, 8_000, 9_000, 10_000]));
+    window.localStorage.setItem(TIMINGS_KEY, JSON.stringify([10_000, 20_000, 30_000, 40_000, 50_000, 60_000, 70_000, 80_000, 90_000, 100_000]));
     const later = renderHook(({ items }) => useBatchProgress(items), { initialProps: { items: [doc('x', 'processing'), doc('y', 'waiting')] } });
-    // Of 3s to 10s, the sorted middle.
-    expect(later.result.current!.perDocument).toBe(7_000);
-    act(() => { vi.setSystemTime(111_000); });
+    // Of 30s to 100s, the sorted middle.
+    expect(later.result.current!.perDocument).toBe(70_000);
+    act(() => { vi.setSystemTime(210_000); });
     later.rerender({ items: [doc('x', 'ready'), doc('y', 'processing')] });
-    expect(JSON.parse(window.localStorage.getItem(TIMINGS_KEY)!)).toEqual([4_000, 5_000, 6_000, 7_000, 8_000, 9_000, 10_000, 11_000]);
+    expect(JSON.parse(window.localStorage.getItem(TIMINGS_KEY)!)).toEqual([40_000, 50_000, 60_000, 70_000, 80_000, 90_000, 100_000, 110_000]);
   });
 
   // The strip keeps its own clock, which stands still between runs. Opened
@@ -98,12 +98,36 @@ describe('the queue run', () => {
     expect(estimateLeft({ total: 3, done: 0, current: doc('b', 'processing'), startedAt: 30 * 60_000, perDocument: 60_000 }, 0)).toBe('about 4 min left');
   });
 
+  // Kept between launches, three encrypted PDFs refused in 300 ms each were
+  // the next launch's typical document: a run of two hundred one-minute
+  // documents said "about 2 min left" from its first.
+  it('times only documents that were read, and keeps no time too short for a reading', () => {
+    const { result, rerender } = renderHook(({ items }) => useBatchProgress(items), {
+      initialProps: { items: [doc('a', 'processing'), doc('b', 'waiting'), doc('c', 'waiting'), doc('d', 'waiting'), doc('e', 'waiting')] },
+    });
+    // Refused: it failed, and was counted done all the same.
+    act(() => { vi.setSystemTime(300); });
+    rerender({ items: [doc('a', 'failed'), doc('b', 'processing'), doc('c', 'waiting'), doc('d', 'waiting'), doc('e', 'waiting')] });
+    // Over before anything could have read it, wherever it went.
+    act(() => { vi.setSystemTime(600); });
+    rerender({ items: [doc('a', 'failed'), doc('b', 'review'), doc('c', 'processing'), doc('d', 'waiting'), doc('e', 'waiting')] });
+    expect(result.current).toMatchObject({ done: 2 });
+    expect(window.localStorage.getItem(TIMINGS_KEY)).toBeNull();
+    // Read: one minute into review, and one more on to its rename.
+    act(() => { vi.setSystemTime(60_600); });
+    rerender({ items: [doc('a', 'failed'), doc('b', 'review'), doc('c', 'review'), doc('d', 'processing'), doc('e', 'waiting')] });
+    act(() => { vi.setSystemTime(120_600); });
+    rerender({ items: [doc('a', 'failed'), doc('b', 'review'), doc('c', 'review'), { ...doc('d', 'processing'), stage: 'filing' }, doc('e', 'waiting')] });
+    expect(JSON.parse(window.localStorage.getItem(TIMINGS_KEY)!)).toEqual([60_000, 60_000]);
+    expect(result.current).toMatchObject({ total: 5, done: 4, perDocument: 60_000 });
+  });
+
   it('takes one stored time for an anecdote, and anything else in storage for nothing', () => {
     const first = () => renderHook(() => useBatchProgress([doc('a', 'processing'), doc('b', 'waiting')])).result.current!;
     window.localStorage.setItem(TIMINGS_KEY, JSON.stringify([60_000]));
     expect(first().perDocument).toBeUndefined();
-    // Not a list; not numbers; a time no document takes (a computer left asleep); nothing at all.
-    for (const stored of ['{"a":1}', '"60000"', 'not json', JSON.stringify(['60000', null, -5, 0, Number.MAX_VALUE, 9 * 60 * 60 * 1000]), '']) {
+    // Not a list; not numbers; times no reading takes (a file set aside at once, a computer left asleep); nothing at all.
+    for (const stored of ['{"a":1}', '"60000"', 'not json', JSON.stringify(['60000', null, -5, 0, 300, 1_999, Number.MAX_VALUE, 9 * 60 * 60 * 1000]), '']) {
       window.localStorage.setItem(TIMINGS_KEY, stored);
       expect(first().perDocument, stored).toBeUndefined();
     }

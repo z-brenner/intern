@@ -11,6 +11,16 @@ const PADDING = 1.2;
 export const TIMINGS_KEY = 'intern.documentTimings';
 /** A stored time longer than this was a computer asleep, not a document being read. */
 const LONGEST_SAMPLE_MS = 60 * 60 * 1000;
+/**
+ * A document over sooner than this was not read by the model: it was set
+ * aside before reading (a file that could not be opened, one with no text).
+ * The shortest reading in the recorded runs, of the small model on a
+ * four-core computer, took nine seconds.
+ */
+const SHORTEST_SAMPLE_MS = 2_000;
+
+/** A time that can be a document's reading, to go by for the next. */
+const plausible = (ms: number) => Number.isFinite(ms) && ms >= SHORTEST_SAMPLE_MS && ms <= LONGEST_SAMPLE_MS;
 
 /**
  * The times kept from earlier runs: the last few, each a plausible number
@@ -21,12 +31,12 @@ function storedTimings(): number[] {
   try {
     const stored: unknown = JSON.parse(window.localStorage.getItem(TIMINGS_KEY) ?? '[]');
     if (!Array.isArray(stored)) return [];
-    return stored.filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= LONGEST_SAMPLE_MS).slice(-SAMPLE_SIZE);
+    return stored.filter((value): value is number => typeof value === 'number' && plausible(value)).slice(-SAMPLE_SIZE);
   } catch { return []; }
 }
 
 function storeTimings(samples: number[]) {
-  try { window.localStorage.setItem(TIMINGS_KEY, JSON.stringify(samples.filter((value) => value <= LONGEST_SAMPLE_MS))); } catch { /* Not kept; this run still has them. */ }
+  try { window.localStorage.setItem(TIMINGS_KEY, JSON.stringify(samples.filter(plausible))); } catch { /* Not kept; this run still has them. */ }
 }
 
 export interface BatchProgress {
@@ -69,10 +79,11 @@ const reading = (item: QueueItem) => item.status === 'processing' && item.stage 
  *
  * A run starts when there is something to read and nothing was being read,
  * and ends when nothing is left. Each document's time is measured here, from
- * when the window first saw it being read to when it stopped, and the
- * estimate (estimateLeft) is the median of the last few, padded and
- * rounded up - per Nielsen Norman, an estimate that runs over is worse than
- * none - and only offered once two documents have been timed.
+ * when the window first saw it being read to when it stopped; one that
+ * failed, or was over too soon to have been read, counts as done but is not
+ * timed. The estimate (estimateLeft) is the median of the last few, padded
+ * and rounded up - per Nielsen Norman, an estimate that runs over is worse
+ * than none - and only offered once two documents have been timed.
  *
  * The last few times are kept between launches. A document takes about a
  * minute on the accurate model, so a run of one or two never reached an
@@ -115,8 +126,14 @@ export function useBatchProgress(items: QueueItem[], onFinished?: (done: number)
           since.current.delete(item.id);
           // Back to waiting is a pause or a retry, not a reading finished.
           if (item.status !== 'waiting') {
-            durations.current = [...(durations.current ?? []), at - started].slice(-SAMPLE_SIZE);
-            storeTimings(durations.current);
+            // Done either way; timed only if it was read. A failure, or a
+            // file set aside in a moment, says nothing of how long the next
+            // document will take - and the times are kept for the next
+            // launch, whose first documents would go by them.
+            if (item.status !== 'failed' && plausible(at - started)) {
+              durations.current = [...(durations.current ?? []), at - started].slice(-SAMPLE_SIZE);
+              storeTimings(durations.current);
+            }
             current?.done.add(item.id);
             changed = true;
           }
