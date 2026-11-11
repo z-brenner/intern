@@ -10,7 +10,7 @@ export const releaseNotes: readonly ReleaseNotes[] = [
       'Analysis details stay open or closed as you left them while you move through review.',
       'Alt+N skips to the next document to decide, a double-click on a row opens its details, and Escape closes the More menu.',
       'Long queues respond faster while Intern is reading and while you type in the filter.',
-      'The progress bar moves while a document is read, and estimates the time left from the first document.',
+      'Once Intern has read a couple of documents, the progress bar moves while each one is read, and the time left is shown from the start of every run.',
     ],
   },
   {
