@@ -934,15 +934,17 @@ token count from the file's own header, the position each checkpoint reaches,
 and the server's count of what it saved. A file that reaches past the
 instructions-only request's prompt and the one token it generated is deleted
 (`Save::HeldMore`), and so is one whose checkpoint list cannot be read
-(`Save::Unchecked`), as a runtime that wrote it differently would leave.
-After either, no server lifetime of the session saves again
-(`Save::Refused`): such a runtime may keep the document in its slot, and every
-idle unload and every switch of model would otherwise write it to the slot
-folder once more before deleting it. What
-is checked is how far the saved state reaches, by position, not where each
-checkpoint came from: one inside the request's own 15 tokens is taken to be
-the request's, which on b11946 it is, since the server keeps no checkpoint
-past where the two prompts part. After any change of runtime the speed
+(`Save::Unchecked`), as a runtime that wrote it differently would leave, or
+as state bytes that also read as a list to the end of the file would. After
+either, no server lifetime of the session saves again (`Save::Refused`): such
+a runtime may keep the document in its slot, and every idle unload and every
+switch of model would otherwise write it to the slot folder once more before
+deleting it. What is checked is how far the token list and the checkpoints
+reach, by count and position - not the positions held in the model's state
+itself, which is not parsed, nor where each checkpoint came from: one inside
+the request's own 15 tokens is taken to be the request's, which on b11946 it
+is, since the server keeps no checkpoint and no cell past where the two
+prompts part. After any change of runtime the speed
 battery's `live_slots` job is the check to run: it saves through the app's own
 code against the real server, reads the file back and fails unless the
 restore works. On the runners the 9B saved 492 tokens, the request's 477

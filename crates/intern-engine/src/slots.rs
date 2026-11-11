@@ -294,11 +294,13 @@ const SEARCH_CHUNK: usize = 8 * 1024 * 1024;
 /// speculative states, each a u64 length and that many bytes.
 ///
 /// The model's state before the list has no length of its own, so the list
-/// is found by its magic, searched from the front, and taken only where it
-/// reads to exactly the end of the file. `None` when the header is not
-/// that, or no such list ends the file: a runtime that writes either
-/// differently, or keeps no checkpoints, gives a file nothing here can
-/// vouch for.
+/// is found by its magic, searched through the whole file, and taken only
+/// where it reads to exactly the end of the file. `None` when the header is
+/// not that, when no such list ends the file, or when two places do: a
+/// runtime that writes either differently, or keeps no checkpoints, gives a
+/// file nothing here can vouch for, and so do state bytes that would read as
+/// a shorter list. The model's state itself is not read: how far its own
+/// cells reach is not known here.
 pub fn saved_state_reach(path: &Path) -> Option<SavedState> {
     saved_state_in_chunks(path, SEARCH_CHUNK)
 }
@@ -335,20 +337,25 @@ fn saved_state_in_chunks(path: &Path, chunk: usize) -> Option<SavedState> {
     let mut chunk = vec![0_u8; chunk.max(CHECKPOINT_MAGIC.len())];
     let mut start = 0_u64;
     let mut kept = 0_usize;
+    let mut list = None;
     loop {
         let read = reader.read(&mut chunk[kept..]).ok()?;
         let filled = kept + read;
         for found in finder.find_iter(&chunk[..filled]) {
             let offset = start + found as u64;
             if let Some(checkpoints) = checkpoints_at(&mut file, offset, length) {
-                return Some(SavedState {
-                    tokens,
-                    checkpoints,
-                });
+                // Bytes before the server's list that read as a list to the
+                // end of the file too would hide which one is the server's.
+                if list.replace(checkpoints).is_some() {
+                    return None;
+                }
             }
         }
         if read == 0 {
-            return None;
+            return list.map(|checkpoints| SavedState {
+                tokens,
+                checkpoints,
+            });
         }
         // Keep the last few bytes, so a magic split across two reads is
         // still found, and found once.
@@ -631,10 +638,12 @@ impl SlotKeeper {
     /// generated is deleted ([`Save::HeldMore`]), and so is one whose
     /// checkpoints cannot be read ([`Save::Unchecked`]); after either, no
     /// lifetime of the session saves again ([`Save::Refused`]). What is
-    /// checked is how far the saved state reaches, by position: a
-    /// checkpoint inside the request's own 15 tokens is taken to be the
-    /// request's, as on b11946 it is, since the server keeps no checkpoint
-    /// past where the prompts part. The speed battery's `live_slots` job
+    /// checked is how far the token list and the checkpoints reach, by
+    /// count and position, not the positions held in the model's state
+    /// itself, nor where each checkpoint came from: one inside the
+    /// request's own 15 tokens is taken to be the request's, as on b11946
+    /// it is, since the server keeps no checkpoint and no cell past where
+    /// the prompts part. The speed battery's `live_slots` job
     /// runs the app's own save against the real server; it is the check to
     /// run after any runtime change.
     ///
@@ -1369,6 +1378,31 @@ mod tests {
             assert_eq!(saved_state_in_chunks(&path, chunk), Some(expected.clone()));
         }
         assert_eq!(saved_state_reach(&path).unwrap().reach(), 492);
+
+        // State bytes that read as a list to the end of the file as well -
+        // one checkpoint of 10 tokens whose state runs up to the server's
+        // list's last two lengths, both empty - leave which is the
+        // server's unknown, wherever the reads split the file.
+        let mut planted = vec![0_u8; 300];
+        planted[100..108].copy_from_slice(&CHECKPOINT_MAGIC);
+        planted[108..112].copy_from_slice(&1_u32.to_le_bytes());
+        planted[112..120].copy_from_slice(&10_i64.to_le_bytes());
+        planted[124..128].copy_from_slice(&9_i32.to_le_bytes());
+        let mut masked = slot_file(492, &planted, Some(&[(477, 40), (488, 40)]));
+        let size_at = memchr::memmem::find(&masked, &CHECKPOINT_MAGIC).unwrap() + 28;
+        let to_the_end = (masked.len() - 16 - (size_at + 8)) as u64;
+        masked[size_at..size_at + 8].copy_from_slice(&to_the_end.to_le_bytes());
+        fs::write(&path, &masked).unwrap();
+        let length = masked.len() as u64;
+        let server_list = length - (8 + 4 + 2 * (8 + 4 + 4 + 8 + 40 + 16));
+        let mut handle = fs::File::open(&path).unwrap();
+        for (at, count) in [((size_at - 28) as u64, 1), (server_list, 2)] {
+            let list = checkpoints_at(&mut handle, at, length);
+            assert_eq!(list.map(|list| list.len()), Some(count), "at {at}");
+        }
+        for chunk in [8, 9, 13, 64, 1_000, SEARCH_CHUNK] {
+            assert_eq!(saved_state_in_chunks(&path, chunk), None, "{chunk}");
+        }
 
         // A list that stops short of the end, or runs past it.
         let mut longer = file.clone();
