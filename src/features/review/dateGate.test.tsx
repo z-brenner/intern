@@ -80,6 +80,49 @@ describe('the date gate', () => {
     expect(screen.queryByRole('group', { name: 'Dates to choose from' })).not.toBeInTheDocument();
   });
 
+  // Choosing a date takes the choices off screen, and with them the button
+  // that had focus: it fell to <body>, and the name just completed could
+  // only be filed by finding the panel again.
+  it('puts focus in the name once a date is chosen from the keyboard, so Enter files it', async () => {
+    const stated: QueueItem = {
+      ...undated, id: 'minutes', originalFilename: 'Scan 0043.pdf', proposedFilename: 'Board Meeting Minutes - Contoso Worldwide, Inc.pdf',
+      suggestedDate: undefined, reason: 'No date that defines the document was found.', datesInDocument: ['2024-06-18', '2024-07-01'], fileModifiedDate: '2024-06-20',
+    };
+    const baseBridge = createInMemoryBridge({ items: [stated, { ...stated, id: 'second', originalFilename: 'Scan 0044.pdf', datesInDocument: undefined }, undated] });
+    const approve = vi.fn(baseBridge.approve);
+    render(<App bridge={{ ...baseBridge, approve }} />);
+    await selectRow(await screen.findByRole('row', { name: /Scan 0043.pdf/i }));
+    const filename = screen.getByLabelText('Filename');
+
+    // A date the document states.
+    const chip = within(screen.getByRole('group', { name: 'Dates to choose from' })).getByRole('button', { name: '2024-06-18' });
+    chip.focus();
+    fireEvent.click(chip);
+    expect(chip).not.toBeInTheDocument();
+    expect(filename).toHaveFocus();
+    expect(filename).toHaveValue('2024-06-18 Board Meeting Minutes - Contoso Worldwide, Inc');
+    fireEvent.keyDown(filename, { key: 'Enter' });
+    await waitFor(() => expect(approve).toHaveBeenCalledWith('minutes', '2024-06-18 Board Meeting Minutes - Contoso Worldwide, Inc.pdf', expect.any(String)));
+
+    // The file's own date, the last resort.
+    await selectRow(await screen.findByRole('row', { name: /Scan 0044.pdf/i }));
+    const fileDate = screen.getByRole('button', { name: '2024-06-20 · file date' });
+    fileDate.focus();
+    fireEvent.click(fileDate);
+    expect(screen.getByLabelText('Filename')).toHaveFocus();
+    expect(screen.getByLabelText('Filename')).toHaveValue('2024-06-20 Board Meeting Minutes - Contoso Worldwide, Inc');
+
+    // And the model's unverified one, put in the field to look at first.
+    await selectRow(await screen.findByRole('row', { name: /Scan 0042.pdf/i }));
+    const use = screen.getByRole('button', { name: 'Use this date' });
+    use.focus();
+    fireEvent.click(use);
+    expect(use).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Filename')).toHaveFocus();
+    expect(screen.getByLabelText('Filename')).toHaveValue('2024-06-18 Board Resolution - Contoso Worldwide, Inc');
+    expect(approve).toHaveBeenCalledTimes(1);
+  });
+
   it('can put the suggested date into the field to edit before renaming', async () => {
     render(<App bridge={createInMemoryBridge({ items: [undated] })} />);
     await selectRow(await screen.findByRole('row', { name: /Scan 0042.pdf/i }));

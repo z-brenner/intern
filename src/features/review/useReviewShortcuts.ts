@@ -27,6 +27,8 @@ export interface ReviewShortcutOptions {
   onMove(item: QueueItem): void;
   /** F2, or Enter where nothing else has focus: open the Details panel for the item and go to its name. */
   onOpen(item: QueueItem): void;
+  /** Alt+N: leave this item undecided and go to the next one still to decide. Absent when there is no other. */
+  onNext?(): void;
   /** Focus the filter box; false when there is none to focus. */
   onFilter(): boolean;
   /** Whether the queue table's selected cells span more than one row, when Delete is ignored. */
@@ -45,6 +47,17 @@ function isTextField(target: Element | null): boolean {
 }
 
 /**
+ * The letter a chord was pressed with: the one the key types on this
+ * keyboard's layout, or where that is no Latin letter (a Cyrillic or Greek
+ * layout, or Option on a Mac turning it into a symbol), the one printed on
+ * that key of a QWERTY keyboard.
+ */
+function chordLetter(event: KeyboardEvent): string {
+  if (/^[a-z]$/i.test(event.key)) return event.key.toLowerCase();
+  return /^Key[A-Z]$/.test(event.code) ? event.code.slice(3).toLowerCase() : '';
+}
+
+/**
  * Keyboard review (FRONTEND_UX-10). With 200 items queued, reaching Approve
  * from a selected row took about 197 presses of Tab, and focus went back to
  * the toolbar after every decision. Outside text fields:
@@ -57,6 +70,10 @@ function isTextField(target: Element | null): boolean {
  * - Ctrl+Enter approves and Alt+K keeps the original - from the review
  *   panel's own fields too, since after each decision the caret is already
  *   in the next item's name;
+ * - Alt+N goes to the next item still to decide, leaving this one as it is -
+ *   from those fields as well. After every decision the caret is in a name,
+ *   where J is a letter, so there was no key for "not this one yet": the
+ *   Next undecided link was three presses of Shift+Tab away;
  * - Delete removes, after asking - but not while the table has cells of
  *   several rows selected, which it would seem to remove as well;
  * - "/" goes to the filter.
@@ -77,7 +94,7 @@ export function useReviewShortcuts(options: ReviewShortcutOptions) {
   useLayoutEffect(() => { latest.current = options; });
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const { enabled, rows, selected, inspector, onMove, onOpen, onFilter, selectionSpansRows, onDeleteRefused } = latest.current;
+      const { enabled, rows, selected, inspector, onMove, onOpen, onNext, onFilter, selectionSpansRows, onDeleteRefused } = latest.current;
       // A key a field or dialog already handled (Enter in the name, Escape
       // in the filter) is not a shortcut as well.
       if (!enabled || event.defaultPrevented || event.isComposing) return;
@@ -99,6 +116,16 @@ export function useReviewShortcuts(options: ReviewShortcutOptions) {
         if ((textField && !inPanel) || !actions?.keep) return;
         event.preventDefault();
         if (!event.repeat) inspector.current?.keep();
+        return;
+      }
+      // Next undecided. It presses the panel's link, so it acts only while
+      // the panel is open and offers one. N, not J: Alt+J would sit beside
+      // Alt+K, and a slip from "not yet" to "keep its name" files a document.
+      // With AltGr (Ctrl+Alt on Windows) or Shift it is some other chord.
+      if (event.altKey && !command && !event.shiftKey && chordLetter(event) === 'n') {
+        if ((textField && !inPanel) || !inspector.current || !onNext) return;
+        event.preventDefault();
+        if (!event.repeat) onNext();
         return;
       }
       if (textField || command || event.altKey) return;

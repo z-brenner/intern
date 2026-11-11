@@ -1,8 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
+import { ReviewInspector } from '../../components/ReviewInspector';
 import { detailsToggle, openDetails, openRow, queueCell, selectRow as selectByName } from '../queue/gridTesting';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
+import type { QueueItem } from '../../types';
 
 describe('review actions', () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -321,6 +323,36 @@ describe('review actions', () => {
     await waitFor(() => expect(filename).toHaveValue('My local draft'));
   });
 
+  // Moving on (Alt+N, Next undecided, another row) threw the typing away.
+  // It is set aside for the item, and for the reading it was typed against.
+  it('keeps what was typed for an item left undecided, for that item and that reading only', () => {
+    const calls = { onClose: vi.fn(), onApprove: vi.fn(), onKeep: vi.fn(), onCancel: vi.fn(), onRetry: vi.fn(), onReanalyze: vi.fn(), onRemove: vi.fn(), onUndo: vi.fn(), onOpen: vi.fn(), onReveal: vi.fn() };
+    const lease: QueueItem = { id: 'lease', originalFilename: 'scan.pdf', status: 'review', proposedFilename: '2024-03-01 Lease.pdf', description: 'A lease.', confidence: 0.8, proposalRevision: '1' };
+    const invoice: QueueItem = { id: 'invoice', originalFilename: 'scan 2.pdf', status: 'review', proposedFilename: '2024-04-01 Invoice.pdf', description: 'An invoice.', confidence: 0.8, proposalRevision: '1' };
+    const view = render(<ReviewInspector item={lease} drawer={false} {...calls} />);
+    const filename = () => screen.getByLabelText('Filename');
+    const description = () => screen.getByLabelText('Description');
+    fireEvent.change(filename(), { target: { value: '2024-03-01 Lease of Unit 4' } });
+    fireEvent.change(description(), { target: { value: 'A lease of Unit 4.' } });
+
+    view.rerender(<ReviewInspector item={invoice} drawer={false} {...calls} />);
+    expect(filename()).toHaveValue('2024-04-01 Invoice');
+    expect(description()).toHaveValue('An invoice.');
+    view.rerender(<ReviewInspector item={lease} drawer={false} {...calls} />);
+    expect(filename()).toHaveValue('2024-03-01 Lease of Unit 4');
+    expect(description()).toHaveValue('A lease of Unit 4.');
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/ }));
+    expect(calls.onApprove).toHaveBeenLastCalledWith('2024-03-01 Lease of Unit 4.pdf', 'A lease of Unit 4.');
+
+    // Read again, it is a new proposal: shown as it is, not under the edit of the old one.
+    view.rerender(<ReviewInspector item={invoice} drawer={false} {...calls} />);
+    view.rerender(<ReviewInspector item={{ ...lease, proposedFilename: '2024-03-02 Lease Agreement.pdf', description: 'A lease agreement.', proposalRevision: '2' }} drawer={false} {...calls} />);
+    expect(filename()).toHaveValue('2024-03-02 Lease Agreement');
+    expect(description()).toHaveValue('A lease agreement.');
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/ }));
+    expect(calls.onApprove).toHaveBeenLastCalledWith('2024-03-02 Lease Agreement.pdf', 'A lease agreement.');
+  });
+
   it('traps keyboard focus in settings and restores it to the invoking control', async () => {
     render(<App bridge={createInMemoryBridge()} selection={folderPicker('C:\\Scans')} />);
     const trigger = (await screen.findAllByRole('button', { name: 'Settings' }))[0];
@@ -429,6 +461,106 @@ describe('review actions', () => {
 
     expect(screen.queryByRole('dialog', { name: 'Review item' })).not.toBeInTheDocument();
     await waitFor(() => expect(queueCell('NDA - Acme Corp.docx')).toHaveFocus());
+  });
+
+  // The panel's More menu closed only by its own button or by taking one of
+  // its actions. Escape did nothing beside the queue, and in the narrow
+  // drawer closed the whole drawer from under the open menu.
+  it('closes the More menu on Escape with focus back on its button, and on a press outside it', async () => {
+    const bridge = createInMemoryBridge();
+    const reanalyze = vi.spyOn(bridge, 'reanalyze');
+    render(<App bridge={bridge} />);
+    const panel = await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    const more = within(panel).getByRole('button', { name: 'More review actions' });
+    const menu = () => within(panel).queryByRole('group', { name: 'More review actions' });
+
+    fireEvent.click(more);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    const again = within(menu()!).getByRole('button', { name: 'Analyze again' });
+    again.focus();
+    // Handled here: nothing behind the panel hears this Escape as well.
+    expect(fireEvent.keyDown(again, { key: 'Escape' })).toBe(false);
+    expect(menu()).not.toBeInTheDocument();
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    expect(more).toHaveFocus();
+    // The panel is beside the queue and stays; a second Escape has nothing to close.
+    fireEvent.keyDown(more, { key: 'Escape' });
+    expect(panel).toBeInTheDocument();
+
+    // From elsewhere in the panel the menu closes and focus stays where it is.
+    fireEvent.click(more);
+    const filename = within(panel).getByLabelText('Filename');
+    filename.focus();
+    fireEvent.keyDown(filename, { key: 'Escape' });
+    expect(menu()).not.toBeInTheDocument();
+    expect(filename).toHaveFocus();
+    expect(filename).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
+
+    // A press inside the menu, or on its own button, is not a press outside it.
+    fireEvent.click(more);
+    fireEvent.pointerDown(within(menu()!).getByRole('button', { name: 'Remove from queue' }));
+    expect(menu()).toBeInTheDocument();
+    fireEvent.pointerDown(more);
+    expect(menu()).toBeInTheDocument();
+    // One anywhere else is: in the panel, or in the queue.
+    fireEvent.pointerDown(within(panel).getByRole('heading', { name: 'Review item' }));
+    expect(menu()).not.toBeInTheDocument();
+    fireEvent.click(more);
+    fireEvent.pointerDown(queueCell('NDA - Acme Corp.docx'));
+    expect(menu()).not.toBeInTheDocument();
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+
+    // Its actions still work, and still close it.
+    fireEvent.click(more);
+    fireEvent.click(within(menu()!).getByRole('button', { name: 'Analyze again' }));
+    await waitFor(() => expect(reanalyze).toHaveBeenCalledWith('lease'));
+  });
+
+  it('closes the More menu before the narrow drawer: Escape once for the menu, again for the drawer', async () => {
+    stubNarrowWindow();
+    render(<App bridge={createInMemoryBridge()} />);
+    await screen.findByRole('grid', { name: 'Queue' });
+    selectByName('Lease Agreement - 123 Main St.pdf');
+    fireEvent.click(detailsToggle());
+    const drawer = await screen.findByRole('dialog', { name: 'Review item' });
+    const more = within(drawer).getByRole('button', { name: 'More review actions' });
+
+    fireEvent.click(more);
+    const remove = within(drawer).getByRole('button', { name: 'Remove from queue' });
+    remove.focus();
+    fireEvent.keyDown(remove, { key: 'Escape' });
+
+    // The menu went; the drawer, and the document in it, did not.
+    expect(within(drawer).queryByRole('group', { name: 'More review actions' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Review item' })).toBe(drawer);
+    expect(more).toHaveFocus();
+    expect(screen.getByRole('banner')).toHaveAttribute('inert');
+
+    fireEvent.keyDown(more, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Review item' })).not.toBeInTheDocument();
+    await waitFor(() => expect(queueCell('Lease Agreement - 123 Main St.pdf')).toHaveFocus());
+  });
+
+  // The menu is drawn only while the item can be kept. One that stopped
+  // being keepable under an open menu - a refresh showing it read again -
+  // took the menu off screen and left it open: the next Escape closed
+  // nothing, and it took a second to close the drawer.
+  it('closes the drawer at the first Escape once the More menu has gone with the item\'s actions', () => {
+    const calls = { onClose: vi.fn(), onApprove: vi.fn(), onKeep: vi.fn(), onCancel: vi.fn(), onRetry: vi.fn(), onReanalyze: vi.fn(), onRemove: vi.fn(), onUndo: vi.fn(), onOpen: vi.fn(), onReveal: vi.fn() };
+    const lease: QueueItem = { id: 'lease', originalFilename: 'scan.pdf', status: 'review', proposedFilename: '2024-03-01 Lease.pdf', description: 'A lease.', confidence: 0.8, proposalRevision: '1', reason: 'Low confidence.', errorCode: 'LOW_CONFIDENCE' };
+    const view = render(<ReviewInspector item={lease} drawer {...calls} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More review actions' }));
+    expect(screen.getByRole('group', { name: 'More review actions' })).toBeInTheDocument();
+
+    view.rerender(<ReviewInspector item={{ ...lease, status: 'processing', stage: 'naming', reason: undefined, errorCode: undefined }} drawer {...calls} />);
+    expect(screen.queryByRole('group', { name: 'More review actions' })).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('heading', { name: 'Review item' }), { key: 'Escape' });
+    expect(calls.onClose).toHaveBeenCalledOnce();
+
+    // Back in review, the menu stays closed until it is opened again.
+    view.rerender(<ReviewInspector item={lease} drawer {...calls} />);
+    expect(screen.getByRole('button', { name: 'More review actions' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('group', { name: 'More review actions' })).not.toBeInTheDocument();
   });
 
   it('moves focus to a visible queue control when refresh removes the invoking row', async () => {

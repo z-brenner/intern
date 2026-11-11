@@ -273,7 +273,8 @@ test('the queue can be driven from the keyboard alone', async ({ page }) => {
 // FRONTEND_UX-10. Reaching Approve from a selected row took a Tab press per
 // remaining row, and after each decision focus went back to the toolbar. Five
 // decisions here, without the mouse: J and K to move, Enter to the name, and
-// Ctrl+Enter, Enter or Alt+K to decide - each landing in the next name.
+// Ctrl+Enter, Enter or Alt+K to decide - each landing in the next name - and
+// Alt+N to leave one for later, which review comes back round to.
 test('keyboard_only_review_of_five_items', async ({ page }) => {
   await page.goto('/?reviewBatch=1');
   const inspector = page.getByRole('complementary', { name: 'Review item' });
@@ -311,15 +312,21 @@ test('keyboard_only_review_of_five_items', async ({ page }) => {
     await expect(filename).toBeFocused();
   };
   await decide(() => page.keyboard.press('Control+Enter'), '2024-02-09 Invoice INV-3301 from Fabrikam Inc');
+  // Not this one yet: from inside its name, Alt+N goes on to the next still
+  // to decide and types nothing. It stays undecided.
+  await decide(() => page.keyboard.press('Alt+KeyN'), '2024-03-30 Statement of Work with Litware Inc');
+  await expect(inspector).toContainText('2 of 5 to decide');
+  await expect(page.getByRole('row', { name: /Scan 0102\.pdf/ })).toContainText('2024-02-09 Invoice INV-3301 from Fabrikam Inc.pdf');
   // A name corrected in place, and Enter files it.
-  await decide(async () => { await page.keyboard.press('End'); await page.keyboard.type(' (paid)'); await page.keyboard.press('Enter'); }, '2024-03-30 Statement of Work with Litware Inc');
-  await decide(() => page.keyboard.press('Alt+KeyK'), '2024-04-18 Lease Amendment for 500 Pine St');
+  await decide(async () => { await page.keyboard.press('End'); await page.keyboard.type(' (paid)'); await page.keyboard.press('Enter'); }, '2024-04-18 Lease Amendment for 500 Pine St');
   // Needing review first, then ready.
-  await decide(() => page.keyboard.press('Control+Enter'), '2024-03-14 Notice of Termination to Contoso Ltd');
+  await decide(() => page.keyboard.press('Alt+KeyK'), '2024-03-14 Notice of Termination to Contoso Ltd');
   await decide(() => page.keyboard.press('Control+Enter'), '2024-04-02 Board Resolution of Tailspin Toys');
+  // The last one hands on to the one left for later.
+  await decide(() => page.keyboard.press('Control+Enter'), '2024-02-09 Invoice INV-3301 from Fabrikam Inc');
   await shot(page, 'keyboard-review-five-decided');
 
-  await expect(page.getByRole('status', { name: 'Action status' })).toHaveText('Renamed Scan 0103.pdf. Next: Scan 0105.pdf.');
+  await expect(page.getByRole('status', { name: 'Action status' })).toHaveText('Renamed Scan 0105.pdf. Next: Scan 0102.pdf.');
   await expect(inspector).toContainText('1 of 1 to decide');
   await expect(page.getByRole('button', { name: /^Completed, / })).toHaveAccessibleName('Completed, 5');
   await expect(page.getByRole('alert', { name: 'Action error' })).toHaveCount(0);

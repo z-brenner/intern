@@ -87,6 +87,56 @@ describe('the Details panel', () => {
     }
   });
 
+  // The mouse had no way to open the panel from the row itself: click the
+  // row, then find the Details button in the toolbar. A double-click is the
+  // mouse's Enter.
+  it('opens from a double-click on a row, at the name, and a single click still only selects', async () => {
+    await start();
+    const cell = queueCell('Scan 0102.pdf', 'proposed');
+    // A double-click as the browser delivers it: two presses, then dblclick.
+    clickCell(cell, { detail: 1 });
+    expect(panel()).not.toBeInTheDocument();
+    clickCell(cell, { detail: 2 });
+    expect(panel()).not.toBeInTheDocument();
+    fireEvent.doubleClick(cell, { button: 0, detail: 2 });
+
+    expect(panel()).toHaveTextContent('Scan 0102.pdf');
+    await waitFor(() => expect(within(panel()!).getByLabelText('Filename')).toHaveFocus());
+    expect(within(panel()!).getByLabelText('Filename')).toHaveValue('2024-02-09 Invoice INV-3301 from Fabrikam Inc');
+    expect(detailsToggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(queueCell('Scan 0102.pdf').closest('tr')).toHaveAttribute('aria-current', 'true');
+    // The button says how else it opens.
+    expect(detailsToggle()).toHaveAttribute('title', expect.stringMatching(/Enter, F2 or a double-click/));
+
+    // Open already, a double-click on another row's Status goes to that row's name.
+    const status = queueCell('Scan 0104.pdf', 'status');
+    clickCell(status);
+    fireEvent.doubleClick(status, { button: 0, detail: 2 });
+    await waitFor(() => expect(within(panel()!).getByLabelText('Filename')).toHaveValue('2024-03-30 Statement of Work with Litware Inc'));
+    await waitFor(() => expect(within(panel()!).getByLabelText('Filename')).toHaveFocus());
+
+    // A row with no name to edit opens at the panel's heading.
+    const waiting = queueCell('Scan 0107.pdf');
+    clickCell(waiting);
+    fireEvent.doubleClick(waiting, { button: 0, detail: 2 });
+    await waitFor(() => expect(within(panel()!).getByRole('heading', { name: 'Review item' })).toHaveFocus());
+    expect(panel()).toHaveTextContent('Scan 0107.pdf');
+  });
+
+  it('does not open from a double-click that was extending a selection, or one of another button', async () => {
+    const { bridge } = await start();
+    clickCell(queueCell('Scan 0101.pdf'));
+    const cell = queueCell('Scan 0103.pdf', 'description');
+    clickCell(cell, { shiftKey: true });
+    fireEvent.doubleClick(cell, { button: 0, shiftKey: true });
+    fireEvent.doubleClick(cell, { button: 0, ctrlKey: true });
+    fireEvent.doubleClick(cell, { button: 1 });
+
+    expect(panel()).not.toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Cell selection' })).toHaveTextContent('3 rows by 3 columns selected');
+    expect(bridge.approve).not.toHaveBeenCalled();
+  });
+
   it('opens from Enter on a cell, at the name', async () => {
     await start();
     const cell = queueCell('Scan 0102.pdf', 'check');
