@@ -249,11 +249,10 @@ pub(crate) fn names_a_kind_at(words: &[String], at: usize) -> bool {
 const LEFT_STOPS: &[&str] = &["this", "the", "a", "an", "our", "your", "its"];
 
 /// Words after which a title line stops naming the document: its date
-/// ("EFFECTIVE SEPTEMBER 1, 2024", "Date reported: ..."), the weekday its
-/// date opens with ("MINUTES OF THE TUESDAY, OCTOBER 29, 2024, HYBRID
-/// MEETING"), its page, or the authority it is given under ("NOTICE OF
-/// DEPOSITION PURSUANT TO RULE 30(b)(6)"), which its number would cut to a
-/// dangling "Pursuant to Rule". A type never keeps its own date.
+/// ("EFFECTIVE SEPTEMBER 1, 2024", "Date reported: ..."), its page, or the
+/// authority it is given under ("NOTICE OF DEPOSITION PURSUANT TO RULE
+/// 30(b)(6)"), which its number would cut to a dangling "Pursuant to Rule".
+/// A type never keeps its own date.
 const TITLE_STOPS: &[&str] = &[
     "pursuant",
     "no",
@@ -279,6 +278,14 @@ const TITLE_STOPS: &[&str] = &[
     "october",
     "november",
     "december",
+];
+
+/// The weekday a title's date can open with ("MINUTES OF THE TUESDAY,
+/// OCTOBER 29, 2024, HYBRID MEETING"), which stops the title to its right
+/// as the date does. To the left, and in telling a kind from a name, a
+/// weekday is a word like any other: the "Good Friday Agreement", a
+/// "Cyber Monday Promotion Agreement".
+const WEEKDAYS: &[&str] = &[
     "monday",
     "tuesday",
     "wednesday",
@@ -289,7 +296,7 @@ const TITLE_STOPS: &[&str] = &[
 ];
 
 /// Words a title's complement can open with that complete nothing by
-/// themselves: a title cut before what they introduce ends without them.
+/// themselves: a complement cut right after one ends without it.
 const ARTICLES: &[&str] = &["the", "a", "an"];
 
 /// The type a title line states for a document whose kind is `head`:
@@ -430,6 +437,7 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
     let stops_right = |index: usize| {
         let word = core(tokens[index]);
         TITLE_STOPS.contains(&word.as_str())
+            || WEEKDAYS.contains(&word.as_str())
             || (RIGHT_STOPS.contains(&word.as_str()) && !(word == "will" && will_is_a_noun(index)))
             || (word == "with" && !named_for_its_subject)
     };
@@ -453,12 +461,17 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
     }
     // A complement cut by a stop right after its article - "Minutes of the
     // Tuesday, October 29" - leaves "of the" dangling, which completes
-    // nothing: the title ends before it.
-    while end > at + 1 && {
-        let word = core(tokens[end - 1]);
-        ARTICLES.contains(&word.as_str()) || CONNECTORS.contains(&word.as_str())
-    } {
-        end -= 1;
+    // nothing: the title ends before it. Only a connector and its article
+    // dangle so, and only before a stop: a letter that ends the line or
+    // stands after a noun is the title's own ("Amendment to Exhibit A",
+    // "Notice of Exercise of Option A").
+    if end < tokens.len()
+        && stops_right(end)
+        && end >= at + 3
+        && ARTICLES.contains(&core(tokens[end - 1]).as_str())
+        && CONNECTORS.contains(&core(tokens[end - 2]).as_str())
+    {
+        end -= 2;
     }
     // A comma inside the title is the title's own ("Software License,
     // Customization and Maintenance Agreement"); only its ends lose
@@ -1204,6 +1217,35 @@ mod tests {
                 "NOTICE OF THE ANNUAL MEETING OF SHAREHOLDERS",
                 "notice",
                 Some("Notice of the Annual Meeting of Shareholders"),
+            ),
+            // The letter a schedule or an option is named by is no article:
+            // it stays at the line's end and before the date alike.
+            (
+                "Amendment to Exhibit A",
+                "amendment",
+                Some("Amendment to Exhibit A"),
+            ),
+            (
+                "Addendum to Exhibit A dated March 3, 2024",
+                "addendum",
+                Some("Addendum to Exhibit A"),
+            ),
+            (
+                "Notice of Exercise of Option A",
+                "notice",
+                Some("Notice of Exercise of Option A"),
+            ),
+            // A weekday stops a title to its right only: to its left it is
+            // the title's own word.
+            (
+                "Good Friday Agreement",
+                "agreement",
+                Some("Good Friday Agreement"),
+            ),
+            (
+                "Cyber Monday Promotion Agreement",
+                "agreement",
+                Some("Cyber Monday Promotion Agreement"),
             ),
         ] {
             assert_eq!(title_phrase(line, head).as_deref(), phrase, "{line}");
