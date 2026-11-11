@@ -1,5 +1,5 @@
 import { CircleCheck, ClipboardCopy, Ellipsis, PanelRight, Trash2 } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { DropZone } from './components/DropZone';
 import { FolderSetupFlow } from './components/FolderSetupFlow';
@@ -233,11 +233,20 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // A folder of four hundred documents is a wall of rows. The filter narrows
   // the current view by anything a person is likely to remember: the name the
   // file arrived with, the name it was given, or a word from its description.
-  const query = filter.trim().toLowerCase();
+  //
+  // The rows follow the box a moment behind it. Narrowed by the text as it
+  // is typed, every keystroke waited for the table: on a thousand rows the
+  // character typed took a third of a second to appear, and the ones after
+  // it queued up behind it. The box shows what was typed at once; the table,
+  // its counts and "No items match" are worked out from the deferred text in
+  // a pass that the next keystroke interrupts.
+  const deferredFilter = useDeferredValue(filter);
+  const query = deferredFilter.trim().toLowerCase();
   const readyFilter = readyOnly && view === 'queue';
   const shown = (list: QueueItem[]) => list.filter((item) => inCurrentView(item) && (!query || matchesQuery(item, query)) && (!readyFilter || renamesWithAllReady(item)));
   const visible = shown(items);
-  const filterShown = filtered.length > FILTER_THRESHOLD || query.length > 0;
+  // The box itself goes by what is in it now, not by what the rows have caught up with.
+  const filterShown = filtered.length > FILTER_THRESHOLD || filter.trim().length > 0;
   const selected = items.find((item) => item.id === selectedId);
   const panelOpen = Boolean(selected) && (narrowInspector ? detailsAskedFor : detailsOpen);
   const drawerOpen = panelOpen && narrowInspector;
@@ -916,7 +925,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       {items.length > 0 && (visible.length > 0
         ? <QueueTable items={visible} selectedId={selectedId} store={gridStore} onSelectRow={selectRow} onOpen={openItem} />
         : query
-          ? <p className="queue-filter-empty" role="status">No items match “{filter.trim()}”.</p>
+          ? <p className="queue-filter-empty" role="status">No items match “{deferredFilter.trim()}”.</p>
           : <ViewEmpty view={view} />)}
       <p className="item-count">{query || readyFilter ? `${visible.length} of ${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}` : `${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}`}</p>
       </DropZone>}</section>
