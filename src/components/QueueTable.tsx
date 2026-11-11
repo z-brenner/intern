@@ -212,7 +212,7 @@ export function QueueTable({ items, selectedId, store, onSelectRow, onOpen }: Pr
         title={column.copyable ? `Select the ${column.label} column` : undefined}>{column.label}</th>)}</tr></thead>
       <tbody>{items.map((item, rowIndex) => {
         const inRows = bounds !== undefined && rowIndex >= bounds.top && rowIndex <= bounds.bottom;
-        return <QueueRow key={item.id} item={item} statusId={`${idPrefix}-status-${rowIndex}`} current={selectedId === item.id}
+        return <QueueRow key={item.id} item={item} statusId={`${idPrefix}-status-${idToken(item.id)}`} current={selectedId === item.id}
           left={inRows ? bounds.left : -1} right={inRows ? bounds.right : -1} top={inRows && rowIndex === bounds.top} bottom={inRows && rowIndex === bounds.bottom}
           tabColumn={active?.id === item.id ? active.column : undefined} marked={multiple && active?.id === item.id ? active.column : undefined}
           handlers={stableHandlers} />;
@@ -279,6 +279,19 @@ const QueueRow = memo(function QueueRow({ item, statusId, current, left, right, 
     })}
   </tr>;
 });
+
+/**
+ * An item's id as part of an element id. A row's status cell used to be
+ * named by the row's place in the table, so when a document left - every
+ * approval - each row after it was a different row to React and rendered
+ * again. Named by its item, a row that did not change is left alone.
+ * aria-describedby takes a list of ids divided by spaces, so anything that
+ * is not a letter, a digit, "_" or "-" is written as its code instead; two
+ * different ids never come out the same.
+ */
+function idToken(id: string): string {
+  return id.replace(/[^A-Za-z0-9_-]/g, (character) => `.${character.charCodeAt(0).toString(36)}.`);
+}
 
 /** A cell of the grid by item and column, matched on its data attributes rather than a selector an id could break. */
 export function findCell(root: ParentNode | null | undefined, cell: CellRef): HTMLElement | undefined {

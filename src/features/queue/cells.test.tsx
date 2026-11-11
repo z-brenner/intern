@@ -41,6 +41,37 @@ async function start(items?: QueueItem[]) {
 describe('queue cells', () => {
   afterEach(() => { vi.unstubAllGlobals(); });
 
+  // A status cell is named by its item, not by its row's place, so the rows
+  // after a document that leaves are not different rows. An id is free text,
+  // and aria-describedby is a list divided by spaces.
+  it('describes each filename by its own row\'s status, whatever its id is made of, and after a row above it leaves', async () => {
+    const ids = ['12', 'a b', 'a.b', 'a_b', 'a-b', 'a\tb', 'x"y\'z', '東京 1'];
+    const statuses: QueueItem['status'][] = ['review', 'ready', 'waiting', 'review', 'ready', 'waiting', 'review', 'ready'];
+    const words = { review: 'Needs review', ready: 'Ready', waiting: 'Waiting' } as Record<string, string>;
+    render(<App bridge={createInMemoryBridge({ items: ids.map((id, index) => ({ id, originalFilename: `Scan ${index}.pdf`, status: statuses[index], proposedFilename: statuses[index] === 'waiting' ? undefined : `2024-01-0${index + 1} Letter.pdf` })) })} />);
+    const grid = await screen.findByRole('grid', { name: 'Queue' }, { timeout: 5000 });
+    const check = (from: number) => {
+      const named = [...grid.querySelectorAll<HTMLElement>('[data-column="status"]')].map((cell) => cell.id);
+      expect(new Set(named).size).toBe(ids.length - from);
+      for (const id of named) expect(id).toMatch(/^\S+$/);
+      for (let index = from; index < ids.length; index += 1) {
+        const cell = queueCell(`Scan ${index}.pdf`);
+        expect(cell).toHaveAccessibleDescription(words[statuses[index]]);
+        expect(document.getElementById(cell.getAttribute('aria-describedby')!)).toBe(queueCell(`Scan ${index}.pdf`, 'status'));
+      }
+    };
+    await waitFor(() => check(0), { timeout: 5000 });
+    const kept = queueCell('Scan 5.pdf', 'status').id;
+
+    // The first row leaves, as an approved or removed document does.
+    const panel = await openDetails('Scan 0.pdf');
+    fireEvent.click(within(panel).getByRole('button', { name: 'More review actions' }));
+    fireEvent.click(within(panel).getByRole('button', { name: 'Remove from queue' }));
+    await waitFor(() => expect(screen.queryByRole('gridcell', { name: 'Scan 0.pdf' })).not.toBeInTheDocument());
+    check(1);
+    expect(queueCell('Scan 5.pdf', 'status').id).toBe(kept);
+  });
+
   it('puts status before the three document columns in Queue and Completed', async () => {
     await start([
       { id: 'a', originalFilename: 'queue.pdf', status: 'ready' },
