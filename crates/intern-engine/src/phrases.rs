@@ -72,7 +72,7 @@ pub(crate) fn is_placeholder(value: &str) -> bool {
 const CONNECTORS: &[&str] = &["of", "to", "for", "and", "on", "under"];
 
 /// Words after which a title stops to its right: a sentence has begun.
-const RIGHT_STOPS: &[&str] = &["is", "are", "was", "were", "hereby", "will", "shall"];
+pub(crate) const RIGHT_STOPS: &[&str] = &["is", "are", "was", "were", "hereby", "will", "shall"];
 
 /// Whether the words from `at` open the sentence a notice is given by,
 /// after its title: "NOTICE *IS HEREBY* GIVEN", "Notice *hereby* given".

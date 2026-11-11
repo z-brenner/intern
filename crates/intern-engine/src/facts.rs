@@ -64,7 +64,7 @@ use crate::infer::{
     infer_date_role_as, reads_as_signature_date, reads_as_signature_date_as, repair_issued_relation,
 };
 use crate::phrases::{
-    gives_notice, has_a_kind, head_noun, is_form_code, is_placeholder, is_reference,
+    RIGHT_STOPS, gives_notice, has_a_kind, head_noun, is_form_code, is_placeholder, is_reference,
     label_and_value, names_a_kind, opens_with_party_label, phrase_positions, possessive_side,
     same_word, subject_value, tidy_case, title_phrase, trim_name, without_identifier, words,
 };
@@ -2859,7 +2859,8 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
     // Objection Letter"), all of which name the kind. Never what a
     // connector joins: an "Approval of Closure Plan" is an approval, and
     // the plan is what it approves.
-    const JOINS: &[&str] = &["of", "to", "for", "on", "under", "by"];
+    // Nor what it joins past an article or a name set in capitals
+    // ([`joined_by_a_connector`]).
     let value_words = words(&value);
     if let Some(head) = head_noun(&value_words).map(str::to_owned)
         && let Some(phrase) = title_phrase(&value, &head)
@@ -2868,7 +2869,7 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
         && let Some(at) = phrase_positions(&value_words, &phrase_words)
             .into_iter()
             .next()
-        && !(at > 0 && JOINS.contains(&value_words[at - 1].as_str()))
+        && !joined_by_a_connector(&value, at)
     {
         // The tokens outside the phrase: a token may hold several words.
         let end = at + phrase_words.len();
@@ -2942,6 +2943,62 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
         }
     }
     value
+}
+
+/// Whether the kind phrase that opens at word `at` of a title is what a
+/// connector joins to the title's head: right after the connector ("Approval
+/// *of* Closure Plan"), or past an article or a name set in capitals
+/// ("Response *to* the ONS Engagement on Adjustment of Migration
+/// Statistics", "Approval *of* SEP Completion Report"). The head says what
+/// the document is - a response, an approval - and the phrase what it
+/// answers or approves, so the phrase is no type on its own. A sentence is
+/// no title, and its connector joins nothing to one: "Receipt is
+/// acknowledged *of* the Letter of Notification" still reads as the letter
+/// it acknowledges.
+fn joined_by_a_connector(value: &str, at: usize) -> bool {
+    const JOINS: &[&str] = &["of", "to", "for", "on", "under", "by"];
+    const ARTICLES: &[&str] = &["the", "a", "an"];
+    let value_words = words(value);
+    if at > 0 && JOINS.contains(&value_words[at - 1].as_str()) {
+        return true;
+    }
+    let tokens = value.split_whitespace().collect::<Vec<_>>();
+    // The tokens before the phrase: a token may hold several words
+    // ("Girafa.com,") or none ("-").
+    let mut seen = 0;
+    let mut before = Vec::new();
+    for token in &tokens {
+        let count = words(token).len();
+        if seen + count > at {
+            break;
+        }
+        if count > 0 {
+            before.push(*token);
+        }
+        seen += count;
+    }
+    let core = |token: &str| {
+        normalize(token)
+            .trim_matches(|character: char| !character.is_alphanumeric())
+            .to_owned()
+    };
+    // A title set all in capitals sets no name apart by them.
+    let in_capitals = |token: &str| {
+        token.chars().any(char::is_alphabetic) && !token.chars().any(char::is_lowercase)
+    };
+    let all_capitals = tokens.iter().all(|token| in_capitals(token));
+    let mut left = before.len();
+    while left > 0
+        && (ARTICLES.contains(&core(before[left - 1]).as_str())
+            || (!all_capitals && in_capitals(before[left - 1])))
+    {
+        left -= 1;
+    }
+    left > 0
+        && JOINS.contains(&core(before[left - 1]).as_str())
+        && !words(&before[..left - 1].join(" "))
+            .iter()
+            .any(|word| RIGHT_STOPS.contains(&word.as_str()))
 }
 
 fn titled(value: &str) -> String {
@@ -7680,6 +7737,38 @@ mod tests {
             "Details for Improvement Notice",
         ] {
             assert_eq!(stated_title(kept, &parties), kept);
+        }
+    }
+
+    /// A kind a connector joins to the title's head past an article or a
+    /// name set in capitals is what the document answers or approves, not
+    /// what it is: the title stays whole, as it does when the kind follows
+    /// the connector directly. A sentence is no title, and the kind phrase
+    /// it runs on to still reads.
+    #[test]
+    fn a_stated_title_keeps_what_its_connector_joins_past_an_article_or_a_name() {
+        let parties = ["Harbour Advisory Committee"];
+        for kept in [
+            "Response to the QRA Engagement on Adjustment of Harbour Statistics",
+            "RESPONSE TO THE QRA ENGAGEMENT ON ADJUSTMENT OF HARBOUR STATISTICS",
+            "Approval of SEP Completion Report",
+            "Details for the Improvement Notice",
+        ] {
+            assert_eq!(stated_title(kept, &parties), kept);
+        }
+        for (value, kind) in [
+            (
+                "Receipt is acknowledged of the Letter of Notification",
+                "Letter of Notification",
+            ),
+            // No connector before the name in capitals: the line's kind
+            // phrase, as ever.
+            (
+                "Quay Harbour QRA Statistics Engagement Plan",
+                "Statistics Engagement Plan",
+            ),
+        ] {
+            assert_eq!(stated_title(value, &parties), kind, "{value}");
         }
     }
 
