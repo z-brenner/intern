@@ -755,6 +755,10 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     }).catch(() => { /* No drag events in this runtime; drops still land, unannounced. */ });
     return () => { active = false; stop?.(); setDrag({ dragging: false, count: 0 }); };
   }, [selection]);
+  // The panel's "Next undecided", and Alt+N: on to the next item still to
+  // decide, at its name, leaving the selected one as it is. Nothing when the
+  // selected item is the only one left.
+  const goToNextUndecided = nextToDecide && nextToDecide.id !== selected?.id ? () => openItem(nextToDecide) : undefined;
   useReviewShortcuts({
     enabled: modelReady(model.setup) && !folderSetupOpen && !settingsOpen && !historyOpen,
     rows: visible,
@@ -762,6 +766,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     inspector: inspectorHandle,
     onMove: moveSelection,
     onOpen: (item) => openItem(item),
+    onNext: goToNextUndecided,
     // Delete removes the panel's one item; with several rows of cells
     // selected it would read as removing them all, so it does nothing.
     selectionSpansRows: () => { const bounds = selectionBounds(selectionOf(gridStore.get()), visible); return Boolean(bounds && bounds.bottom > bounds.top); },
@@ -943,7 +948,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       </div>}
       {panelOpen && selected && <ReviewInspector id={REVIEW_PANEL_ID} ref={inspectorHandle} busy={actionPending} drawer={drawerOpen} item={selected}
         position={undecided.length ? { index: undecided.findIndex((item) => item.id === selected.id) + 1 || undefined, total: undecided.length } : undefined}
-        onNext={nextToDecide && nextToDecide.id !== selected.id ? () => openItem(nextToDecide) : undefined}
+        onNext={goToNextUndecided}
         onClose={() => closeDetails()} onApprove={(filename, description) => void decide(selected, 'approve', () => bridge.approve(selected.id, filename, description))} onKeep={() => void decide(selected, 'keep', () => bridge.keepOriginal(selected.id))} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void retryItem(selected)} onReanalyze={() => void refreshAndClear(() => bridge.reanalyze(selected.id), 'Sent back to be analyzed again.')} onRemove={(confirmed) => void decide(selected, 'remove', () => confirmed ? bridge.remove(selected.id, { confirmed: true }) : bridge.remove(selected.id))} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} onOpen={() => void openDocument(selected.id, false)} onReveal={() => void openDocument(selected.id, true)} />}
     </div>
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))} onClose={closeHistory} />}

@@ -276,7 +276,8 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     <div className="inspector-title"><h2 ref={headingRef} tabIndex={-1}>{completed ? 'Filed document' : 'Review item'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close review"><Icon icon={X} /></button></div>
     {position && position.total > 0 && <div className="review-position">
       <span>{position.index ? `${position.index} of ${position.total} to decide` : `${position.total} to decide`}</span>
-      {onNext && <button type="button" className="link-button" onClick={onNext}>Next undecided<Icon icon={ChevronRight} /></button>}
+      {/* Its key is in the tooltip and read out with it; no badge here, where the line has no room for one. */}
+      {onNext && <button type="button" className="link-button" onClick={onNext} aria-keyshortcuts="Alt+N" title="Leave this one for now and go to the next still to decide (Alt+N)">Next undecided<Icon icon={ChevronRight} /></button>}
     </div>}
     {/*
       What to check comes first. It used to be the last thing in the panel,

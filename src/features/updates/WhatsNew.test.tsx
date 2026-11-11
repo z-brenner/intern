@@ -31,6 +31,7 @@ describe('update summary', () => {
     }
     fireEvent.keyDown(proceed, { key: 'Enter', ctrlKey: true });
     fireEvent.keyDown(proceed, { key: 'k', code: 'KeyK', altKey: true });
+    fireEvent.keyDown(proceed, { key: 'n', code: 'KeyN', altKey: true });
     expect(bridge.approve).not.toHaveBeenCalled();
     expect(bridge.keepOriginal).not.toHaveBeenCalled();
     expect(bridge.remove).not.toHaveBeenCalled();
