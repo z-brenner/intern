@@ -109,3 +109,91 @@ pub(crate) fn completion_reply(finish_reason: &str, content: &str) -> Vec<u8> {
         &body.to_string(),
     )
 }
+
+/// One request a [`RoutedServer`] answered.
+#[derive(Clone, Debug)]
+pub(crate) struct RoutedRequest {
+    pub(crate) method: String,
+    /// The path with its query, as the request line gives it.
+    pub(crate) path: String,
+    pub(crate) authorization: Option<String>,
+    pub(crate) body: String,
+}
+
+/// A loopback server that answers each request with what `route` returns
+/// for it - a status code and a JSON body - and keeps every request.
+pub(crate) struct RoutedServer {
+    pub(crate) address: SocketAddr,
+    requests: Arc<std::sync::Mutex<Vec<RoutedRequest>>>,
+}
+
+impl RoutedServer {
+    /// The requests answered so far, in order, apart from `GET /props`.
+    pub(crate) fn requests(&self) -> Vec<RoutedRequest> {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| request.path != "/props")
+            .cloned()
+            .collect()
+    }
+}
+
+pub(crate) fn routed_server(
+    route: impl Fn(&RoutedRequest) -> (u16, String) + Send + 'static,
+) -> RoutedServer {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = Arc::clone(&requests);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            if reader.read_line(&mut request_line).is_err() {
+                continue;
+            }
+            let mut parts = request_line.split_whitespace();
+            let method = parts.next().unwrap_or_default().to_owned();
+            let path = parts.next().unwrap_or_default().to_owned();
+            let mut length = 0_usize;
+            let mut authorization = None;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_err() || line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                let lower = line.to_ascii_lowercase();
+                if let Some(value) = lower.strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+                if lower.starts_with("authorization:") {
+                    authorization = Some(line["authorization:".len()..].trim().to_owned());
+                }
+            }
+            let mut body = vec![0_u8; length];
+            let _ = reader.read_exact(&mut body);
+            let request = RoutedRequest {
+                method,
+                path,
+                authorization,
+                body: String::from_utf8_lossy(&body).into_owned(),
+            };
+            let (status, reply) = route(&request);
+            kept.lock().unwrap().push(request);
+            let status = match status {
+                200 => "200 OK".to_owned(),
+                other => format!("{other} Error"),
+            };
+            let _ = stream.write_all(&http_reply(
+                &status,
+                &[("Content-Type", "application/json")],
+                &reply,
+            ));
+            let _ = stream.flush();
+        }
+    });
+    RoutedServer { address, requests }
+}
