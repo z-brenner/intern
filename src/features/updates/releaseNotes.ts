@@ -5,6 +5,10 @@ export const releaseNotes: readonly ReleaseNotes[] = [
   {
     version: '0.1.0-alpha.17',
     changes: [
+      'The accurate model needs about 2.6 GB less memory and reads documents faster on most processors.',
+      'The first document after Intern starts is read sooner: the model’s instructions are kept between starts.',
+      'Fewer wrong names are filed without your check: a name is filed on its own only when the model is surer of it, so more documents wait for a quick look.',
+      'Court filings, invoices, letters and emails are named right a little more often.',
       'Evidence in review now says when it is the document’s own lines, and which model read the document.',
       'The “model unsure” reason says what to check, and no longer contradicts the confidence shown beside it.',
       'Analysis details stay open or closed as you left them while you move through review.',
