@@ -541,6 +541,28 @@ describe('review actions', () => {
     await waitFor(() => expect(queueCell('Lease Agreement - 123 Main St.pdf')).toHaveFocus());
   });
 
+  // The menu is drawn only while the item can be kept. One that stopped
+  // being keepable under an open menu - a refresh showing it read again -
+  // took the menu off screen and left it open: the next Escape closed
+  // nothing, and it took a second to close the drawer.
+  it('closes the drawer at the first Escape once the More menu has gone with the item\'s actions', () => {
+    const calls = { onClose: vi.fn(), onApprove: vi.fn(), onKeep: vi.fn(), onCancel: vi.fn(), onRetry: vi.fn(), onReanalyze: vi.fn(), onRemove: vi.fn(), onUndo: vi.fn(), onOpen: vi.fn(), onReveal: vi.fn() };
+    const lease: QueueItem = { id: 'lease', originalFilename: 'scan.pdf', status: 'review', proposedFilename: '2024-03-01 Lease.pdf', description: 'A lease.', confidence: 0.8, proposalRevision: '1', reason: 'Low confidence.', errorCode: 'LOW_CONFIDENCE' };
+    const view = render(<ReviewInspector item={lease} drawer {...calls} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More review actions' }));
+    expect(screen.getByRole('group', { name: 'More review actions' })).toBeInTheDocument();
+
+    view.rerender(<ReviewInspector item={{ ...lease, status: 'processing', stage: 'naming', reason: undefined, errorCode: undefined }} drawer {...calls} />);
+    expect(screen.queryByRole('group', { name: 'More review actions' })).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('heading', { name: 'Review item' }), { key: 'Escape' });
+    expect(calls.onClose).toHaveBeenCalledOnce();
+
+    // Back in review, the menu stays closed until it is opened again.
+    view.rerender(<ReviewInspector item={lease} drawer {...calls} />);
+    expect(screen.getByRole('button', { name: 'More review actions' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('group', { name: 'More review actions' })).not.toBeInTheDocument();
+  });
+
   it('moves focus to a visible queue control when refresh removes the invoking row', async () => {
     const bridge = createInMemoryBridge();
     render(<App bridge={bridge} />);

@@ -152,6 +152,11 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     setDraft(kept.get(draftFor) ?? { for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false });
     setError(''); setMoreOpen(false); setConfirmingRemove(false);
   }
+  // The More menu is drawn only beside Keep original. An item that can no
+  // longer be kept - a refresh showing it being read again - took the menu
+  // off screen and left it open, and the next Escape closed that unseen
+  // menu instead of the drawer. It closes with what it belonged to.
+  if (moreOpen && !actions.keep) setMoreOpen(false);
   const { stem, description } = draft;
   const setStem = (value: string) => setDraft((current) => ({ ...current, stem: value, edited: true }));
   const setDescription = (value: string) => setDraft((current) => ({ ...current, description: value, edited: true }));
