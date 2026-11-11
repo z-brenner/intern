@@ -6434,26 +6434,16 @@ const VERSUS_WORDS: &[&str] = &["v", "vs", "versus", "against"];
 /// Harbor Marine Supply, LLC") and one it labels a defendant, respondent
 /// or appellee ("Tavistock Boatworks, Inc., Defendant"), in a document
 /// that sets the case out as "A v. B" under a forum's heading on its first
-/// page ("SUPERIOR COURT OF THE STATE OF WASHINGTON"). A document that only
-/// mentions a case - a law firm's invoice for the matter - has no such
-/// heading.
+/// page ("SUPERIOR COURT OF THE STATE OF WASHINGTON"), wherever the heading
+/// stands there ([`caption_units`]). A document that only mentions a case -
+/// a law firm's invoice for the matter - has no such heading.
 fn caption_sides(
     scope: &ValidationScope<'_>,
     context: &ScopeView,
     cast: &[CastMember],
 ) -> Option<(usize, usize)> {
-    let first_page = scope.context_units().map(|unit| unit.page).min()?;
-    let headed = scope
-        .context_units()
-        .filter(|unit| unit.page == first_page)
-        .take(8)
-        .any(|unit| {
-            let text = normalize_loosely(&unit.text);
-            FORUM_WORDS
-                .iter()
-                .any(|word| !whole_positions(&text, word).is_empty())
-        });
-    if !headed {
+    let caption = caption_units(scope);
+    if caption.is_empty() {
         return None;
     }
     // A caption laid out as a table keeps its labels in cells of their
@@ -6492,7 +6482,7 @@ fn caption_sides(
         .position(|party| labeled(&party.name, ANSWERING_SIDE));
     match (bringing, answering) {
         (Some(bringing), Some(answering)) if bringing != answering => Some((bringing, answering)),
-        _ => caption_block_sides(scope, first_page, cast),
+        _ => caption_block_sides(&caption, cast),
     }
 }
 
@@ -6503,12 +6493,8 @@ fn caption_sides(
 /// THEFLYONTHEWALL.COM, INC., Defendant."), and the parties named after it
 /// down to theirs - a label in the plural too, and the caption laid out as
 /// a table. Each side is the first of the cast the caption names on it.
-fn caption_block_sides(
-    scope: &ValidationScope<'_>,
-    first_page: usize,
-    cast: &[CastMember],
-) -> Option<(usize, usize)> {
-    let text = caption_text(scope, first_page);
+fn caption_block_sides(caption: &[&EvidenceUnit], cast: &[CastMember]) -> Option<(usize, usize)> {
+    let text = caption_text(caption);
     // Where any of `words` stands in the caption, singular or plural.
     let positions = |words: &[&str], from: usize, to: usize| {
         words
@@ -6559,14 +6545,67 @@ fn caption_block_sides(
 /// How far after "v." a caption's answering side and its label can run.
 const CAPTION_REACH: usize = 400;
 
-/// The head of the first page as a caption is read from it: its first
-/// units' text, loosely normalized, in one line, a table's cell marks
-/// left out.
-fn caption_text(scope: &ValidationScope<'_>, first_page: usize) -> String {
-    scope
-        .context_units()
-        .filter(|unit| unit.page == first_page)
-        .take(12)
+/// How many of the first page's opening units name a forum as its heading
+/// however they are set: a filing stamp over the court's name, a form's
+/// title that names its court.
+const FORUM_HEAD_UNITS: usize = 8;
+
+/// How far down its first page a court document's forum heading can
+/// stand, in units, when it is set as a heading: a pleading opens with
+/// its counsel's block - their names, firm, address and telephone,
+/// "Attorneys for Defendants" - and the court's name heads the caption
+/// under it.
+const FORUM_HEADING_REACH: usize = 20;
+
+/// How many units a caption runs for, from its forum's heading down.
+const CAPTION_UNITS: usize = 12;
+
+/// The units a court document's caption is read from: the first page's,
+/// from its forum's heading for as far as a caption runs. The heading is
+/// the first of the page's opening units that names a court, a tribunal
+/// or an arbitration, or, under a block that fills those, the first
+/// that names one on a line in capitals ("UNITED STATES DISTRICT COURT"):
+/// counsel's block above the heading is no part of the caption and takes
+/// none of its room, while a sentence further down that mentions a court
+/// heads nothing. Empty when no forum heads the page.
+fn caption_units<'a>(scope: &ValidationScope<'a>) -> Vec<&'a EvidenceUnit> {
+    let Some(first_page) = scope.context_units().map(|unit| unit.page).min() else {
+        return Vec::new();
+    };
+    let page = || {
+        scope
+            .context_units()
+            .filter(move |unit| unit.page == first_page)
+    };
+    let names_forum = |text: &str| {
+        let text = normalize_loosely(text);
+        FORUM_WORDS
+            .iter()
+            .any(|word| !whole_positions(&text, word).is_empty())
+    };
+    let heading = page()
+        .take(FORUM_HEADING_REACH)
+        .enumerate()
+        .position(|(at, unit)| {
+            if at < FORUM_HEAD_UNITS {
+                names_forum(&unit.text)
+            } else {
+                unit.text
+                    .lines()
+                    .any(|line| in_capitals(line) && names_forum(line))
+            }
+        });
+    match heading {
+        Some(heading) => page().skip(heading).take(CAPTION_UNITS).collect(),
+        None => Vec::new(),
+    }
+}
+
+/// A caption's units as its sides are read from them: their text, loosely
+/// normalized, in one line, a table's cell marks left out.
+fn caption_text(caption: &[&EvidenceUnit]) -> String {
+    caption
+        .iter()
         .map(|unit| normalize_loosely(&unit.text.replace('|', " ")))
         .collect::<Vec<_>>()
         .join(" ")
@@ -6583,8 +6622,8 @@ fn caption_other_side<'a>(
     scope: &ValidationScope<'a>,
     parties: &[ValidatedParty],
 ) -> Option<(String, &'a EvidenceUnit, bool)> {
-    let first_page = scope.context_units().map(|unit| unit.page).min()?;
-    let text = caption_text(scope, first_page);
+    let caption = caption_units(scope);
+    let text = caption_text(&caption);
     let positions = |words: &[&str], from: usize, to: usize| {
         words
             .iter()
@@ -6622,35 +6661,31 @@ fn caption_other_side<'a>(
         (false, true) => (forum, bringing_label, true),
         _ => return None,
     };
-    scope
-        .context_units()
-        .filter(|unit| unit.page == first_page)
-        .take(12)
-        .find_map(|unit| {
-            unit.features.organizations.iter().find_map(|organization| {
-                let loose = normalize_loosely(organization);
-                // The court's own heading names no side: "SNOHOMISH
-                // COUNTY" under "SUPERIOR COURT" is the forum, not the
-                // plaintiff.
-                if names_a_forum(&loose) {
-                    return None;
-                }
-                whole_positions(&text, &loose)
-                    .into_iter()
-                    .any(|at| (from..to).contains(&at))
-                    .then(|| written_span(unit, organization))
-                    .flatten()
-                    // The index stops a name at its organization's word:
-                    // "First National Bank of Omaha" is read whole.
-                    .map(|span| {
-                        (
-                            without_sentence_stop(&with_of_phrase(unit, &span)),
-                            unit,
-                            bringing,
-                        )
-                    })
-            })
+    caption.into_iter().find_map(|unit| {
+        unit.features.organizations.iter().find_map(|organization| {
+            let loose = normalize_loosely(organization);
+            // The court's own heading names no side: "SNOHOMISH
+            // COUNTY" under "SUPERIOR COURT" is the forum, not the
+            // plaintiff.
+            if names_a_forum(&loose) {
+                return None;
+            }
+            whole_positions(&text, &loose)
+                .into_iter()
+                .any(|at| (from..to).contains(&at))
+                .then(|| written_span(unit, organization))
+                .flatten()
+                // The index stops a name at its organization's word:
+                // "First National Bank of Omaha" is read whole.
+                .map(|span| {
+                    (
+                        without_sentence_stop(&with_of_phrase(unit, &span)),
+                        unit,
+                        bringing,
+                    )
+                })
         })
+    })
 }
 
 /// Words a court's, a tribunal's or a jurisdiction's heading is made of.
@@ -12455,6 +12490,115 @@ Rickmansworth,
             outcome.proposal.parties[0]
                 .to_lowercase()
                 .contains("bramble"),
+            "{:?}",
+            outcome.proposal
+        );
+    }
+
+    /// A pleading opens with its counsel's block - names, firm, address,
+    /// telephone - and the court's heading stands under it, past where a
+    /// page's opening units end. The caption is read from the heading down,
+    /// so the block takes none of its room: a scanned notice of appeal as
+    /// the reader extracts it, the docket number and the title run into the
+    /// caption's lines. A sentence that far down which only mentions a
+    /// court and its case heads no caption.
+    #[test]
+    fn a_caption_under_counsels_block_is_read_from_its_forums_heading() {
+        const COUNSEL: &str = "Rowan D. Keeling (admitted pro hac vice) Charles L. Hartwell \
+(admitted pro hac vice)\n\n\
+| Keeling Cove & Hartwell P.C. | PLEDU.S. DC |\n\
+| One Pitcairn Place |\n\
+| 165 Township Line Rd. | OCT 13 2009 |\n\n\
+Jenkintown, PA 19046\n\n\
+(215) 555-0110\n\n\
+M: Y.\n\n\
+and Barry N. Gutterfield Gutterfield & Associates The Lincoln Building 60 East 42d Street, \
+46th Floor New York, NY 10165 Attorneys for Defendants\n\n";
+        const CAPTION: &str = "UNITED STATES DISTRICT COURT\n\n\
+SOUTHERN DISTRICT OF NEW YORK SENDAI MARINE INSURANCE COMPANY OF AMERICA, and SENDAI MARINE \
+INSURANCE,\n\n\
+INC. NO.: 07 CIV. 2735 (DC)\n\n\
+Plaintiffs, JUDGE CHIN\n\n\
+- against - NOTICE OF APPEAL\n\n\
+NORTHFOLK EASTERN RAILWAY COMPANY, NORTHFOLK EASTERN CORPORATION, and THE KANSAS PLAINS \
+RAILWAY COMPANY\n\n\
+Defendants. Notice is hereby given that defendants hereby appeal to the United States Court \
+of Appeals for the Second Circuit from the Judgment entered in this action.\n\n\
+Dated: October 13, 2009";
+        const LIEN: &str = "NOTICE OF CHARGING LIEN\n\n\
+Please take notice that the undersigned claim a lien on any recovery in the action pending in \
+the United States District Court for the Southern District of New York, in which Plaintiff \
+Sendai Marine Insurance Company of America proceeds against Defendant Northfolk Eastern \
+Railway Company.\n\n\
+Dated: October 13, 2009";
+        let sides = |title: &'static str, plaintiff: &'static str, defendant: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(title.into()),
+                type_evidence: vec![id_of(index, title)],
+                document_date: Some("2009-10-13".into()),
+                date_evidence: vec![id_of(index, "Dated")],
+                parties: vec![
+                    party(
+                        plaintiff,
+                        Some(PartyRole::Client),
+                        &[id_of(index, plaintiff)],
+                    ),
+                    party(
+                        defendant,
+                        Some(PartyRole::Client),
+                        &[id_of(index, defendant)],
+                    ),
+                ],
+                ..ModelFacts::default()
+            }
+        };
+        let (outcome, index) = facts_for(
+            &format!("{COUNSEL}{CAPTION}"),
+            sides(
+                "NOTICE OF APPEAL",
+                "SENDAI MARINE INSURANCE COMPANY OF AMERICA",
+                "NORTHFOLK EASTERN RAILWAY COMPANY",
+            ),
+        );
+        // The heading stands past the page's opening units.
+        let heading = index
+            .units()
+            .iter()
+            .position(|unit| unit.text.contains("DISTRICT COURT"))
+            .unwrap();
+        assert!(heading >= FORUM_HEAD_UNITS, "{heading}");
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::Between,
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec![
+                "SENDAI MARINE INSURANCE COMPANY OF AMERICA",
+                "NORTHFOLK EASTERN RAILWAY COMPANY"
+            ]
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // Under the same block, a notice that names the court and the
+        // sides of a case only in the sentence it gives is no document of
+        // the case.
+        let (outcome, _) = facts_for(
+            &format!("{COUNSEL}{LIEN}"),
+            sides(
+                "NOTICE OF CHARGING LIEN",
+                "Sendai Marine Insurance Company of America",
+                "Northfolk Eastern Railway Company",
+            ),
+        );
+        assert_ne!(
+            outcome.proposal.party_relation,
+            PartyRelation::Between,
             "{:?}",
             outcome.proposal
         );
