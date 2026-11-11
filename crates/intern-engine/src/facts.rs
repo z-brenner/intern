@@ -1805,6 +1805,23 @@ pub fn validate_facts_at(
     if class == DocumentClass::Issued && relation.parties.is_empty() {
         push(&mut reasons, ReviewReason::PartyMissing);
     }
+    // Any document left naming no one, though the reply named parties the
+    // document holds - each set aside as copied, as signing for another,
+    // or as staff of an organization no single line names (a memorandum's
+    // "FROM: Name, Acting Director, Office of ..." under a letterhead of
+    // two offices) - has lost the party its name is for, which a person
+    // must supply. A reason already raised about the parties says so.
+    if relation.parties.is_empty()
+        && !parties.is_empty()
+        && !reasons.iter().any(|reason| {
+            matches!(
+                reason,
+                ReviewReason::PartyUnsupported | ReviewReason::PartyMissing
+            )
+        })
+    {
+        push(&mut reasons, ReviewReason::PartyMissing);
+    }
 
     // The subject, the identifier and the key facts: every number and name
     // in them must be in what the model was shown, and the subject and a
@@ -11658,6 +11675,68 @@ engaged Alder Geosciences, Inc. to carry out the works described below.";
         );
         assert!(
             !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// real5-memo-03's shape: a memorandum under a letterhead of two
+    /// offices, whose reply named only the official on its "FROM:" line.
+    /// The official holds a post and signs for an organization, so is no
+    /// party of their own, and no single organization heads the page to
+    /// stand in: the name is left with no party, which waits for a person.
+    /// A reply that named no one leaves nothing missing: a memorandum may
+    /// be filed by its kind and date alone.
+    #[test]
+    fn a_name_left_with_no_party_the_reply_named_goes_to_review() {
+        const MEMO: &str = "EXECUTIVE OFFICE OF THE GOVERNOR\n\
+OFFICE OF BUDGET AND PLANNING\n\
+MERIDEN CITY, 20503\n\n\
+January 29, 2025\n\n\
+M-25-14\n\n\
+MEMORANDUM FOR HEADS OF STATE DEPARTMENTS AND AGENCIES\n\n\
+FROM: Odalys B. Brandt, Acting Director, Office of Budget and Planning\n\n\
+SUBJECT: Rescission of M-25-13\n\n\
+Memorandum M-25-13 is rescinded. If you have questions about implementing it, please \
+contact your agency counsel.";
+        let reply = |named: bool| {
+            facts_for(MEMO, |index| ModelFacts {
+                document_type: Some("MEMORANDUM".into()),
+                type_evidence: vec![id_of(index, "MEMORANDUM FOR")],
+                document_date: Some("2025-01-29".into()),
+                date_evidence: vec![id_of(index, "January 29")],
+                parties: if named {
+                    vec![party(
+                        "Odalys B. Brandt",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "FROM:")],
+                    )]
+                } else {
+                    Vec::new()
+                },
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        let outcome = reply(true);
+        assert!(
+            outcome.proposal.parties.is_empty(),
+            "{:?}",
+            outcome.proposal
+        );
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyMissing),
+            "{:?}",
+            outcome.reasons
+        );
+        let outcome = reply(false);
+        assert!(
+            outcome.proposal.parties.is_empty(),
+            "{:?}",
+            outcome.proposal
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyMissing),
             "{:?}",
             outcome.reasons
         );
