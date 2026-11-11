@@ -1115,6 +1115,41 @@ pub fn validate_facts_at(
             }
         }
     }
+    // An email's header block says who sent it and to whom, in the
+    // domains of its "From:" and "To:" addresses: "@ups.com" to
+    // "@enron.com", "@dgs.ca.gov" to "@nfpa.org". A party whose name one
+    // side's domain spells, and the other's does not, is on that side,
+    // whatever the reply called it: the roles an email's body gives its
+    // parties - the "Contractor:" of the contract it attaches, the company
+    // a shipment was sent "at the request of" - are the matter's, not the
+    // email's.
+    if class == DocumentClass::Email
+        && let Some(sides) = EmailSides::of(scope)
+    {
+        for party in &mut parties {
+            if party.copied {
+                continue;
+            }
+            let Some((role, unit, line)) = sides.side_of(&party.name) else {
+                continue;
+            };
+            remember(
+                &Found {
+                    support: Support::Context,
+                    unit: Some(unit),
+                    line: Some(line.to_owned()),
+                    miscited: 0,
+                },
+                &mut references,
+            );
+            party.role = Some(role);
+            party.role_support = Support::Context;
+            party.document_role = Some(role);
+            if !party.evidence.contains(&unit.id) {
+                party.evidence.push(unit.id.clone());
+            }
+        }
+    }
     // So does a person the document names only by the post they hold for
     // it - "Beckett Halloran (President)", "Winemaker | Esme Varga",
     // "Examined by | Delphine Moncrieff, Associate Conservator", "/s/ Arlo
@@ -2669,6 +2704,146 @@ fn email_header<'a>(scope: &ValidationScope<'a>) -> Option<(&'a EvidenceUnit, St
         line.split_once(':')
             .is_some_and(|(label, _)| label.trim().eq_ignore_ascii_case("from"))
     })
+}
+
+/// Mail providers, whose domains name no organization: an address there
+/// says nothing of whom its holder writes for.
+const MAIL_PROVIDERS: &[&str] = &[
+    "gmail",
+    "googlemail",
+    "outlook",
+    "hotmail",
+    "live",
+    "msn",
+    "yahoo",
+    "ymail",
+    "aol",
+    "icloud",
+    "protonmail",
+    "proton",
+    "gmx",
+    "btinternet",
+    "comcast",
+    "verizon",
+];
+
+/// Labels of a domain that name a kind of site or a host, never whose it
+/// is: "com", "gov", "www", "mail".
+const DOMAIN_KINDS: &[&str] = &[
+    "com", "org", "net", "gov", "edu", "mil", "int", "info", "biz", "www", "mail", "email", "smtp",
+    "mx",
+];
+
+/// The fewest letters a domain's label or a name must share for the label
+/// to spell the name: two letters are a country's or a state's code.
+const DOMAIN_NAME_LETTERS: usize = 3;
+
+/// The labels of the domains a header line's addresses are at that can
+/// name an organization: "dgs" of "Betts, Bruce@DGS
+/// <Bruce.Betts@dgs.ca.gov>", "enron" of "<susan.bailey@enron.com>",
+/// "icc-es" and "iccsafe" of a line with both. The last label names no one
+/// ("com", "uk"), nor does a kind of site, a two-letter code or a mail
+/// provider; an address has a dot in its domain, which a display name's
+/// "Bruce@DGS" has not.
+fn address_domain_labels(line: &str) -> Vec<String> {
+    let mut labels = Vec::new();
+    for token in line.split(|character: char| {
+        character.is_whitespace() || matches!(character, '<' | '>' | '(' | ')' | ',' | ';' | '"')
+    }) {
+        let Some((mailbox, domain)) = token.rsplit_once('@') else {
+            continue;
+        };
+        let domain = domain
+            .trim_matches(|character: char| !character.is_alphanumeric())
+            .to_lowercase();
+        let parts = domain.split('.').collect::<Vec<_>>();
+        if mailbox.is_empty() || parts.len() < 2 {
+            continue;
+        }
+        for label in &parts[..parts.len() - 1] {
+            if label.chars().count() >= DOMAIN_NAME_LETTERS
+                && !DOMAIN_KINDS.contains(label)
+                && !MAIL_PROVIDERS.contains(label)
+                && !labels.iter().any(|known| known == label)
+            {
+                labels.push((*label).to_owned());
+            }
+        }
+    }
+    labels
+}
+
+/// Whether a domain's label spells an organization's name: the name run
+/// together ("nfpa" for "NFPA", "c-spanarchives" for "C-SPAN Archives"),
+/// its first word ("enron" for "ENRON CORP", "lambeth" for "Lambeth
+/// Council"), the name with more after it ("hdrinc" for "HDR", "iccsafe"
+/// for "ICC"), or its initials ("dgs" for "Department of General
+/// Services"). Fewer than three letters spell nothing.
+fn domain_spells(label: &str, name: &str) -> bool {
+    let label = label
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect::<String>();
+    let mut name_words = words(name);
+    if name_words.first().is_some_and(|word| word == "the") {
+        name_words.remove(0);
+    }
+    let Some(first) = name_words.first() else {
+        return false;
+    };
+    let long_enough = |text: &str| text.chars().count() >= DOMAIN_NAME_LETTERS;
+    let whole = name_words.concat();
+    let initials = name_words
+        .iter()
+        .filter(|word| !STOPWORDS.contains(&word.as_str()))
+        .filter_map(|word| word.chars().next())
+        .collect::<String>();
+    long_enough(&label)
+        && ((long_enough(&whole) && label.starts_with(&whole))
+            || (long_enough(first) && label == *first)
+            || (name_words.len() > 1 && long_enough(&initials) && label == initials))
+}
+
+/// The two sides of an email as its header block's addresses give them:
+/// the organizations its "From:" and its "To:" domains can name, and those
+/// two lines with their units.
+struct EmailSides<'a> {
+    from: (Vec<String>, &'a EvidenceUnit, String),
+    to: (Vec<String>, &'a EvidenceUnit, String),
+}
+
+impl<'a> EmailSides<'a> {
+    /// `None` without a header block ([`email_header_block`]) that holds
+    /// both lines.
+    fn of(scope: &ValidationScope<'a>) -> Option<Self> {
+        let block = email_header_block(scope)?;
+        let field = |wanted: &str| {
+            block.iter().find_map(|(unit, line)| {
+                let (label, value) = line.split_once(':')?;
+                label
+                    .trim()
+                    .eq_ignore_ascii_case(wanted)
+                    .then(|| (address_domain_labels(value), *unit, line.clone()))
+            })
+        };
+        Some(Self {
+            from: field("from")?,
+            to: field("to")?,
+        })
+    }
+
+    /// The side `name` is on - the sender's when a "From:" domain spells
+    /// it, the recipient's when a "To:" domain does - with the header line
+    /// that shows it. `None` when neither does, or both do: a message
+    /// within one organization says nothing of sides.
+    fn side_of(&self, name: &str) -> Option<(PartyRole, &'a EvidenceUnit, &str)> {
+        let spelled = |labels: &[String]| labels.iter().any(|label| domain_spells(label, name));
+        match (spelled(&self.from.0), spelled(&self.to.0)) {
+            (true, false) => Some((PartyRole::Sender, self.from.1, self.from.2.as_str())),
+            (false, true) => Some((PartyRole::Recipient, self.to.1, self.to.2.as_str())),
+            _ => None,
+        }
+    }
 }
 
 /// The context's title units: the units at the head of its first page and
@@ -11131,6 +11306,162 @@ From: Saul Ravenscroft\nSent: Monday, March 9, 2026\nTo: Signe Holmqvist\nSubjec
             ..ModelFacts::default()
         });
         assert!(outcome.reasons.contains(&ReviewReason::TypeUnsupported));
+    }
+
+    /// An email's header block says who sent it and to whom in the domains
+    /// of its addresses. The reply may read the sides from the body - the
+    /// company a carrier's notice was sent "at the request of", the
+    /// "Contractor:" of a contract the message attaches - and the header
+    /// puts them right. A message within one organization, and a name no
+    /// domain spells, are left as the reply read them.
+    #[test]
+    fn an_emails_header_addresses_say_who_sent_it_and_to_whom() {
+        // A carrier's notification as the worker extracts an .eml file:
+        // the reply called the customer's company the sender.
+        let (outcome, _) = facts_for(
+            "From: <pkginfo@pax.com>\nTo: <susan.bailey@kestrel.com>\nDate: Wed, 20 Mar 2002 \
+             15:48:51 -0800 (PST)\nSubject: PAX Ship Notification, 1Z7261100192688747\n\n\
+             ***Do not reply to this email.  PAX and KESTREL CORP will not receive your reply.\n\n\
+             At the request of KESTREL CORP, this notice confirms the following shipment has \
+             been sent.",
+            |index| ModelFacts {
+                document_type: Some("email".into()),
+                type_evidence: vec![id_of(index, "From: <pkginfo")],
+                document_date: Some("2002-03-20".into()),
+                date_evidence: vec![id_of(index, "Date: Wed")],
+                parties: vec![party(
+                    "KESTREL CORP",
+                    Some(PartyRole::Sender),
+                    &[id_of(index, "At the request")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::To,
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(outcome.proposal.parties.len(), 1);
+        assert!(!outcome.reasons.contains(&ReviewReason::PartyUnsupported));
+        // An Outlook message: display names before the addresses, a "Cc:"
+        // line, and the body's roles for the contract it is about.
+        const MESSAGE: &str = "From: Betts, Bruce@DHS <Bruce.Betts@dhs.ca.gov>\n\
+To: drose@qrpa.org <drose@qrpa.org>\n\
+Cc: de la Motte, Leann@DHS <Leann.delaMotte@dhs.ca.gov>\n\
+Date: Tue, 5 Apr 2016 14:42:09 +0000\n\
+Subject: Harbour Code Publication\n\n\
+Good Morning Debra,\n\n\
+I am the Acquisition Analyst assigned to assist with the execution of Contract #3188107 \
+for the Department of Harbour Services.\n\n\
+Please complete and return the following documents to me via email.\n\n\
+Contractor: QRPA";
+        let sides = |index: &EvidenceIndex| ModelFacts {
+            document_type: Some("email".into()),
+            type_evidence: vec![id_of(index, "From: Betts")],
+            document_date: Some("2016-04-05".into()),
+            date_evidence: vec![id_of(index, "Date: Tue")],
+            parties: vec![
+                party(
+                    "QRPA",
+                    Some(PartyRole::Buyer),
+                    &[id_of(index, "Contractor: QRPA")],
+                ),
+                party(
+                    "Department of Harbour Services",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "I am the Acquisition")],
+                ),
+            ],
+            ..ModelFacts::default()
+        };
+        let (outcome, _) = facts_for(MESSAGE, sides);
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::From,
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Department of Harbour Services"]
+        );
+        let roles = |outcome: &ValidationOutcome| {
+            outcome
+                .facts
+                .as_ref()
+                .expect("facts")
+                .parties
+                .iter()
+                .map(|party| (party.name.clone(), party.document_role))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            roles(&outcome),
+            vec![
+                ("QRPA".to_owned(), Some(PartyRole::Recipient)),
+                (
+                    "Department of Harbour Services".to_owned(),
+                    Some(PartyRole::Sender)
+                ),
+            ]
+        );
+        // The same message sent within the department: both domains spell
+        // "DHS", so the header gives it no side.
+        let (outcome, _) = facts_for(
+            &MESSAGE
+                .replace("drose@qrpa.org", "drose@dhs.ca.gov")
+                .replace("Department of Harbour Services", "DHS"),
+            |index| ModelFacts {
+                document_type: Some("email".into()),
+                type_evidence: vec![id_of(index, "From: Betts")],
+                parties: vec![party(
+                    "DHS",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "I am the Acquisition")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(roles(&outcome), vec![("DHS".to_owned(), None)]);
+        for (line, labels) in [
+            ("Betts, Bruce@DHS <Bruce.Betts@dhs.ca.gov>", vec!["dhs"]),
+            ("<susan.bailey@kestrel.com>", vec!["kestrel"]),
+            (
+                "Mark Johnson (mjohnson@icc-es.org) <mjohnson@icc-es.org>, Dave Walls \
+                 <dwalls@iccsafe.org>",
+                vec!["icc-es", "iccsafe"],
+            ),
+            (
+                "Jillian Holford <Jillian.Holford@royalquay.gov.uk>",
+                vec!["royalquay"],
+            ),
+            // A mail provider's domain, a display name's "@", no address.
+            ("Mara Quill <mara.quill@gmail.com>", vec![]),
+            ("Betts, Bruce@DHS", vec![]),
+            ("Saul Ravenscroft", vec![]),
+        ] {
+            assert_eq!(address_domain_labels(line), labels, "{line}");
+        }
+        for (label, name, spelled) in [
+            ("kestrel", "KESTREL CORP", true),
+            ("qrpa", "QRPA", true),
+            ("dhs", "Department of Harbour Services", true),
+            ("hdrinc", "HDR", true),
+            ("icc-es", "ICC", true),
+            ("c-spanarchives", "C-SPAN Archives", true),
+            ("lambeth", "The Lambeth Council", true),
+            // A first word the label only starts with, initials of one
+            // word, two letters, another organization.
+            ("generalservices", "General Dynamics", false),
+            ("kestrel", "Kestrelbank Outfitters", false),
+            ("dhs", "Dhsworth", false),
+            ("ca", "CA", false),
+            ("pax", "KESTREL CORP", false),
+        ] {
+            assert_eq!(domain_spells(label, name), spelled, "{label} {name}");
+        }
     }
 
     #[test]
