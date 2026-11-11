@@ -1245,6 +1245,262 @@ fn settling_rescans_run_unasked_and_reuse_held_verdicts() {
     });
 }
 
+/// A rig whose folder is looked at between scans, as a folder on this
+/// computer's own disk is: the scans themselves still only come when `step`
+/// asks, so a scan nobody asked for is one the look called for.
+fn looking_rig(backlog_files: &[&str], configure: impl FnOnce(&mut IntakeConfig)) -> Rig {
+    Rig::start_with(
+        identity("here-machine", "here"),
+        false,
+        backlog_files,
+        |config| {
+            config.min_quiet_seconds = DEFAULT_MIN_QUIET_SECONDS;
+            config.arrival_probe_interval = Some(Duration::from_millis(10));
+            config.arrival_burst_window = Duration::from_millis(10);
+            configure(config);
+        },
+    )
+}
+
+/// With nothing arriving the next scan is a whole interval away, and a
+/// dropped document's quiet time did not start until that scan came: ten
+/// seconds lost on average and twenty at worst, before the ten it has to
+/// keep still. A folder on this computer is listed every few seconds in
+/// between, and a file turning up brings the scan forward. The quiet time is
+/// the same ten seconds, counted from that sight.
+#[test]
+fn a_file_dropped_between_scans_is_seen_within_moments_and_claimed_after_its_quiet_time() {
+    // As it was, and still is wherever the folder is not looked at.
+    let unlooked = Rig::start_with(identity("here-machine", "here"), false, &[], |config| {
+        config.min_quiet_seconds = DEFAULT_MIN_QUIET_SECONDS;
+    });
+    unlooked.step();
+    unlooked.write("dropped.pdf", b"a scanned page");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        unlooked.watcher.status().arriving,
+        0,
+        "nothing sees it until the next scan"
+    );
+
+    let rig = looking_rig(&[], |_| {});
+    rig.step();
+    let path = rig.write("dropped.pdf", b"a scanned page");
+    // Nobody asks for this scan.
+    wait_until("the dropped file to be seen", || {
+        rig.watcher.status().arriving == 1
+    });
+    assert!(rig.host.enqueued().is_empty());
+
+    rig.step_by(DEFAULT_MIN_QUIET_SECONDS - 1);
+    assert!(
+        rig.host.enqueued().is_empty(),
+        "seen sooner, and quiet no less long"
+    );
+    rig.step_by(1);
+    assert_eq!(rig.host.enqueued(), vec![path]);
+}
+
+/// Seeing a file sooner must never mean taking it sooner than it is whole.
+/// One noticed while it is still being written waits out its quiet time
+/// from the last change a scan saw, exactly as one a scan happened upon
+/// does, and is claimed as the finished file.
+#[test]
+fn a_file_noticed_while_it_is_still_being_written_is_not_claimed_early() {
+    let rig = looking_rig(&[], |_| {});
+    rig.step();
+    let path = rig.write("uploading.pdf", b"the first pages");
+    wait_until("the file to be seen", || rig.watcher.status().arriving == 1);
+
+    // Six seconds on, the writer adds the rest.
+    rig.clock.advance(5);
+    let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+    writeln!(file, "and the rest of the upload").unwrap();
+    drop(file);
+    rig.step_by(1);
+    rig.step_by(DEFAULT_MIN_QUIET_SECONDS - 1);
+    assert!(
+        rig.host.enqueued().is_empty(),
+        "fifteen seconds since it was first seen, but nine since it changed"
+    );
+    rig.step_by(1);
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+    let key = facts_for(rig.temp.path(), "uploading.pdf").key();
+    assert_eq!(
+        rig.read_claim(&key).size,
+        fs::metadata(&path).unwrap().len(),
+        "claimed as the finished file"
+    );
+}
+
+/// Documents that arrive together are first seen by one scan, so their
+/// quiet times end together and one scan claims them, in the order of
+/// their names: what happens when a scan comes upon a batch, and still what
+/// happens when the look does.
+#[test]
+fn files_dropped_together_are_first_seen_by_one_scan_and_claimed_by_one() {
+    let rig = looking_rig(&[], |_| {});
+    rig.step();
+    // The whole batch lands in one move. It is put together where neither
+    // a scan nor the look goes.
+    let staging = rig.temp.path().join(".staging");
+    fs::create_dir_all(staging.join("batch")).unwrap();
+    for name in ["c.pdf", "a.pdf", "b.pdf"] {
+        fs::write(staging.join("batch").join(name), format!("document {name}")).unwrap();
+    }
+    let batch = rig.temp.path().join("batch");
+    fs::rename(staging.join("batch"), &batch).unwrap();
+
+    wait_until("the batch to be seen", || {
+        rig.watcher.status().arriving == 3
+    });
+    assert!(
+        rig.host
+            .statuses
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|reported| reported.arriving == 0 || reported.arriving == 3),
+        "never seen in part"
+    );
+    rig.step_by(DEFAULT_MIN_QUIET_SECONDS - 1);
+    assert!(rig.host.enqueued().is_empty());
+    rig.step_by(1);
+    assert_eq!(
+        rig.host.enqueued(),
+        vec![
+            batch.join("a.pdf"),
+            batch.join("b.pdf"),
+            batch.join("c.pdf")
+        ]
+    );
+}
+
+/// On a folder where nothing happens the look costs its listing and nothing
+/// more: no scan runs that would not have run anyway, so nothing is asked of
+/// the host, nothing is reported, and nothing in `.intern` is touched. An
+/// empty file and one of a type Intern does not read are part of nothing
+/// happening.
+#[test]
+fn a_folder_where_nothing_happens_is_listed_between_scans_and_nothing_more() {
+    let rig = looking_rig(&[], |config| {
+        config.min_quiet_seconds = 1;
+        config.arrival_probe_interval = Some(Duration::from_millis(5));
+    });
+    rig.step();
+    let claimed = rig.write("claimed.pdf", b"a document in the queue");
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![claimed]);
+    rig.write("empty.pdf", b"");
+    rig.write("notes.xyz", b"not a document Intern reads");
+    // This scan takes everything now in the folder as known.
+    rig.step();
+
+    // Every scan asks the host again about the document this machine holds,
+    // so the count of those questions is a count of scans.
+    let scans = rig.host.admission_calls();
+    let reports = rig.host.statuses.lock().unwrap().len();
+    let key = facts_for(rig.temp.path(), "claimed.pdf").key();
+    let claim = fs::read(rig.claim_file(&key)).unwrap();
+    let last_scan_at = rig.watcher.status().last_scan_at;
+    // Dozens of looks.
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(rig.host.admission_calls(), scans, "no scan ran");
+    assert_eq!(rig.host.statuses.lock().unwrap().len(), reports);
+    assert_eq!(rig.watcher.status().last_scan_at, last_scan_at);
+    assert_eq!(fs::read(rig.claim_file(&key)).unwrap(), claim);
+
+    // And the looks were being taken all that while: a file turning up is
+    // seen without anyone asking.
+    rig.write("late.pdf", b"a document that turns up");
+    wait_until("the late file to be seen", || {
+        rig.watcher.status().arriving == 1
+    });
+    assert!(rig.host.admission_calls() > scans);
+}
+
+/// The scan a look calls for is no full scan. It takes the verdict holding
+/// each held document from the last full one, as a rescan while files
+/// settle does - for a shared folder each of those checks is a request to
+/// Microsoft - and asks only about the document that turned up, once it has
+/// settled. The full scans go on asking, on their own interval.
+#[test]
+fn a_scan_the_look_calls_for_asks_nothing_again_about_held_documents() {
+    let rig = looking_rig(&["held.pdf"], |config| {
+        config.settling_interval = Duration::from_millis(20);
+    });
+    *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::Other);
+    rig.step_by(DEFAULT_MIN_QUIET_SECONDS);
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+    assert_eq!(rig.host.admission_calls(), 1);
+    // From here on the host would admit whatever it was asked about.
+    *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::LocalOnly);
+
+    let path = rig.write("dropped.pdf", b"a scanned page");
+    wait_until("the dropped file to be seen", || {
+        rig.watcher.status().arriving == 1
+    });
+    assert_eq!(
+        rig.host.admission_calls(),
+        1,
+        "the look's scan asked nothing"
+    );
+    // Its quiet time passes, and the loop, rescanning while it settles,
+    // claims it.
+    rig.clock.advance(DEFAULT_MIN_QUIET_SECONDS);
+    wait_until("the dropped file to be claimed", || {
+        rig.host.enqueued() == vec![path.clone()] && rig.watcher.status().arriving == 0
+    });
+    assert_eq!(
+        rig.host.admission_calls(),
+        2,
+        "asked about the new document, once, and about nothing else"
+    );
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+
+    // A full scan asks about the held document again, as it always did.
+    rig.step();
+    assert_eq!(rig.host.admission_calls(), 4);
+}
+
+/// The rescans while a file settles are not listed for the look, which is
+/// off while anything arrives; the scan that ends the settling run is, and
+/// the looks after it compare with what it left. A file that went on
+/// growing after the look first saw it calls for no further scan once it
+/// has been claimed, and a file that turns up after that is still seen
+/// without anyone asking.
+#[test]
+fn the_look_after_a_settling_run_compares_with_what_its_last_scan_left() {
+    let rig = looking_rig(&[], |config| {
+        config.arrival_probe_interval = Some(Duration::from_millis(5));
+    });
+    rig.step();
+    let path = rig.write("growing.pdf", b"the first pages");
+    wait_until("the file to be seen", || rig.watcher.status().arriving == 1);
+    // It goes on growing; the rescans while it settles see that.
+    let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+    writeln!(file, "and the rest of the upload").unwrap();
+    drop(file);
+    rig.step_by(1);
+    assert_eq!(rig.watcher.status().arriving, 1);
+    rig.step_by(DEFAULT_MIN_QUIET_SECONDS);
+    assert_eq!(rig.host.enqueued(), vec![path]);
+    assert_eq!(rig.watcher.status().arriving, 0);
+
+    // Every scan asks the host again about the document this machine
+    // holds, so the count of those questions is a count of scans.
+    let scans = rig.host.admission_calls();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(rig.host.admission_calls(), scans, "no scan ran");
+
+    rig.write("late.pdf", b"a document that turns up");
+    wait_until("the late file to be seen", || {
+        rig.watcher.status().arriving == 1
+    });
+    assert!(rig.host.admission_calls() > scans);
+}
+
 /// Settings shows what is on its way, and the loop rescans quickly while
 /// anything is. Files that were already there when watching started are not
 /// arriving.

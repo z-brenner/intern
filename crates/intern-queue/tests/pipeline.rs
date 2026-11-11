@@ -2596,6 +2596,54 @@ fn lost_processing_lease_cancels_worker_and_pauses_before_more_work() {
     assert_eq!(worker.cancellations.load(Ordering::SeqCst), 1);
 }
 
+/// The deadline is the one clock a slow reading runs against, and it ends
+/// the reading once. The request its cancel interrupts comes back the way a
+/// server restarted under a request makes it come back: as a failed request,
+/// which at any other time is answered by restarting the server and sending
+/// the request again. Not here. Nothing is recovered and nothing is sent a
+/// second time - a request that has just used the whole deadline would only
+/// use it again - and the document waits in doubt over a time-out, counted
+/// as one, with the queue still running. This pins what the queue already
+/// did; what keeps the client's own limit from ending a slow request before
+/// the deadline does is the check on `client::REQUEST_TIMEOUT` beside
+/// `MODEL_TIMEOUT_SECONDS`, which fails the build.
+#[test]
+fn a_request_that_misses_the_deadline_is_canceled_once_and_not_sent_again() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "slow.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(
+        "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.",
+    ))]));
+    let model = Arc::new(InterruptedModel {
+        hold_first: true,
+        cancel_releases: true,
+        ..InterruptedModel::default()
+    });
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&path, "slow-hash");
+    let pipeline = Pipeline::open(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        model.clone(),
+        files,
+        Arc::new(RecordingEvents::default()),
+        SettingsStore::new(temp.path().join("settings.json")),
+    )
+    .unwrap()
+    .with_model_timeout(Duration::from_millis(20));
+    pipeline.enqueue_files(&[path]).unwrap();
+
+    pipeline.run_next().unwrap();
+
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(model.cancels.load(Ordering::SeqCst), 1);
+    assert_eq!(model.recoveries.load(Ordering::SeqCst), 0);
+    let item = pipeline.list().unwrap().pop().unwrap();
+    assert_eq!(item.status, QueueStatus::Queued);
+    assert_eq!(item.doubt.as_deref(), Some("timeout"));
+    assert!(!pipeline.is_paused());
+}
+
 /// A local model whose first request ends the way the real one's did when a
 /// cancel restarted the server under it: as a retryable server failure, not
 /// as a cancel. It counts what the queue then asks of it.

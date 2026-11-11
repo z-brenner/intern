@@ -810,6 +810,10 @@ struct RuntimeModel {
     /// starts the local server, and a start already under way discards what
     /// it launched.
     held: AtomicBool,
+    /// Set while a document's read runs the self-test of the model it just
+    /// loaded ([`RuntimeModel::self_test_for`]), which a cancel ends by
+    /// stopping the server under it rather than wait for `lifecycle`.
+    self_testing: AtomicBool,
     /// Each tier's model as this session last checked it.
     checks: Mutex<std::collections::BTreeMap<ModelTier, TierCheck>>,
     /// Serializes the stamp's read-modify-write: the setup thread and the
@@ -885,6 +889,7 @@ impl RuntimeModel {
             generation: AtomicU64::new(0),
             failed_generation: AtomicU64::new(0),
             held: AtomicBool::new(false),
+            self_testing: AtomicBool::new(false),
             checks: Mutex::new(std::collections::BTreeMap::new()),
             stamp_lock: Mutex::new(()),
             last_tier: Mutex::new(None),
@@ -1774,15 +1779,26 @@ impl RuntimeModel {
                 return Ok(());
             }
             let before = self.file_state(tier);
-            match self.semantic_self_test(&CancellationToken::new()) {
-                Ok(()) => {
+            match self.self_test_for(asked) {
+                // Canceled while the model loaded: it is not tested for a
+                // document no longer being read, and not left running
+                // untested either, where the cancel would restart it and
+                // the next document be read by it with no self-test at all.
+                None => {
+                    let _ = self.stop_runtime();
+                    return Err(ReadFailure::Failed(self.overtaken()));
+                }
+                Some(Ok(())) => {
                     self.passed_self_test(tier, before.as_ref());
                     return Ok(());
                 }
-                // Stopped under the self-test on purpose - a hosted model
-                // chosen, or shutdown - which says nothing about the model.
-                Err(_) if !self.running() => return Err(ReadFailure::Failed(self.overtaken())),
-                Err(error) => {
+                // Stopped under the self-test on purpose - a cancel, a
+                // hosted model chosen, or shutdown - which says nothing
+                // about the model.
+                Some(Err(_)) if !self.running() => {
+                    return Err(ReadFailure::Failed(self.overtaken()));
+                }
+                Some(Err(error)) => {
                     eprintln!(
                         "intern: the {} local model failed its self-test: {}",
                         tier.as_str(),
@@ -1806,6 +1822,28 @@ impl RuntimeModel {
                 }
             }
         }
+    }
+
+    /// The self-test of the model a document's read has just loaded, for a
+    /// request that read the generation as `asked`; `None` when a cancel came
+    /// first.
+    ///
+    /// The read holds `lifecycle` through it, and the probe's request ends
+    /// only when it is answered, when the server stops, or at the client's
+    /// own limit ([`intern_engine::client::REQUEST_TIMEOUT`], longer than the
+    /// queue's deadline on purpose). A cancel that waited for `lifecycle`
+    /// waited that out, with the queue behind it past its deadline; so while
+    /// this runs a cancel stops the server under it at once (see `cancel`).
+    /// The mark is set before the generation is read, and a cancel moves the
+    /// generation before it reads the mark: of a cancel and a self-test that
+    /// overlap, either the self-test sees the cancel and never starts, or the
+    /// cancel sees the self-test and stops its server.
+    fn self_test_for(&self, asked: u64) -> Option<Result<(), CommandError>> {
+        self.self_testing.store(true, Ordering::SeqCst);
+        let tested = (!self.overtaken_since(asked))
+            .then(|| self.semantic_self_test(&CancellationToken::new()));
+        self.self_testing.store(false, Ordering::SeqCst);
+        tested
     }
 
     /// Reads the document with `tier`'s model, starting it if it is not the
@@ -2075,10 +2113,23 @@ impl AnalyzerBoundary for RuntimeModel {
 
     /// Interrupts the request in flight by restarting the server under it.
     /// A server that was not running is left that way.
+    ///
+    /// The self-test of a model a document has just loaded is ended at once
+    /// instead: its server is stopped before `lifecycle` is waited for, as a
+    /// hold stops one, and nothing is restarted, so a model that was never
+    /// tested is loaded and tested by the next document that needs it. That
+    /// self-test holds `lifecycle`, and waiting for it waited out its
+    /// request - which only the client's own limit ends - long past the
+    /// queue's deadline, the one clock a document's reading is meant to run
+    /// against.
     fn cancel(&self) -> Result<(), ModelFailure> {
         // Before anything stops: the request the stop interrupts must see a
         // cancel, not a server that failed.
         self.generation.fetch_add(1, Ordering::SeqCst);
+        // After the generation moved: see `self_test_for`.
+        if self.self_testing.load(Ordering::SeqCst) {
+            self.stop_runtime()?;
+        }
         let lifecycle = self
             .lifecycle
             .lock()
@@ -3351,6 +3402,10 @@ fn intake_config(
     config.process_others_uploads = settings.process_others_uploads;
     config.backlog_file = Some(data_dir.join("intake-backlog.json"));
     config.retake_backlog = first_look;
+    // A folder on this computer's own disk is listed between scans, so a
+    // dropped document is seen in moments; a synced or shared one is
+    // scanned as before.
+    config.probe_arrivals_if_local(&intern_intake::detect_cloud_roots());
     config
 }
 
@@ -6815,6 +6870,29 @@ mod intake_tests {
             true,
         );
         assert!(first_look.retake_backlog);
+    }
+
+    /// A folder on this computer's own disk is looked at between scans for
+    /// documents that have just turned up; a network share is scanned on
+    /// the interval alone, as it always was.
+    #[test]
+    fn a_folder_on_this_computer_is_looked_at_between_scans_and_a_share_is_not() {
+        let config_for = |folder: &str| {
+            intake_config(
+                PathBuf::from(folder),
+                &AppSettings::default(),
+                Path::new("/home/pat/.local/share/intern"),
+                false,
+            )
+        };
+        assert_eq!(
+            config_for("/srv/scans").arrival_probe_interval,
+            Some(intern_intake::ARRIVAL_PROBE_INTERVAL)
+        );
+        assert_eq!(
+            config_for(r"\\fileserver\legal\intake").arrival_probe_interval,
+            None
+        );
     }
 
     /// The watcher claims by the same single list the queue admits by, so a
@@ -11001,8 +11079,11 @@ mod runtime_tests {
     }
 
     /// A document whose model must be loaded first, canceled while it loads:
-    /// the document is canceled, not read, and the cancel's restart waits for
-    /// the load rather than starting a second model beside it.
+    /// the document is canceled, not read, and the cancel waits for the load
+    /// rather than starting a second model beside it. The model, loaded for
+    /// the first time, is not self-tested for a document no longer being
+    /// read, nor left running untested for the cancel to restart: the next
+    /// document loads it and tests it.
     #[test]
     fn a_cancel_during_a_swap_cancels_the_document_and_never_loads_two_models() {
         let install = Install::new("tier-swap-cancel");
@@ -11025,6 +11106,7 @@ mod runtime_tests {
         // runs, or a slow runner opens the gate first and the document
         // completes.
         let asked = runtime.generation.load(Ordering::SeqCst);
+        let proposals = rig.proposals.load(Ordering::SeqCst);
         let canceling = Arc::clone(&runtime);
         let cancel = std::thread::spawn(move || canceling.cancel());
         while runtime.generation.load(Ordering::SeqCst) == asked {
@@ -11040,14 +11122,88 @@ mod runtime_tests {
         );
         assert_eq!(cancel.join().unwrap(), Ok(()));
         assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1, "never two models");
-        assert_eq!(rig.alive.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            rig.proposals.load(Ordering::SeqCst),
+            proposals,
+            "no self-test was sent for the canceled document"
+        );
+        assert_eq!(rig.alive.load(Ordering::SeqCst), 0, "nothing left untested");
+        assert_eq!(launched(&rig), [ModelTier::Fast, ModelTier::Accurate]);
+        assert_eq!(runtime.tier_failure(ModelTier::Accurate), None);
+        assert_eq!(
+            read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap()).tier,
+            ModelTier::Accurate
+        );
+        assert_eq!(
+            launched(&rig),
+            [ModelTier::Fast, ModelTier::Accurate, ModelTier::Accurate]
+        );
+    }
+
+    /// The queue ends a reading that misses its deadline by canceling it, and
+    /// a document that loads a model for the first time waits, under
+    /// `lifecycle`, for that model's self-test. A cancel that waited for
+    /// `lifecycle` waited out the self-test's request, which only the
+    /// client's own limit ends - sixteen minutes, past the deadline on
+    /// purpose - with the queue stuck behind it. It stops that server at
+    /// once instead. The model is neither set aside nor stripped of its saved
+    /// instructions over a stop it did not cause, and it is not restarted
+    /// untested: the next document loads it, tests it, and is read by it.
+    #[test]
+    fn a_cancel_ends_a_first_load_self_test_at_once_and_blames_nothing_on_the_model() {
+        let install = Install::new("self-test-cancel");
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        let (setup, _states) = manager(&runtime, ModelSource::Local);
+        settle(&setup);
+        install.install_accurate();
+        runtime.remember_verified(ModelTier::Accurate);
+        rig.saved_state.lock().unwrap().insert(ModelTier::Accurate);
+        *rig.accurate_reply.lock().unwrap() = Some(Reply::HangUntilStopped);
+
+        let analyzing = Arc::clone(&runtime);
+        let request = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
+        // The accurate model, loaded for the first time, is being
+        // self-tested, and its server does not answer.
+        rig.wait_in_flight();
+        let canceling = Arc::clone(&runtime);
+        let (sender, canceled) = channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(canceling.cancel());
+        });
+        assert_eq!(
+            canceled.recv_timeout(Duration::from_secs(30)),
+            Ok(Ok(())),
+            "the cancel waited for the self-test"
+        );
+
+        assert_eq!(
+            request.join().unwrap().unwrap_err(),
+            ModelFailure::fatal("MODEL_CANCELED")
+        );
+        assert_eq!(runtime.tier_failure(ModelTier::Accurate), None);
+        assert!(
+            rig.saved_state
+                .lock()
+                .unwrap()
+                .contains(&ModelTier::Accurate),
+            "its saved instructions are kept"
+        );
+        assert_eq!(launched(&rig), [ModelTier::Fast, ModelTier::Accurate]);
+        assert_eq!(rig.alive.load(Ordering::SeqCst), 0, "nothing left untested");
+
+        *rig.accurate_reply.lock().unwrap() = None;
+        let proposals = rig.proposals.load(Ordering::SeqCst);
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!(reading.tier, ModelTier::Accurate);
         assert_eq!(
             launched(&rig),
             [ModelTier::Fast, ModelTier::Accurate, ModelTier::Accurate]
         );
         assert_eq!(
-            read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap()).tier,
-            ModelTier::Accurate
+            rig.proposals.load(Ordering::SeqCst),
+            proposals + 2,
+            "tested, then asked about the document"
         );
     }
 

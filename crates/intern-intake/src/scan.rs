@@ -8,7 +8,10 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-use crate::coordination::{DoneOutcome, MachinePresence};
+use crate::{
+    cloud::{self, CloudRoot},
+    coordination::{DoneOutcome, MachinePresence},
+};
 
 pub const DEFAULT_SCAN_INTERVAL: Duration = Duration::from_secs(20);
 /// How soon the loop looks again while a file is still arriving.
@@ -17,6 +20,22 @@ pub const SETTLING_SCAN_INTERVAL: Duration = Duration::from_secs(3);
 /// claimed: half the default interval, so ordinary pickup still takes two
 /// scans, but no longer two scans that happen to land a moment apart.
 pub const DEFAULT_MIN_QUIET_SECONDS: i64 = 10;
+/// How often, between scans, a folder on this computer's own disk is listed
+/// for files that have just turned up ([`IntakeConfig::arrival_probe_interval`]).
+pub const ARRIVAL_PROBE_INTERVAL: Duration = Duration::from_secs(3);
+/// How long after a listing shows something new the folder is listed once
+/// more before it is scanned - and again for as long as further files keep
+/// turning up - so that files dropped together are first seen by one scan,
+/// and so claimed by one, as they are when a scan happens upon them.
+pub const ARRIVAL_BURST_WINDOW: Duration = Duration::from_secs(1);
+/// The look between scans waits at least this many times as long as its
+/// last listing of the folder took (`next_look_after`), so that listing
+/// the folder never takes more than about one part in this many of the
+/// time, however big or slow the folder is. A folder whose listing takes
+/// more than 30 ms is looked at less often than [`ARRIVAL_PROBE_INTERVAL`],
+/// and one whose listing takes a fifth of a second no more often than it is
+/// scanned: not between scans at all.
+pub const ARRIVAL_PROBE_LOAD: u32 = 100;
 
 #[derive(Clone, Debug)]
 pub struct IntakeConfig {
@@ -43,6 +62,26 @@ pub struct IntakeConfig {
     /// documents are admitted - so what is in it now is what they chose to
     /// leave alone. A restart or a changed label leaves this false.
     pub retake_backlog: bool,
+    /// How often the folder's listings are read between scans, while nothing
+    /// is arriving, to notice a file that has just turned up.
+    ///
+    /// A file's quiet time starts when a scan first sees it, and with
+    /// nothing arriving the next scan is up to `scan_interval` away: a
+    /// dropped document waited ten seconds on average, and up to twenty,
+    /// before its ten seconds of quiet even began. This look only reads
+    /// directory listings - names, and the size and time each listing gives -
+    /// never a file, the `.intern` folder, or the host, and when it finds
+    /// nothing new that is all that happens. When it finds a file it has not
+    /// seen, or one whose size or time changed, the next scan runs now
+    /// rather than at the end of the interval. That scan is an ordinary one:
+    /// it starts the same quiet time, and nothing is claimed any sooner
+    /// after it was first seen than before.
+    ///
+    /// `None`, the default, never looks. The host turns it on with
+    /// [`Self::probe_arrivals_if_local`].
+    pub arrival_probe_interval: Option<Duration>,
+    /// See [`ARRIVAL_BURST_WINDOW`]. Injectable like the intervals.
+    pub arrival_burst_window: Duration,
 }
 
 impl IntakeConfig {
@@ -56,7 +95,28 @@ impl IntakeConfig {
             min_quiet_seconds: DEFAULT_MIN_QUIET_SECONDS,
             backlog_file: None,
             retake_backlog: false,
+            arrival_probe_interval: None,
+            arrival_burst_window: ARRIVAL_BURST_WINDOW,
         }
+    }
+
+    /// Turns the look for arrivals between scans on
+    /// ([`Self::arrival_probe_interval`]) when the folder is on this
+    /// computer's own disk, and off when it is inside one of `sync_roots` -
+    /// a OneDrive or SharePoint folder - or on a network share
+    /// ([`cloud::classify`]).
+    ///
+    /// Only there, because only there is seeing a document sooner known to
+    /// cost nothing. In a shared library the first question a settled
+    /// document raises is who uploaded it, which is a request to Microsoft
+    /// that an upload's metadata may not have caught up with yet; asked
+    /// sooner it is more often asked twice. And on a share every listing is
+    /// a round trip to a server that other machines are listing too. Those
+    /// folders are scanned exactly as before.
+    pub fn probe_arrivals_if_local(&mut self, sync_roots: &[CloudRoot]) {
+        self.arrival_probe_interval = cloud::classify(&self.intake_root, sync_roots)
+            .is_none()
+            .then_some(ARRIVAL_PROBE_INTERVAL);
     }
 
     /// How long the loop waits before its next scan, given how many files the
@@ -349,6 +409,164 @@ pub(crate) fn walk_intake(root: &Path, extensions: &[String]) -> io::Result<Walk
     Ok(walk)
 }
 
+/// What the folder's directory listings say of each file a scan would
+/// consider: its size and modification time, as the listing has them.
+pub(crate) type Listing = HashMap<PathBuf, (u64, i64)>;
+
+/// Lists the files [`walk_intake`] would consider, by the same rules, from
+/// the directory listings alone: no file is opened, so nothing is recalled
+/// from the cloud and no handle is taken on a document someone is writing.
+///
+/// What a listing says can lag - Windows updates a directory entry lazily,
+/// which is why a scan opens each file for its attributes - so this is only
+/// fit for what it is used for: noticing that something is new or changed
+/// and a scan is worth running now. An empty file is listed, though a scan
+/// skips it, so that its filling up is noticed. A subfolder that cannot be
+/// listed is passed over; the scan is what counts and reports those.
+pub(crate) fn list_intake(root: &Path, extensions: &[String]) -> io::Result<Listing> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut listing = Listing::new();
+    while let Some(directory) = pending.pop() {
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if directory == root => return Err(error),
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if skipped_name(&path) {
+                continue;
+            }
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if !file_type.is_file() || !supported(&path, extensions) {
+                continue;
+            }
+            // The entry's own metadata: what the listing carries on Windows,
+            // and one call that follows no link elsewhere.
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            listing.insert(path, (metadata.len(), modified_secs(&metadata)));
+        }
+    }
+    Ok(listing)
+}
+
+/// What a look at the folder's listings calls for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Glimpse {
+    /// Nothing new: look again after the usual interval.
+    Nothing,
+    /// Something turned up, and more may be on its way: look again after
+    /// the burst window.
+    Wait,
+    /// What turned up has stopped turning up: scan now.
+    Scan,
+}
+
+/// Notices arrivals between scans from one listing of the folder to the
+/// next ([`IntakeConfig::arrival_probe_interval`]).
+///
+/// It decides only when a scan runs, never what a scan does. A file that is
+/// new since the last listing, or whose size or time has changed, is worth a
+/// scan now; and so that files dropped together are first seen by one scan,
+/// the scan waits until a listing a burst window later shows no further new
+/// file.
+#[derive(Debug, Default)]
+pub(crate) struct ArrivalProbe {
+    /// The last listing looked at; `None` before the first, and after a
+    /// folder that could not be listed.
+    last: Option<Listing>,
+    /// Whether something has turned up that no scan has been run for yet.
+    waiting: bool,
+    /// Whether the last scan found files still arriving.
+    settling: bool,
+}
+
+impl ArrivalProbe {
+    /// Whether the folder is listed just before the scan about to run, as
+    /// what the look after it compares with ([`Self::rebase`]).
+    ///
+    /// Not when a look has just listed it and `called_for` this scan. And
+    /// not while files settle: the rescans then come every few seconds, no
+    /// look follows one that finds anything arriving, and a listing before
+    /// each was read only after the last of them. That one is listed after
+    /// it instead ([`Self::scanned`]).
+    pub(crate) fn lists_before_scan(&self, called_for: bool) -> bool {
+        !called_for && !self.settling
+    }
+
+    /// Notes how many files a scan found `arriving`, and says whether the
+    /// folder is to be listed now, after it: when it ends a settling run,
+    /// whose rescans were not listed before. A file that landed during that
+    /// scan, behind its walk, is in this listing and so brings no scan
+    /// forward: the next scan finds it, as a scan always found such a file
+    /// before there was a look. The window is the length of one scan of a
+    /// folder on this computer's own disk.
+    pub(crate) fn scanned(&mut self, arriving: usize) -> bool {
+        let settled = self.settling && arriving == 0;
+        self.settling = arriving > 0;
+        settled
+    }
+
+    /// Takes `listing` as what is already known, with nothing waiting: a
+    /// scan is about to walk the folder, and only what turns up after this
+    /// listing is news to the next look. `None`, for a folder that could
+    /// not be listed, makes the next look the first.
+    pub(crate) fn rebase(&mut self, listing: Option<Listing>) {
+        self.last = listing;
+        self.waiting = false;
+    }
+
+    /// Compares `listing` with the one before it and keeps it for the next
+    /// look.
+    pub(crate) fn look(&mut self, listing: Listing) -> Glimpse {
+        let Some(last) = &self.last else {
+            // Nothing to compare with: whatever is here, the scans see it.
+            self.last = Some(listing);
+            return Glimpse::Nothing;
+        };
+        let mut appeared = false;
+        let mut changed = false;
+        for (path, facts) in &listing {
+            match last.get(path) {
+                None => appeared = true,
+                Some(before) if before != facts => changed = true,
+                Some(_) => {}
+            }
+        }
+        self.last = Some(listing);
+        if self.waiting {
+            if appeared {
+                return Glimpse::Wait;
+            }
+            self.waiting = false;
+            return Glimpse::Scan;
+        }
+        if appeared || changed {
+            self.waiting = true;
+            return Glimpse::Wait;
+        }
+        Glimpse::Nothing
+    }
+}
+
+/// How long the look between scans waits before it lists the folder again:
+/// `every`, or [`ARRIVAL_PROBE_LOAD`] times as long as the last listing
+/// took, whichever is longer.
+pub(crate) fn next_look_after(every: Duration, listing_took: Duration) -> Duration {
+    every.max(listing_took.saturating_mul(ARRIVAL_PROBE_LOAD))
+}
+
 /// A file only becomes claimable once it has been observed with an
 /// identical `(size, mtime)` for at least `min_quiet_seconds` on the clock.
 ///
@@ -630,12 +848,288 @@ pub(crate) fn modified_secs(metadata: &fs::Metadata) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, path::PathBuf};
 
-    use super::walk_intake;
+    use std::time::Duration;
+
+    use super::{
+        ARRIVAL_BURST_WINDOW, ARRIVAL_PROBE_INTERVAL, ARRIVAL_PROBE_LOAD, ArrivalProbe,
+        DEFAULT_SCAN_INTERVAL, Glimpse, IntakeConfig, Listing, list_intake, next_look_after,
+        walk_intake,
+    };
+    use crate::cloud::{CloudProviderKind, CloudRoot};
 
     fn extensions() -> Vec<String> {
         vec!["pdf".to_string()]
+    }
+
+    /// A listing of `files`: name, size, modification time.
+    fn listing(files: &[(&str, u64, i64)]) -> Listing {
+        files
+            .iter()
+            .map(|(name, size, modified)| (PathBuf::from(name), (*size, *modified)))
+            .collect()
+    }
+
+    /// The look between scans lists what a scan would consider - the same
+    /// names skipped, subfolders followed, `.intern` never entered - and an
+    /// empty file besides, so that its filling up is noticed. What it says
+    /// of a settled file is what a scan reads from the file itself (checked
+    /// where a listing is read from the file's own record; a Windows
+    /// listing may lag, which is why it only ever decides when to scan).
+    #[test]
+    fn the_listing_between_scans_follows_a_scans_rules() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir(root.join("batch")).unwrap();
+        fs::create_dir(root.join(".intern")).unwrap();
+        for (name, bytes) in [
+            ("keep.pdf", &b"settled"[..]),
+            ("batch/inner.pdf", b"in a subfolder"),
+            ("empty.pdf", b""),
+            ("~$lock.pdf", b"x"),
+            (".hidden.pdf", b"x"),
+            ("notes.txt", b"x"),
+            (".intern/claim.pdf", b"x"),
+            ("NEEDS REVIEW - unread.pdf", b"x"),
+        ] {
+            fs::write(root.join(name), bytes).unwrap();
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("keep.pdf"), root.join("link.pdf")).unwrap();
+
+        let listed = list_intake(root, &extensions()).unwrap();
+        let walk = walk_intake(root, &extensions()).unwrap();
+
+        let mut names: Vec<PathBuf> = listed.keys().cloned().collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                root.join("batch").join("inner.pdf"),
+                root.join("empty.pdf"),
+                root.join("keep.pdf"),
+            ]
+        );
+        assert_eq!(walk.files.len(), 2, "a scan skips the empty file");
+        for facts in &walk.files {
+            assert!(listed.contains_key(&facts.path), "{}", facts.relative_path);
+            #[cfg(unix)]
+            assert_eq!(
+                listed[&facts.path],
+                (facts.size, facts.modified_secs),
+                "{}",
+                facts.relative_path
+            );
+        }
+        assert_eq!(listed[&root.join("empty.pdf")].0, 0);
+        assert!(list_intake(&root.join("gone"), &extensions()).is_err());
+    }
+
+    /// On a folder where nothing happens, a look calls for nothing, however
+    /// many there are: no scan runs that would not have run anyway.
+    #[test]
+    fn a_look_at_an_unchanged_folder_calls_for_nothing() {
+        let files = [("a.pdf", 10, 100), ("empty.pdf", 0, 100)];
+        let mut probe = ArrivalProbe::default();
+        // The first listing is only what later ones are compared with.
+        assert_eq!(probe.look(listing(&files)), Glimpse::Nothing);
+        for _ in 0..50 {
+            assert_eq!(probe.look(listing(&files)), Glimpse::Nothing);
+        }
+        // A file that left is no arrival either.
+        assert_eq!(
+            probe.look(listing(&[("empty.pdf", 0, 100)])),
+            Glimpse::Nothing
+        );
+        assert_eq!(
+            probe.look(listing(&[("empty.pdf", 0, 100)])),
+            Glimpse::Nothing
+        );
+    }
+
+    /// A file that turns up is worth a scan now - once a second listing, a
+    /// burst window later, shows nothing further turning up - and then the
+    /// folder is quiet again.
+    #[test]
+    fn a_new_file_calls_for_one_scan_after_the_burst_window() {
+        let mut probe = ArrivalProbe::default();
+        probe.rebase(Some(listing(&[("old.pdf", 10, 100)])));
+        let dropped = [("old.pdf", 10, 100), ("dropped.pdf", 20, 200)];
+        assert_eq!(probe.look(listing(&dropped)), Glimpse::Wait);
+        assert_eq!(probe.look(listing(&dropped)), Glimpse::Scan);
+        assert_eq!(probe.look(listing(&dropped)), Glimpse::Nothing);
+    }
+
+    /// Files dropped together are seen by one scan, as they are when a scan
+    /// happens upon them: while each listing shows another new file the scan
+    /// waits, and it runs once, for all of them, when one shows none.
+    #[test]
+    fn a_burst_of_files_calls_for_one_scan_when_it_has_all_turned_up() {
+        let mut probe = ArrivalProbe::default();
+        probe.rebase(Some(listing(&[])));
+        let one = [("a.pdf", 10, 200)];
+        let three = [("a.pdf", 10, 200), ("b.pdf", 10, 200), ("c.pdf", 10, 201)];
+        let five = [
+            ("a.pdf", 10, 200),
+            ("b.pdf", 10, 200),
+            ("c.pdf", 10, 201),
+            ("d.pdf", 10, 201),
+            ("e.pdf", 10, 202),
+        ];
+        assert_eq!(probe.look(listing(&one)), Glimpse::Wait);
+        assert_eq!(probe.look(listing(&three)), Glimpse::Wait);
+        assert_eq!(probe.look(listing(&five)), Glimpse::Wait);
+        assert_eq!(probe.look(listing(&five)), Glimpse::Scan);
+        assert_eq!(probe.look(listing(&five)), Glimpse::Nothing);
+    }
+
+    /// A file that changed - an empty one filling up, a document saved over -
+    /// is worth a scan too. One still being written does not hold the scan
+    /// off: how long it must then keep still is the scan's rule, and only
+    /// the scan's.
+    #[test]
+    fn a_changed_file_calls_for_a_scan_and_a_growing_one_does_not_hold_it_off() {
+        let mut probe = ArrivalProbe::default();
+        probe.rebase(Some(listing(&[
+            ("empty.pdf", 0, 100),
+            ("saved.pdf", 10, 100),
+        ])));
+        assert_eq!(
+            probe.look(listing(&[("empty.pdf", 512, 130), ("saved.pdf", 10, 100)])),
+            Glimpse::Wait
+        );
+        // Still growing a burst window later: the scan runs all the same.
+        assert_eq!(
+            probe.look(listing(&[("empty.pdf", 2048, 131), ("saved.pdf", 10, 100)])),
+            Glimpse::Scan
+        );
+        // And is called for again while it goes on changing.
+        assert_eq!(
+            probe.look(listing(&[("empty.pdf", 4096, 134), ("saved.pdf", 10, 100)])),
+            Glimpse::Wait
+        );
+        // The same size saved at a later time is a change as well.
+        probe.rebase(Some(listing(&[("saved.pdf", 10, 100)])));
+        assert_eq!(
+            probe.look(listing(&[("saved.pdf", 10, 160)])),
+            Glimpse::Wait
+        );
+    }
+
+    /// A scan is about to walk the folder: what the listing showed just
+    /// before it is known, and nothing is waiting any more. After a folder
+    /// that could not be listed, the next listing is the first again.
+    #[test]
+    fn a_scan_takes_what_was_listed_before_it_as_known() {
+        let mut probe = ArrivalProbe::default();
+        probe.rebase(Some(listing(&[])));
+        let dropped = [("dropped.pdf", 20, 200)];
+        assert_eq!(probe.look(listing(&dropped)), Glimpse::Wait);
+        // A scan ran for another reason - its interval, Scan now.
+        probe.rebase(Some(listing(&dropped)));
+        assert_eq!(probe.look(listing(&dropped)), Glimpse::Nothing);
+
+        probe.rebase(None);
+        assert_eq!(
+            probe.look(listing(&[("dropped.pdf", 20, 200), ("more.pdf", 5, 300)])),
+            Glimpse::Nothing
+        );
+    }
+
+    /// While files settle the rescans come every few seconds and no look
+    /// follows one that finds anything arriving, so the folder is not listed
+    /// before them: it is listed once, after the scan that finds nothing
+    /// more arriving, as what the next look compares with. Every other scan
+    /// is listed before it, but for one a look just listed the folder for.
+    #[test]
+    fn a_settling_run_is_listed_once_after_its_last_scan() {
+        let mut probe = ArrivalProbe::default();
+        assert!(probe.lists_before_scan(false));
+        assert!(!probe.lists_before_scan(true), "the look's listing serves");
+        assert!(!probe.scanned(0), "listed before, not again after");
+
+        // A scan finds a file arriving; the rescans while it settles are
+        // not listed, before or after.
+        assert!(!probe.scanned(1));
+        assert!(!probe.lists_before_scan(false));
+        assert!(!probe.scanned(2));
+        assert!(!probe.lists_before_scan(false));
+        // The scan that finds nothing more arriving is listed after.
+        assert!(probe.scanned(0));
+        assert!(probe.lists_before_scan(false));
+        assert!(!probe.scanned(0));
+
+        // A scan a look called for that finds something arriving starts a
+        // settling run like any other.
+        assert!(!probe.lists_before_scan(true));
+        assert!(!probe.scanned(1));
+        assert!(!probe.lists_before_scan(false));
+        assert!(probe.scanned(0));
+    }
+
+    /// Listing a folder costs more the more it holds, and the look's cost is
+    /// bounded all the same: it waits at least [`ARRIVAL_PROBE_LOAD`] times
+    /// as long as its last listing took. A folder of tens of thousands of
+    /// files that takes 47 ms to list is looked at every 4.7 s rather than
+    /// every 3, and one that takes a fifth of a second is not looked at
+    /// between its scans at all.
+    #[test]
+    fn a_folder_slow_to_list_is_looked_at_less_often() {
+        let every = ARRIVAL_PROBE_INTERVAL;
+        assert_eq!(next_look_after(every, Duration::ZERO), every);
+        assert_eq!(next_look_after(every, Duration::from_millis(2)), every);
+        assert_eq!(next_look_after(every, every / ARRIVAL_PROBE_LOAD), every);
+        assert_eq!(
+            next_look_after(every, Duration::from_millis(47)),
+            Duration::from_millis(4_700)
+        );
+        assert!(next_look_after(every, Duration::from_millis(200)) >= DEFAULT_SCAN_INTERVAL);
+        // The burst window stretches the same way.
+        assert_eq!(
+            next_look_after(ARRIVAL_BURST_WINDOW, Duration::from_millis(5)),
+            ARRIVAL_BURST_WINDOW
+        );
+        assert_eq!(
+            next_look_after(ARRIVAL_BURST_WINDOW, Duration::from_millis(20)),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            next_look_after(every, Duration::MAX),
+            Duration::MAX,
+            "no overflow"
+        );
+    }
+
+    /// Only a folder on this computer's own disk is looked at between
+    /// scans. One inside a OneDrive or SharePoint folder, or on a network
+    /// share, is scanned as it always was - and so is every folder until the
+    /// host says otherwise.
+    #[test]
+    fn only_a_folder_on_this_computer_is_looked_at_between_scans() {
+        let sync_roots = [CloudRoot {
+            kind: CloudProviderKind::SharePoint,
+            display_name: "Contoso - Legal".into(),
+            root: PathBuf::from("/home/pat/Contoso/Legal - Documents"),
+        }];
+        let probed = |folder: &str| {
+            let mut config = IntakeConfig::new(folder, extensions());
+            assert_eq!(config.arrival_probe_interval, None, "off until asked for");
+            config.probe_arrivals_if_local(&sync_roots);
+            config.arrival_probe_interval
+        };
+        assert_eq!(probed("/home/pat/Scans"), Some(ARRIVAL_PROBE_INTERVAL));
+        assert_eq!(probed("/home/pat/Contoso/Legal - Documents/Inbox"), None);
+        assert_eq!(probed(r"\\fileserver\legal\intake"), None);
+        assert_eq!(probed(r"\\?\UNC\fileserver\legal\intake"), None);
+
+        // Asked again once the folder is no longer a plain one, it goes off.
+        let mut config = IntakeConfig::new("/home/pat/Scans", extensions());
+        config.probe_arrivals_if_local(&[]);
+        assert_eq!(config.arrival_probe_interval, Some(ARRIVAL_PROBE_INTERVAL));
+        config.intake_root = PathBuf::from("/home/pat/Contoso/Legal - Documents/Inbox");
+        config.probe_arrivals_if_local(&sync_roots);
+        assert_eq!(config.arrival_probe_interval, None);
     }
 
     #[test]
