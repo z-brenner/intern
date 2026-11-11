@@ -7,6 +7,7 @@
 //! --pipeline evidence|digest      the engine's pipeline (evidence by default)
 //! --id-style stable|ordinal       how the evidence lines are named
 //! --retrieval-tier auto|whole|small|normal|dense
+//! --short-document-tokens N       try small field budgets above N on otherwise-whole documents
 //! --context-tokens N              the server's context, when not the app's
 //! --prompt-profile NAME           ask the model as a manifest profile does
 //!                                 (bonsai_2); none by default, as the
@@ -39,6 +40,7 @@ pub const KEYS: &[&str] = &[
     "pipeline",
     "id-style",
     "retrieval-tier",
+    "short-document-tokens",
     "context-tokens",
     "prompt-profile",
     "min-token-confidence",
@@ -90,6 +92,26 @@ impl EngineSettings {
             settings.retrieval = settings.retrieval.clone().with_tier(word).ok_or_else(|| {
                 format!("--retrieval-tier is auto, whole, small, normal or dense, not {word}")
             })?;
+        }
+        if let Some(value) = values.get("short-document-tokens") {
+            if settings.pipeline != Pipeline::Evidence
+                || settings.retrieval.whole_document_tokens == u32::MAX
+            {
+                return Err("--short-document-tokens requires evidence retrieval without --retrieval-tier whole".into());
+            }
+            let limit = settings.retrieval.whole_document_tokens;
+            settings.retrieval.short_document_tokens = Some(
+                value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|tokens| *tokens < limit)
+                    .ok_or_else(|| {
+                        format!(
+                            "--short-document-tokens must be between 0 and {}",
+                            limit - 1
+                        )
+                    })?,
+            );
         }
         if let Some(word) = values.get("prompt-profile") {
             if settings.pipeline != Pipeline::Evidence {
@@ -296,6 +318,7 @@ mod tests {
             ("pipeline", "evidence"),
             ("id-style", "ordinal"),
             ("retrieval-tier", "dense"),
+            ("short-document-tokens", "750"),
             ("context-tokens", "16384"),
             ("min-token-confidence", "0.5"),
         ]))
@@ -308,6 +331,7 @@ mod tests {
             intern_engine::retrieve::TierPolicy::Dense
         );
         assert_eq!(settings.context(), Some(16_384));
+        assert_eq!(settings.retrieval.short_document_tokens, Some(750));
         let whole = EngineSettings::parse(&values(&[("retrieval-tier", "whole")])).unwrap();
         assert_eq!(whole.retrieval.whole_document_tokens, u32::MAX);
         assert_eq!(
@@ -318,6 +342,7 @@ mod tests {
             ("pipeline", "legacy"),
             ("id-style", "handles"),
             ("retrieval-tier", "huge"),
+            ("short-document-tokens", "1800"),
             ("context-tokens", "12"),
             // The reply budget alone is 1,024 tokens.
             ("context-tokens", "1024"),

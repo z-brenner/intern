@@ -358,6 +358,10 @@ pub struct RetrievalConfig {
     /// A document whose units cost at most this many estimated tokens goes
     /// whole.
     pub whole_document_tokens: u32,
+    /// Experiment: try field budgets on otherwise-whole documents above
+    /// this estimated token count. Absent from the shipping configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub short_document_tokens: Option<u32>,
     pub budgets: FieldBudgets,
     /// The small and dense tiers' budgets, in percent of the normal tier's.
     pub small_pct: u32,
@@ -400,6 +404,7 @@ impl RetrievalConfig {
     pub fn plan_start() -> Self {
         Self {
             whole_document_tokens: 1_800,
+            short_document_tokens: None,
             budgets: FieldBudgets::plan_start(),
             small_pct: 60,
             dense_pct: 175,
@@ -540,24 +545,39 @@ pub fn retrieve(
         .map(|ordinal| u64::from(cost(*ordinal)))
         .sum();
     let whole_limit = u64::from(config.whole_document_tokens) * u64::from(scale_pct) / 100;
-    if whole_cost <= whole_limit {
+    let whole = || {
         let selected_by = candidates
             .iter()
             .map(|ordinal| (*ordinal, WHOLE_BIT))
             .collect();
-        return render(index, config, Tier::Whole, false, selected_by);
+        render(index, config, Tier::Whole, false, selected_by)
+    };
+    let normally_whole = whole_cost <= whole_limit;
+    if normally_whole
+        && config
+            .short_document_tokens
+            .is_none_or(|limit| whole_cost <= u64::from(limit) * u64::from(scale_pct) / 100)
+    {
+        return whole();
     }
 
     let scored = Field::ALL.map(|field| score_units(index, config, field, &candidates));
-    let tier = match config.tier {
-        TierPolicy::Small => Tier::Small,
-        TierPolicy::Normal => Tier::Normal,
-        TierPolicy::Dense => Tier::Dense,
-        TierPolicy::Auto => {
-            if config.dense_triggers && crowded(index, &candidates, &scored[1]) {
-                Tier::Dense
-            } else {
-                Tier::Normal
+    let tier = if normally_whole {
+        if crowded(index, &candidates, &scored[1]) {
+            return whole();
+        }
+        Tier::Small
+    } else {
+        match config.tier {
+            TierPolicy::Small => Tier::Small,
+            TierPolicy::Normal => Tier::Normal,
+            TierPolicy::Dense => Tier::Dense,
+            TierPolicy::Auto => {
+                if config.dense_triggers && crowded(index, &candidates, &scored[1]) {
+                    Tier::Dense
+                } else {
+                    Tier::Normal
+                }
             }
         }
     };
@@ -579,7 +599,14 @@ pub fn retrieve(
 
     let mut selected_by: BTreeMap<u32, u8> = BTreeMap::new();
     for (field, scores) in Field::ALL.iter().zip(&scored) {
-        let budget = u64::from(config.budgets.of(*field)) * u64::from(tier_pct) / 100
+        // Preserve the normal allowance for description evidence. The
+        // experiment should save tokens without reducing it to the filename.
+        let field_pct = if normally_whole && matches!(field, Field::Subject | Field::KeyFacts) {
+            100
+        } else {
+            tier_pct
+        };
+        let budget = u64::from(config.budgets.of(*field)) * u64::from(field_pct) / 100
             * u64::from(scale_pct)
             / 100;
         let allowed = hierarchical.then(|| {
@@ -626,7 +653,17 @@ pub fn retrieve(
             }
         }
     }
-    render(index, config, tier, hierarchical, deduplicated)
+    let context = render(index, config, tier, hierarchical, deduplicated);
+    if normally_whole {
+        let original = whole();
+        let has_core_evidence = [Field::DocumentType, Field::Date, Field::Parties]
+            .into_iter()
+            .all(|field| !context.chosen_for(field).is_empty());
+        if !has_core_evidence || context.estimated_tokens >= original.estimated_tokens {
+            return original;
+        }
+    }
+    context
 }
 
 /// Every unit's score for one field under `config`, for diagnostics: what
@@ -1486,6 +1523,39 @@ mod tests {
             context
                 .text
                 .contains("[p1.b3] Dear Mira Vale, Your employment")
+        );
+    }
+
+    #[test]
+    fn short_document_experiment_keeps_core_evidence_and_leaves_long_documents_alone() {
+        let mut text = String::from(
+            "STATEMENT OF WORK\n\nEffective Date: May 4, 2026\n\nClient: Northwind Works LLC\n\n",
+        );
+        for number in 1..=20 {
+            text.push_str(&format!(
+                "The inspection checklist, reference {number}, must be completed and retained in the usual manner.\n\n"
+            ));
+        }
+        let source = source_from_text(&text);
+        let index = EvidenceIndex::build(&source);
+        let default = RetrievalConfig::default();
+        let experiment = RetrievalConfig {
+            short_document_tokens: Some(100),
+            ..default.clone()
+        };
+        let full = retrieve(&index, &default, 100);
+        let compact = retrieve(&index, &experiment, 100);
+        assert_eq!(full.tier, Tier::Whole);
+        assert_eq!(compact.tier, Tier::Small);
+        assert!(compact.estimated_tokens < full.estimated_tokens);
+        for text in ["STATEMENT OF WORK", "May 4, 2026", "Northwind Works LLC"] {
+            assert!(holds(&compact, &index, text), "missing {text}");
+        }
+
+        let long = EvidenceIndex::build(&credit_agreement());
+        assert_eq!(
+            retrieve(&long, &default, 100),
+            retrieve(&long, &experiment, 100)
         );
     }
 
