@@ -1030,7 +1030,11 @@ a file saved under the old ones. A file is only ever restored into a server that
 would have computed the same state, so the first document's reply is the one it
 would have got as the second. A launch removes its tier's files for any other
 configuration, and any save a stopped server left unfinished (saves are
-written as `.part` and renamed), so there is at most one file per tier. Every
+written as `.part` and renamed), so there is at most one file per tier: two
+files and 348 MB at most, beside the models in the app's local data. An
+uninstall leaves the folder, as it leaves the models and the rest of Intern's
+own data, and the installer's hooks never touch it; deleted by hand, it costs
+the next first document of each model the speed-up and is saved again. Every
 failure costs only the speed-up: a restore that fails removes the file and the
 next document saves a new one; a save is skipped with less than 2 GiB free.
 On Windows a folder outside ASCII is never passed (the server checks the
@@ -1043,6 +1047,22 @@ folder or a file, in 9-16 ms on the 4-core box at a load of 1.3 and 17-47 ms
 at a load of 10-15 (five and three tries of each). A folder it refuses is not passed, so a server that will not
 start, for whatever reason, fails on its three tries as it would without a
 slot folder (`LlamaServer::accepts_slot_directory`).
+
+The folder is Intern's own data, beside the models: at most one file a tier,
+174 MB each, so 348 MB once each model has read a long first document.
+Nothing in the installer names it (`windows/hooks.nsh` touches the install
+folder and the Send to shortcut only), so an update leaves it and an
+uninstall leaves it, as they leave the models. It can be deleted at any time:
+the next launch finds no file, and the next long first document saves one.
+
+All of this was measured on Linux. CI's Windows job compiles the code and
+runs its unit tests, the folder check among them with a batch file standing
+in for the server; no run on record has the app ask the real
+`llama-server.exe` for a folder, a save or a restore, since the live test
+and the `live_slots` job run on Linux only. What Windows gains is therefore
+not measured. What it can lose is bounded by the rules above: the folder
+check is given ten seconds at most, a folder the server refuses is not
+passed, and a save or a restore that fails is dropped.
 
 A new install downloads the quick model first and opens the queue as soon as it
 has passed its digest and its semantic self-test. The accurate model downloads
