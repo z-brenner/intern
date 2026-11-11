@@ -6,6 +6,9 @@
 //! Intern can make locally and cheaply, and it is the main reason a proposal
 //! can be trusted without a human reading it.
 
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, PoisonError};
+
 use unicode_casefold::UnicodeCaseFold;
 use unicode_normalization::UnicodeNormalization;
 
@@ -51,6 +54,39 @@ impl Segments for DocumentDigest {
 /// Invisible characters ([`is_invisible`]) are left out, so one neither
 /// splits a word nor keeps a quote from matching it.
 pub fn normalize(value: &str) -> String {
+    if value.is_ascii() {
+        return normalize_ascii(value);
+    }
+    normalize_unicode(value)
+}
+
+/// [`normalize`] for text that is all ASCII, which is most of what documents
+/// write and all of a date's spellings. There it comes to very little - no
+/// ASCII character is invisible, is changed by Unicode normalization, or is
+/// one of the quotes, dashes and spaces that are unified, and folding case
+/// is lowering "A" to "Z" - so the tables [`normalize_unicode`] walks for
+/// every character are not consulted. The result is the same, character for
+/// character.
+fn normalize_ascii(value: &str) -> String {
+    let mut result = String::with_capacity(value.len());
+    let mut pending_space = false;
+    for byte in value.bytes() {
+        let character = char::from(byte);
+        if character.is_whitespace() {
+            pending_space = !result.is_empty();
+        } else {
+            if pending_space {
+                result.push(' ');
+                pending_space = false;
+            }
+            result.push(character.to_ascii_lowercase());
+        }
+    }
+    result
+}
+
+/// [`normalize`] for any text.
+fn normalize_unicode(value: &str) -> String {
     let visible = value.chars().filter(|character| !is_invisible(*character));
     let normalized = visible.nfkc().case_fold().map(|character| match character {
         '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}' | '\u{2032}' => '\'',
@@ -367,16 +403,12 @@ pub(crate) enum DateSpelling {
 /// written in. One position can carry two spellings - "04/04/2026" is the
 /// same text month first and day first - and each is listed.
 pub(crate) fn date_statements(iso_date: &str, normalized: &str) -> Vec<(usize, DateSpelling)> {
-    let candidates = date_spellings(iso_date);
+    let candidates = searched_spellings(iso_date);
     let bytes = normalized.as_bytes();
     let mut statements = Vec::new();
-    for (candidate, spelling) in &candidates {
-        let candidate = normalize(candidate);
-        if candidate.is_empty() {
-            continue;
-        }
+    for (candidate, spelling) in candidates.iter() {
         let mut from = 0;
-        while let Some(found) = normalized[from..].find(&candidate) {
+        while let Some(found) = normalized[from..].find(candidate.as_str()) {
             let position = from + found;
             let end = position + candidate.len();
             // A spelling that runs straight into other digits is part of a
@@ -391,6 +423,66 @@ pub(crate) fn date_statements(iso_date: &str, normalized: &str) -> Vec<(usize, D
         }
     }
     statements
+}
+
+/// The spellings of one date as [`date_statements`] searches for them.
+type SearchedSpellings = Arc<[(String, DateSpelling)]>;
+
+/// How many dates' spellings [`searched_spellings`] keeps. A document's
+/// checks ask about few dates - the model's, and the ones stated beside it -
+/// and ask about each on every line, so this is room to spare; a document
+/// with more dates than this has the oldest worked out again when it is next
+/// asked about. One date's spellings take about 10 KB, so the list stays
+/// under a megabyte.
+const SPELLINGS_KEPT: usize = 64;
+
+/// The dates asked about most recently and their spellings, oldest first.
+/// One list for the process, behind a lock that is held only to look a date
+/// up or to add one - never while spellings are worked out or searched for.
+static SPELLINGS: Mutex<VecDeque<(String, SearchedSpellings)>> = Mutex::new(VecDeque::new());
+
+/// [`date_spellings`], each spelling `normalize`d as the text it is searched
+/// in is, the empty ones dropped, in the same order.
+///
+/// Working these out is most of what a date check costs - up to 166
+/// spellings built and normalized - and a document's checks ask about the
+/// same date on every line, which made it close to half of all the engine's
+/// time. The spellings depend on the date alone, so the last
+/// [`SPELLINGS_KEPT`] dates' are kept: what comes back is exactly what
+/// working it out again would give.
+fn searched_spellings(iso_date: &str) -> SearchedSpellings {
+    let kept = |spellings: &VecDeque<(String, SearchedSpellings)>| {
+        spellings
+            .iter()
+            .find(|(date, _)| date == iso_date)
+            .map(|(_, searched)| Arc::clone(searched))
+    };
+    // A panic cannot leave the list half-written - nothing is computed while
+    // it is locked - so a poisoned lock still guards a sound list.
+    let found = kept(&SPELLINGS.lock().unwrap_or_else(PoisonError::into_inner));
+    if let Some(searched) = found {
+        return searched;
+    }
+    let searched: SearchedSpellings = date_spellings(iso_date)
+        .into_iter()
+        .map(|(candidate, spelling)| (normalize(&candidate), spelling))
+        .filter(|(candidate, _)| !candidate.is_empty())
+        .collect();
+    // Anything that is not a date's shape has no spellings, costs nothing to
+    // ask about again, and must not push a real date out of the list.
+    if searched.is_empty() {
+        return searched;
+    }
+    let mut spellings = SPELLINGS.lock().unwrap_or_else(PoisonError::into_inner);
+    // Another thread may have added this date while it was worked out here.
+    if let Some(searched) = kept(&spellings) {
+        return searched;
+    }
+    if spellings.len() >= SPELLINGS_KEPT {
+        spellings.pop_front();
+    }
+    spellings.push_back((iso_date.to_owned(), Arc::clone(&searched)));
+    searched
 }
 
 /// The months a reading can misspell by one letter and still be read: the
@@ -1358,6 +1450,396 @@ mod invisible_tests {
         }
         // An invisible operator means something: two times three is no 23.
         assert_ne!(normalize("2\u{2062}3"), "23");
+    }
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::{normalize, normalize_ascii, normalize_unicode};
+
+    /// ASCII text takes a shorter way through [`normalize`], and it must be
+    /// the same text that comes out: every one- and two-character ASCII
+    /// string, and every three-character one over each kind of whitespace
+    /// and of character beside it, which is every step the whitespace
+    /// collapsing can take.
+    #[test]
+    fn ascii_text_normalizes_as_all_text_does() {
+        let ascii: Vec<char> = (0..=0x7f_u8).map(char::from).collect();
+        for first in &ascii {
+            let one = first.to_string();
+            assert_eq!(normalize_ascii(&one), normalize_unicode(&one), "{one:?}");
+            for second in &ascii {
+                let two = format!("{first}{second}");
+                assert_eq!(normalize_ascii(&two), normalize_unicode(&two), "{two:?}");
+            }
+        }
+        // Every ASCII character Unicode calls whitespace, the controls beside
+        // them that it does not, and a letter of each case, a digit, a mark.
+        let kinds = [
+            '\t', '\n', '\u{b}', '\u{c}', '\r', ' ', '\0', '\u{8}', '\u{e}', '\u{1c}', '\u{1f}',
+            '\u{7f}', 'A', 'z', '0', '-',
+        ];
+        for first in kinds {
+            for second in kinds {
+                for third in kinds {
+                    let three = format!("{first}{second}{third}");
+                    assert_eq!(
+                        normalize_ascii(&three),
+                        normalize_unicode(&three),
+                        "{three:?}"
+                    );
+                }
+            }
+        }
+        assert_eq!(normalize_ascii(""), "");
+        assert_eq!(
+            normalize_ascii("\t INVOICE\u{b}Date:\r\n  March 3,\u{c}2024 \n"),
+            "invoice date: march 3, 2024"
+        );
+    }
+
+    /// Text with anything but ASCII in it goes the long way, whatever else it
+    /// holds: a no-break or ideographic space is a space, a ligature and a
+    /// full-width figure are their letters, a sharp s folds to two letters,
+    /// and the whitespace around them collapses as it always did.
+    #[test]
+    fn other_text_still_goes_the_long_way() {
+        for (written, read) in [
+            ("Total\u{a0}Due", "total due"),
+            (" \u{3000}Total \u{2003}\t Due\u{85}", "total due"),
+            (
+                "O\u{fb03}ce  \u{ff12}\u{ff10}\u{ff12}\u{ff16}",
+                "office 2026",
+            ),
+            ("STRA\u{df}E\t1", "strasse 1"),
+            ("\u{212a}elvin\u{2014}2026", "kelvin-2026"),
+            ("Cafe\u{301}  \u{c9}t\u{e9}", "caf\u{e9} \u{e9}t\u{e9}"),
+            ("Qu\u{200b}ill\u{ad}on  Ridge", "quillon ridge"),
+        ] {
+            assert_eq!(normalize(written), read, "{written:?}");
+            assert_eq!(
+                normalize(written),
+                normalize_unicode(written),
+                "{written:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod searched_spelling_tests {
+    use std::sync::PoisonError;
+
+    use super::{
+        DateSpelling, SPELLINGS, SPELLINGS_KEPT, date_spellings, date_statements, normalize,
+        normalize_ascii, normalize_unicode, searched_spellings,
+    };
+
+    /// A date's spellings as every call used to work them out: each built,
+    /// and normalized the long way.
+    fn spellings_afresh(iso_date: &str) -> Vec<(String, DateSpelling)> {
+        date_spellings(iso_date)
+            .into_iter()
+            .map(|(candidate, spelling)| (normalize_unicode(&candidate), spelling))
+            .collect()
+    }
+
+    /// [`date_statements`] as it was before a date's spellings were kept,
+    /// over the spellings [`spellings_afresh`] works out.
+    fn statements_afresh(
+        candidates: &[(String, DateSpelling)],
+        normalized: &str,
+    ) -> Vec<(usize, DateSpelling)> {
+        let bytes = normalized.as_bytes();
+        let mut statements = Vec::new();
+        for (candidate, spelling) in candidates {
+            if candidate.is_empty() {
+                continue;
+            }
+            let mut from = 0;
+            while let Some(found) = normalized[from..].find(candidate) {
+                let position = from + found;
+                let end = position + candidate.len();
+                let digit_before = position > 0 && bytes[position - 1].is_ascii_digit();
+                let digit_after = bytes.get(end).is_some_and(u8::is_ascii_digit);
+                if !digit_before && !digit_after && !statements.contains(&(position, *spelling)) {
+                    statements.push((position, *spelling));
+                }
+                from = position + candidate.chars().next().map_or(1, char::len_utf8);
+            }
+        }
+        statements
+    }
+
+    /// xorshift64, as the fuzz tests scatter text: no dependency, and each
+    /// case reproduces from its number.
+    struct Rng(u64);
+
+    impl Rng {
+        fn seeded(case: u64) -> Self {
+            let seed = (case + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32_D192_ED03;
+            Self(seed.max(1))
+        }
+
+        fn below(&mut self, bound: usize) -> usize {
+            let mut value = self.0;
+            value ^= value << 13;
+            value ^= value >> 7;
+            value ^= value << 17;
+            self.0 = value;
+            usize::try_from(value % bound as u64).expect("below a usize bound")
+        }
+    }
+
+    /// Every day of four years, a leap year among them.
+    fn generated_dates() -> Vec<String> {
+        let mut dates = Vec::new();
+        for year in 2023..=2026 {
+            for month in 1..=12 {
+                let days = match month {
+                    2 if year % 4 == 0 => 29,
+                    2 => 28,
+                    4 | 6 | 9 | 11 => 30,
+                    _ => 31,
+                };
+                for day in 1..=days {
+                    dates.push(format!("{year:04}-{month:02}-{day:02}"));
+                }
+            }
+        }
+        dates
+    }
+
+    /// What stands between and against the spellings in a generated line:
+    /// the digits and letters the boundary check reads, punctuation, text
+    /// that is not ASCII, invisible characters, and every odd whitespace.
+    const BETWEEN: &[&str] = &[
+        " ", "  ", "", "1", "9", "a", ", ", "/", "-", ".", "\t", "\r\n", "\u{b}", "\u{c}",
+        "\u{a0}", "\u{3000}", "\u{2003}", "\u{200b}", "\u{e9}", "\u{2014}", "\u{fb01}", "\u{ff11}",
+        " dated ", " DUE: ",
+    ];
+
+    /// Things asked about that are not a date's shape, or are one only in
+    /// length: capitals, spaces and tabs where figures belong, text that is
+    /// not ASCII, months there are none of. The spellings of some of these
+    /// are not what `normalize` leaves them as, which is why the kept ones
+    /// are the normalized ones.
+    const NOT_DATES: &[&str] = &[
+        "",
+        "2026-4-1",
+        "2026-04-01T",
+        "2026-13-01",
+        "2026-00-10",
+        "2026-1\u{e9}-0",
+        "20\u{e9}6-01-2",
+        "\u{ff12}\u{ff10}\u{ff12}",
+        "ABCD-01-XY",
+        "JUNE-06-TH",
+        " 026-01-02",
+        "2026-01- 2",
+        "2026-01-2 ",
+        "2026\t01\t02",
+        "20\t\t-01-\u{b}2",
+        "    -01-  ",
+        "2026/01/02",
+        "0000-01-00",
+    ];
+
+    /// A line that writes `iso_date` and the dates beside it some of the ways
+    /// [`date_spellings`] lists, as a document might: in capitals, run into
+    /// digits and letters, and set apart by whatever [`BETWEEN`] holds.
+    fn generated_line(rng: &mut Rng, iso_dates: &[&str]) -> String {
+        let mut line = String::new();
+        for _ in 0..(2 + rng.below(5)) {
+            line.push_str(BETWEEN[rng.below(BETWEEN.len())]);
+            let spellings = date_spellings(iso_dates[rng.below(iso_dates.len())]);
+            if spellings.is_empty() {
+                line.push_str("no date");
+                continue;
+            }
+            let (spelling, _) = &spellings[rng.below(spellings.len())];
+            if rng.below(3) == 0 {
+                line.push_str(&spelling.to_uppercase());
+            } else {
+                line.push_str(spelling);
+            }
+        }
+        line.push_str(BETWEEN[rng.below(BETWEEN.len())]);
+        line
+    }
+
+    /// The spellings kept for a date are the ones it has: for every day of
+    /// four years - some 230,000 spellings - each is what the long way
+    /// through `normalize` makes of it, in the same order, and the short way
+    /// makes the same of it.
+    #[test]
+    fn a_dates_kept_spellings_are_its_spellings_normalized() {
+        let dates = generated_dates();
+        assert!(dates.len() > 1_400);
+        let mut spellings = 0_usize;
+        for date in &dates {
+            let afresh = spellings_afresh(date);
+            // May has the fewest, with no abbreviation.
+            assert!(afresh.len() >= 70, "{date}");
+            assert!(afresh.iter().all(|(candidate, _)| !candidate.is_empty()));
+            assert_eq!(&*searched_spellings(date), afresh.as_slice(), "{date}");
+            // Asked again, the kept ones come back.
+            assert_eq!(&*searched_spellings(date), afresh.as_slice(), "{date}");
+            for ((written, _), (read, _)) in date_spellings(date).iter().zip(&afresh) {
+                assert_eq!(normalize_ascii(written), *read, "{written:?}");
+            }
+            spellings += afresh.len();
+        }
+        assert!(spellings > 200_000, "{spellings}");
+    }
+
+    /// Keeping a date's spellings changes nothing a check can see. Over a
+    /// few thousand generated lines - each date's own spellings and its
+    /// neighbours', against digits, letters, text that is not ASCII and
+    /// every odd whitespace, normalized and raw - the statements found are
+    /// the ones found by working every spelling out afresh. There are far
+    /// more dates here than are kept, so this is also every date dropped
+    /// from the list and worked out again.
+    #[test]
+    fn statements_are_found_as_they_were_when_every_spelling_was_worked_out_afresh() {
+        // Every fifth day and the day after it: several times as many dates
+        // as are kept, each one's spellings worked out afresh once.
+        let dates = generated_dates();
+        let asked_about: Vec<(&str, Vec<(String, DateSpelling)>)> = dates
+            .iter()
+            .enumerate()
+            .filter(|(at, _)| at % 5 < 2)
+            .map(|(_, date)| (date.as_str(), spellings_afresh(date)))
+            .collect();
+        assert!(asked_about.len() > 8 * SPELLINGS_KEPT);
+        let not_dates: Vec<(&str, Vec<(String, DateSpelling)>)> = NOT_DATES
+            .iter()
+            .map(|asked| (*asked, spellings_afresh(asked)))
+            .collect();
+        let mut stated = 0_usize;
+        for case in 0..2_000_u64 {
+            let mut rng = Rng::seeded(case);
+            let at = rng.below(asked_about.len() - 1) & !1;
+            let (date, date_afresh) = &asked_about[at];
+            let (next_day, next_day_afresh) = &asked_about[at + 1];
+            let (not_a_date, not_a_date_afresh) = &not_dates[rng.below(not_dates.len())];
+            let written = [
+                date,
+                date,
+                next_day,
+                dates[rng.below(dates.len())].as_str(),
+                dates[rng.below(dates.len())].as_str(),
+                not_a_date,
+            ];
+            let line = generated_line(&mut rng, &written);
+            let normalized = normalize(&line);
+            for (asked, afresh) in [
+                (*date, date_afresh),
+                (*next_day, next_day_afresh),
+                (*not_a_date, not_a_date_afresh),
+            ] {
+                for text in [&normalized, &line] {
+                    let found = date_statements(asked, text);
+                    assert_eq!(
+                        found,
+                        statements_afresh(afresh, text),
+                        "case {case}: {asked:?} in {text:?}"
+                    );
+                    stated += found.len();
+                }
+            }
+        }
+        // The lines do state their dates: this compares findings, not blanks.
+        assert!(stated > 2_000, "{stated}");
+    }
+
+    /// What is asked about need not be a date. Anything else is answered as
+    /// it was - mostly with nothing, and a ten-character string with a month
+    /// in the middle with whatever its "spellings" find - and is kept only
+    /// if it has spellings.
+    #[test]
+    fn what_is_not_a_date_is_answered_as_it_was() {
+        for asked in NOT_DATES {
+            let afresh = spellings_afresh(asked);
+            for case in 0..40_u64 {
+                let mut rng = Rng::seeded(case);
+                let line = generated_line(&mut rng, &[asked, asked, "2026-01-02"]);
+                for text in [normalize(&line), line] {
+                    assert_eq!(
+                        date_statements(asked, &text),
+                        statements_afresh(&afresh, &text),
+                        "case {case}: {asked:?} in {text:?}"
+                    );
+                }
+            }
+        }
+        // A capital or a space in what was asked is folded in its spellings
+        // as it is in the text, so the two still meet.
+        assert!(!date_statements("ABCD-01-XY", &normalize("January XY, ABCD")).is_empty());
+        assert!(!date_statements("2026-01- 2", &normalize("January 2, 2026")).is_empty());
+        assert!(date_statements("2026-13-01", "2026-13-01").is_empty());
+        let kept = SPELLINGS.lock().unwrap_or_else(PoisonError::into_inner);
+        for (date, spellings) in kept.iter() {
+            assert!(!spellings.is_empty(), "{date:?}");
+            assert!(!["", "2026-4-1", "2026-13-01"].contains(&date.as_str()));
+        }
+    }
+
+    /// The list is bounded, and one list serves every thread: eight threads
+    /// asking about overlapping dates, far more of them than are kept, each
+    /// get the statements working it out afresh gives, and the list never
+    /// holds more than [`SPELLINGS_KEPT`] dates, or one date twice.
+    #[test]
+    fn the_kept_spellings_are_bounded_and_shared_between_threads() {
+        let dates = generated_dates();
+        let asked_about: Vec<(&str, Vec<(String, DateSpelling)>)> = dates
+            .iter()
+            .take(3 * SPELLINGS_KEPT)
+            .map(|date| (date.as_str(), spellings_afresh(date)))
+            .collect();
+        let asked_about = &asked_about;
+        std::thread::scope(|scope| {
+            for thread in 0..8_usize {
+                scope.spawn(move || {
+                    for round in 0..600_usize {
+                        // Threads walk the same dates in step, so one date is
+                        // worked out and added from several at once.
+                        let (date, afresh) =
+                            &asked_about[(round * 7 + (thread % 3) * 11) % asked_about.len()];
+                        let (spelling, _) = &afresh[(round + thread) % afresh.len()];
+                        let line = format!("dated {spelling}; due 1{spelling}");
+                        let found = date_statements(date, &line);
+                        assert_eq!(found, statements_afresh(afresh, &line), "{date}: {line:?}");
+                        assert!(!found.is_empty(), "{date}: {line:?}");
+                        let kept = SPELLINGS.lock().unwrap_or_else(PoisonError::into_inner);
+                        assert!(kept.len() <= SPELLINGS_KEPT, "{}", kept.len());
+                        let mut seen: Vec<&str> = kept.iter().map(|(date, _)| &**date).collect();
+                        seen.sort_unstable();
+                        seen.dedup();
+                        assert_eq!(seen.len(), kept.len(), "a date is kept once");
+                    }
+                });
+            }
+        });
+    }
+
+    /// A panic while the list is locked - the engine catches panics and
+    /// carries on with the next document - does not stop dates being read.
+    #[test]
+    fn a_panic_holding_the_list_does_not_stop_dates_being_read() {
+        let panicked = std::thread::spawn(|| {
+            let _kept = SPELLINGS.lock().unwrap_or_else(PoisonError::into_inner);
+            panic!("a panic with the kept spellings locked");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert!(SPELLINGS.is_poisoned());
+        let line = normalize("Effective as of April 1, 2026");
+        assert_eq!(date_statements("2026-04-01", &line).len(), 1);
+        assert_eq!(
+            date_statements("2031-07-09", "due 9 july 2031"),
+            statements_afresh(&spellings_afresh("2031-07-09"), "due 9 july 2031")
+        );
     }
 }
 
