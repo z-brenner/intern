@@ -29,7 +29,7 @@ function actionSet(item: QueueItem): string[] {
 }
 
 const proposal = { proposedFilename: '2024-03-01 Lease Agreement.pdf', confidence: 0.8, description: 'A lease.' };
-const review: QueueItem = { id: 'review', originalFilename: 'scan.pdf', status: 'review', ...proposal, reason: 'The model reported low confidence in its own proposal.', errorCode: 'LOW_CONFIDENCE' };
+const review: QueueItem = { id: 'review', originalFilename: 'scan.pdf', status: 'review', ...proposal, reason: 'The model was unsure of its reading. Check the name against the document, starting with the date and the parties.', errorCode: 'LOW_CONFIDENCE' };
 
 describe('the actions each status offers', () => {
   afterEach(() => cleanup());

@@ -25,6 +25,37 @@ const MIN_DESCRIPTION_WORDS: usize = 6;
 /// A subject shortened to fit keeps at most this many words.
 const SHORT_SUBJECT_WORDS: usize = 6;
 
+/// The kinds of release an organization publishes - a regulator's notice
+/// of an enforcement action, a press office's announcement - as a type
+/// names them. Each is a record of what it announces, about its subject;
+/// only a release a party gives ("General Release", "Release of Claims")
+/// is an agreement.
+const PUBLISHED_RELEASES: &[&str] = &["enforcement release", "press release", "news release"];
+
+/// Words that make a type an agreement besides "release", which also
+/// names what an organization publishes ([`PUBLISHED_RELEASES`]).
+const AGREEMENT_WORDS: &[&str] = &[
+    "agreement",
+    "contract",
+    "lease",
+    "statement of work",
+    // Filers agreeing to file one Schedule 13D or 13G for all of them
+    // (Rule 13d-1(k)): an agreement among them, whatever its title calls it.
+    "joint filing",
+    "terms",
+    "license",
+    "licence",
+    "deed",
+    "promissory note",
+    "waiver",
+];
+
+/// Parties the reply gave no role at all, of which a default that kept the
+/// first is doubtful: a list - the people a meeting's minutes record, the
+/// lenders a notice goes to - that nothing told apart. Two such parties are
+/// as often a record's subject and the one who made it.
+const MIN_ALIKE_WITHOUT_ROLE: usize = 3;
+
 impl DocumentClass {
     /// The class of a validated document type. Families whose names contain
     /// other families' words are tested first: an addendum is an amendment
@@ -36,6 +67,7 @@ impl DocumentClass {
         };
         let lowered = document_type.to_lowercase();
         let has = |words: &[&str]| words.iter().any(|word| contains_word(&lowered, word));
+        let published = has(PUBLISHED_RELEASES);
         if has(&["amendment", "addendum", "modification", "change order"]) {
             Self::Amendment
         } else if has(&["notice", "notification", "claim"]) {
@@ -68,24 +100,10 @@ impl DocumentClass {
                 ]))
         {
             Self::Issued
-        } else if has(&[
-            "agreement",
-            "contract",
-            "lease",
-            "statement of work",
-            // Filers agreeing to file one Schedule 13D or 13G for all of
-            // them (Rule 13d-1(k)): an agreement among them, whatever its
-            // title calls it.
-            "joint filing",
-            "terms",
-            "license",
-            "licence",
-            "deed",
-            "promissory note",
-            "release",
-            "waiver",
-        ]) {
+        } else if has(AGREEMENT_WORDS) || (!published && has(&["release"])) {
             Self::Agreement
+        } else if published {
+            Self::Record
         } else if has(&["email", "e-mail"]) {
             Self::Email
         } else if has(&["letter", "memo", "memorandum"]) {
@@ -123,6 +141,18 @@ impl DocumentClass {
             Self::Unknown
         }
     }
+}
+
+/// Whether a type names a release an organization publishes
+/// ([`PUBLISHED_RELEASES`]), which [`DocumentClass::of`] sorts with the
+/// records.
+pub(crate) fn names_a_published_release(document_type: Option<&str>) -> bool {
+    document_type.is_some_and(|value| {
+        let lowered = value.to_lowercase();
+        PUBLISHED_RELEASES
+            .iter()
+            .any(|kind| contains_word(&lowered, kind))
+    })
 }
 
 /// Whether `phrase` stands in `text` as whole words.
@@ -168,8 +198,16 @@ pub struct Relation {
     /// [`relation_from_roles`].
     pub on_proposed_roles: bool,
     /// No role settled the relation: a party was named by default, as the
-    /// first the document names, or the one party there is.
+    /// first the document names, or the one party there is, and the reply's
+    /// roles may name another in its place ([`relation_from_roles`]).
     pub defaulted: bool,
+    /// The rules named a party whose role nothing in the document settles,
+    /// and the reply's own reading of that party speaks against the name:
+    /// a document "for" a party the reply called its issuer or sender, or
+    /// a default that kept the first of several parties the reply gave one
+    /// and the same role. Neither the document nor the reply is behind such
+    /// a name, and it waits for a person; the basis says why.
+    pub doubtful: bool,
 }
 
 /// The side a document is "about": the client, customer, tenant, employee,
@@ -239,6 +277,10 @@ pub struct RelationCues {
     /// names them - the one bringing it, then the one answering it - by
     /// their places in the cast.
     pub caption: Option<(usize, usize)>,
+    /// The debtor of the bankruptcy case the document is filed in, as its
+    /// caption names it ("In re: Delta Mills, Inc., et al., Debtors."), by
+    /// its place in the cast.
+    pub debtor: Option<usize>,
 }
 
 /// The filename's parties and joining word, from the document's class and
@@ -319,6 +361,7 @@ pub fn relation_from_roles(
         basis: format!("{}, on the reply's roles", fallback.basis),
         on_proposed_roles: true,
         defaulted: false,
+        doubtful: false,
     }
 }
 
@@ -336,6 +379,7 @@ fn relation_from_supported_roles(
             basis: "no parties".into(),
             on_proposed_roles: false,
             defaulted: false,
+            doubtful: false,
         };
     };
     let with = |roles: &[PartyRole]| {
@@ -351,6 +395,7 @@ fn relation_from_supported_roles(
         basis: format!("{}: {basis}", class.as_str()),
         on_proposed_roles: false,
         defaulted: false,
+        doubtful: false,
     };
     // A party named with no role to settle it, where the reply's roles may
     // say more ([`relation_from_roles`]): a form's first party, which is as
@@ -361,6 +406,36 @@ fn relation_from_supported_roles(
     let by_default = |relation: PartyRelation, party: &CastMember, basis: &str| Relation {
         defaulted: true,
         ..one(relation, party, basis)
+    };
+    // A party a document is "for" though no role of its own settles it: the
+    // party a provider's document is about, the one party a notice names,
+    // the first a record names. The reply's roles never replace such a name
+    // - a reply calls the company an improvement notice is served on its
+    // "contractor" - but a reply that called the party the document's
+    // issuer or sender read the document as coming from it, which "for"
+    // denies: a court's public notice is not for the court, nor an
+    // association's newsletter for the association. Neither the document
+    // nor the reply is behind the name, and it waits for a person
+    // ([`Relation::doubtful`]). A form's filer is no such party: the one
+    // that issues a form and fills it in is the one it is for.
+    let for_unassigned = |party: &CastMember, basis: &str| {
+        let relation = one(PartyRelation::For, party, basis);
+        match party.proposed_role {
+            Some(role @ (PartyRole::Issuer | PartyRole::Sender))
+                if party.supported_role().is_none() =>
+            {
+                Relation {
+                    basis: format!(
+                        "{}, though the reply called it the {}",
+                        relation.basis,
+                        role.as_str()
+                    ),
+                    doubtful: true,
+                    ..relation
+                }
+            }
+            _ => relation,
+        }
     };
     // A document that comes from a provider is about the party nothing
     // else is said of: a landlord's notice about its tenant, a lender's
@@ -388,12 +463,51 @@ fn relation_from_supported_roles(
             .iter()
             .find(|party| party.supported_role().is_none())
     };
+    // A default keeps the first party no role assigns - the first a record
+    // names, or the one a provider's document is about beside its provider.
+    // Where the reply gave another such party the very role it gave that
+    // one, it told the two no further apart than the document did, and only
+    // coming first chose between them: the three people a meeting's minutes
+    // list, each called the client, are not the one the minutes are for,
+    // whether or not a letterhead names the body that keeps them. A list of
+    // [`MIN_ALIKE_WITHOUT_ROLE`] parties the reply gave no role at all is
+    // as alike. The name stands, and waits for a person
+    // ([`Relation::doubtful`]).
+    let first_of_alike = |relation: Relation, party: &CastMember| {
+        let alike = 1 + parties
+            .iter()
+            .filter(|other| {
+                !std::ptr::eq(*other, party)
+                    && other.supported_role().is_none()
+                    && other.proposed_role == party.proposed_role
+            })
+            .count();
+        let (enough, reading) = match party.proposed_role {
+            Some(role) => (2, format!("the reply called the {}", role.as_str())),
+            None => (MIN_ALIKE_WITHOUT_ROLE, "the reply gave no role".to_owned()),
+        };
+        if alike < enough {
+            return relation;
+        }
+        Relation {
+            basis: format!("{}, one of {alike} {reading}", relation.basis),
+            doubtful: true,
+            ..relation
+        }
+    };
+    // The party a provider's document is about: "for" it, unless the
+    // reply's own reading speaks against that ([`for_unassigned`],
+    // `first_of_alike`).
+    let counterpart_for = |party: &CastMember| {
+        first_of_alike(for_unassigned(party, "the provider's counterpart"), party)
+    };
     let unresolved = || Relation {
         relation: PartyRelation::None,
         parties: vec![first.name.clone()],
         basis: format!("{}: unresolved", class.as_str()),
         on_proposed_roles: false,
         defaulted: false,
+        doubtful: false,
     };
     let lowered = document_type.unwrap_or_default().to_lowercase();
     // The two sides the document itself names: "by and between A and B".
@@ -404,6 +518,7 @@ fn relation_from_supported_roles(
             basis: format!("{}: by and between", class.as_str()),
             on_proposed_roles: false,
             defaulted: false,
+            doubtful: false,
         }),
         _ => None,
     };
@@ -424,16 +539,52 @@ fn relation_from_supported_roles(
             basis: format!("{}: the case's two sides", class.as_str()),
             on_proposed_roles: false,
             defaulted: false,
+            doubtful: false,
         };
     }
+    // A notice filed in a bankruptcy case is filed under the case too, and
+    // a bankruptcy case has no two sides: it is its debtor's. The notice
+    // is for the debtor, whoever gives it - the creditors' committee that
+    // appears in the case, the creditor that sets a hearing in it, the
+    // trustee that appoints the committee - and whatever role the reply
+    // gave them.
+    if class == DocumentClass::Notice
+        && let Some(debtor) = cues.debtor.and_then(|index| parties.get(index))
+    {
+        return one(PartyRelation::For, debtor, "the debtor of the case");
+    }
+    // A type that is an agreement by "release" alone may name a release an
+    // organization publishes in words [`PUBLISHED_RELEASES`] does not hold -
+    // a "Media Release", an "Earnings Release" - which is about its subject,
+    // not between the first two parties it names. A release a party gives
+    // names its two sides ("by and between"); one whose document names none
+    // is joined "between" its first two parties by their order alone, and
+    // waits for a person ([`Relation::doubtful`]).
+    let released_alone = class == DocumentClass::Agreement
+        && contains_word(&lowered, "release")
+        && !AGREEMENT_WORDS
+            .iter()
+            .any(|word| contains_word(&lowered, word));
     match class {
         DocumentClass::Agreement | DocumentClass::Amendment => match parties {
+            [a, b, ..] if released_alone && !cues.between => Relation {
+                relation: PartyRelation::Between,
+                parties: vec![a.name.clone(), b.name.clone()],
+                basis: format!(
+                    "{}: the first two parties, of a release that names no two sides",
+                    class.as_str()
+                ),
+                on_proposed_roles: false,
+                defaulted: false,
+                doubtful: true,
+            },
             [a, b, ..] => Relation {
                 relation: PartyRelation::Between,
                 parties: vec![a.name.clone(), b.name.clone()],
                 basis: format!("{}: the first two parties", class.as_str()),
                 on_proposed_roles: false,
                 defaulted: false,
+                doubtful: false,
             },
             [only] => one(PartyRelation::With, only, "one party"),
             [] => unreachable!("an empty cast returned above"),
@@ -499,6 +650,7 @@ fn relation_from_supported_roles(
                     basis: "issued: the first party is the reply's customer".into(),
                     on_proposed_roles: false,
                     defaulted: false,
+                    doubtful: false,
                 };
             }
             match parties.iter().find(|party| !receiving(party)) {
@@ -508,6 +660,7 @@ fn relation_from_supported_roles(
                     basis: "issued: unresolved".into(),
                     on_proposed_roles: false,
                     defaulted: false,
+                    doubtful: false,
                 },
                 None => Relation {
                     relation: PartyRelation::None,
@@ -515,6 +668,7 @@ fn relation_from_supported_roles(
                     basis: "issued: only the customer is named".into(),
                     on_proposed_roles: false,
                     defaulted: false,
+                    doubtful: false,
                 },
             }
         }
@@ -529,7 +683,7 @@ fn relation_from_supported_roles(
                 return one(PartyRelation::From, party, "the issuer");
             }
             if let Some(party) = counterpart(false) {
-                return one(PartyRelation::For, party, "the provider's counterpart");
+                return counterpart_for(party);
             }
             if let Some(party) = with(PROVIDER) {
                 return one(PartyRelation::From, party, "the provider");
@@ -544,6 +698,7 @@ fn relation_from_supported_roles(
                     basis: "notice: two sides".into(),
                     on_proposed_roles: false,
                     defaulted: false,
+                    doubtful: false,
                 };
             }
             // A notice naming one party, whose role nothing settles, is
@@ -551,7 +706,7 @@ fn relation_from_supported_roles(
             if let [only] = parties
                 && only.supported_role().is_none()
             {
-                return one(PartyRelation::For, only, "the one party, by default");
+                return for_unassigned(only, "the one party, by default");
             }
             unresolved()
         }
@@ -581,7 +736,7 @@ fn relation_from_supported_roles(
                 return one(PartyRelation::For, party, "the party it is about");
             }
             if let Some(party) = counterpart(false) {
-                return one(PartyRelation::For, party, "the provider's counterpart");
+                return counterpart_for(party);
             }
             if let Some(party) = with(PROVIDER) {
                 return one(PartyRelation::From, party, "the provider");
@@ -626,7 +781,7 @@ fn relation_from_supported_roles(
                 return one(PartyRelation::To, party, "the recipient");
             }
             if let Some(party) = counterpart(true) {
-                return one(PartyRelation::For, party, "the provider's counterpart");
+                return counterpart_for(party);
             }
             if let Some(party) = with(&[PartyRole::Issuer, PartyRole::Sender]) {
                 return one(PartyRelation::From, party, "the issuer");
@@ -635,7 +790,9 @@ fn relation_from_supported_roles(
             // first names: a maintenance record for the aircraft's owner,
             // a certificate for the insured.
             match unassigned() {
-                Some(party) => one(PartyRelation::For, party, "the first party, by default"),
+                Some(party) => {
+                    first_of_alike(for_unassigned(party, "the first party, by default"), party)
+                }
                 None => unresolved(),
             }
         }
@@ -661,7 +818,7 @@ fn relation_from_supported_roles(
             // the other side, which files it; a party called the issuer
             // with no one on the other side is the filer itself.
             if let Some(party) = counterpart(false) {
-                return one(PartyRelation::For, party, "the provider's counterpart");
+                return counterpart_for(party);
             }
             if let Some(party) = with(&[PartyRole::Issuer, PartyRole::Sender]) {
                 return one(PartyRelation::For, party, "the filer");
@@ -669,7 +826,10 @@ fn relation_from_supported_roles(
             // A form whose roles settle nothing is the filing of the party
             // it first names.
             match unassigned() {
-                Some(party) => by_default(PartyRelation::For, party, "the filer, by default"),
+                Some(party) => first_of_alike(
+                    by_default(PartyRelation::For, party, "the filer, by default"),
+                    party,
+                ),
                 None => unresolved(),
             }
         }
@@ -682,6 +842,7 @@ fn relation_from_supported_roles(
                         basis: "unknown: a bilateral pair".into(),
                         on_proposed_roles: false,
                         defaulted: false,
+                        doubtful: false,
                     };
                 }
             }
@@ -1486,7 +1647,8 @@ mod tests {
     /// it was made for: where the rules only named them by default, the
     /// reply's roles decide, and the name says so. A form whose issuer the
     /// document names is for the party on its other side. A notice naming
-    /// one party is for that party whatever the reply called it, and a
+    /// one party is for that party whatever the reply called it - though a
+    /// reply that called it the issuer leaves the name doubtful - and a
     /// default the reply's roles agree with stays a settled default.
     #[test]
     fn a_forms_first_party_and_a_records_one_party_give_way_to_the_replys_roles() {
@@ -1553,6 +1715,7 @@ mod tests {
         );
         assert_eq!(notice.relation, PartyRelation::For);
         assert!(!notice.on_proposed_roles, "{}", notice.basis);
+        assert!(notice.doubtful, "{}", notice.basis);
         let agreed = relation_from_roles(
             DocumentClass::Form,
             Some("Benefits Enrollment Change Form"),
@@ -1565,6 +1728,355 @@ mod tests {
         assert_eq!(agreed.relation, PartyRelation::For);
         assert_eq!(agreed.parties, vec!["Westbrook Kettle Brewing".to_owned()]);
         assert!(!agreed.on_proposed_roles, "{}", agreed.basis);
+        assert!(!agreed.doubtful, "{}", agreed.basis);
+    }
+
+    /// A notice is for the one party it names, a record for the first no
+    /// role assigns, and a provider's document for the party nothing else
+    /// is said of, whatever the reply called them: the name stands. Where
+    /// the reply called that party the document's issuer or sender, it read
+    /// the document as coming from the party the name says it is for, and
+    /// the name says that it is doubtful. Any other role the reply gave -
+    /// the "contractor" an improvement notice is served on - leaves it as
+    /// settled as it was; a role the document supports is no default; and
+    /// a form issued by the party filling it in is that party's filing.
+    #[test]
+    fn a_name_for_the_party_the_reply_called_its_issuer_is_doubtful() {
+        let cues = RelationCues::default();
+        let unsupported = |name: &str, proposed: Option<PartyRole>| CastMember {
+            name: name.to_owned(),
+            role: None,
+            role_supported: false,
+            proposed_role: proposed,
+        };
+        // A court's public notice the reply read as the court's own, and a
+        // loss notice for the insured it names, whose "for" is right.
+        for (kind, name, proposed, doubtful) in [
+            (
+                "Public Notice",
+                "Harrow County Water Court",
+                Some(PartyRole::Issuer),
+                true,
+            ),
+            (
+                "Public Notice",
+                "Harrow County Water Court",
+                Some(PartyRole::Sender),
+                true,
+            ),
+            (
+                "Notice of Loss",
+                "Westbrook Kettle Brewing",
+                Some(PartyRole::Client),
+                false,
+            ),
+            (
+                "Improvement Notice",
+                "Tarnwick Offshore (U.K.) Limited",
+                Some(PartyRole::Contractor),
+                false,
+            ),
+            (
+                "Notice of Loss",
+                "Westbrook Kettle Brewing",
+                Some(PartyRole::Recipient),
+                false,
+            ),
+            ("Notice of Loss", "Westbrook Kettle Brewing", None, false),
+        ] {
+            let relation = relation_from_roles(
+                DocumentClass::Notice,
+                Some(kind),
+                &[unsupported(name, proposed)],
+                cues,
+            );
+            assert_eq!(relation.relation, PartyRelation::For, "{proposed:?}");
+            assert_eq!(relation.parties, vec![name]);
+            assert_eq!(relation.doubtful, doubtful, "{proposed:?}");
+            assert_eq!(
+                relation.basis.contains("though the reply called it"),
+                doubtful,
+                "{}",
+                relation.basis
+            );
+            assert!(!relation.on_proposed_roles, "{proposed:?}");
+        }
+        // A statement "for" the party the reply said it comes from, by the
+        // record's default.
+        let statement = relation_from_roles(
+            DocumentClass::Record,
+            Some("Service Center Statement"),
+            &[
+                unsupported("Corvane Media Group", Some(PartyRole::Issuer)),
+                unsupported("Pellham Tobacco Company", Some(PartyRole::Buyer)),
+            ],
+            cues,
+        );
+        assert_eq!(statement.relation, PartyRelation::For);
+        assert_eq!(statement.parties, vec!["Corvane Media Group"]);
+        assert!(statement.doubtful, "{}", statement.basis);
+        // A report "for" the party nothing else is said of, beside its
+        // issuer, which the reply called the issuer too.
+        let report = relation_from_roles(
+            DocumentClass::Record,
+            Some("Annual Report"),
+            &[
+                CastMember {
+                    name: "Rookmere Precision Castings Corporation".into(),
+                    role: Some(PartyRole::Issuer),
+                    role_supported: true,
+                    proposed_role: Some(PartyRole::Issuer),
+                },
+                unsupported("Casimir Ellwood", Some(PartyRole::Sender)),
+            ],
+            cues,
+        );
+        assert_eq!(report.relation, PartyRelation::For);
+        assert_eq!(report.parties, vec!["Casimir Ellwood"]);
+        assert!(report.doubtful, "{}", report.basis);
+        // The reply told the first party from the second, and did not say
+        // the record comes from it: the default is as settled as before.
+        let settled = relation_from_roles(
+            DocumentClass::Record,
+            Some("Site Completion Report"),
+            &[
+                unsupported("Kestrel Point Developers LLC", Some(PartyRole::Client)),
+                unsupported("Alder Geosciences, Inc.", Some(PartyRole::Contractor)),
+            ],
+            cues,
+        );
+        assert_eq!(settled.relation, PartyRelation::For);
+        assert_eq!(settled.parties, vec!["Kestrel Point Developers LLC"]);
+        assert!(!settled.doubtful, "{}", settled.basis);
+        // A notice whose issuer the document supports is from it.
+        let from = relation_from_roles(
+            DocumentClass::Notice,
+            Some("Public Notice"),
+            &cast(&[("Harrow County Water Court", Some(PartyRole::Issuer))]),
+            cues,
+        );
+        assert_eq!(from.relation, PartyRelation::From);
+        assert!(!from.doubtful, "{}", from.basis);
+        // A form the reply said its one party issued is that party's
+        // filing, by the form's own rows.
+        let form = relation_from_roles(
+            DocumentClass::Form,
+            Some("Annual Registration Form"),
+            &[unsupported(
+                "Brightwater Angling Club",
+                Some(PartyRole::Issuer),
+            )],
+            cues,
+        );
+        assert_eq!(form.relation, PartyRelation::For);
+        assert!(!form.doubtful, "{}", form.basis);
+    }
+
+    /// A record's default keeps the first party no role assigns, a form's
+    /// the first it names, and every class's provider's counterpart the
+    /// first beside its provider. Where the reply gave another such party
+    /// the very role it gave that one - three attendees of a meeting each
+    /// called the client - or gave a list of three no role at all, only
+    /// coming first chose the name, and it says it is doubtful. A reply
+    /// that told the parties apart leaves the default as it was, and a party
+    /// the document's own label names is no default.
+    #[test]
+    fn a_default_that_kept_one_of_several_alike_is_doubtful() {
+        let cues = RelationCues::default();
+        let unsupported = |name: &str, proposed: Option<PartyRole>| CastMember {
+            name: name.to_owned(),
+            role: None,
+            role_supported: false,
+            proposed_role: proposed,
+        };
+        let record = |parties: &[CastMember]| {
+            relation_from_roles(DocumentClass::Record, Some("Minutes"), parties, cues)
+        };
+        let attendees = record(&[
+            unsupported("Odalys Brandt", Some(PartyRole::Client)),
+            unsupported("Teodor Lindqvist", Some(PartyRole::Client)),
+            unsupported("Maren Achterberg", Some(PartyRole::Client)),
+        ]);
+        assert_eq!(attendees.relation, PartyRelation::For);
+        assert_eq!(attendees.parties, vec!["Odalys Brandt"]);
+        assert!(attendees.doubtful, "{}", attendees.basis);
+        assert!(
+            attendees
+                .basis
+                .ends_with("one of 3 the reply called the client"),
+            "{}",
+            attendees.basis
+        );
+        // Told apart: the default is as settled as before.
+        let report = record(&[
+            unsupported("Kestrel Point Developers LLC", Some(PartyRole::Client)),
+            unsupported("Alder Geosciences, Inc.", Some(PartyRole::Contractor)),
+        ]);
+        assert_eq!(report.parties, vec!["Kestrel Point Developers LLC"]);
+        assert!(!report.doubtful, "{}", report.basis);
+        // No role from the reply for two parties: a record's subject and
+        // the one who made it, as often as not. Three it gave no role are a
+        // list nothing told apart.
+        let bare = record(&[
+            unsupported("Odalys Brandt", None),
+            unsupported("Teodor Lindqvist", None),
+        ]);
+        assert_eq!(bare.parties, vec!["Odalys Brandt"]);
+        assert!(!bare.doubtful, "{}", bare.basis);
+        let listed = record(&[
+            unsupported("Odalys Brandt", None),
+            unsupported("Teodor Lindqvist", None),
+            unsupported("Maren Achterberg", None),
+        ]);
+        assert_eq!(listed.parties, vec!["Odalys Brandt"]);
+        assert!(listed.doubtful, "{}", listed.basis);
+        assert!(
+            listed.basis.ends_with("one of 3 the reply gave no role"),
+            "{}",
+            listed.basis
+        );
+        // A body whose letterhead the document supports as the minutes'
+        // issuer leaves the attendees as the provider's counterpart, and the
+        // first of them is no more the one the minutes are for.
+        let issuer = CastMember {
+            name: "Halverston Cooperative Grocers".into(),
+            role: Some(PartyRole::Issuer),
+            role_supported: true,
+            proposed_role: Some(PartyRole::Issuer),
+        };
+        let kept = record(&[
+            issuer.clone(),
+            unsupported("Odalys Brandt", Some(PartyRole::Client)),
+            unsupported("Teodor Lindqvist", Some(PartyRole::Client)),
+            unsupported("Maren Achterberg", Some(PartyRole::Client)),
+        ]);
+        assert_eq!(kept.relation, PartyRelation::For);
+        assert_eq!(kept.parties, vec!["Odalys Brandt"]);
+        assert!(kept.doubtful, "{}", kept.basis);
+        assert!(
+            kept.basis
+                .starts_with("record: the provider's counterpart, one of 3"),
+            "{}",
+            kept.basis
+        );
+        // The provider's counterpart of every class reads the same way: a
+        // landlord's notice, letter or form about the first of two people
+        // the reply both called the tenant.
+        let landlord = CastMember {
+            name: "Harrow & Pike Estates Ltd".into(),
+            role: Some(PartyRole::Landlord),
+            role_supported: true,
+            proposed_role: Some(PartyRole::Landlord),
+        };
+        for (class, kind) in [
+            (DocumentClass::Notice, "Rent Review Notice"),
+            (DocumentClass::Letter, "Rent Arrears Letter"),
+            (DocumentClass::Form, "Tenancy Registration Form"),
+        ] {
+            let alike = relation_from_roles(
+                class,
+                Some(kind),
+                &[
+                    landlord.clone(),
+                    unsupported("Odalys Brandt", Some(PartyRole::Tenant)),
+                    unsupported("Teodor Lindqvist", Some(PartyRole::Tenant)),
+                ],
+                cues,
+            );
+            assert_eq!(alike.relation, PartyRelation::For, "{kind}");
+            assert_eq!(alike.parties, vec!["Odalys Brandt"], "{kind}");
+            assert!(alike.doubtful, "{kind}: {}", alike.basis);
+        }
+        // One client beside a contractor: the counterpart is the client, as
+        // settled as before.
+        let served = record(&[
+            issuer.clone(),
+            unsupported("Kestrel Point Developers LLC", Some(PartyRole::Client)),
+            unsupported("Alder Geosciences, Inc.", Some(PartyRole::Contractor)),
+        ]);
+        assert_eq!(served.parties, vec!["Kestrel Point Developers LLC"]);
+        assert_eq!(served.basis, "record: the provider's counterpart");
+        assert!(!served.doubtful, "{}", served.basis);
+        // A party the document's own label names is named by its role, and
+        // the people beside it change nothing.
+        let labeled = record(&[
+            CastMember {
+                name: "Ione Kowalczyk".into(),
+                role: Some(PartyRole::Client),
+                role_supported: true,
+                proposed_role: Some(PartyRole::Client),
+            },
+            unsupported("Odalys Brandt", Some(PartyRole::Client)),
+            unsupported("Teodor Lindqvist", Some(PartyRole::Client)),
+        ]);
+        assert_eq!(labeled.parties, vec!["Ione Kowalczyk"]);
+        assert!(!labeled.doubtful, "{}", labeled.basis);
+        // A form's first party, of two the reply both called the employee,
+        // is its filer only by coming first.
+        let form = |second: Option<PartyRole>| {
+            relation_from_roles(
+                DocumentClass::Form,
+                Some("Benefits Enrollment Change Form"),
+                &[
+                    unsupported("Westbrook Kettle Brewing", Some(PartyRole::Employee)),
+                    unsupported("Tamsin Okonkwo", second),
+                ],
+                cues,
+            )
+        };
+        let alike = form(Some(PartyRole::Employee));
+        assert_eq!(alike.relation, PartyRelation::For);
+        assert_eq!(alike.parties, vec!["Westbrook Kettle Brewing"]);
+        assert!(alike.doubtful, "{}", alike.basis);
+        let apart = form(Some(PartyRole::Issuer));
+        assert_eq!(apart.parties, vec!["Westbrook Kettle Brewing"]);
+        assert!(!apart.doubtful, "{}", apart.basis);
+    }
+
+    /// A type that is an agreement by "release" alone - a "Media Release"
+    /// or an "Earnings Release" an organization publishes, as well as a
+    /// release a party gives - joins its first two parties "between" by
+    /// their order alone where the document names no two sides, and says
+    /// that it is doubtful. A release whose document names its sides "by
+    /// and between", and an agreement that is one by another word, are as
+    /// settled as before.
+    #[test]
+    fn a_release_that_names_no_two_sides_is_doubtful() {
+        let parties = cast(&[
+            ("Corvane Media Group", None),
+            ("Pellham Tobacco Company", None),
+        ]);
+        let named = RelationCues {
+            between: true,
+            ..RelationCues::default()
+        };
+        for kind in [
+            "Media Release",
+            "Earnings Release",
+            "General Release",
+            "Mutual Release",
+        ] {
+            let class = DocumentClass::of(Some(kind));
+            assert_eq!(class, DocumentClass::Agreement, "{kind}");
+            let relation =
+                relation_from_roles(class, Some(kind), &parties, RelationCues::default());
+            assert_eq!(relation.relation, PartyRelation::Between, "{kind}");
+            assert!(relation.doubtful, "{kind}: {}", relation.basis);
+            let sides = relation_from_roles(class, Some(kind), &parties, named);
+            assert_eq!(sides.relation, PartyRelation::Between, "{kind}");
+            assert!(!sides.doubtful, "{kind}: {}", sides.basis);
+        }
+        for kind in [
+            "Separation Agreement and General Release",
+            "Settlement Agreement and Mutual Release",
+            "Distribution Agreement",
+        ] {
+            let class = DocumentClass::of(Some(kind));
+            let relation =
+                relation_from_roles(class, Some(kind), &parties, RelationCues::default());
+            assert_eq!(relation.relation, PartyRelation::Between, "{kind}");
+            assert!(!relation.doubtful, "{kind}: {}", relation.basis);
+        }
     }
 
     fn cast(parties: &[(&str, Option<PartyRole>)]) -> Vec<CastMember> {
@@ -1655,6 +2167,25 @@ mod tests {
             ),
             ("Quarterly Business Review", DocumentClass::Record),
             ("Billboard Placement Brief", DocumentClass::Unknown),
+            // A release a party gives is an agreement; one an organization
+            // publishes is a record of what it announces.
+            ("General Release", DocumentClass::Agreement),
+            ("Release of Claims", DocumentClass::Agreement),
+            (
+                "Separation Agreement and General Release",
+                DocumentClass::Agreement,
+            ),
+            ("Enforcement Release", DocumentClass::Record),
+            (
+                "Enforcement Release: December 4, 2025",
+                DocumentClass::Record,
+            ),
+            ("Press Release", DocumentClass::Record),
+            ("News Release", DocumentClass::Record),
+            (
+                "Settlement Agreement and Press Release",
+                DocumentClass::Agreement,
+            ),
         ] {
             assert_eq!(DocumentClass::of(Some(kind)), class, "{kind}");
         }
@@ -1778,6 +2309,64 @@ mod tests {
         assert_eq!(relation.relation, PartyRelation::To);
         let relation = relation_from_roles(DocumentClass::Issued, Some("Invoice"), &parties, cues);
         assert_ne!(relation.relation, PartyRelation::Between);
+    }
+
+    #[test]
+    fn a_notice_in_a_bankruptcy_case_is_for_its_debtor_whoever_gives_it() {
+        // The committee that appears in the case is the reply's "client",
+        // and the document supports no role for the debtor.
+        let mut parties = cast(&[
+            ("Delta Mills, Inc.", None),
+            (
+                "Official Committee of Unsecured Creditors",
+                Some(PartyRole::Client),
+            ),
+        ]);
+        parties[1].role_supported = false;
+        let cues = RelationCues {
+            debtor: Some(0),
+            ..RelationCues::default()
+        };
+        let relation = relation_from_roles(
+            DocumentClass::Notice,
+            Some("Notice of Appearance"),
+            &parties,
+            cues,
+        );
+        assert_eq!(relation.relation, PartyRelation::For);
+        assert_eq!(relation.parties, vec!["Delta Mills, Inc."]);
+        assert!(!relation.on_proposed_roles, "{relation:?}");
+        // A role the document does support for the one who gives the
+        // notice does not make the notice theirs.
+        let trustee = cast(&[
+            ("United States Trustee", Some(PartyRole::Issuer)),
+            ("Tile Outlet, Inc.", None),
+        ]);
+        let relation = relation_from_roles(
+            DocumentClass::Notice,
+            Some("Notice of Appointment"),
+            &trustee,
+            RelationCues {
+                debtor: Some(1),
+                ..RelationCues::default()
+            },
+        );
+        assert_eq!(relation.relation, PartyRelation::For);
+        assert_eq!(relation.parties, vec!["Tile Outlet, Inc."]);
+        // An adversary proceeding in the case has two sides, and is filed
+        // between them; a letter about the case is still a letter.
+        let relation = relation_from_roles(
+            DocumentClass::Notice,
+            Some("Notice of Hearing"),
+            &parties,
+            RelationCues {
+                caption: Some((1, 0)),
+                ..cues
+            },
+        );
+        assert_eq!(relation.relation, PartyRelation::Between);
+        let relation = relation_from_roles(DocumentClass::Letter, Some("Letter"), &parties, cues);
+        assert_ne!(relation.parties, vec!["Delta Mills, Inc."]);
     }
 
     #[test]

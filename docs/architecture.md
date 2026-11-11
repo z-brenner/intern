@@ -726,7 +726,7 @@ named as it was keeps whatever the reviewer had typed.
 | Runtime | llama.cpp `b11946` (ggml-org), CPU only, in `llama-upstream/` of the sidecar folder; both models run on it |
 | Context | 8,192 tokens |
 | Threads | every logical processor, at most 8, for generation and for prompt processing alike |
-| Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below) |
+| Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below); `--slot-save-path` ([the instructions across a restart](#the-instructions-across-a-restart)); and for the accurate model `--no-repack` (below) |
 | Vision | none. No projector is pinned, downloaded, or loaded, and the request type has no field for an image |
 
 The model is text-first. Essentially every business document has usable text,
@@ -754,6 +754,26 @@ load, neutral on AVX-512. `--prio -1 --poll 0`: low thread priority and no
 spinning between operations, which cost nothing measurable. The server is given
 180 seconds to become healthy; a cold disk took up to 117.
 
+The accurate model alone also runs with `--no-repack`
+(`tiers::tier_server_flags`,
+[`bench/reports/speed-linux-cpu-2026-11-11`](../bench/reports/speed-linux-cpu-2026-11-11/README.md)):
+llama.cpp otherwise keeps a second, interleaved copy of every Q4_K weight
+matrix for its older x86 GEMM. Without it the 9B's peak resident memory fell
+from 8,750-8,800 MiB to 6,133-6,184 MiB on Linux and its working set right
+after a document from 8,110 MiB to 5,491 MiB on a 16 GiB Windows runner
+(`runtime-speed.yml` run 43063958237), and a document took 22-27% less time
+on AMD Zen 4 and 5, 10-15% less on the AVX2 path most laptops load, and the
+same on an Intel Xeon with AMX; its names differed from the repacked run's
+no more than two repacked runs on different processors differ. The memory
+floors below are unchanged. The copy it drops was what the 9B read on every
+token, beside originals in the file it read once at load; it now reads those
+originals in its place. What it needs reading them - all of its file but the
+token embeddings, where it read 2,726 MiB of the file and the copy before -
+was not measured under a memory limit, so the floors are kept. Where the
+available memory counts the weights as reclaimable (Linux), the bar for
+reading two OCR pages at once counts the whole file now, an upper bound
+(8 GiB, [OCR](ocr.md)).
+
 ### Two models, one at a time
 
 The manifest (schema 3) pins two models, one per tier, each a single GGUF at an
@@ -772,8 +792,10 @@ judge it as they judge the 9B's, but whatever they make of it the queue holds
 it with `FAST_MODEL_READING` (`tiers::hold_fast_reading`), as the builds
 before alpha.13 held Bonsai's: on the four real-document sets the 4B filed
 a wrong name for about every right one at any gate threshold
-(`bench/reports/model-qualification-2026-11`), where the 9B at its 0.7
-gate files one wrong name in seven. What sets a quick reading apart beyond
+(`bench/reports/model-qualification-2026-11`), where the 9B at the 0.7
+gate it had then filed one wrong name in seven. Its gate is 0.8 from
+alpha.17 (`tiers::REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE`,
+[`bench/reports/review-gate-2026-11`](../bench/reports/review-gate-2026-11/README.md)). What sets a quick reading apart beyond
 that is whether it stands in: made while the accurate model was wanted and
 not installed yet, or did not fit in memory, it is provisional, and once the
 accurate model can read - its download verified, or memory back - the queue
@@ -802,10 +824,15 @@ The memory guard: a model is loaded only when the machine reports enough
 available memory for it (`MemAvailable` on Linux, `GlobalMemoryStatusEx` on
 Windows; memory that cannot be read counts as enough): what its server must
 keep resident to read at its speed (Qwen3.5 4B about 4.7 GB, its whole
-resident set; Qwen3.5 9B about 6.2 GB, measured under a memory limit in
-`bench/reports/speed-linux-cpu-2026-11-05`: 3.4 GB of anonymous memory and
-the 2.7 GB of mapped weights it reads on every token, the rest of the mapped
-file being the original of what was repacked and reclaimable at no cost), the
+resident set; Qwen3.5 9B 6,043 MiB, measured at a 6 GB memory limit in
+`bench/reports/speed-linux-cpu-2026-11-05` with repacked weights: 3,317 MiB
+of anonymous memory and 2,726 MiB of mapped weights it read on every token,
+the rest of the mapped file being the original of what was repacked and
+reclaimable at no cost; with `--no-repack` it reads all of the file but the
+token embeddings - about 4,880 of the 5,417 MiB file stayed in its working
+set on Windows, run 43063958237 - and its peak resident set on Linux, a
+high-water mark of whatever was ever resident, was 6,133-6,184 MiB; not
+measured under a limit), the
 parser worker's 0.71 GB OCR peak, and 1 GiB left for the person's own work -
 6.5 GiB for the quick model, 8 GiB for the accurate one. A 16 GB laptop has
 the latter with a browser open, and not with a browser and an office suite at
@@ -818,9 +845,13 @@ cache; on Windows its working set, since the available physical memory counts
 only the free, zero and standby lists, and the weights the server has touched
 stay in its working set until it exits or the system trims them. When the
 server cannot be read, an estimate stands in: the resident high-water mark
-less the model file (`tiers::unload_gives_back`), about right on Linux. On
-Windows that estimate is far short. On a 16 GiB runner the 9B's working set
-right after a document was 8,110 MiB where the estimate credits 2,883 MiB. By
+less the model file (`tiers::unload_gives_back`), measured with repacked
+weights. On Linux it is about right for the 4B. For the 9B, which runs with
+`--no-repack`, it is about 2 GiB high: its peak resident set less its file is
+about 0.7 GiB, against the 2,883 MiB credited. It is kept for Windows (see
+`tiers::resident_estimate`). On Windows that estimate is far short. On a
+16 GiB runner the 9B's working set right after a document was 8,110 MiB with
+repacked weights (5,491 MiB without) where the estimate credits 2,883 MiB. By
 `plan()`'s arithmetic on the probe's numbers, with 2 GiB held by another
 process, as a browser holds it, the estimate would have stood the loaded 9B
 down for the 4B before the next document and the loaded 4B down for the 9B
@@ -830,15 +861,23 @@ working set, the plan sees what the machine has once the server exits: at the
 probe's six exits the two differed by 83 MiB at most
 ([`bench/reports/windows-memory-2026-11-09`](../bench/reports/windows-memory-2026-11-09/README.md)).
 That figure is not quite alike for the two models: with 2 GiB held it came out
-404 MiB higher with the 4B loaded than with the 9B right after a document, and
-917 MiB higher with the 4B a minute idle, so by the same arithmetic a machine a
-few hundred MiB short of the floor with nothing loaded would still swap them,
-before every document or at every pause. A loaded 4B is therefore asked for
-1,024 MiB more than the floor before it makes way for the 9B
-(`tiers::UPGRADE_MARGIN`, in `tiers::memory_for_plan`); a loaded 9B is still
-stood down at the floor itself, so the margin keeps the smaller model longer,
-never the larger, and a machine whose memory drifts around the floor is not
-swapped back and forth either.
+higher with the 4B loaded than with the 9B right after a document - with
+repacked weights by 404 MiB with the 4B also right after a document and 917 MiB
+with it a minute idle, with the 9B's `--no-repack` by 909 and 1,594 MiB
+(`runtime-speed.yml` run 43063958237). By the same arithmetic a machine near
+the floor with nothing loaded would still swap them, before every document or
+at every pause. A loaded 4B is therefore asked for
+2,048 MiB more than the floor before it makes way for the 9B
+(`tiers::UPGRADE_MARGIN`, in `tiers::memory_for_plan`): the largest gap
+measured, with room to spare. At 1,024 MiB, the margin of alpha.15 and
+alpha.16, the `--no-repack` numbers would still swap the models at every pause
+on a machine with about 7,763 to 8,333 MiB available before any load. In both
+runs the 4B was probed after the 9B, and part of its figure is the rest of the
+machine releasing memory while it was loaded, so the margin errs toward
+keeping the smaller model. A loaded 9B is still stood down at the floor
+itself, so the margin keeps the smaller model longer, never the larger, and a
+machine whose memory drifts around the floor is not swapped back and forth
+either.
 When the accurate model is wanted - by
 Automatic or by name - but is not installed yet or does not fit, the quick
 model reads instead, provisionally; its readings are sent back to the accurate
@@ -902,6 +941,182 @@ does mid-request. A model unused for ten minutes is unloaded, giving its memory
 back; the next document loads it again without reading the file, since this
 session already checked it. The review panel says which model read a document,
 and that a provisional reading will be read again.
+
+### The instructions across a restart
+
+Every evidence request opens with the same system turn, 477 tokens on both
+pinned models. llama-server keeps their state from one document to the next in
+a context checkpoint it takes where the user turn starts - the models are
+hybrids whose recurrent layers cannot be rolled back token by token, so the
+checkpoint is the only way the prefix survives - and every document after the
+first reports 477 cached tokens. The first document of a server lifetime has
+nothing cached and processes the instructions itself: at sign-in, and after
+every ten-minute idle unload. A warm-up request would not help: the app loads
+the model when a document arrives, so a warm-up would race that document for
+the server's one slot and save nothing.
+
+So each server is started with `--slot-save-path`, the `slots` folder in the
+app's local data, and its state is carried across the restart
+(`intern_engine::slots`). After the first document a server lifetime reads to
+the end, and only when there was no file to restore, Intern sends the
+instructions-only request (`client::instructions_only_request`: the same turns
+before the document, then "JSON only.", one token of reply), which reuses the
+instructions' state and replaces the document's tokens, and then has the
+server save its slot (`POST /slots/0?action=save`). The file therefore holds
+the instructions and no word of anything filed. That rests on how b11946 keeps
+a slot: a request that reuses only part of the cached prompt drops the rest,
+its tokens and the context checkpoints taken inside it, and the file is the
+slot's token list, the model's state for those tokens, and the checkpoints
+left (the recurrent state at a position, about 50 MiB each). So every save is
+read back before it is renamed into place (`slots::saved_state_reach`): the
+token count from the file's own header, the position each checkpoint reaches,
+and the server's count of what it saved. A file that reaches past the
+instructions-only request's prompt and the one token it generated is deleted
+(`Save::HeldMore`), and so is one whose checkpoint list cannot be read
+(`Save::Unchecked`), as a runtime that wrote it differently would leave, or
+as state bytes that also read as a list to the end of the file would. After
+either, no server lifetime of the session saves again (`Save::Refused`): such
+a runtime may keep the document in its slot, and every idle unload and every
+switch of model would otherwise write it to the slot folder once more before
+deleting it. What is checked is how far the token list and the checkpoints
+reach, by count and position - not the positions held in the model's state
+itself, which is not parsed, nor where each checkpoint came from: one inside
+the request's own 15 tokens is taken to be the request's, which on b11946 it
+is, since the server keeps no checkpoint and no cell past where the two
+prompts part. After any change of runtime the speed
+battery's `live_slots` job is the check to run: it saves through the app's own
+code against the real server, reads the file back and fails unless the
+restore works. On the runners the 9B saved 492 tokens, the request's 477
+cached and 15 processed. On the 4-core box with the pinned 4B (b11946), a
+file saved straight after a 1,094-token document held 1,179 tokens and
+checkpoints at 477, 834 and 1,090 (249,433,044 bytes) and would be deleted;
+the one saved after the instructions-only request held 492 tokens and
+checkpoints at 477 and 488 (174,210,604 bytes), and a release build read it
+back in 26 ms, from the page cache as just after a save (35 ms for the larger
+file). Every later launch of
+the same configuration restores the file (`POST /slots/0?action=restore`)
+after the health check and before the server is handed to anything that
+sends it a document, so the restore never races one. Both calls carry the
+server's key, as every other call does. The save runs on the thread that sent
+the document to the model (`intern-model-request`), inside the read, while
+the engine is held for reading, so an idle unload cannot stop the server
+under it. It delays that document's result by the instructions-only request
+and the save (1.1-1.5 s and 35-64 ms on the runners), once per server
+lifetime that saves.
+
+Only an even state is saved. llama-server processes a prompt it starts from
+nothing in micro-batches and breaks the batch where the last user turn starts
+and 4 and 4 + `-ub` tokens before the end. A first request shorter than the
+instructions plus 260 tokens has one of those breaks inside the instructions,
+and they come out a little different: on a runner, a slot saved after a
+637-token first request and restored gave the 9B a different reply to a
+purchase order (the date role and the subject changed) than the same server
+gave it as a later document. A server lifetime keeps the instructions its first
+request computed, so before slot files the replies of a whole lifetime already
+depended on how long its first document was. The save is made only when the
+document that triggers it was the lifetime's first request and long enough to
+process the instructions in one piece, which most documents are (InternBench's
+median prompt is 1,347 tokens); a lifetime whose first request was the
+self-test or a short document saves nothing, and the next one tries again.
+The instructions' length is what the instructions-only request finds cached,
+so the first lifetime of a configuration in a session whose first document is
+short still sends that request (1.1-1.5 s) before it saves nothing; the length
+is then kept for the session (`slots::KnownInstructions`), and a later
+lifetime with a short first document sends nothing. Restored, the file gives
+every lifetime the instructions such a document gives them, whatever is read
+first.
+
+That is a change for what was measured, too. Through alpha.16 every live run
+of InternBench and the real-document sets started with the benchmark's
+warm-up document as it then was, a short notice whose prompt is 637 tokens,
+so the instructions of every reply recorded until then - the committed
+InternBench recording (`bench/recording.json`) among them - were computed in
+pieces, the uneven way; the app, restored, computes them the even way, as it
+already did in any lifetime whose first document was long. The two give
+different replies to some documents: the purchase order above is one. The
+warm-up is now a notice of about 1,050 tokens (`WARM_UP_TEXT` in
+`intern-bench`), so a live run measures the even state. One has been made:
+the candidate benchmark's run 42625355879 at `a29e446`, both models over
+InternBench and four real-document sets, each log showing a warm-up of 1,056
+prompt tokens processed. Its recordings are that run's artifacts and are not
+committed, so the committed recording and the figures drawn from it still
+describe the uneven state. Its 9B InternBench recording and the committed
+one asked the same 77 prompts, over the same extracted text, of the same
+model, runtime and flags on the same runner CPU model (EPYC 7763): 36 of the
+77 replies are the same in both, and replayed through the engine as of this
+merge at the 0.7 gate they name 72 and 71 documents right, with 39 and 38
+ready and one wrong name filed in each.
+
+Measured on runners ([`bench/reports/cold-start-linux-cpu-2026-11-09`](../bench/reports/cold-start-linux-cpu-2026-11-09/README.md);
+the 9B on the AVX2 `haswell` backend, four threads, saved as the app saves):
+the first document after a load processed 930 prompt tokens in 39.3 s on an
+AMD EPYC 9V45 and 54.0 s on a 9V74 with nothing restored, and 453 in 19.3 s and
+26.5 s restored, the same as a document later in the lifetime; the whole first
+request fell from 50.6 to 30.1 s and from 68.5 to 41.1 s, and its reply was the
+steady-state reply byte for byte in every case. An earlier run on two EPYC 7763
+runners measured the same saving, 32.8 s of an 80-82 s first request. The
+file is 174 MB for either pinned model and is restored in 44-60 ms. The app's
+own code was run the same way: the env-gated live test drives `RuntimeModel`
+and `LlamaLauncher` through three lifetimes of the real server, and on a runner
+(the speed battery's `live_slots` job, the pinned 4B, an EPYC 9V74) the
+third launch restored the 4B's file in 60 ms and read a 928-token agreement
+with 477 tokens cached and 451 processed in 10.3 s, against 20.8 s from
+nothing; the reply was the same in every reading, and a restored lifetime's
+first reading of the agreement found only the instructions cached.
+
+The file's name is the tier and a hash of everything the saved state depends
+on: the model's SHA-256, the server's build as `/props` reports it, the turns
+before the document with the template switches they are rendered with
+(`client::cached_prefix_identity`), every launch argument but the port, key and
+paths (threads, context, batch size, flags), the processor features that
+choose ggml's CPU backend, and the version of the rules above for what a save
+keeps and when (`SLOT_SCHEME`), so a release that changes them never restores
+a file saved under the old ones. A file is restored only into a server of the
+configuration that saved it, so the first document's reply is the one it would
+have got as the second; what the name cannot cover - a file changed on disk
+after it was saved, without changing its length - the self-test catches. A launch removes its tier's files for any other
+configuration, and any save a stopped server left unfinished (saves are
+written as `.part` and renamed), so there is at most one file per tier. Every
+failure costs only the speed-up: a restore that fails removes the file and the
+next document saves a new one; a save is skipped with less than 2 GiB free.
+A file is synced to disk before it is renamed into place, and read back
+before every restore as before it was kept; the server must also say it read
+the whole file. A file a crash cut short or left with a zero-filled tail
+would otherwise still restore in part - b11946 loads the model's state, finds
+no checkpoint list after it, and answers as if it had restored the file -
+and stay, read at every launch for none of the speed-up. Such a file is
+removed (and the slot emptied, when the server read part of it), so the next
+document saves a whole one. A model that fails its self-test with a file
+restored has every file of its tier removed and is started and tested once
+more without one (`slots::forget`); only a model that fails again, reading the
+instructions itself, is set aside. So a damaged file costs the speed-up and
+one more self-test, never the model.
+On Windows a folder outside ASCII is never passed (the server checks the
+folder with `std::filesystem` from UTF-8 text, which Windows' C++ library
+reads in the ANSI code page). And before every launch the server itself is
+asked whether it takes the folder: `llama-server --slot-save-path DIR
+--version` checks the folder while it reads its arguments and exits, without
+a model, in milliseconds: b11946 exited 0 for a folder and 1 for a missing
+folder or a file, in 9-16 ms on the 4-core box at a load of 1.3 and 17-47 ms
+at a load of 10-15 (five and three tries of each). A folder it refuses is not passed, so a server that will not
+start, for whatever reason, fails on its three tries as it would without a
+slot folder (`LlamaServer::accepts_slot_directory`).
+
+The folder is Intern's own data, beside the models: at most one file a tier,
+174 MB each, so 348 MB once each model has read a long first document.
+Nothing in the installer names it (`windows/hooks.nsh` touches the install
+folder and the Send to shortcut only), so an update leaves it and an
+uninstall leaves it, as they leave the models. It can be deleted at any time:
+the next launch finds no file, and the next long first document saves one.
+
+All of this was measured on Linux. CI's Windows job compiles the code and
+runs its unit tests, the folder check among them with a batch file standing
+in for the server; no run on record has the app ask the real
+`llama-server.exe` for a folder, a save or a restore, since the live test
+and the `live_slots` job run on Linux only. What Windows gains is therefore
+not measured. What it can lose is bounded by the rules above: the folder
+check is given ten seconds at most, a folder the server refuses is not
+passed, and a save or a restore that fails is dropped.
 
 A new install downloads the quick model first and opens the queue as soon as it
 has passed its digest and its semantic self-test. The accurate model downloads

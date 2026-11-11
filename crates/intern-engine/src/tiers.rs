@@ -80,6 +80,15 @@ const MIB: u64 = 1024 * 1024;
 /// The parser worker's peak while it reads a document: 0.71 GB on a 25-page
 /// scan through PP-OCR, the most any InternBench document needed. It runs
 /// beside the model, so a model is judged to fit only with room for it too.
+///
+/// One page at a time. Two pages at once took the worker's peak to 1.4 GB
+/// over all of InternBench (docs/ocr.md), so the worker reads a second page
+/// at once only with the memory for it available as a document's pages
+/// start to be read (`intern_worker::paddle::pages_at_once`): the two-page
+/// peak and [`HEADROOM`], and on Linux, where [`available_memory_bytes`]
+/// counts them, the weights a loaded accurate model keeps reading - 8 GiB
+/// on Linux, 3 GiB on Windows. Near a floor it reads one page at a time,
+/// which is what this counts.
 pub const WORKER_PEAK: u64 = 680 * MIB;
 
 /// What is left for the person's own work once a model and the worker are
@@ -129,6 +138,14 @@ pub const fn min_available_for(tier: ModelTier) -> u64 {
 /// every document. It reads that from the live server
 /// ([`memory_released_by`]); this estimate is for when it cannot
 /// ([`unload_gives_back`]).
+///
+/// Measured with repacked weights. With `--no-repack` ([`tier_server_flags`])
+/// the 9B's high-water mark is 6,133-6,184 MiB, so on Linux the estimate now
+/// credits about 2 GiB more than unloading gives back. It is kept: it stands
+/// in only when the live server cannot be read, and on Windows, where it is
+/// already short, lowering it to that would have the runner with a browser's
+/// 2 GiB held swap the models before every document (11,570 MiB available
+/// before any load, run 43063958237).
 pub const fn resident_estimate(tier: ModelTier) -> u64 {
     match tier {
         ModelTier::Fast => 4_700 * MIB,
@@ -136,19 +153,27 @@ pub const fn resident_estimate(tier: ModelTier) -> u64 {
     }
 }
 
-/// What a loaded tier's server must keep in memory to read at its speed:
-/// less than [`resident_estimate`], because the mapped weights the CPU
-/// backend repacks are read once and never again, and the system reclaims
-/// those pages first. Measured for the 9B under a memory limit on Linux
-/// (`bench/reports/speed-linux-cpu-2026-11-05`): 3.4 GB of anonymous memory
-/// and 2.7 GB of weights it keeps reading, about 6.2 GB in all. At a 6 GB
-/// limit it read a document in 95 s against 72 s with no limit; at 5 GB it
-/// thrashed (421 s). The 4B was not measured under a limit; its resident
-/// set stands in. Windows does not take those pages back at once: right
-/// after a document the 9B's working set on a 16 GiB runner was 8,110 MiB,
-/// the touched originals included, and a minute idle trimmed it to
-/// 6,332-7,528 MiB; what it needs under a squeeze there is not measured
-/// (`bench/reports/windows-memory-2026-11-09`).
+/// What a loaded tier's server must keep in memory to read at its speed.
+/// With repacked weights that was less than [`resident_estimate`], because
+/// the mapped weights the CPU backend repacks are read once and never again,
+/// and the system reclaims those pages first. Measured for the 9B under a
+/// memory limit on Linux (`bench/reports/speed-linux-cpu-2026-11-05`), at a
+/// 6 GB limit: 3,317 MiB of anonymous memory and 2,726 MiB of weights it
+/// kept reading, 6,043 MiB in all (the report's "6.2 GB"). There it read a
+/// document in 95 s against 72 s with no limit; at 5 GB it thrashed
+/// (421 s). With `--no-repack` ([`tier_server_flags`]) it reads the
+/// originals in the mapped file in place of the copy: all of the file but
+/// the token embeddings, which are read a row at a time. About 4,880 MiB of
+/// the 5,417 MiB file stayed in its working set on Windows (run
+/// 43063958237); its peak resident set on Linux, 6,133-6,184 MiB
+/// (`bench/reports/speed-linux-cpu-2026-11-11`), is a high-water mark of
+/// whatever was ever resident. Both are within this figure; what it needs
+/// was not measured under a limit. The 4B was not measured under a limit;
+/// its resident set stands in. On Windows the 9B's working set right after
+/// a document on a 16 GiB runner was 8,110 MiB with repacked weights, the
+/// touched originals included (`bench/reports/windows-memory-2026-11-09`),
+/// and 5,490-5,491 MiB without (run 43063958237; 5,229-5,491 MiB from load
+/// to a minute idle); what it needs under a squeeze there is not measured.
 pub const fn working_set(tier: ModelTier) -> u64 {
     match tier {
         ModelTier::Fast => 4_700 * MIB,
@@ -167,20 +192,24 @@ pub const fn working_set(tier: ModelTier) -> u64 {
 /// reports as reclaimable. Crediting them again counted them twice, so a
 /// loaded quick model could make the accurate one look as if it fit on a
 /// machine that cannot hold it. Only the rest - the context, the compute
-/// buffers, the repacked weights - comes back on unload: 2,883 MiB for the
-/// 9B against 3,317 MiB of anonymous memory measured
-/// (`bench/reports/speed-linux-cpu-2026-11-05`).
+/// buffers, any repacked weights - comes back on unload: 2,883 MiB for the
+/// 9B against 3,317 MiB of anonymous memory measured with repacked weights
+/// (`bench/reports/speed-linux-cpu-2026-11-05`). The 9B runs with
+/// `--no-repack` from alpha.17, and its peak resident set less its file is
+/// about 0.7 GiB (`bench/reports/speed-linux-cpu-2026-11-11`), so on Linux
+/// this now credits it about 2 GiB too much (see [`resident_estimate`]).
 ///
 /// On Windows it is far short. The available physical memory counts the
 /// standby list, where a mapped file's cached pages wait, but not the pages
 /// a process has in its working set, and the server keeps the weights it
 /// has touched there until it exits or the system trims them. Measured on a
 /// 16 GiB runner (`bench/reports/windows-memory-2026-11-09`): right after a
-/// document the 9B's working set was 8,107-8,110 MiB and the 4B's
+/// document the 9B's working set was 8,107-8,110 MiB with repacked weights
+/// (5,490-5,491 MiB with `--no-repack`, run 43063958237) and the 4B's
 /// 4,513-4,514, against the 2,883 and 2,086 this credits. With 2 GiB held
-/// by another process, the plan's arithmetic on those numbers stands the
-/// loaded 9B down for the 4B before the next document, and the loaded 4B
-/// down for the 9B before the one after.
+/// by another process, the plan's arithmetic on the repacked numbers stands
+/// the loaded 9B down for the 4B before the next document, and the loaded
+/// 4B down for the 9B before the one after.
 pub const fn unload_gives_back(tier: ModelTier, model_file_bytes: u64) -> u64 {
     resident_estimate(tier).saturating_sub(model_file_bytes)
 }
@@ -190,21 +219,40 @@ pub const fn unload_gives_back(tier: ModelTier, model_file_bytes: u64) -> u64 {
 ///
 /// Credited what stopping it gives back, a loaded model leaves the plan
 /// judging the machine about as it would be with nothing loaded, but not
-/// exactly, and not alike for the two models. On a 16 GiB Windows runner
-/// (`bench/reports/windows-memory-2026-11-09`) the plan's figure ran from
-/// 110 MiB under to 1,098 MiB over the memory available before that model
-/// was loaded, and with 2 GiB held by another process it came out higher
-/// with the 4B loaded than with the 9B: by 404 MiB with each right after a
-/// document, by 917 MiB with the 4B a minute idle. Where the 4B's figure
-/// is the higher, a machine with the 9B loaded and just short of the floor
-/// is judged to have room once the 4B is loaded, and the two swap, the 9B
-/// each time onto a machine that cannot hold it: before every document of
-/// a queue, or at every pause. Asked for this much more,
-/// the 4B stays until the room is plainly there. The loaded 9B is still
-/// stood down at the floor itself: the margin keeps the smaller model
-/// longer, never the larger one. It also stops a machine whose memory
-/// drifts around the floor from swapping the models back and forth.
-pub const UPGRADE_MARGIN: u64 = 1_024 * MIB;
+/// exactly, and not alike for the two models. Where the 4B's figure is the
+/// higher, a machine with the 9B loaded and near the floor is judged to
+/// have room once the 4B is loaded, and the two swap, the 9B each time onto
+/// a machine that cannot hold it: before every document of a queue, or at
+/// every pause. On 16 GiB Windows runners with 2 GiB held by another
+/// process, the plan's figure against the memory available before that
+/// model was loaded came out:
+///
+/// * with repacked weights (`bench/reports/windows-memory-2026-11-09`, pass
+///   3): +181 MiB with the 9B right after a document, +585 with the 4B
+///   right after a document and +1,098 a minute idle, so the 4B's was the
+///   higher by 404 and 917 MiB;
+/// * with the 9B's `--no-repack` (`runtime-speed.yml` run 43063958237):
+///   -141 MiB with the 9B right after a document, +768 with the 4B right
+///   after a document and +1,453 a minute idle, so the 4B's was the higher
+///   by 909 and 1,594 MiB. At 1,024 MiB, the margin from alpha.15 to
+///   alpha.16, a machine with between about 7,763 and 8,333 MiB available
+///   before any load would have the models swap at every pause.
+///
+/// The margin is the largest gap measured with room to spare, as 1,024 was
+/// for 917: carried to every machine as the report's bands are, either
+/// run's numbers bring the loaded 4B back only where the 9B would stay
+/// (the test `a_loaded_fast_model_makes_way_only_with_room_to_spare`).
+/// In both runs the 4B was probed second, after the 9B, and more memory was
+/// available 3 s after its exit than before its load (1,181 and 1,449 MiB),
+/// its own working set flat or falling over its idle minute while the
+/// available memory rose by 581 and 685 MiB: part of its figure is the rest
+/// of the machine releasing memory, so the margin errs toward keeping the
+/// smaller model. The loaded 9B is still stood down at the floor itself:
+/// the margin keeps the smaller model longer, never the larger one. It also
+/// stops a machine whose memory drifts around the floor from swapping the
+/// models back and forth. The cost: a loaded 4B, its readings provisional,
+/// stays until the plan's figure reaches the floor and this margin.
+pub const UPGRADE_MARGIN: u64 = 2_048 * MIB;
 
 /// The memory the plan judges the machine by: `available`, what the
 /// machine reports, plus, when a model is loaded, what stopping its server
@@ -222,12 +270,29 @@ pub const fn memory_for_plan(available: u64, loaded: Option<(ModelTier, u64)>) -
 }
 
 /// llama-server flags for one tier alone, added after the ones every launch
-/// sets ([`crate::server::LlamaServer::arguments_for`]). Empty until the
-/// benchmarks show a flag that helps one model and not the other: this is the
-/// one place to add it.
+/// sets ([`crate::server::LlamaServer::arguments_for`]): the one place a flag
+/// that was measured on one model and not the other goes.
+///
+/// The accurate model runs with `--no-repack`. llama.cpp otherwise copies
+/// every Q4_K weight matrix into an interleaved layout for its older x86
+/// GEMM, and that copy is about 2.6 GiB of the 9B's private memory; without
+/// it the weights stay mapped from the file and b11946's tiled k-quant kernel
+/// reads them. Measured on the 9B with the recorded requests
+/// (`bench/reports/speed-linux-cpu-2026-11-11`), each runner its own
+/// baseline: the server's peak resident memory (`VmHWM`) fell from
+/// 8,750-8,800 MiB to 6,133-6,184 MiB on every set, and on a 16 GiB Windows
+/// runner its working set right after a document from 8,110 MiB to 5,491
+/// MiB (`runtime-speed.yml` run 43063958237); time per request fell 22-27% on AMD Zen 4 and Zen 5 runners
+/// (AVX-512), and 10-15% with ggml's AVX2 backend pinned, the code path most
+/// laptops load; on an Intel Xeon with AMX it was unchanged. Live on
+/// InternBench and the five real sets the names it gave differed from the
+/// repacked run's no more than two repacked runs on different processors
+/// differ from each other. The fast model was not measured with it, so it
+/// keeps the repacked layout.
 pub const fn tier_server_flags(tier: ModelTier) -> &'static [&'static str] {
     match tier {
-        ModelTier::Fast | ModelTier::Accurate => &[],
+        ModelTier::Fast => &[],
+        ModelTier::Accurate => &["--no-repack"],
     }
 }
 
@@ -451,10 +516,25 @@ pub fn escalation_with(
 /// Calibrated by replay on the four real-document sets
 /// (`bench/reports/model-qualification-2026-11`): a larger model is surer of
 /// its wrong names than Qwen3.5 2B was, and the 2B's 0.5 let the 9B file
-/// 16 wrong names of 42 filed. At 0.6 it files 9 wrong of 28; at 0.7, 2 of
-/// 15; at 0.8, 1 of 7. On InternBench 0.7 keeps 37 of 77 names ready with
-/// one wrong, against 47 and one at 0.6.
-pub const REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE: f32 = 0.7;
+/// 16 wrong names of 42 filed. At 0.6 it filed 9 wrong of 28; at 0.7, 2 of
+/// 15; at 0.8, 1 of 7. It was 0.7 through alpha.16.
+///
+/// 0.8 from alpha.17, by a rule written down before the sixth real set was
+/// read (`bench/reports/review-gate-2026-11`): of the policies that filed no
+/// more wrong names than 0.7 on the development recordings, those that filed
+/// the fewest wrong names on that unseen set. Three tied there, all at 0.8,
+/// with the same right names too: this threshold alone, and with either of
+/// two extra rules, which filed nothing more on that set. The plain
+/// threshold was taken over two tied policies with an extra rule, a choice
+/// the pre-registered rule left open. Replayed through this release's
+/// engine, 0.7 filed 4 right names and 2 wrong ones there, 0.8 3 and 1,
+/// counting the names the set scores, as the rule does; each also filed a
+/// blank invoice template under the date its TODAY() cell held, which the
+/// set's gold forbids. On the five development sets and InternBench 0.7
+/// filed 55 right and 2 wrong, 0.8 39 and none. A name filed wrong is
+/// renamed with no one looking; a right one held is a click. 51 documents
+/// cannot certify a rate, and the counts say so.
+pub const REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE: f32 = 0.8;
 
 /// The same for the quick model's readings. A quick reading always goes to
 /// a person ([`hold_fast_reading`]), so this decides only whether a cascade
@@ -920,60 +1000,85 @@ mod tests {
         assert_eq!(first(Some((F, released + UPGRADE_MARGIN))), Some(A));
     }
 
-    /// Pass 3 of the Windows probe, with 2 GiB held by another process
-    /// (`bench/reports/windows-memory-2026-11-09`), carried to a machine
-    /// with `nothing` MiB available before any model is loaded, as the
-    /// report's bands carry it: each load takes from the available memory
-    /// what it took on the runner, and the server reports the working set it
-    /// reported. Credited that alone, a machine just short of the floor with
-    /// the 9B loaded is judged to have room once the 4B is loaded, and the
-    /// two swap, document after document or pause after pause. Asked for the
-    /// margin, the 4B stays.
+    /// The Windows probe's passes with 2 GiB held by another process, carried
+    /// to a machine with `nothing` MiB available before any model is loaded,
+    /// as the report's bands carry them: each load takes from the available
+    /// memory what it took on the runner, and the server reports the working
+    /// set it reported. Pass 3, with repacked weights
+    /// (`bench/reports/windows-memory-2026-11-09`), and the 9B with
+    /// `--no-repack` (`runtime-speed.yml` run 43063958237). Credited that
+    /// alone, a machine near the floor with the 9B loaded is judged to have
+    /// room once the 4B is loaded, and the two swap, document after document
+    /// or pause after pause; asked for alpha.16's 1,024 MiB, at every pause
+    /// still with `--no-repack`. Asked for the margin, the 4B stays.
     #[test]
     fn a_loaded_fast_model_makes_way_only_with_room_to_spare() {
         // MiB: what the load took from the available memory, and the
         // server's working set then. The 9B right after a document; the 4B
         // right after a document, and after a minute idle.
-        const ACCURATE_AFTER_A_DOCUMENT: (u64, u64) = (7_926, 8_107);
-        const FAST_AFTER_A_DOCUMENT: (u64, u64) = (3_929, 4_514);
-        const FAST_AFTER_A_MINUTE_IDLE: (u64, u64) = (3_347, 4_445);
+        const PASS_3: [(u64, u64); 3] = [(7_926, 8_107), (3_929, 4_514), (3_347, 4_445)];
+        const NO_REPACK: [(u64, u64); 3] = [(5_631, 5_490), (3_746, 4_514), (3_061, 4_514)];
+        const ALPHA_16_MARGIN: u64 = 1_024 * MIB;
         let first = |memory: u64| plan(Automatic, BOTH, Some(memory)).map(|plan| plan.first);
         // A machine with less than the 9B took has nothing left available.
         let available = |nothing: u64, takes: u64| nothing.saturating_sub(takes) * MIB;
-        let mut swaps_without_the_margin = [Vec::new(), Vec::new()];
-        for nothing in 7_000..10_000_u64 {
-            let (takes, holds) = ACCURATE_AFTER_A_DOCUMENT;
-            let with_accurate = memory_for_plan(available(nothing, takes), Some((A, holds * MIB)));
-            let stands_down = first(with_accurate) == Some(F);
-            assert_eq!(
-                stands_down,
-                (nothing + holds - takes) * MIB < MIN_AVAILABLE_FOR_ACCURATE,
-                "{nothing} MiB"
-            );
-            for (fast, swaps) in [FAST_AFTER_A_DOCUMENT, FAST_AFTER_A_MINUTE_IDLE]
-                .into_iter()
-                .zip(&mut swaps_without_the_margin)
-            {
-                let (takes, holds) = fast;
-                let with_fast = available(nothing, takes);
-                let comes_back = first(memory_for_plan(with_fast, Some((F, holds * MIB))));
-                assert!(
-                    !(stands_down && comes_back == Some(A)),
-                    "{nothing} MiB: the models swap"
+        // The machines on which the models swap, credited the working set
+        // alone and asked for alpha.16's margin: the first, the last and how
+        // many, after a document and after a minute idle. Asked for the
+        // margin, none.
+        let bands = |[accurate, after_a_document, after_a_minute_idle]: [(u64, u64); 3]| {
+            let mut swaps = [[Vec::new(), Vec::new()], [Vec::new(), Vec::new()]];
+            for nothing in 6_000..10_000_u64 {
+                let (takes, holds) = accurate;
+                let with_accurate =
+                    memory_for_plan(available(nothing, takes), Some((A, holds * MIB)));
+                let stands_down = first(with_accurate) == Some(F);
+                assert_eq!(
+                    stands_down,
+                    (nothing + holds - takes) * MIB < MIN_AVAILABLE_FOR_ACCURATE,
+                    "{nothing} MiB"
                 );
-                if stands_down && first(with_fast + holds * MIB) == Some(A) {
-                    swaps.push(nothing);
+                for (stage, (takes, holds)) in [after_a_document, after_a_minute_idle]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let with_fast = available(nothing, takes);
+                    let comes_back = first(memory_for_plan(with_fast, Some((F, holds * MIB))));
+                    assert!(
+                        !(stands_down && comes_back == Some(A)),
+                        "{nothing} MiB: the models swap"
+                    );
+                    for (margin, found) in [0, ALPHA_16_MARGIN].into_iter().zip(&mut swaps) {
+                        let figure = (with_fast + holds * MIB).saturating_sub(margin);
+                        if stands_down && first(figure) == Some(A) {
+                            found[stage].push(nothing);
+                        }
+                    }
                 }
             }
-        }
-        let band = |swaps: &[u64]| (swaps.first().copied(), swaps.last().copied(), swaps.len());
+            swaps.map(|stages| {
+                stages.map(|found| (found.first().copied(), found.last().copied(), found.len()))
+            })
+        };
         assert_eq!(
-            band(&swaps_without_the_margin[0]),
-            (Some(7_607), Some(8_010), 404)
+            bands(PASS_3),
+            [
+                [
+                    (Some(7_607), Some(8_010), 404),
+                    (Some(7_094), Some(8_010), 917)
+                ],
+                [(None, None, 0), (None, None, 0)],
+            ]
         );
         assert_eq!(
-            band(&swaps_without_the_margin[1]),
-            (Some(7_094), Some(8_010), 917)
+            bands(NO_REPACK),
+            [
+                [
+                    (Some(7_424), Some(8_332), 909),
+                    (Some(6_739), Some(8_332), 1_594)
+                ],
+                [(None, None, 0), (Some(7_763), Some(8_332), 570)],
+            ]
         );
     }
 
@@ -1084,6 +1189,10 @@ mod tests {
             assert_eq!(options.extra_arguments, tier_server_flags(tier));
         }
         assert_eq!(IDLE_UNLOAD_AFTER.as_secs(), 600);
+        // Measured on the 9B only: the 4B keeps llama.cpp's repacked
+        // weights.
+        assert_eq!(tier_server_flags(ModelTier::Accurate), ["--no-repack"]);
+        assert!(tier_server_flags(ModelTier::Fast).is_empty());
     }
 
     #[test]

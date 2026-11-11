@@ -3,6 +3,22 @@ export interface ReleaseNotes { version: string; changes: readonly string[] }
 
 export const releaseNotes: readonly ReleaseNotes[] = [
   {
+    version: '0.1.0-alpha.17',
+    // Shown whole in a dialog that must not scroll at the smallest window it
+    // is tested in (a scrolling dialog takes a Tab stop of its own): short
+    // lines, the rest in docs/releases/v0.1.0-alpha.17.md.
+    changes: [
+      'The accurate model reads faster on most processors and holds about 2.7 GB less memory.',
+      'The first document after Intern starts is read sooner on most computers.',
+      'Fewer wrong names are filed without your check, so more documents wait for a quick look.',
+      'Court filings, invoices, letters and emails are named right a little more often.',
+      'A file dropped into a folder on this computer’s own disk is noticed within seconds.',
+      'Review says which model read a document, and its reasons say what to check.',
+      'Alt+N skips to the next document to decide; a double-click opens a row’s details.',
+      'Long queues respond faster, and the progress bar moves while each document is read.',
+    ],
+  },
+  {
     version: '0.1.0-alpha.16',
     changes: [
       'Status now comes first in Queue and Completed, so you can copy filenames and descriptions together.',

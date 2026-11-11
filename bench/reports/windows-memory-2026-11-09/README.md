@@ -9,8 +9,9 @@ document. By `plan()`'s arithmetic on the measured numbers it does, for
 documents read back to back on a 16 GiB machine with about 10,000 to
 13,200 MiB (9.8 to 12.9 GiB) available before any model is loaded. The plan
 now credits the live server's working set instead, and asks a loaded 4B for
-1 GiB more than the floor before it makes way for the 9B; with the measured
-numbers the swap is gone. Figures are in MiB unless they say otherwise.
+1 GiB more than the floor before it makes way for the 9B (2 GiB from
+alpha.17: see the note under "The change"); with the measured numbers the
+swap is gone. Figures are in MiB unless they say otherwise.
 
 ## The mechanism
 
@@ -228,6 +229,25 @@ has between 0 and 1,024 MiB more than the floor by the plan's figure keeps
 the 4B, its readings provisional, until memory frees up or the idle unload;
 a launch with nothing loaded still loads the 9B at the floor.
 
+Note, alpha.17: the margin is now 2,048 MiB. With the 9B run with
+`--no-repack`, the probe with 2 GiB held (`runtime-speed.yml` run
+43063958237, `bench/reports/speed-linux-cpu-2026-11-11`) measured a wider
+gap: the plan's figure came out 141 MiB under the memory before the load with
+the 9B right after a document, and over it by 768 MiB with the 4B right after
+a document and 1,453 MiB a minute idle, gaps of 909 and 1,594 MiB. Carried to
+other machines as above, 1,024 MiB left a swap at every pause for
+7,763 ≤ A < 8,333. At 2,048 MiB the 4B comes back only for A ≥ 9,472 after
+a document or A ≥ 8,787 after a minute idle with those numbers (9,655 and
+9,142 with pass 3's), all above where the 9B is stood down, so neither band
+is left in either run. In both runs the 4B was probed second, after the 9B,
+and more was available 3 s after its exit than before its load (1,181 MiB in
+pass 3, 1,449 MiB in run 43063958237), its own working set flat or falling
+over its idle minute while the available memory rose by 581 and 685 MiB:
+part of its figure is the rest of the machine releasing memory, so the
+margin errs toward keeping the smaller model. The cost grows with it: a
+loaded 4B now stays until the plan's figure has 2,048 MiB more than the
+floor.
+
 On Linux the credit for the 9B moves from 2,883 to about 3,317 MiB (its
 `RssAnon` in `bench/reports/speed-linux-cpu-2026-11-05`) and for the 4B
 from 2,086 to a little less: a research run for this work, not committed
@@ -251,8 +271,9 @@ comes back at the floor and the margin, not a byte before), and
 fallback, at the floor and the margin and a byte under). `tiers.rs` tests
 the margin's arithmetic
 (`only_a_loaded_fast_model_is_asked_for_the_margin`) and carries pass 3's
-numbers to every A from 7,000 to 9,999 MiB
-(`a_loaded_fast_model_makes_way_only_with_room_to_spare`): credited the
+numbers to every A from 6,000 to 9,999 MiB
+(`a_loaded_fast_model_makes_way_only_with_room_to_spare`, which from
+alpha.17 also carries run 43063958237's): credited the
 working set alone the models swap for 7,607-8,010 MiB after a document and
 7,094-8,010 MiB after a minute idle; with the margin, at none. The test
 fixtures' model files are a few bytes, so in those runtimes the fallback
@@ -278,7 +299,9 @@ child process on Linux and Windows.
   right after a document), with about 100 MiB to spare, on one load per
   model per pass. A machine where the gap is wider could still swap the
   models, at a pause rather than before every document if it is the idle
-  4B's figure that is higher.
+  4B's figure that is higher. (Run 43063958237, with the 9B's
+  `--no-repack`, measured 1,594 MiB, and the margin is now 2,048 MiB: see
+  the note above.)
 - The app itself. The verdicts are `plan()`'s arithmetic on measured
   numbers, and the change is covered by unit tests with a fake server; no
   installed build was run on Windows with both models.

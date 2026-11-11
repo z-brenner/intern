@@ -617,6 +617,29 @@ pub struct TokenConfidence {
     pub tokens: u32,
 }
 
+/// One generated token of a reply as the server reported it, for the
+/// laboratory: the token's text, the model's own probability for it before
+/// the grammar masked anything, and the most probable tokens at its position
+/// (the token itself among them unless the grammar overrode the model).
+///
+/// A recording keeps the whole reply's trace so that a readiness gate can be
+/// designed and replayed from what the model actually weighed, field by
+/// field, rather than from one summary figure. The app never asks for it.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TokenTraceEntry {
+    pub token: String,
+    pub p: f32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top: Vec<TokenAlternative>,
+}
+
+/// A token the model weighed at one position of its reply.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TokenAlternative {
+    pub token: String,
+    pub p: f32,
+}
+
 /// Model output after evidence, format, and calibration checks.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct ValidatedProposal {
@@ -653,10 +676,14 @@ pub enum ReviewReason {
     /// The model gave no usable type, so the document's own title was used;
     /// a person should confirm it names the document.
     TypeInferred,
-    /// A named party could not be found in the document.
+    /// The document does not settle the filename's party: a named party
+    /// could not be found in it, or the name rests on roles only the reply
+    /// gave, on a default the reply's own reading speaks against, or on a
+    /// class of recipients rather than a party.
     PartyUnsupported,
-    /// An agreement named only one of its parties: an agreement always has
-    /// two sides, so the reply missed the other.
+    /// A party the filename needs is missing: an agreement named only one
+    /// of its two sides, an issued document no issuer, or any document no
+    /// party though the reply named some.
     PartyMissing,
     /// The description asserted something the document does not contain.
     DescriptionUnsupported,

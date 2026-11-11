@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "status": "accepted",
-  "release_inputs_sha256": "473175c1ed816db6b94c53bec6d1ab35cdca533ed925dbe9510016fd8187b676",
+  "status": "pending",
+  "release_inputs_sha256": "pending",
   "screenshot_path": "docs/qa/latest-implementation.png",
-  "screenshot_sha256": "770c7a6def2044a8b0af60aa3ca5f23f7cc8ca30641b3d76cc4eaa3ec8bba456",
-  "reviewer": "Zachary Brenner",
-  "reviewed_at": "2026-11-10T00:57:53Z",
-  "notes": "Zachary Brenner looked at the exact fresh alpha.16 capture from QA run 42722700028 attempt 1 and replied: \"I looked at it and accept\". Codex and an independent reviewing agent inspected the full-size capture and verified artifact hashes; Codex prepared this record. Status-first columns, contiguous filename/description columns, clear review actions, collapsed analysis details, readable text and visible focus/selection were checked. No unintended clipping or collisions observed. Prior-release acceptance was not reused."
+  "screenshot_sha256": "pending",
+  "reviewer": "pending",
+  "reviewed_at": "pending",
+  "notes": "Pending fresh alpha.17 QA capture and review."
 }

@@ -293,6 +293,7 @@ mod tests {
                     facts: None,
                 },
                 token_confidence: None,
+                token_trace: None,
             },
             model_timings: Some(timings),
             wall_micros: 3_000_000,

@@ -1,0 +1,233 @@
+{
+ "run_42575519449": {
+  "haswell-a": {
+   "runner_cpu": "AMD EPYC 7763 64-Core Processor",
+   "summary": {
+    "slot_file_bytes": 234281292,
+    "saved_tokens": 717,
+    "save_ms": 64.249,
+    "restore_ms": 105.8,
+    "restore_wall_ms": 106.8,
+    "restore_ok": true,
+    "load_s": 5.1,
+    "cold_cache_n": [
+     0,
+     0
+    ],
+    "restored_cache_n": [
+     477,
+     477
+    ],
+    "steady_cache_n": 477,
+    "cold_prompt_n": 930,
+    "restored_prompt_n": 453,
+    "cold_prompt_ms": 64677.7,
+    "restored_prompt_ms": 31811.7,
+    "steady_prompt_ms": 31929.776,
+    "cold_latency_s": 81.8,
+    "restored_latency_s": 49.2,
+    "first_document_saving_s": 32.8,
+    "restored_identical_to_steady": [
+     false,
+     false
+    ],
+    "cold_identical_to_steady": [
+     true,
+     true
+    ],
+    "errors": 0
+   },
+   "replies": {
+    "steady": "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}",
+    "cold": [
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}",
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}"
+    ],
+    "restored": [
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"issuance\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"purchase order for fabric and zippers\",\"p1.b4\"]}",
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"issuance\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"purchase order for fabric and zippers\",\"p1.b4\"]}"
+    ]
+   }
+  },
+  "haswell-b": {
+   "runner_cpu": "AMD EPYC 7763 64-Core Processor",
+   "summary": {
+    "slot_file_bytes": 234281292,
+    "saved_tokens": 717,
+    "save_ms": 62.719,
+    "restore_ms": 99.6,
+    "restore_wall_ms": 100.4,
+    "restore_ok": true,
+    "load_s": 4.9,
+    "cold_cache_n": [
+     0,
+     0
+    ],
+    "restored_cache_n": [
+     477,
+     477
+    ],
+    "steady_cache_n": 477,
+    "cold_prompt_n": 930,
+    "restored_prompt_n": 453,
+    "cold_prompt_ms": 64693.4,
+    "restored_prompt_ms": 31787.1,
+    "steady_prompt_ms": 31858.75,
+    "cold_latency_s": 80.1,
+    "restored_latency_s": 47.6,
+    "first_document_saving_s": 32.8,
+    "restored_identical_to_steady": [
+     false,
+     false
+    ],
+    "cold_identical_to_steady": [
+     true,
+     true
+    ],
+    "errors": 0
+   },
+   "replies": {
+    "steady": "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}",
+    "cold": [
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}",
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}"
+    ],
+    "restored": [
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"issuance\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"purchase order for fabric and zippers\",\"p1.b4\"]}",
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"issuance\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"purchase order for fabric and zippers\",\"p1.b4\"]}"
+    ]
+   }
+  }
+ },
+ "notes": "Summaries of scripts/bonsai-eval/cold-start.py as speed-battery.yml ran it (cold_start true, cpu_variant haswell, threads 4, Qwen3.5-9B Q4_K_M, llama.cpp b11946). Run 42575519449 saved the slot after request 0000 (637 tokens) with no instructions-only request; run 42584078974 after request 0016 and the instructions-only request, as the app does.",
+ "run_42584078974": {
+  "cold-haswell-a": {
+   "runner_cpu": "AMD EPYC 9V45 96-Core Processor",
+   "cpu_backend": "libggml-cpu-haswell.so",
+   "summary": {
+    "instructions_only_cache_n": 477,
+    "slot_file_bytes": 174210604,
+    "saved_tokens": 492,
+    "save_ms": 38.338,
+    "restore_ms": 44.4,
+    "restore_wall_ms": 45.0,
+    "restore_ok": true,
+    "load_s": 3.1,
+    "cold_cache_n": [
+     0,
+     0
+    ],
+    "restored_cache_n": [
+     477,
+     477
+    ],
+    "steady_cache_n": 477,
+    "cold_prompt_n": 930,
+    "restored_prompt_n": 453,
+    "cold_prompt_ms": 39266.1,
+    "restored_prompt_ms": 19299.8,
+    "steady_prompt_ms": 19490.967,
+    "cold_latency_s": 50.6,
+    "restored_latency_s": 30.1,
+    "first_document_saving_s": 19.9,
+    "restored_identical_to_steady": [
+     true,
+     true
+    ],
+    "cold_identical_to_steady": [
+     true,
+     true
+    ],
+    "errors": 0
+   },
+   "save_first_read": {
+    "request": "0016",
+    "cache_n": 0,
+    "prompt_n": 1094,
+    "prompt_ms": 46700.301,
+    "latency_s": 58.4
+   },
+   "instructions_only": {
+    "status": 200,
+    "latency_s": 1.11,
+    "cache_n": 477,
+    "prompt_n": 15
+   },
+   "replies": {
+    "steady": "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}",
+    "cold": [
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}",
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}"
+    ],
+    "restored": [
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}",
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}"
+    ]
+   }
+  },
+  "cold-haswell-b": {
+   "runner_cpu": "AMD EPYC 9V74 80-Core Processor",
+   "cpu_backend": "libggml-cpu-haswell.so",
+   "summary": {
+    "instructions_only_cache_n": 477,
+    "slot_file_bytes": 174210604,
+    "saved_tokens": 492,
+    "save_ms": 34.678,
+    "restore_ms": 58.8,
+    "restore_wall_ms": 59.5,
+    "restore_ok": true,
+    "load_s": 4.2,
+    "cold_cache_n": [
+     0,
+     0
+    ],
+    "restored_cache_n": [
+     477,
+     477
+    ],
+    "steady_cache_n": 477,
+    "cold_prompt_n": 930,
+    "restored_prompt_n": 453,
+    "cold_prompt_ms": 53995.4,
+    "restored_prompt_ms": 26492.9,
+    "steady_prompt_ms": 26494.759,
+    "cold_latency_s": 68.5,
+    "restored_latency_s": 41.1,
+    "first_document_saving_s": 27.4,
+    "restored_identical_to_steady": [
+     true,
+     true
+    ],
+    "cold_identical_to_steady": [
+     true,
+     true
+    ],
+    "errors": 0
+   },
+   "save_first_read": {
+    "request": "0016",
+    "cache_n": 0,
+    "prompt_n": 1094,
+    "prompt_ms": 63100.085,
+    "latency_s": 78.07
+   },
+   "instructions_only": {
+    "status": 200,
+    "latency_s": 1.47,
+    "cache_n": 477,
+    "prompt_n": 15
+   },
+   "replies": {
+    "steady": "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}",
+    "cold": [
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}",
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}"
+    ],
+    "restored": [
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}",
+     "{\"type\":[\"PURCHASE ORDER\",\"p1.b2\"],\"date\":[\"2026-06-03\",\"execution\",\"p1.b3.f2\"],\"parties\":[[\"Ridgewell Textiles Ltd.\",\"vendor\",\"p1.b3.f3\"],[\"Thornbury Outdoor Gear Co.\",\"buyer\",\"p1.b4\"]],\"subject\":[\"Ripstop nylon and textile fabrics\",\"p1.b4\"]}"
+    ]
+   }
+  }
+ }
+}

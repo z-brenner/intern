@@ -27,9 +27,9 @@ use crate::{
     },
     identity::MachineIdentity,
     scan::{
-        FileFacts, Hydration, IntakeAdmission, IntakeConfig, IntakeHost, IntakeStatus, ItemState,
-        StabilityTracker, SystemHydration, is_conflict_copy, modified_secs, relative_slash_path,
-        walk_intake,
+        ArrivalProbe, FileFacts, Glimpse, Hydration, IntakeAdmission, IntakeConfig, IntakeHost,
+        IntakeStatus, ItemState, Listing, StabilityTracker, SystemHydration, is_conflict_copy,
+        list_intake, modified_secs, next_look_after, relative_slash_path, walk_intake,
     },
 };
 
@@ -373,6 +373,13 @@ fn run(
     let mut state_generation = None;
     let mut last_reported: Option<IntakeStatus> = None;
     let mut last_full: Option<Instant> = None;
+    let mut probe = ArrivalProbe::default();
+    // Whether the look between scans called for the scan about to run, and
+    // when the scan after it was already due.
+    let mut probed: Option<Instant> = None;
+    // How long the last listing of the folder took, which spaces the looks
+    // out on a folder that is slow to list.
+    let mut listing_took = std::time::Duration::ZERO;
     loop {
         let (config, generation, requested) = {
             let mut control = lock(&shared.control);
@@ -386,6 +393,19 @@ fn run(
         if state_generation != Some(generation) {
             state = ScanState::new(&config);
             state_generation = Some(generation);
+            probe = ArrivalProbe::default();
+            probed = None;
+        }
+        // What the listings show before this scan walks the folder is what
+        // the look between scans takes as known: a file that lands after
+        // this is news to it, whether or not the scan caught it. A scan the
+        // look itself called for follows a listing just taken, and a rescan
+        // while files settle is listed after, if at all (below).
+        let looking = config.arrival_probe_interval.is_some();
+        if looking && probe.lists_before_scan(probed.is_some()) {
+            let (listing, took) = timed_listing(&config);
+            probe.rebase(listing.ok());
+            listing_took = took;
         }
         // Claims `hand_over` took: the queue has their items from that
         // moment, exactly as for a claim this loop took itself. One taken in
@@ -420,7 +440,13 @@ fn run(
             full,
         );
         *lock(&shared.status) = status.clone();
-        let interval = config.next_interval(status.arriving as usize);
+        let arriving = status.arriving as usize;
+        if probe.scanned(arriving) && looking {
+            let (listing, took) = timed_listing(&config);
+            probe.rebase(listing.ok());
+            listing_took = took;
+        }
+        let interval = config.next_interval(arriving);
         if last_reported
             .as_ref()
             .is_none_or(|previous| previous.materially_differs(&status))
@@ -428,19 +454,96 @@ fn run(
             host.status_changed(&status);
             last_reported = Some(status);
         }
-        let deadline = Instant::now() + interval;
-        let mut control = lock(&shared.control);
-        while !control.wake && !control.shutdown {
-            let now = Instant::now();
-            if now >= deadline {
+        let deadline = next_scan_due(probed.take(), arriving, Instant::now(), interval);
+        // While anything is arriving the scans already come every few
+        // seconds; the look is for the long wait with nothing arriving.
+        let look_every = config
+            .arrival_probe_interval
+            .filter(|every| arriving == 0 && *every < interval);
+        // On a folder slow to list the looks come further apart, and on one
+        // slow enough not before the scan that is due.
+        let look_in = |after, listing_took| {
+            Instant::now().checked_add(next_look_after(
+                after,
+                listing_took,
+                config.arrival_probe_load,
+            ))
+        };
+        let mut next_look = look_every.and_then(|every| look_in(every, listing_took));
+        loop {
+            let until = next_look.map_or(deadline, |look| look.min(deadline));
+            if wait_or_wake(shared, until) || Instant::now() >= deadline {
                 break;
             }
-            control = shared
-                .wake
-                .wait_timeout(control, deadline - now)
-                .unwrap_or_else(PoisonError::into_inner)
-                .0;
+            let Some(every) = look_every else {
+                break;
+            };
+            let (listing, took) = timed_listing(&config);
+            listing_took = took;
+            let glimpse = match listing {
+                Ok(listing) => probe.look(listing),
+                // The folder cannot be listed; the scan that is due will
+                // say so. The next listing that works starts over.
+                Err(_) => {
+                    probe.rebase(None);
+                    Glimpse::Nothing
+                }
+            };
+            match glimpse {
+                Glimpse::Nothing => next_look = look_in(every, listing_took),
+                Glimpse::Wait => next_look = look_in(config.arrival_burst_window, listing_took),
+                Glimpse::Scan => {
+                    probed = Some(deadline);
+                    break;
+                }
+            }
         }
+    }
+}
+
+/// When the next scan is due after one that ended at `now`: `interval` on,
+/// unless the look between scans called for the scan that just ran - `due`
+/// is when the next was already due then - and it found nothing arriving.
+/// An empty file or a conflict copy turning up is worth that one look, and
+/// must not put off the scan that was coming anyway: the full scans, which
+/// ask again about every held document, keep their interval.
+fn next_scan_due(
+    called_for: Option<Instant>,
+    arriving: usize,
+    now: Instant,
+    interval: std::time::Duration,
+) -> Instant {
+    match called_for {
+        Some(due) if arriving == 0 && due > now => due,
+        _ => now + interval,
+    }
+}
+
+/// Lists the folder for the look between scans ([`list_intake`]), and says
+/// how long that took.
+fn timed_listing(config: &IntakeConfig) -> (std::io::Result<Listing>, std::time::Duration) {
+    let started = Instant::now();
+    let listing = list_intake(&config.intake_root, &config.extensions);
+    (listing, started.elapsed())
+}
+
+/// Waits until `until`, or until the loop is woken or shut down. True when
+/// it was woken or shut down.
+fn wait_or_wake(shared: &Shared, until: Instant) -> bool {
+    let mut control = lock(&shared.control);
+    loop {
+        if control.wake || control.shutdown {
+            return true;
+        }
+        let now = Instant::now();
+        if now >= until {
+            return false;
+        }
+        control = shared
+            .wake
+            .wait_timeout(control, until - now)
+            .unwrap_or_else(PoisonError::into_inner)
+            .0;
     }
 }
 
@@ -1080,5 +1183,35 @@ impl Scanner<'_> {
         self.awaiting_hydration
             .retain(|key| owned.contains_key(key));
         self.seen_live.retain(|key| owned.contains_key(key));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::next_scan_due;
+
+    /// A scan the look between scans called for does not move the scan that
+    /// was due anyway, unless it found something arriving - then the scans
+    /// come at the settling interval, as after any scan that did.
+    #[test]
+    fn a_scan_the_look_called_for_does_not_put_off_the_one_that_was_due() {
+        let now = Instant::now();
+        let interval = Duration::from_secs(20);
+        let due = now + Duration::from_secs(7);
+        // An ordinary scan: the next is a whole interval on.
+        assert_eq!(next_scan_due(None, 0, now, interval), now + interval);
+        // Called for by the look, nothing arriving: the next stays put.
+        assert_eq!(next_scan_due(Some(due), 0, now, interval), due);
+        // Something arriving: the settling interval, from now.
+        let settling = Duration::from_secs(3);
+        assert_eq!(next_scan_due(Some(due), 1, now, settling), now + settling);
+        // The scan took until past when the next was due: not in the past.
+        let overdue = now - Duration::from_millis(1);
+        assert_eq!(
+            next_scan_due(Some(overdue), 0, now, interval),
+            now + interval
+        );
     }
 }

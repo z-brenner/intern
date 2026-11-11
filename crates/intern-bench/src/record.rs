@@ -4,7 +4,8 @@
 use std::collections::BTreeMap;
 
 use intern_engine::{
-    DigestBudget, DocumentAnalysis, DocumentSource, domain::ProposalStatus,
+    DigestBudget, DocumentAnalysis, DocumentSource, ValidatedFacts,
+    domain::{PartyRole, ProposalStatus, Support},
     retrieve::RetrievalConfig,
 };
 use serde::{Deserialize, Serialize};
@@ -89,6 +90,11 @@ pub struct DocumentRecord {
     pub model_proposal: Option<Value>,
     #[serde(default)]
     pub token_confidence: Option<Value>,
+    /// How the evidence pipeline came to the filename's parties (see
+    /// [`RelationRecord`]); absent for the digest pipeline, which keeps no
+    /// such facts, and for a document that was not analyzed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relation: Option<RelationRecord>,
     #[serde(default)]
     pub scores: BTreeMap<String, Value>,
     /// The description's checkable claims and whether the document states
@@ -126,6 +132,74 @@ pub struct DocumentRecord {
     pub timings_recorded: bool,
     #[serde(default)]
     pub memory: MemoryPeaks,
+}
+
+/// Why a document's filename names the parties it does: the class its type
+/// sorted into, the rule of the relation table that applied, and every
+/// party validation kept with the role the reply gave it and the support
+/// the document gave that role.
+///
+/// It is what a rule's firings are counted from - how many names a default
+/// such as `record: the first party, by default` gave, and how many of them
+/// were right - which a filename and its review reasons alone do not say.
+/// Nothing here is a score: no baseline holds it and no comparison reads
+/// it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct RelationRecord {
+    /// `agreement`, `issued`, `notice`, `record`, ...
+    pub document_class: String,
+    /// The relation rule that applied, in the engine's own words.
+    pub basis: String,
+    /// The validated parties in the order the document first names them,
+    /// those set aside (copied, or signing for a party) included.
+    #[serde(default)]
+    pub parties: Vec<PartyRecord>,
+}
+
+/// One validated party of a [`RelationRecord`].
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct PartyRecord {
+    pub name: String,
+    /// The role the document supports, which alone decides the relation.
+    #[serde(default)]
+    pub role: Option<PartyRole>,
+    /// The role the reply gave, supported or not.
+    #[serde(default)]
+    pub proposed_role: Option<PartyRole>,
+    /// How the document supports the reply's role.
+    #[serde(default)]
+    pub role_support: Support,
+    /// The role the document's own wording gives the party.
+    #[serde(default)]
+    pub document_role: Option<PartyRole>,
+    /// Named only on a "cc:" line.
+    #[serde(default)]
+    pub copied: bool,
+    /// A person acting for a party, and so no party of their own.
+    #[serde(default)]
+    pub signatory: bool,
+}
+
+impl RelationRecord {
+    fn of(facts: &ValidatedFacts) -> Self {
+        Self {
+            document_class: facts.document_class.as_str().to_owned(),
+            basis: facts.relation_basis.clone(),
+            parties: facts
+                .parties
+                .iter()
+                .map(|party| PartyRecord {
+                    name: party.name.clone(),
+                    role: party.role,
+                    proposed_role: party.proposed_role,
+                    role_support: party.role_support,
+                    document_role: party.document_role,
+                    copied: party.copied,
+                    signatory: party.signatory,
+                })
+                .collect(),
+        }
+    }
 }
 
 impl DocumentRecord {
@@ -243,6 +317,7 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
             record.token_confidence = analysis
                 .token_confidence
                 .and_then(|confidence| serde_json::to_value(confidence).ok());
+            record.relation = analysis.facts.as_ref().map(RelationRecord::of);
             let proposal = &analysis.proposal;
             Outcome {
                 analyzed: true,
@@ -350,6 +425,109 @@ mod tests {
                 "{key}"
             );
         }
+    }
+
+    /// An evidence-pipeline record says which relation rule named its
+    /// parties and what the reply had called them, so a default's firings
+    /// can be counted against the names they gave. It is no score: the
+    /// scores, which a baseline holds, are the same with it or without, and
+    /// a record with no validated facts writes no such key.
+    #[test]
+    fn a_record_says_which_relation_rule_named_its_parties() {
+        let document = GoldDocument {
+            id: "minutes".into(),
+            file: "minutes.docx".into(),
+            pages: 1,
+            ..GoldDocument::default()
+        };
+        let mut analysis: DocumentAnalysis = serde_json::from_value(serde_json::json!({
+            "filename": "2018-06-14 Minutes for Odalys Brandt.docx", "description": "",
+            "status": "needs_review", "reviewReasons": ["party_unsupported"],
+            "proposal": {"document_type": "Minutes", "document_date": "2018-06-14",
+                "date_role": null, "parties": ["Odalys Brandt"], "party_relation": "for",
+                "description": "", "confidence": 0.9,
+                "evidence": {"date": null, "document_type": null, "parties": []}},
+            "telemetry": {"sourceCharacters": 1, "digestCharacters": 1, "compressionRatio": 1.0,
+                "distillMicros": 1, "inferenceMillis": 1}
+        }))
+        .unwrap();
+        let retrieval = RetrievalConfig::default();
+        let observe = |analysis: &DocumentAnalysis| {
+            scored_record(
+                &document,
+                Observation {
+                    status: COMPLETED,
+                    error: None,
+                    analysis: Some(analysis),
+                    source: None,
+                    budget: DigestBudget::default(),
+                    retrieval: &retrieval,
+                    exchanges: &[],
+                    last_prompt: None,
+                    timings: timing::empty(),
+                    timings_recorded: true,
+                    memory: MemoryPeaks::default(),
+                    replayed: true,
+                    stale: false,
+                },
+            )
+        };
+        let bare = observe(&analysis);
+        assert_eq!(bare.relation, None);
+        let written = serde_json::to_value(&bare).unwrap();
+        assert!(written.get("relation").is_none(), "{written}");
+
+        analysis.facts = Some(ValidatedFacts {
+            parties: vec![
+                intern_engine::ValidatedParty {
+                    name: "Odalys Brandt".into(),
+                    proposed_role: Some(PartyRole::Client),
+                    ..Default::default()
+                },
+                intern_engine::ValidatedParty {
+                    name: "Teodor Lindqvist".into(),
+                    role: Some(PartyRole::Other),
+                    proposed_role: Some(PartyRole::Client),
+                    signatory: true,
+                    ..Default::default()
+                },
+            ],
+            document_class: intern_engine::DocumentClass::Record,
+            relation_basis: "record: the first party, by default".into(),
+            ..ValidatedFacts::default()
+        });
+        let record = observe(&analysis);
+        let relation = record.relation.as_ref().expect("the relation is recorded");
+        assert_eq!(relation.document_class, "record");
+        assert_eq!(relation.basis, "record: the first party, by default");
+        assert_eq!(relation.parties.len(), 2);
+        assert_eq!(relation.parties[0].proposed_role, Some(PartyRole::Client));
+        assert_eq!(relation.parties[0].role, None);
+        assert!(relation.parties[1].signatory);
+        // Every score both records hold is the same; the facts add only the
+        // evidence pipeline's own support counts, and the relation record
+        // none of its own.
+        for (key, value) in &bare.scores {
+            assert_eq!(record.scores.get(key), Some(value), "{key}");
+        }
+        let added = record
+            .scores
+            .keys()
+            .filter(|key| !bare.scores.contains_key(*key))
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            added,
+            [
+                "facts_proposed",
+                "facts_unsupported",
+                "miscited_ids",
+                "unknown_ids"
+            ]
+        );
+        let read: DocumentRecord =
+            serde_json::from_value(serde_json::to_value(&record).unwrap()).unwrap();
+        assert_eq!(read.relation, record.relation);
     }
 
     /// A document that was read carries what its evidence context costs

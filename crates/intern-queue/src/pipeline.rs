@@ -169,7 +169,34 @@ impl Drop for LeaseKeeper {
 }
 
 pub const PARSER_TIMEOUT_SECONDS: u64 = 30 * 60;
+/// How long a document may hold the model: the start or swap of a model it
+/// has to wait for, the self-test of one it loads for the first time, its
+/// request, and the one more request a server that failed under it is
+/// restarted for, all told. The deadline is the queue's to keep (see
+/// `await_model_request`): at its end the request is canceled, which
+/// restarts the local server under it - or, under a first load's
+/// self-test, stops it - and the document waits in doubt over a time-out.
 pub const MODEL_TIMEOUT_SECONDS: u64 = 15 * 60;
+
+// The deadline above is the only clock a document's requests to the local
+// model run against: its own, the one more after a server failed under it,
+// and a first load's self-test, which the cancel ends as it ends a request.
+// The local client has a limit of its own, and a request it gives up on
+// comes back as a failed request - which is answered by restarting the
+// server and sending the request again (`analyze_with_deadline`). A limit
+// shorter than the deadline therefore abandons any request slower than
+// itself and sends it again into the same wall: at ten minutes against
+// these fifteen, a document that needed eleven could never be read. The
+// client's limit must outlast the deadline, so that only the deadline ever
+// ends a document's request for being slow, and ends it once. What the
+// cancel cannot cut short is waited out after the deadline as before: a
+// model start under way (its health check and slot restore have limits of
+// their own), and a verified start on the setup thread, which is bounded
+// by the client's limit.
+const _: () = assert!(
+    intern_engine::client::REQUEST_TIMEOUT.as_secs() > MODEL_TIMEOUT_SECONDS,
+    "the local client must not give a request up before the queue's deadline for it"
+);
 
 /// How long a request that has already missed its deadline is given to
 /// notice its cancel before the queue stops waiting for it.

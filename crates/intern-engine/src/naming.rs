@@ -342,9 +342,10 @@ const SUFFIXES: &[(&str, &str)] = &[
 /// Suffixes that are initialisms and stay in capitals.
 const CAPITAL_SUFFIXES: &[&str] = &["LLC", "LLP", "PLC", "PC", "NA", "LP"];
 
-/// The small words a title keeps in lower case after its first word.
+/// The small words a title keeps in lower case after its first word. "A"
+/// is left out: "SCHEDULE A" names its schedule by the letter.
 const CONNECTORS: &[&str] = &[
-    "of", "and", "the", "for", "to", "with", "in", "on", "at", "by",
+    "of", "and", "the", "an", "for", "to", "with", "in", "on", "at", "by",
 ];
 
 /// Short words that are words, not initialisms, and are cased like any
@@ -357,7 +358,7 @@ const SHORT_WORDS: &[&str] = &[
     "new", "san", "los", "las", "del", "st", "gas", "oil", "tax", "air", "sea", "bay", "oak",
     "sun", "sky", "one", "two", "six", "ten", "big", "top", "red", "old", "all", "art", "car",
     "law", "bar", "day", "way", "key", "inn", "box", "pay", "fee", "web", "lab", "pet", "tea",
-    "toy",
+    "toy", "act",
 ];
 
 /// Title-cases a segment a letterhead or a scan printed in capitals:
@@ -930,6 +931,10 @@ mod tests {
                 "Los Angeles Department of Water and Power",
             ),
             ("NOTICE OF CHANGE IN TERMS", "Notice of Change in Terms"),
+            (
+                "RESPONSE TO AN OFFICIAL INFORMATION ACT REQUEST",
+                "Response to an Official Information Act Request",
+            ),
             ("SMITH LAW GROUP PLLC", "Smith Law Group PLLC"),
             ("IBM GLOBAL SERVICES", "IBM Global Services"),
             ("USA TODAY HOLDINGS", "USA Today Holdings"),

@@ -268,3 +268,121 @@ describe('the Pages deployment', () => {
     expect(release.indexOf('  pages:\n')).toBeGreaterThan(release.indexOf('gh release create $Tag'));
   });
 });
+
+describe('the server speed battery', () => {
+  const battery = async () => stepsOf(jobOf(await readFile('.github/workflows/speed-battery.yml', 'utf8'), 'battery'));
+
+  // ggml loads its CPU backends from the folder /proc/self/exe resolves to,
+  // so a folder of symlinks to the release loads the release's own best
+  // variant: an AMX or AVX-512 path no laptop has. Hard links are files of
+  // their own, and a folder holding one variant can load only that one.
+  it('pins one CPU backend with hard links, before any server starts', async () => {
+    const steps = await battery();
+    const pin = steps.findIndex((step) => step.includes('name: Pin the CPU backend'));
+    expect(pin).toBeGreaterThan(steps.findIndex((step) => step.includes('name: Fetch llama-server')));
+    const step = steps[pin];
+    expect(step).toContain("if: inputs.cpu_variant != ''");
+    expect(step).toContain('cp -a --link "$source/." "$pinned/"');
+    expect(step).not.toMatch(/ln -s|--symbolic/);
+    expect(step).toContain(`! -name "libggml-cpu-$CPU_VARIANT.so" -delete`);
+    expect(step).toContain('echo "LLAMA_SERVER=$pinned/');
+    for (const name of ['Measure the cold start', 'Run the battery']) {
+      expect(steps.findIndex((s) => s.includes(`name: ${name}`)), name).toBeGreaterThan(pin);
+    }
+    // The backend the server loads is recorded, before any server starts,
+    // and the summary names it, so a pin that did not take is visible.
+    const record = steps.findIndex((s) => s.includes('name: Record the CPU backend'));
+    expect(record).toBeGreaterThan(pin);
+    expect(steps[record]).toContain('"$LLAMA_SERVER" -lv 4 --list-devices');
+    expect(steps.find((s) => s.includes('name: Summarize'))).toContain('loaded CPU backend from');
+  });
+
+  // The battery warms every slot before it times anything, so the first
+  // document of a server lifetime - the one a slot restore speeds up - is
+  // timed only by the cold-start step, on fresh servers, before the battery.
+  it('times the cold start on fresh servers before the warmed battery', async () => {
+    const steps = await battery();
+    const cold = steps.findIndex((step) => step.includes('name: Measure the cold start'));
+    expect(cold).toBeGreaterThan(steps.findIndex((step) => step.includes('name: Fetch and verify the model')));
+    expect(cold).toBeLessThan(steps.findIndex((step) => step.includes('name: Run the battery')));
+    expect(steps[cold]).toContain('if: inputs.cold_start');
+    expect(steps[cold]).toContain('scripts/bonsai-eval/cold-start.py');
+    const upload = steps.find((step) => step.includes('actions/upload-artifact@'))!;
+    expect(upload).toContain('out/cold-start/cold-start.json');
+    const script = await readFile('scripts/bonsai-eval/cold-start.py', 'utf8');
+    // The app's launch, with the slot directory and a key the slot calls carry.
+    for (const flag of ['"--cache-ram", "0", "-ub", "256", "--prio", "-1", "--poll", "0", "--no-mmproj"', '"--slot-save-path"', '"--api-key"']) {
+      expect(script).toContain(flag);
+    }
+    expect(script).toContain('add_header("Authorization", f"Bearer {key}")');
+  });
+
+  // The OCR comparison runs on a runner of its own, both workers built here
+  // from source with the shipped features, alternated, every reading kept.
+  it('times this commit\'s parser worker against the base\'s on one runner', async () => {
+    const workflow = await readFile('.github/workflows/speed-battery.yml', 'utf8');
+    const job = jobOf(workflow, 'ocr-pages');
+    expect(job).toContain('if: inputs.ocr_pages');
+    expect(job).toContain('fetch-depth: 0');
+    const steps = stepsOf(job);
+    const at = (name: string) => steps.findIndex((step) => step.includes(`name: ${name}`));
+    const head = at("Build this commit's parser worker");
+    const stage = at('Stage the runtime as the package lays it out');
+    const base = at("Build the base's parser worker");
+    const time = at('Time the two workers, alternated');
+    expect(head).toBeGreaterThan(-1);
+    expect(stage).toBeGreaterThan(head);
+    expect(base).toBeGreaterThan(stage);
+    expect(time).toBeGreaterThan(base);
+    for (const index of [head, base]) {
+      expect(steps[index]).toContain('cargo build --locked --release -p intern-worker --features windows-native');
+    }
+    expect(steps[base]).toContain('git worktree add --detach "$LAB/base"');
+    expect(steps[base]).toContain('--target-dir "$GITHUB_WORKSPACE/target"');
+    expect(steps[time]).toContain('INTERN_RUNTIME_DIR: ${{ runner.temp }}/ocr-pages/stage/runtime');
+    expect(steps[time]).toContain('scripts/bonsai-eval/ocr-pages.py --base "$LAB/worker-base" --head "$LAB/worker-head"');
+    expect(steps[time]).toContain('--rounds 3');
+    expect(steps.find((step) => step.includes('actions/upload-artifact@'))).toContain('ocr-pages/out/');
+    const script = await readFile('scripts/bonsai-eval/ocr-pages.py', 'utf8');
+    expect(script).toContain('PROTOCOL_VERSION = 1');
+    expect(script).toContain('VmHWM');
+  });
+
+  // The app's own launch and slot code against the real server: the test
+  // the workflow names must exist, and a run that did not pass it fails.
+  it('runs the app\'s live slot test on the pinned server, and fails when it does', async () => {
+    const workflow = await readFile('.github/workflows/speed-battery.yml', 'utf8');
+    expect(jobOf(workflow, 'battery')).toContain('if: inputs.battery');
+    const job = jobOf(workflow, 'live-slots');
+    expect(job).toContain('if: inputs.live_slots');
+    const steps = stepsOf(job);
+    const fetch = steps.find((step) => step.includes('name: Fetch and verify llama-server'))!;
+    expect(fetch).toContain('echo "$LLAMA_UPSTREAM_SHA256  $LAB/llama/$archive" | sha256sum --check --strict');
+    const run = steps.find((step) => step.includes('name: Run the live slot-restore test'))!;
+    const test = /cargo test --locked -p intern-app --lib (\w+)/.exec(run)![1];
+    expect(await readFile('src-tauri/src/commands.rs', 'utf8')).toContain(`fn ${test}`);
+    expect(run).toContain('INTERN_LIVE_LLAMA_SERVER="$LLAMA_SERVER" INTERN_LIVE_MODEL="$MODEL"');
+    expect(run).toContain("grep -q 'test result: ok. 1 passed'");
+    expect(steps.find((step) => step.includes('actions/upload-artifact@'))).toContain('live-slots/out/');
+  });
+});
+
+// The replays' baselines are written at the accurate model's review gate
+// (tiers::REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE), so the app files what CI
+// scores as ready. A gate moved in the engine and not here, or here and not
+// in the engine, holds the replays to a readiness the app does not have.
+describe('the review gate CI replays at', () => {
+  it('is the accurate model\'s gate, in every replay and in the corpus recording script', async () => {
+    const tiers = await readFile('crates/intern-engine/src/tiers.rs', 'utf8');
+    const constant = tiers.match(/pub const REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE: f32 = ([\d.]+);/);
+    expect(constant, 'tiers.rs defines the accurate gate').not.toBeNull();
+    const gate = constant![1];
+    const workflow = await ci();
+    const replays = [...workflow.matchAll(/--min-token-confidence ([\d.]+)/g)].map((match) => match[1]);
+    expect(replays).toHaveLength(3);
+    for (const value of replays) expect(value).toBe(gate);
+    const recording = await readFile('scripts/record-corpus.ps1', 'utf8');
+    const recorded = [...recording.matchAll(/--min-token-confidence ([\d.]+)/g)].map((match) => match[1]);
+    expect(recorded).toEqual([gate]);
+  });
+});

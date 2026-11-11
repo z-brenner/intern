@@ -21,7 +21,7 @@
 //! Nothing here invents text: a role comes from a line that states the date,
 //! a type from a heading, an issuer from a party the model already named.
 
-use crate::cues::{CUSTOMER_CUES, ISSUER_CUES, NOT_A_TITLE, TYPE_NOUNS};
+use crate::cues::{CUSTOMER_CUES, ISSUER_CUES, NOT_A_TITLE, PAYMENT_ADDRESS_CUES, TYPE_NOUNS};
 use crate::domain::{DateRole, PartyRelation};
 use crate::evidence::{
     NumericDate, NumericOrder, Segments, date_match_positions, extract_stated_dates,
@@ -936,9 +936,11 @@ const ISSUED_TYPES: &[&str] = &[
 /// [`normalize_loosely`] writes them: a cue anywhere on the line, as on a
 /// plain line ("remit to acme inc"), except that in a table's row a label's
 /// cell - a cue ending on its colon - labels the cells after it, never the
-/// one before it. The customer's name at the head of an invoice's row is
-/// not where payment goes because a later cell of the row reads "Please
-/// Remit To:".
+/// one before it, and a cue's cell that carries its own value ("Send
+/// Payment To: Halvorsen Fixture Works LLC") labels that value only. The
+/// customer's name at the head of an invoice's row is not where payment
+/// goes because a later cell of the row reads "Please Remit To:" or
+/// "Remit To: <issuer>".
 pub(crate) fn cue_labels(line: &str, party: &str, cues: &[&str]) -> bool {
     if !line.contains('|') {
         return line.contains(party) && cues.iter().any(|cue| line.contains(cue));
@@ -949,12 +951,26 @@ pub(crate) fn cue_labels(line: &str, party: &str, cues: &[&str]) -> bool {
         .filter(|cell| !cell.is_empty())
         .collect::<Vec<_>>();
     let cued = |cell: &str| cues.iter().any(|cue| cell.contains(cue));
+    // A cue's label closed by its colon with the value after it, in the
+    // cell: "send payment to: halvorsen fixture works llc". A cell with
+    // no colon after its cue does not say where its label ends ("vendor
+    // registration form", "remit to").
+    let carries_a_value = |cell: &str| {
+        cues.iter().any(|cue| {
+            cell.find(cue).is_some_and(|at| {
+                cell[at + cue.len()..]
+                    .split_once(':')
+                    .is_some_and(|(_, value)| !value.trim().is_empty())
+            })
+        })
+    };
     cells.iter().enumerate().any(|(at, cell)| {
         cell.contains(party)
-            && cells
-                .iter()
-                .enumerate()
-                .any(|(other, text)| cued(text) && (other <= at || !text.ends_with(':')))
+            && cells.iter().enumerate().any(|(other, text)| {
+                cued(text)
+                    && (other == at
+                        || (!carries_a_value(text) && (other < at || !text.ends_with(':'))))
+            })
     })
 }
 
@@ -989,9 +1005,11 @@ pub fn repair_issued_relation(
         .iter()
         .map(|party| on_line_with(party, CUSTOMER_CUES))
         .collect();
+    // The address payment is sent to is the issuer's, as a "Remit To" line's
+    // is: "Send Payment To: WBTV PO Box 14200".
     let issuers: Vec<bool> = parties
         .iter()
-        .map(|party| on_line_with(party, ISSUER_CUES))
+        .map(|party| on_line_with(party, ISSUER_CUES) || on_line_with(party, PAYMENT_ADDRESS_CUES))
         .collect();
     // Every cue nominates an issuer: an issuer line nominates its own party,
     // a customer line nominates the other one. One nominee, however many
@@ -1762,6 +1780,53 @@ Date: April 1, 2026",
         assert_eq!(relation, PartyRelation::From);
     }
 
+    /// A broadcast station's invoice in the real sets: the station stands on
+    /// the line that says where payment goes, the agency it bills in an
+    /// address block with no label on its own line. The label alone on its
+    /// line, as the invoice's later pages print it over a table, names no
+    /// one; nor does its cell name the customer whose cell comes before it.
+    #[test]
+    fn a_send_payment_to_line_names_the_issuer_directly() {
+        let parties = || vec!["Tidewater Buying LLC".to_owned(), "KQRD".to_owned()];
+        let digest = digest_of(
+            "INVOICE\n\nBilling Address:\n\nTidewater Buying LLC / POL\n41 Wharf Street\n\n\
+             Send Payment To: KQRD P.O. Box 4410 Marrow Springs, CO 80513\n\nKQRD\n",
+        );
+        let (kept, relation) =
+            repair_issued_relation(Some("Invoice"), parties(), PartyRelation::Between, &digest);
+        assert_eq!(kept, vec!["KQRD".to_owned()]);
+        assert_eq!(relation, PartyRelation::From);
+
+        let label_alone = digest_of(
+            "INVOICE\n\nSend Payment To:\n\n| KQRD | Invoice # | 2884942-1 |\n\
+             | P.O. Box 4410 | Invoice Date | 05/26/24 |\n\nTidewater Buying LLC / POL\n",
+        );
+        let (kept, relation) = repair_issued_relation(
+            Some("Invoice"),
+            parties(),
+            PartyRelation::Between,
+            &label_alone,
+        );
+        assert_eq!(kept, parties());
+        assert_eq!(relation, PartyRelation::Between);
+
+        assert!(cue_labels(
+            "send payment to: kqrd p.o. box 4410",
+            "kqrd",
+            PAYMENT_ADDRESS_CUES
+        ));
+        assert!(!cue_labels(
+            "| tidewater buying llc |  | send payment to: |  |",
+            "tidewater buying llc",
+            PAYMENT_ADDRESS_CUES
+        ));
+        assert!(!cue_labels(
+            "| include invoice # on check - payment terms 30 days | tidewater buying llc |",
+            "tidewater buying llc",
+            PAYMENT_ADDRESS_CUES
+        ));
+    }
+
     #[test]
     fn the_relation_is_left_alone_when_the_document_does_not_settle_it() {
         let digest = digest_of(
@@ -1820,6 +1885,33 @@ Date: April 1, 2026",
             "eog resources inc",
             issuers
         ));
+        // A cue's cell that carries its own value labels that value, not
+        // the customer's cell beside it, whichever side it stands on.
+        for cues in [issuers.as_slice(), PAYMENT_ADDRESS_CUES] {
+            let cue = cues[0];
+            assert!(!cue_labels(
+                &format!("| quillon ridge bakery inc | {cue}: halvorsen fixture works llc |"),
+                "quillon ridge bakery inc",
+                cues
+            ));
+            assert!(!cue_labels(
+                &format!(
+                    "| bill to: quillon ridge bakery inc | {cue}: halvorsen fixture works llc |"
+                ),
+                "quillon ridge bakery inc",
+                cues
+            ));
+            assert!(!cue_labels(
+                &format!("| {cue}: halvorsen fixture works llc | quillon ridge bakery inc |"),
+                "quillon ridge bakery inc",
+                cues
+            ));
+            assert!(cue_labels(
+                &format!("| quillon ridge bakery inc | {cue}: halvorsen fixture works llc |"),
+                "halvorsen fixture works llc",
+                cues
+            ));
+        }
         // The issuer is then named by the customer's cue alone.
         let digest = digest_of(
             "| INVOICE | |\n| EOG RESOURCES, INC. | | | Please Remit To: | |\n\

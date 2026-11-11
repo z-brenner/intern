@@ -13,6 +13,7 @@ Each pair is one report: the Markdown is for reading, the JSON for
 | `2026-10-07-phase3-after` | The same 77 documents through the evidence pipeline, the default since, replayed from today's `bench/recording.json`. |
 | `2026-10-07-phase3-compare` | `intern-bench compare` of the two, with the phase 3 scorecard: what retrieval, the facts reply and validation changed, document by document. |
 | `model-qualification-2026-11` | Qwen3.5 9B and 4B qualified to replace Qwen3.5 2B: six candidates live on InternBench and three real sets, the finalists on every recording after two rounds of engine adaptation, a fourth unseen real set, the fixtures corpus, speed and memory on one machine. `readings.json` has every document's reading by the three models. |
+| `review-gate-2026-11` | The accurate model's review gate moved from 0.7 to 0.8, by a rule written before a sixth real set was read: the pre-registration, the policy code it hashed, and the counts on that set and the development sets. |
 
 ## The phase 3 runs
 

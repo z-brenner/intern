@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::domain::{
     DateRole, Evidence, KeyFact, ModelFacts, ModelProposal, ModelTimings, PartyFact, PartyRelation,
-    PartyRole, TokenConfidence,
+    PartyRole, TokenAlternative, TokenConfidence, TokenTraceEntry,
 };
 use crate::error::{EngineError, EngineErrorCode, EngineResult};
 use crate::evidence::is_valid_iso_date;
@@ -194,6 +194,10 @@ pub struct ProposerReply {
     pub proposal: ModelProposal,
     /// See [`Proposer::propose_scored`].
     pub token_confidence: Option<TokenConfidence>,
+    /// Every generated token with the model's probability for it and the
+    /// tokens it weighed, when the client was asked to keep them
+    /// ([`ModelClient::with_token_trace`]): laboratory recordings only.
+    pub token_trace: Option<Vec<TokenTraceEntry>>,
     /// How the server spent the request, when it said: the local server
     /// does, and nothing else is asked.
     pub timings: Option<ModelTimings>,
@@ -222,6 +226,7 @@ pub trait Proposer: Send + Sync {
             .map(|(proposal, token_confidence)| ProposerReply {
                 proposal,
                 token_confidence,
+                token_trace: None,
                 timings: None,
             })
     }
@@ -242,10 +247,44 @@ pub struct ModelClient {
     model_id: String,
     http: Client,
     token_confidence: bool,
+    token_trace: bool,
     context_tokens: usize,
     #[cfg(feature = "benchmark-transport")]
     benchmark_transport: Option<crate::benchmark_transport::BenchmarkTransport>,
 }
+
+/// How long the client itself waits for the local server's reply before it
+/// gives a request up as failed.
+///
+/// A backstop, and on purpose longer than the fifteen minutes the queue
+/// gives a document with the model (`MODEL_TIMEOUT_SECONDS`; the queue
+/// refuses to build if this is not longer). The queue keeps that deadline
+/// itself and ends a reading that misses it by canceling it, which stops
+/// the server under the document's request, or under the self-test of a
+/// model the document has just loaded; so under the queue no request of a
+/// document's is ended by this limit, only by the deadline, once. This was
+/// ten minutes, and the two clocks disagreed: a request the client gave up
+/// on is a failed request, which the queue answers by restarting the server
+/// and sending it again, so a document that needed eleven minutes on a slow
+/// or memory-starved machine was cut off at ten, sent again to a freshly
+/// started server, and cut off again by the deadline five minutes later. It
+/// could never be read, however long it was given.
+///
+/// What this still bounds on its own is a server that stops answering a
+/// caller with no deadline: the setup thread's verified start - and a
+/// document that waits for the model behind it - the benchmark, and the
+/// command line.
+///
+/// Against the ten minutes, the deadline ending a request that hangs moves
+/// three outcomes under the queue. A request that hangs once is no longer
+/// given up, restarted for and sent again within the same attempt: the
+/// document waits in doubt over a time-out. A restart that fails under a
+/// hung server pauses the queue as a failed cancel at the deadline, not as
+/// a failed recovery at ten minutes. And in the cascade, an accurate second
+/// reading that was given up at ten minutes, leaving the fast reading to
+/// stand, now runs to the deadline, whose cancel takes the fast reading
+/// with it.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(16 * 60);
 
 impl Proposer for ModelClient {
     fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal> {
@@ -270,6 +309,22 @@ impl Proposer for ModelClient {
     }
 }
 
+/// The HTTP client for a server on this machine, which gives a request up
+/// once it has gone `timeout` without its whole reply.
+fn local_http(timeout: Duration) -> EngineResult<Client> {
+    // Plain HTTP to this machine never consults a root certificate, so
+    // the operating system's store is not read: one with nothing usable
+    // in it fails the build, and must not stop the local model.
+    Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(timeout)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .tls_built_in_native_certs(false)
+        .build()
+        .map_err(|_| request_failed())
+}
+
 impl ModelClient {
     pub fn new(
         endpoint: &str,
@@ -287,25 +342,15 @@ impl ModelClient {
                 "model endpoint must be local HTTP",
             ));
         }
-        // Plain HTTP to this machine never consults a root certificate, so
-        // the operating system's store is not read: one with nothing usable
-        // in it fails the build, and must not stop the local model.
-        let http = Client::builder()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(10 * 60))
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .tls_built_in_native_certs(false)
-            .build()
-            .map_err(|_| request_failed())?;
         Ok(Self {
             endpoint,
             api_key: api_key.into(),
             model_id: model_id.into(),
-            http,
+            http: local_http(REQUEST_TIMEOUT)?,
             #[cfg(feature = "benchmark-transport")]
             benchmark_transport: None,
             token_confidence: false,
+            token_trace: false,
             context_tokens: crate::server::CONTEXT_TOKENS as usize,
         })
     }
@@ -344,6 +389,20 @@ impl ModelClient {
     /// it, which is measurable on a CPU (see docs/model-candidates.md).
     pub fn with_token_confidence(mut self, enabled: bool) -> Self {
         self.token_confidence = enabled;
+        self
+    }
+
+    /// Keeps every generated token of a reply with its probability and the
+    /// two tokens the model found most probable at its position
+    /// ([`ProposerReply::token_trace`]), and asks the server for token
+    /// probabilities to do it.
+    ///
+    /// Laboratory only: the benchmark's live recordings turn it on so that
+    /// what a readiness gate reads can be studied and replayed token by
+    /// token. Like [`Self::with_token_confidence`] it changes no generated
+    /// token and nothing that identifies a request.
+    pub fn with_token_trace(mut self, enabled: bool) -> Self {
+        self.token_trace = enabled;
         self
     }
 
@@ -446,10 +505,12 @@ impl ModelClient {
         let completion: ChatCompletion = serde_json::from_slice(&bytes)
             .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
         let token_confidence = completion.token_confidence();
+        let token_trace = self.token_trace.then(|| completion.token_trace()).flatten();
         let timings = completion.model_timings();
         decode(completion, request.evidence.as_ref()).map(|proposal| ProposerReply {
             proposal,
             token_confidence,
+            token_trace,
             timings,
         })
     }
@@ -459,40 +520,106 @@ impl ModelClient {
     /// is transport, and the token-probability fields in particular change
     /// no generated token.
     fn completion_request(&self, request: &ModelRequest) -> Value {
-        let mut messages = vec![json!({"role": "system", "content": request.system_turn()})];
-        // A profile's exchanges sit between the instructions and the
-        // document, where the server's prompt cache keeps them with the
-        // system turn from one document to the next.
-        for turn in request.profile.map_or(&[][..], PromptProfile::examples) {
-            messages.push(json!({"role": "user", "content": turn.user}));
-            messages.push(json!({"role": "assistant", "content": turn.assistant}));
-        }
-        messages.push(json!({"role": "user", "content": request.prompt}));
         let mut body = json!({
             "model": self.model_id,
-            "messages": messages,
+            "messages": chat_messages(request),
             "stream": false,
             "temperature": 0,
             "top_k": 1,
             "max_tokens": MAX_REPLY_TOKENS,
             "grammar": request.grammar.as_deref().unwrap_or(RESPONSE_GRAMMAR),
             "cache_prompt": true,
-            // Hybrid-reasoning models must answer directly: Intern needs a form
-            // filled in, not a chain of thought, and thinking tokens are pure
-            // latency on a CPU.
-            "chat_template_kwargs": {"enable_thinking": false}
+            "chat_template_kwargs": template_switches()
         });
         if let Some(seed) = request.profile.and_then(PromptProfile::seed) {
             body["seed"] = json!(seed);
         }
-        if self.token_confidence {
-            // One alternative is the least llama-server accepts; only the
-            // chosen token's own probability is read.
+        if self.token_confidence || self.token_trace {
+            // One alternative is the least llama-server accepts, and only
+            // the chosen token's own probability is read for the gate. A
+            // trace keeps two, so that a token the grammar forced over the
+            // model's own choice can be told from one the model chose.
             body["logprobs"] = json!(true);
-            body["top_logprobs"] = json!(1);
+            body["top_logprobs"] = json!(if self.token_trace { 2 } else { 1 });
         }
         body
     }
+}
+
+/// The turns of a request, in order: the system turn, a profile's
+/// exchanges, and the document's own turn last.
+fn chat_messages(request: &ModelRequest) -> Vec<Value> {
+    let mut messages = vec![json!({"role": "system", "content": request.system_turn()})];
+    // A profile's exchanges sit between the instructions and the
+    // document, where the server's prompt cache keeps them with the
+    // system turn from one document to the next.
+    for turn in request.profile.map_or(&[][..], PromptProfile::examples) {
+        messages.push(json!({"role": "user", "content": turn.user}));
+        messages.push(json!({"role": "assistant", "content": turn.assistant}));
+    }
+    messages.push(json!({"role": "user", "content": request.prompt}));
+    messages
+}
+
+/// The chat template's switches, the same on every request.
+///
+/// Hybrid-reasoning models must answer directly: Intern needs a form filled
+/// in, not a chain of thought, and thinking tokens are pure latency on a CPU.
+fn template_switches() -> Value {
+    json!({"enable_thinking": false})
+}
+
+/// What the local server keeps from one evidence request to the next,
+/// hashed: every turn before the document's own - the system turn and a
+/// profile's exchanges - and the template switches they are rendered with.
+/// The grammar, the sampler and the token probabilities shape only the
+/// reply, so they are not part of it. A slot file saved after one document
+/// holds this state ([`crate::slots`]), and is only restored where it is
+/// the same.
+pub fn cached_prefix_identity(profile: Option<PromptProfile>) -> String {
+    let request = ModelRequest {
+        system: Some(crate::prompt::evidence_system()),
+        profile,
+        ..ModelRequest::default()
+    };
+    let mut messages = chat_messages(&request);
+    messages.pop();
+    let mut hasher = Sha256::new();
+    hasher.update(Value::Array(messages).to_string().as_bytes());
+    hasher.update([0_u8]);
+    hasher.update(template_switches().to_string().as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// The user turn of [`instructions_only_request`]: two words no document's
+/// turn starts with, so a document after it shares nothing past the
+/// instructions with it.
+const INSTRUCTIONS_ONLY_TURN: &str = "JSON only.";
+
+/// A request that leaves the local server's slot holding the evidence
+/// instructions and nothing of any document: every turn an evidence request
+/// sends before its document, then two fixed words, answered with one token.
+///
+/// Sent after a document, it reuses the instructions' state that document
+/// left behind and replaces the document's own tokens, so a slot file saved
+/// after it ([`crate::slots`]) holds no word of anything a person filed.
+pub fn instructions_only_request(model_id: &str, profile: Option<PromptProfile>) -> Value {
+    let request = ModelRequest {
+        prompt: INSTRUCTIONS_ONLY_TURN.to_owned(),
+        system: Some(crate::prompt::evidence_system()),
+        profile,
+        ..ModelRequest::default()
+    };
+    json!({
+        "model": model_id,
+        "messages": chat_messages(&request),
+        "stream": false,
+        "temperature": 0,
+        "top_k": 1,
+        "max_tokens": 1,
+        "cache_prompt": true,
+        "chat_template_kwargs": template_switches()
+    })
 }
 
 /// How probable the model found the tokens of its `document_date` and
@@ -1004,6 +1131,35 @@ impl ChatCompletion {
         token_confidence(&tokens)
     }
 
+    /// Every generated token of the first choice with its probability and
+    /// the alternatives the server listed, when it reported them.
+    pub(crate) fn token_trace(&self) -> Option<Vec<TokenTraceEntry>> {
+        let logprobs = self.choices.first()?.logprobs.as_ref()?;
+        let tokens: Vec<TokenLogprob> =
+            serde_json::from_value(logprobs.get("content")?.clone()).ok()?;
+        let probability = |logprob: f64| logprob.exp().clamp(0.0, 1.0) as f32;
+        let text = |token: &str, bytes: &Option<Vec<u8>>| match bytes {
+            Some(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+            None => token.to_owned(),
+        };
+        let trace: Vec<TokenTraceEntry> = tokens
+            .iter()
+            .map(|token| TokenTraceEntry {
+                token: text(&token.token, &token.bytes),
+                p: probability(token.logprob),
+                top: token
+                    .top_logprobs
+                    .iter()
+                    .map(|alternative| TokenAlternative {
+                        token: text(&alternative.token, &alternative.bytes),
+                        p: probability(alternative.logprob),
+                    })
+                    .collect(),
+            })
+            .collect();
+        (!trace.is_empty()).then_some(trace)
+    }
+
     /// How the server spent the request, when it reported that in
     /// llama-server's shape.
     pub(crate) fn model_timings(&self) -> Option<ModelTimings> {
@@ -1053,6 +1209,19 @@ pub(crate) struct TokenLogprob {
     token: String,
     /// The token's exact bytes; `token` alone can be lossy where a token
     /// splits a multi-byte character.
+    #[serde(default)]
+    bytes: Option<Vec<u8>>,
+    logprob: f64,
+    /// The most probable tokens at this position, as many as the request
+    /// asked for. Absent from a service that does not list them.
+    #[serde(default)]
+    top_logprobs: Vec<TopLogprob>,
+}
+
+/// One of the most probable tokens at a position of the reply.
+#[derive(Deserialize)]
+pub(crate) struct TopLogprob {
+    token: String,
     #[serde(default)]
     bytes: Option<Vec<u8>>,
     logprob: f64,
@@ -1501,6 +1670,73 @@ mod tests {
         );
     }
 
+    /// The prefix a slot file is named for is what every evidence request
+    /// sends before its document, whatever the document: the same system
+    /// turn and profile exchanges, under the same template switches.
+    #[test]
+    fn the_cached_prefix_is_what_every_evidence_request_opens_with() {
+        let client = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m").unwrap();
+        for profile in [None, Some(PromptProfile::Bonsai2)] {
+            let bodies = ["one document", "another"].map(|prompt| {
+                client.completion_request(&ModelRequest {
+                    prompt: prompt.to_owned(),
+                    system: Some(crate::prompt::evidence_system()),
+                    grammar: Some(format!("root ::= \"{prompt}\"")),
+                    profile,
+                    ..ModelRequest::default()
+                })
+            });
+            let leading = |body: &Value| {
+                let mut messages = body["messages"].as_array().unwrap().clone();
+                messages.pop();
+                (messages, body["chat_template_kwargs"].clone())
+            };
+            assert_eq!(leading(&bodies[0]), leading(&bodies[1]));
+            let (messages, switches) = leading(&bodies[0]);
+            let mut hasher = Sha256::new();
+            hasher.update(Value::Array(messages).to_string().as_bytes());
+            hasher.update([0_u8]);
+            hasher.update(switches.to_string().as_bytes());
+            assert_eq!(
+                cached_prefix_identity(profile),
+                format!("{:x}", hasher.finalize())
+            );
+        }
+        assert_ne!(
+            cached_prefix_identity(None),
+            cached_prefix_identity(Some(PromptProfile::Bonsai2))
+        );
+    }
+
+    /// The request a slot is saved after opens exactly as every evidence
+    /// request does, so it reuses and keeps their instructions, and carries
+    /// nothing of a document after them.
+    #[test]
+    fn the_instructions_only_request_opens_as_every_evidence_request_does() {
+        let client = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m").unwrap();
+        for profile in [None, Some(PromptProfile::Bonsai2)] {
+            let document = client.completion_request(&ModelRequest {
+                prompt: "The whole 1-page document follows.".to_owned(),
+                system: Some(crate::prompt::evidence_system()),
+                profile,
+                ..ModelRequest::default()
+            });
+            let probe = instructions_only_request("m", profile);
+            let mut leading = probe["messages"].as_array().unwrap().clone();
+            let last = leading.pop().unwrap();
+            let mut expected = document["messages"].as_array().unwrap().clone();
+            expected.pop();
+            assert_eq!(leading, expected);
+            assert_eq!(last, json!({"role": "user", "content": "JSON only."}));
+            assert_eq!(
+                probe["chat_template_kwargs"],
+                document["chat_template_kwargs"]
+            );
+            assert_eq!(probe["max_tokens"], json!(1));
+            assert_eq!(probe["cache_prompt"], json!(true));
+        }
+    }
+
     /// The local server runs without a vision projector. A request that carried
     /// an image would be rejected by it, so the request must always be plain
     /// text - never a multimodal content array.
@@ -1518,7 +1754,7 @@ mod tests {
 
     /// A retry is for a reply that came back malformed. A request that failed
     /// outright fails the same way twice, and against a dead or hung server
-    /// the second attempt only doubles a ten-minute wait for one document.
+    /// the second attempt only doubles a wait of minutes for one document.
     #[test]
     fn a_failed_request_is_not_retried() {
         let server = scripted_server(vec![http_reply("503 Service Unavailable", &[], "")]);
@@ -1529,6 +1765,42 @@ mod tests {
 
         assert_eq!(error.code(), EngineErrorCode::ModelRequestFailed);
         assert_eq!(server.attempts(), 1);
+    }
+
+    /// A server that takes a request and never answers does not hold its
+    /// caller for ever: the client gives the request up at its own limit, as
+    /// a failed request, and does not send it again. The limit itself is
+    /// longer than the queue's deadline for a document (the queue checks),
+    /// so under the queue it is the deadline that ends a slow request, once.
+    #[test]
+    fn a_server_that_stops_answering_is_given_up_on_at_the_clients_limit() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (connected, connections) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            // Every connection is taken and kept open, unanswered, for as
+            // long as the test runs.
+            for stream in listener.incoming() {
+                if connected.send(stream).is_err() {
+                    return;
+                }
+            }
+        });
+        let mut client = local_client(address);
+        let limit = Duration::from_millis(400);
+        client.http = local_http(limit).unwrap();
+
+        let started = std::time::Instant::now();
+        let error = client.propose(&ModelRequest::new("p")).unwrap_err();
+
+        assert_eq!(error.code(), EngineErrorCode::ModelRequestFailed);
+        assert!(started.elapsed() >= limit, "{:?}", started.elapsed());
+        assert!(started.elapsed() < Duration::from_secs(30));
+        assert_eq!(
+            connections.try_iter().count(),
+            1,
+            "the request was not sent again"
+        );
     }
 
     /// llama-server answers a prompt longer than its context with a 400. That
@@ -1716,6 +1988,7 @@ mod tests {
                 token: (*text).to_owned(),
                 bytes: Some(text.as_bytes().to_vec()),
                 logprob: probability.ln(),
+                top_logprobs: Vec::new(),
             })
             .collect()
     }
@@ -1819,6 +2092,60 @@ mod tests {
         let confidence = completion.token_confidence().unwrap();
         assert_eq!(confidence.tokens, 1);
         assert!(close(confidence.min, (-0.01_f32).exp()));
+    }
+
+    /// A trace keeps every token the server reported, forced ones included,
+    /// with the alternatives it listed; a token the grammar forced over the
+    /// model's choice is the one whose own text is not the first listed.
+    #[test]
+    fn a_token_trace_keeps_every_token_and_its_alternatives() {
+        let completion: ChatCompletion = serde_json::from_str(
+            r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"{\"document_date\":\"2025-02-14\"}"},
+               "logprobs":{"content":[
+                 {"id":1,"token":"{\"document_date\":\"","bytes":[123,34,100,111,99,117,109,101,110,116,95,100,97,116,101,34,58,34],"logprob":-14.2,
+                  "top_logprobs":[{"id":9,"token":"Sure","bytes":[83,117,114,101],"logprob":-0.1},{"id":8,"token":"The","logprob":-2.5}]},
+                 {"id":2,"token":"2025-02-14","bytes":[50,48,50,53,45,48,50,45,49,52],"logprob":-0.01,
+                  "top_logprobs":[{"id":2,"token":"2025-02-14","logprob":-0.01},{"id":3,"token":"2025-02-15","logprob":-4.7}]},
+                 {"id":3,"token":"\"}","bytes":[34,125],"logprob":-0.4,"top_logprobs":[]}]}}]}"#,
+        )
+        .unwrap();
+        let trace = completion.token_trace().unwrap();
+        assert_eq!(trace.len(), 3);
+        assert_eq!(trace[0].token, "{\"document_date\":\"");
+        assert!(close(trace[0].p, (-14.2_f32).exp()));
+        assert_eq!(trace[0].top[0].token, "Sure");
+        assert_eq!(trace[0].top[1].token, "The");
+        assert_eq!(trace[1].token, "2025-02-14");
+        assert_eq!(trace[1].top[0].token, trace[1].token);
+        assert!(close(trace[1].top[1].p, (-4.7_f32).exp()));
+        assert!(trace[2].top.is_empty());
+        // The summary the gate reads is unchanged by keeping the trace.
+        assert_eq!(completion.token_confidence().unwrap().tokens, 1);
+
+        let silent: ChatCompletion = serde_json::from_str(
+            r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"{}"}}]}"#,
+        )
+        .unwrap();
+        assert!(silent.token_trace().is_none());
+    }
+
+    /// A trace asks for two alternatives a token, and changes nothing else
+    /// about the request; without it the gate's request is as it was.
+    #[test]
+    fn a_token_trace_asks_for_two_alternatives_and_nothing_else() {
+        let request = ModelRequest::new("p");
+        let scored = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m")
+            .unwrap()
+            .with_token_confidence(true);
+        let traced = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m")
+            .unwrap()
+            .with_token_trace(true);
+        let scored_body = scored.completion_request(&request);
+        let mut traced_body = traced.completion_request(&request);
+        assert_eq!(traced_body["logprobs"], serde_json::json!(true));
+        assert_eq!(traced_body["top_logprobs"], serde_json::json!(2));
+        traced_body["top_logprobs"] = serde_json::json!(1);
+        assert_eq!(traced_body, scored_body);
     }
 
     /// A live llama-server reply to a request shaped as this client sends

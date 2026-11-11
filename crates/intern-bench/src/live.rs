@@ -7,9 +7,11 @@
 //! document - with a proposer in front of the model client that records
 //! every request and its reply for replay.
 //!
-//! Before the corpus a short synthetic document goes through the worker
-//! and the engine and is thrown away, so the first scored document is not
-//! charged for starting the worker or for the server's empty prompt cache.
+//! Before the corpus a synthetic document goes through the worker and the
+//! engine and is thrown away, so the first scored document is not charged
+//! for starting the worker or for the server's empty prompt cache, and every
+//! scored document reuses the instructions as a restored app does
+//! ([`WARM_UP_TEXT`]).
 
 use std::{
     path::{Path, PathBuf},
@@ -58,13 +60,51 @@ pub struct LiveRun {
     pub context_tokens: Option<usize>,
 }
 
-/// A fictional notice long enough to be read as a document, short enough
-/// to cost a second.
-const WARM_UP_TEXT: &str = "NOTICE OF OFFICE RELOCATION\n\nDated May 4, 2026\n\n\
+/// A fictional notice, read as a document and thrown away.
+///
+/// Long enough that the server processes the instructions in one piece: a
+/// first request shorter than the instructions plus 4 + `-ub` tokens is
+/// broken inside them, and every later document reuses instructions
+/// computed that way, which can change a reply
+/// (`intern_engine::slots::SlotKeeper::save_once`). The app restores the
+/// instructions as a long first document computes them, so this is the
+/// state its replies are measured in. About 1,050 tokens with the
+/// instructions on Qwen3.5's tokenizer (counted with `llama-tokenize`),
+/// past the 737 the app's `-ub 256` needs and the 993 of llama.cpp's
+/// default 512. Through alpha.16 it was a four-sentence notice of 637
+/// tokens, and every live run recorded with that notice was made with the
+/// instructions in pieces (docs/architecture.md).
+const WARM_UP_TEXT: &str = "NOTICE OF OFFICE RELOCATION\n\n\
+    Dated May 4, 2026\n\n\
     Brindlemoor Survey Partners LLP informs its clients that from June 1, 2026 its \
     office moves from 4 Quarry Lane to 12 Larkspur Row, Easthaven. Telephone numbers \
     and the client portal are unchanged. Correspondence sent to the old address will \
-    be forwarded until August 31, 2026.\n\nOrla Penhallow, Managing Partner";
+    be forwarded until August 31, 2026.\n\n\
+    The new office is on the second floor of the Larkspur Row building, above the \
+    public library. The entrance is on the east side of the building, facing the \
+    river walk, and a lift serves every floor. Visitors should sign in at the ground \
+    floor reception desk, which is staffed from 8:30 a.m. to 5:30 p.m. on weekdays.\n\n\
+    Parking is available in the municipal car park on Weir Street, a short walk from \
+    the office. The firm will validate parking for clients attending meetings of up \
+    to three hours. Bicycle racks are provided at the rear of the building, and the \
+    number 14 and number 22 buses stop on Larkspur Row.\n\n\
+    The office will be closed on Friday, May 29, 2026 while files and equipment are \
+    moved. Meetings already arranged for that day will be held by video call, and \
+    each client affected will receive the details by email. Site visits and field \
+    surveys continue as scheduled throughout the move.\n\n\
+    Original documents, title deeds and survey records held for clients will be \
+    moved under the supervision of the records manager and remain in locked storage \
+    at all times. Clients who wish to collect original documents before the move are \
+    asked to arrange a time with their surveyor by May 22, 2026.\n\n\
+    Deliveries of plans, drawings and signed instructions may be left at the Quarry \
+    Lane reception until May 28, 2026, and at the Larkspur Row reception from June \
+    1, 2026. Courier accounts and invoice references are unchanged, and invoices \
+    issued before the move remain payable in the usual way.\n\n\
+    Questions about the relocation may be directed to the office manager on the \
+    usual telephone number or through the client portal. The firm thanks its clients \
+    for their patience during the move and looks forward to welcoming them at \
+    Larkspur Row.\n\n\
+    Orla Penhallow, Managing Partner";
 
 pub fn run(
     documents: &[GoldDocument],
@@ -90,6 +130,12 @@ pub fn run(
     let client = client.with_token_confidence(
         settings.min_token_confidence.is_some()
             || std::env::var_os("INTERN_BENCH_TOKEN_CONFIDENCE").is_some_and(|value| value == "1"),
+    );
+    // A laboratory opt-in: keep every generated token with its probability
+    // and the two tokens the model found most probable, so a recording can
+    // be studied and replayed token by token. No generated token changes.
+    let client = client.with_token_trace(
+        std::env::var_os("INTERN_BENCH_TOKEN_TRACE").is_some_and(|value| value == "1"),
     );
     #[cfg(feature = "benchmark-transport")]
     let client = match &options.benchmark_transport {
@@ -242,19 +288,29 @@ pub fn run(
 }
 
 /// Starts the worker and fills the server's prompt cache with the system
-/// instruction, on a document nobody scores.
+/// instruction, on a document nobody scores, and says how long its prompt
+/// was: the instructions are processed in one piece from 4 + `-ub` tokens
+/// past them ([`WARM_UP_TEXT`]).
 fn warm_up(worker: &SupervisedWorker, engine: &Engine) -> Result<(), String> {
     let started = Instant::now();
     let source = warm_up_worker(worker)?;
-    engine
+    let analysis = engine
         .analyze(&source, "txt", &[])
         .map_err(|error| format!("the model did not answer the warm-up document: {error}"))?;
-    eprintln!("warmed up in {:.1} s", started.elapsed().as_secs_f64());
+    match analysis.telemetry.model {
+        Some(timings) => eprintln!(
+            "warmed up in {:.1} s: {} prompt tokens processed, {} cached",
+            started.elapsed().as_secs_f64(),
+            timings.prompt_tokens,
+            timings.cached_tokens
+        ),
+        None => eprintln!("warmed up in {:.1} s", started.elapsed().as_secs_f64()),
+    }
     Ok(())
 }
 
-/// Starts the worker on a short text document nobody scores, so the first
-/// scored document is not charged for the start.
+/// Starts the worker on a text document nobody scores, so the first scored
+/// document is not charged for the start.
 pub(crate) fn warm_up_worker(worker: &SupervisedWorker) -> Result<DocumentSource, String> {
     let directory =
         std::env::temp_dir().join(format!("intern-bench-warm-up-{}", std::process::id()));
@@ -334,5 +390,24 @@ impl Proposer for RecordingProposer {
 
     fn context_tokens(&self) -> Option<usize> {
         self.inner.context_tokens()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WARM_UP_TEXT;
+
+    /// The warm-up's prompt stays past the instructions plus 4 + 512
+    /// tokens: its 2,095 characters make about 1,050 tokens with the
+    /// instructions on Qwen3.5's tokenizer, and the 2,000 asked here about
+    /// 1,025.
+    #[test]
+    fn the_warm_up_processes_the_instructions_in_one_piece() {
+        assert!(
+            WARM_UP_TEXT.chars().count() >= 2_000,
+            "{}",
+            WARM_UP_TEXT.len()
+        );
+        assert_eq!(WARM_UP_TEXT.split("\n\n").count(), 10);
     }
 }

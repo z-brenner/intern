@@ -14,7 +14,7 @@ on - WebKitGTK 4.1, the AppIndicator library, `tesseract-ocr`, `libgomp1`,
 and OpenSSL 3:
 
 ```sh
-sudo apt install ./Intern_0.1.0-alpha.16_amd64.deb
+sudo apt install ./Intern_0.1.0-alpha.17_amd64.deb
 intern            # or Intern from the applications menu
 ```
 
@@ -27,6 +27,7 @@ model, or **Choose existing model files** points at one you have.
 | llama-server, the parser worker, PDFium, ONNX Runtime, the OCR models, tessdata | `/usr/lib/Intern/runtime/` (llama-server in `runtime/llama-upstream/`), listed with every file's SHA-256 in `runtime-inventory.json` there |
 | Third-party licenses | `/usr/lib/Intern/licenses/` and `/usr/lib/Intern/resources/THIRD_PARTY_NOTICES.md` |
 | The model, the queue, settings, logs | `~/.local/share/com.intern.app/` (`logs/startup-error.log` if Intern cannot start, `logs/intern.log` for a crash) |
+| The instructions' saved model state, so the first document after a model load does not read them again | `~/.local/share/com.intern.app/slots/`: at most one 174 MB file per model, 348 MB with both; safe to delete, and saved again after the next long first document |
 | **Start Intern when you sign in** | `~/.config/autostart/Intern.desktop` |
 | The hosted model's API key | The Secret Service (GNOME Keyring, KWallet), as **Intern** |
 

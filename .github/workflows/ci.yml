@@ -73,7 +73,7 @@ jobs:
           key: cargo-replay-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
       - run: npm ci
       - run: npm run fixtures
-      # Every replay is scored with the accurate model's review gate, 0.7
+      # Every replay is scored with the accurate model's review gate, 0.8
       # (REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE in crates/intern-engine/src/tiers.rs),
       # as the app reads: the baselines were written at that gate.
       - name: Replay the corpus and compare with the baseline
@@ -81,7 +81,7 @@ jobs:
           cargo run --locked -p intern-engine --bin intern-evaluate --
           --fixtures fixtures/generated --expected fixtures/expected.json
           --replay fixtures/corpus-recording.json --baseline fixtures/corpus-baseline.json
-          --min-token-confidence 0.7 --output corpus-report.json
+          --min-token-confidence 0.8 --output corpus-report.json
       # The digest pipeline a hosted model reads, from its own recording.
       - name: Replay the corpus through the digest pipeline and compare with its baseline
         if: always()
@@ -89,13 +89,13 @@ jobs:
           cargo run --locked -p intern-engine --bin intern-evaluate --
           --fixtures fixtures/generated --expected fixtures/expected.json --pipeline digest
           --replay fixtures/corpus-recording-digest.json --baseline fixtures/corpus-baseline-digest.json
-          --min-token-confidence 0.7 --output corpus-report-digest.json
+          --min-token-confidence 0.8 --output corpus-report-digest.json
       - name: Replay InternBench and compare with its baseline
         if: always()
         run: >-
           cargo run --locked -p intern-bench --
           run --corpus bench/generated --gold bench/gold.json --manifest bench/manifest.json
-          --replay bench/recording.json --baseline bench/baseline.json --min-token-confidence 0.7
+          --replay bench/recording.json --baseline bench/baseline.json --min-token-confidence 0.8
           --output internbench-report.json --markdown internbench-report.md
       - name: Upload corpus reports
         if: always()
@@ -429,7 +429,7 @@ jobs:
       - name: Upload Windows installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: intern-v0.1.0-alpha.16-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          name: intern-v0.1.0-alpha.17-windows-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
           path: |
             target/release/bundle/nsis/*.exe

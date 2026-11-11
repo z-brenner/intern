@@ -345,6 +345,7 @@ impl Engine {
             proposal,
             token_confidence,
             timings: model,
+            ..
         } = self.client.propose_measured(&request)?;
         let inference_millis =
             u64::try_from(inference_started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -532,6 +533,7 @@ impl Engine {
             proposal,
             token_confidence,
             timings: model,
+            ..
         } = self.client.propose_measured(request)?;
         let inference_millis =
             u64::try_from(inference_started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -1227,6 +1229,7 @@ mod tests {
             Ok(ProposerReply {
                 proposal: self.propose(request)?,
                 token_confidence: None,
+                token_trace: None,
                 timings: Some(SERVER_TIMINGS),
             })
         }
