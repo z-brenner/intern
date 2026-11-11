@@ -48,7 +48,7 @@ use std::{
 
 use intern_engine::{
     DocumentSource, EngineError, EngineErrorCode, EngineResult, ModelProposal, ModelRequest,
-    ModelTimings, PageImage, Proposer, ProposerReply, TokenConfidence,
+    ModelTimings, PageImage, Proposer, ProposerReply, TokenConfidence, TokenTraceEntry,
 };
 use serde::{Deserialize, Serialize};
 
@@ -170,6 +170,11 @@ pub enum RecordedReply {
         proposal: ModelProposal,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         token_confidence: Option<TokenConfidence>,
+        /// Every generated token with its probability and the tokens the
+        /// model weighed, when the live run kept them. A recording made
+        /// before traces were kept has none, and reads as before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token_trace: Option<Vec<TokenTraceEntry>>,
     },
     Failed {
         code: EngineErrorCode,
@@ -182,6 +187,7 @@ impl RecordedReply {
             Ok(reply) => Self::Proposed {
                 proposal: reply.proposal.clone(),
                 token_confidence: reply.token_confidence,
+                token_trace: reply.token_trace.clone(),
             },
             Err(error) => Self::Failed { code: error.code() },
         }
@@ -194,9 +200,11 @@ impl RecordedReply {
             Self::Proposed {
                 proposal,
                 token_confidence,
+                token_trace,
             } => Ok(ProposerReply {
                 proposal: proposal.clone(),
                 token_confidence: *token_confidence,
+                token_trace: token_trace.clone(),
                 timings: None,
             }),
             Self::Failed { code } => Err(EngineError::new(*code, "recorded failure")),
@@ -425,6 +433,55 @@ mod tests {
         );
         assert!(!text.contains("model_timings"));
         assert_eq!(serde_json::from_str::<Exchange>(&text).unwrap(), exchange);
+    }
+
+    /// A reply recorded with a token trace gives it back on replay, and a
+    /// reply recorded before traces were kept reads as it always did.
+    #[test]
+    fn a_token_trace_round_trips_and_an_older_reply_has_none() {
+        let older = r#"{"outcome":"proposed","proposal":{"document_type":null,"document_date":null,"date_role":null,"parties":[],"party_relation":"none","description":"","confidence":0.5,"needs_review":false,"evidence":{"date":null,"document_type":null,"parties":[]}}}"#;
+        let reply: RecordedReply = serde_json::from_str(older).unwrap();
+        let RecordedReply::Proposed {
+            proposal,
+            token_trace,
+            ..
+        } = &reply
+        else {
+            panic!("a proposed reply");
+        };
+        assert!(token_trace.is_none());
+        assert!(
+            !serde_json::to_string(&reply)
+                .unwrap()
+                .contains("token_trace")
+        );
+        assert_eq!(reply.answer().unwrap().token_trace, None);
+
+        let traced = RecordedReply::Proposed {
+            proposal: proposal.clone(),
+            token_confidence: None,
+            token_trace: Some(vec![TokenTraceEntry {
+                token: "2025".to_owned(),
+                p: 0.25,
+                top: vec![intern_engine::TokenAlternative {
+                    token: "2024".to_owned(),
+                    p: 0.5,
+                }],
+            }]),
+        };
+        let text = serde_json::to_string(&traced).unwrap();
+        assert!(
+            text.contains(
+                r#""token_trace":[{"token":"2025","p":0.25,"top":[{"token":"2024","p":0.5}]}]"#
+            ),
+            "{text}"
+        );
+        let read: RecordedReply = serde_json::from_str(&text).unwrap();
+        assert_eq!(read, traced);
+        assert_eq!(
+            read.answer().unwrap().token_trace.unwrap()[0].top[0].token,
+            "2024"
+        );
     }
 
     #[test]

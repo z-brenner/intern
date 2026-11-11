@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::domain::{
     DateRole, Evidence, KeyFact, ModelFacts, ModelProposal, ModelTimings, PartyFact, PartyRelation,
-    PartyRole, TokenConfidence,
+    PartyRole, TokenAlternative, TokenConfidence, TokenTraceEntry,
 };
 use crate::error::{EngineError, EngineErrorCode, EngineResult};
 use crate::evidence::is_valid_iso_date;
@@ -194,6 +194,10 @@ pub struct ProposerReply {
     pub proposal: ModelProposal,
     /// See [`Proposer::propose_scored`].
     pub token_confidence: Option<TokenConfidence>,
+    /// Every generated token with the model's probability for it and the
+    /// tokens it weighed, when the client was asked to keep them
+    /// ([`ModelClient::with_token_trace`]): laboratory recordings only.
+    pub token_trace: Option<Vec<TokenTraceEntry>>,
     /// How the server spent the request, when it said: the local server
     /// does, and nothing else is asked.
     pub timings: Option<ModelTimings>,
@@ -222,6 +226,7 @@ pub trait Proposer: Send + Sync {
             .map(|(proposal, token_confidence)| ProposerReply {
                 proposal,
                 token_confidence,
+                token_trace: None,
                 timings: None,
             })
     }
@@ -242,6 +247,7 @@ pub struct ModelClient {
     model_id: String,
     http: Client,
     token_confidence: bool,
+    token_trace: bool,
     context_tokens: usize,
     #[cfg(feature = "benchmark-transport")]
     benchmark_transport: Option<crate::benchmark_transport::BenchmarkTransport>,
@@ -306,6 +312,7 @@ impl ModelClient {
             #[cfg(feature = "benchmark-transport")]
             benchmark_transport: None,
             token_confidence: false,
+            token_trace: false,
             context_tokens: crate::server::CONTEXT_TOKENS as usize,
         })
     }
@@ -344,6 +351,20 @@ impl ModelClient {
     /// it, which is measurable on a CPU (see docs/model-candidates.md).
     pub fn with_token_confidence(mut self, enabled: bool) -> Self {
         self.token_confidence = enabled;
+        self
+    }
+
+    /// Keeps every generated token of a reply with its probability and the
+    /// two tokens the model found most probable at its position
+    /// ([`ProposerReply::token_trace`]), and asks the server for token
+    /// probabilities to do it.
+    ///
+    /// Laboratory only: the benchmark's live recordings turn it on so that
+    /// what a readiness gate reads can be studied and replayed token by
+    /// token. Like [`Self::with_token_confidence`] it changes no generated
+    /// token and nothing that identifies a request.
+    pub fn with_token_trace(mut self, enabled: bool) -> Self {
+        self.token_trace = enabled;
         self
     }
 
@@ -446,10 +467,12 @@ impl ModelClient {
         let completion: ChatCompletion = serde_json::from_slice(&bytes)
             .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
         let token_confidence = completion.token_confidence();
+        let token_trace = self.token_trace.then(|| completion.token_trace()).flatten();
         let timings = completion.model_timings();
         decode(completion, request.evidence.as_ref()).map(|proposal| ProposerReply {
             proposal,
             token_confidence,
+            token_trace,
             timings,
         })
     }
@@ -485,11 +508,13 @@ impl ModelClient {
         if let Some(seed) = request.profile.and_then(PromptProfile::seed) {
             body["seed"] = json!(seed);
         }
-        if self.token_confidence {
-            // One alternative is the least llama-server accepts; only the
-            // chosen token's own probability is read.
+        if self.token_confidence || self.token_trace {
+            // One alternative is the least llama-server accepts, and only
+            // the chosen token's own probability is read for the gate. A
+            // trace keeps two, so that a token the grammar forced over the
+            // model's own choice can be told from one the model chose.
             body["logprobs"] = json!(true);
-            body["top_logprobs"] = json!(1);
+            body["top_logprobs"] = json!(if self.token_trace { 2 } else { 1 });
         }
         body
     }
@@ -1004,6 +1029,35 @@ impl ChatCompletion {
         token_confidence(&tokens)
     }
 
+    /// Every generated token of the first choice with its probability and
+    /// the alternatives the server listed, when it reported them.
+    pub(crate) fn token_trace(&self) -> Option<Vec<TokenTraceEntry>> {
+        let logprobs = self.choices.first()?.logprobs.as_ref()?;
+        let tokens: Vec<TokenLogprob> =
+            serde_json::from_value(logprobs.get("content")?.clone()).ok()?;
+        let probability = |logprob: f64| logprob.exp().clamp(0.0, 1.0) as f32;
+        let text = |token: &str, bytes: &Option<Vec<u8>>| match bytes {
+            Some(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+            None => token.to_owned(),
+        };
+        let trace: Vec<TokenTraceEntry> = tokens
+            .iter()
+            .map(|token| TokenTraceEntry {
+                token: text(&token.token, &token.bytes),
+                p: probability(token.logprob),
+                top: token
+                    .top_logprobs
+                    .iter()
+                    .map(|alternative| TokenAlternative {
+                        token: text(&alternative.token, &alternative.bytes),
+                        p: probability(alternative.logprob),
+                    })
+                    .collect(),
+            })
+            .collect();
+        (!trace.is_empty()).then_some(trace)
+    }
+
     /// How the server spent the request, when it reported that in
     /// llama-server's shape.
     pub(crate) fn model_timings(&self) -> Option<ModelTimings> {
@@ -1053,6 +1107,19 @@ pub(crate) struct TokenLogprob {
     token: String,
     /// The token's exact bytes; `token` alone can be lossy where a token
     /// splits a multi-byte character.
+    #[serde(default)]
+    bytes: Option<Vec<u8>>,
+    logprob: f64,
+    /// The most probable tokens at this position, as many as the request
+    /// asked for. Absent from a service that does not list them.
+    #[serde(default)]
+    top_logprobs: Vec<TopLogprob>,
+}
+
+/// One of the most probable tokens at a position of the reply.
+#[derive(Deserialize)]
+pub(crate) struct TopLogprob {
+    token: String,
     #[serde(default)]
     bytes: Option<Vec<u8>>,
     logprob: f64,
@@ -1716,6 +1783,7 @@ mod tests {
                 token: (*text).to_owned(),
                 bytes: Some(text.as_bytes().to_vec()),
                 logprob: probability.ln(),
+                top_logprobs: Vec::new(),
             })
             .collect()
     }
@@ -1819,6 +1887,60 @@ mod tests {
         let confidence = completion.token_confidence().unwrap();
         assert_eq!(confidence.tokens, 1);
         assert!(close(confidence.min, (-0.01_f32).exp()));
+    }
+
+    /// A trace keeps every token the server reported, forced ones included,
+    /// with the alternatives it listed; a token the grammar forced over the
+    /// model's choice is the one whose own text is not the first listed.
+    #[test]
+    fn a_token_trace_keeps_every_token_and_its_alternatives() {
+        let completion: ChatCompletion = serde_json::from_str(
+            r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"{\"document_date\":\"2025-02-14\"}"},
+               "logprobs":{"content":[
+                 {"id":1,"token":"{\"document_date\":\"","bytes":[123,34,100,111,99,117,109,101,110,116,95,100,97,116,101,34,58,34],"logprob":-14.2,
+                  "top_logprobs":[{"id":9,"token":"Sure","bytes":[83,117,114,101],"logprob":-0.1},{"id":8,"token":"The","logprob":-2.5}]},
+                 {"id":2,"token":"2025-02-14","bytes":[50,48,50,53,45,48,50,45,49,52],"logprob":-0.01,
+                  "top_logprobs":[{"id":2,"token":"2025-02-14","logprob":-0.01},{"id":3,"token":"2025-02-15","logprob":-4.7}]},
+                 {"id":3,"token":"\"}","bytes":[34,125],"logprob":-0.4,"top_logprobs":[]}]}}]}"#,
+        )
+        .unwrap();
+        let trace = completion.token_trace().unwrap();
+        assert_eq!(trace.len(), 3);
+        assert_eq!(trace[0].token, "{\"document_date\":\"");
+        assert!(close(trace[0].p, (-14.2_f32).exp()));
+        assert_eq!(trace[0].top[0].token, "Sure");
+        assert_eq!(trace[0].top[1].token, "The");
+        assert_eq!(trace[1].token, "2025-02-14");
+        assert_eq!(trace[1].top[0].token, trace[1].token);
+        assert!(close(trace[1].top[1].p, (-4.7_f32).exp()));
+        assert!(trace[2].top.is_empty());
+        // The summary the gate reads is unchanged by keeping the trace.
+        assert_eq!(completion.token_confidence().unwrap().tokens, 1);
+
+        let silent: ChatCompletion = serde_json::from_str(
+            r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"{}"}}]}"#,
+        )
+        .unwrap();
+        assert!(silent.token_trace().is_none());
+    }
+
+    /// A trace asks for two alternatives a token, and changes nothing else
+    /// about the request; without it the gate's request is as it was.
+    #[test]
+    fn a_token_trace_asks_for_two_alternatives_and_nothing_else() {
+        let request = ModelRequest::new("p");
+        let scored = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m")
+            .unwrap()
+            .with_token_confidence(true);
+        let traced = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m")
+            .unwrap()
+            .with_token_trace(true);
+        let scored_body = scored.completion_request(&request);
+        let mut traced_body = traced.completion_request(&request);
+        assert_eq!(traced_body["logprobs"], serde_json::json!(true));
+        assert_eq!(traced_body["top_logprobs"], serde_json::json!(2));
+        traced_body["top_logprobs"] = serde_json::json!(1);
+        assert_eq!(traced_body, scored_body);
     }
 
     /// A live llama-server reply to a request shaped as this client sends

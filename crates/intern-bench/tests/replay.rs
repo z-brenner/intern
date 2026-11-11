@@ -219,6 +219,7 @@ fn recording() -> Recording {
                     RecordedReply::Proposed {
                         proposal: invoice_reply(),
                         token_confidence: None,
+                        token_trace: None,
                     },
                 )],
                 12_000.0,
@@ -233,6 +234,7 @@ fn recording() -> Recording {
                     RecordedReply::Proposed {
                         proposal: notice_reply(),
                         token_confidence: None,
+                        token_trace: None,
                     },
                 )],
                 8_000.0,
@@ -248,6 +250,7 @@ fn recording() -> Recording {
                     RecordedReply::Proposed {
                         proposal: notice_reply(),
                         token_confidence: None,
+                        token_trace: None,
                     },
                 )],
                 30_000.0,
@@ -847,6 +850,7 @@ fn a_budget_changed_since_the_recording_makes_long_documents_stale() {
             RecordedReply::Proposed {
                 proposal: notice_reply(),
                 token_confidence: None,
+                token_trace: None,
             },
         )],
         20_000.0,

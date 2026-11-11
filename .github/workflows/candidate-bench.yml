@@ -287,6 +287,10 @@ jobs:
           THREADS: ${{ inputs.threads }}
           LLAMA_SERVER_ARGS: ${{ inputs.extra_server_args }}
           SERVER_MEMORY_FILE: ${{ runner.temp }}/candidate-bench/out/server-memory.txt
+          # Keep every generated token with its probability and the two the
+          # model found most probable, so the recording can be studied and
+          # replayed token by token. No generated token changes.
+          INTERN_BENCH_TOKEN_TRACE: "1"
         run: |
           started=$(date +%s)
           status=0

@@ -91,6 +91,12 @@ pub fn run(
         settings.min_token_confidence.is_some()
             || std::env::var_os("INTERN_BENCH_TOKEN_CONFIDENCE").is_some_and(|value| value == "1"),
     );
+    // A laboratory opt-in: keep every generated token with its probability
+    // and the two tokens the model found most probable, so a recording can
+    // be studied and replayed token by token. No generated token changes.
+    let client = client.with_token_trace(
+        std::env::var_os("INTERN_BENCH_TOKEN_TRACE").is_some_and(|value| value == "1"),
+    );
     #[cfg(feature = "benchmark-transport")]
     let client = match &options.benchmark_transport {
         Some((profile, output)) => client
