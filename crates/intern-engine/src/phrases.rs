@@ -89,6 +89,17 @@ pub(crate) fn gives_notice(words: &[String], at: usize) -> bool {
     }
 }
 
+/// Whether the words from `at` begin a sentence about a document rather
+/// than end its title: "The report on the works *is* provided below", "The
+/// invoice *will* follow". A sentence that gives a notice ([`gives_notice`])
+/// stands under the notice's own title.
+pub(crate) fn begins_a_sentence(words: &[String], at: usize) -> bool {
+    words
+        .get(at)
+        .is_some_and(|word| RIGHT_STOPS.contains(&word.as_str()))
+        && !gives_notice(words, at)
+}
+
 /// Whether a token is the possessive of a side of a case - "Plaintiff's",
 /// "Defendants'", "PETITIONER'S" - which names who files a notice, not
 /// the notice.
@@ -152,8 +163,25 @@ const MORE_KINDS: &[&str] = &[
     "direction",
 ];
 
+/// Kinds a title names with a word a name is as readily made of: what an
+/// agency answers a request with ("Response to an Official Information Act
+/// Request"), cites an employer with ("Citation and Notification of
+/// Penalty") or sends its offices ("Circular 002/2014"). A type is read
+/// with them like any other kind; a name is not told from a title by them
+/// ([`sets_a_name_apart`]): "First Response Security", "Circular Economy
+/// Scotland".
+const KINDS_A_NAME_HOLDS: &[&str] = &["response", "citation", "notification", "circular"];
+
 /// Whether `word` names a kind of document.
 pub(crate) fn names_a_kind(word: &str) -> bool {
+    sets_a_name_apart(word) || KINDS_A_NAME_HOLDS.contains(&word)
+}
+
+/// Whether `word` names a kind of document by which a title's line is told
+/// from a name's - a line of an address or a signature block that holds it
+/// is no organization's, a short name that holds it no person's: every
+/// kind but [`KINDS_A_NAME_HOLDS`].
+pub(crate) fn sets_a_name_apart(word: &str) -> bool {
     TYPE_NOUNS.contains(&word) || MORE_KINDS.contains(&word)
 }
 
@@ -1248,5 +1276,72 @@ mod tests {
             .map(|phrase| phrase.starts_with("direction")),
             Some(true)
         );
+    }
+
+    /// A response, a citation, a notification and a circular are kinds a
+    /// title names, each read as the head of its title line. They are
+    /// words a name holds too, so none of them sets a name apart.
+    #[test]
+    fn a_response_a_citation_a_notification_and_a_circular_are_kinds() {
+        for (line, head, phrase) in [
+            (
+                "RESPONSE TO AN OFFICIAL INFORMATION ACT REQUEST (REF: DOIA007-2024/25)",
+                "response",
+                "Response to an Official Information Act Request Ref",
+            ),
+            (
+                "Citation and Notification of Penalty",
+                "citation",
+                "Citation and Notification of Penalty",
+            ),
+            (
+                "Circular 014/2016: Transport Secretary\u{2019}s decision on the findings",
+                "circular",
+                "Circular",
+            ),
+            (
+                "Subject: UPS Ship Notification, 1Z7261100192688747",
+                "notification",
+                "Ship Notification",
+            ),
+        ] {
+            assert!(names_a_kind(head), "{head}");
+            assert!(!sets_a_name_apart(head), "{head}");
+            assert_eq!(head_noun(&words(line)), Some(head), "{line}");
+            assert_eq!(title_phrase(line, head).as_deref(), Some(phrase), "{line}");
+        }
+        assert_eq!(
+            without_identifier(
+                "RESPONSE TO AN OFFICIAL INFORMATION ACT REQUEST (REF: DOIA007-2024/25)"
+            ),
+            "RESPONSE TO AN OFFICIAL INFORMATION ACT REQUEST"
+        );
+        // A kind of another type's title is still the title's head: a
+        // letter of response is a letter, a response plan a plan.
+        assert_eq!(
+            head_noun(&words("letter of response to appeal")),
+            Some("letter")
+        );
+        assert_eq!(head_noun(&words("Emergency Response Plan")), Some("plan"));
+        // Every other kind sets a name apart, as before.
+        for kind in ["notice", "invoice", "direction"] {
+            assert!(names_a_kind(kind) && sets_a_name_apart(kind), "{kind}");
+        }
+    }
+
+    /// A sentence begins after a kind where a verb follows it; a notice
+    /// given "hereby" is its title's own sentence.
+    #[test]
+    fn a_verb_after_a_kind_begins_a_sentence() {
+        let w = |text: &str| words(text);
+        assert!(begins_a_sentence(
+            &w("The report on the works is provided below"),
+            5
+        ));
+        assert!(begins_a_sentence(&w("Invoice will follow"), 1));
+        assert!(!begins_a_sentence(&w("NOTICE IS HEREBY GIVEN"), 1));
+        assert!(!begins_a_sentence(&w("Notice hereby given"), 1));
+        assert!(!begins_a_sentence(&w("Report on the Consultation"), 1));
+        assert!(!begins_a_sentence(&w("Report"), 1));
     }
 }
