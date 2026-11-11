@@ -631,11 +631,22 @@ pub fn validate_facts_at(
     // changes is the name's point (CUAD's "AMENDMENT NO. 3", which names the
     // agreement it amends only in its first paragraph). So does a notice
     // alone: the IRS's CP161, filed as "Notice from" the taxpayer it is
-    // sent to, is one of a hundred kinds the word covers.
+    // sent to, is one of a hundred kinds the word covers. A response, a
+    // notification or a citation alone says as little: what it answers,
+    // tells or cites is the name's point ("Response to an Official
+    // Information Act Request", "Citation and Notification of Penalty").
     if document_type.as_deref().is_some_and(|value| {
         matches!(
             normalize(value).trim(),
-            "letter" | "document" | "agreement" | "amendment" | "addendum" | "notice"
+            "letter"
+                | "document"
+                | "agreement"
+                | "amendment"
+                | "addendum"
+                | "notice"
+                | "response"
+                | "notification"
+                | "citation"
         )
     }) {
         push(&mut reasons, ReviewReason::TypeMissing);
@@ -15199,6 +15210,65 @@ Dated: September 16, 2008",
             outcome.reasons
         );
         assert_ne!(outcome.proposal.document_type.as_deref(), Some("Citation"));
+    }
+
+    /// A response, a notification or a citation alone names no kind a
+    /// person could file by, as a notice alone names none: the name waits
+    /// for a person even when the page states the word as its heading and
+    /// both parties are supported. The title that completes it is filed.
+    #[test]
+    fn a_bare_response_notification_or_citation_waits_for_a_person() {
+        let notice = |heading: &str| {
+            format!(
+                "Northgate Borough Council\nTown Hall\nNorthgate NG1 1AA\n\n{heading}\n\n\
+                 4 March 2024\n\nTo: Harbour Fairs Ltd, 1 Pier Road, Northgate\n\n\
+                 Northgate Borough Council has considered the application of Harbour Fairs Ltd \
+                 for a licence to hold the summer fair on the Common."
+            )
+        };
+        let reply = |typed: &'static str, cited: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(typed.into()),
+                type_evidence: vec![id_of(index, cited)],
+                document_date: Some("2024-03-04".into()),
+                date_evidence: vec![id_of(index, "4 March 2024")],
+                parties: vec![
+                    party(
+                        "Northgate Borough Council",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "Northgate Borough Council\nTown Hall")],
+                    ),
+                    party(
+                        "Harbour Fairs Ltd",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "To: Harbour Fairs Ltd")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            }
+        };
+        for (heading, typed) in [
+            ("RESPONSE", "Response"),
+            ("NOTIFICATION", "Notification"),
+            ("CITATION", "Citation"),
+        ] {
+            let (outcome, _) = facts_for(&notice(heading), reply(typed, heading));
+            assert!(
+                outcome.reasons.contains(&ReviewReason::TypeMissing),
+                "{heading}: {:?} {:?}",
+                outcome.proposal,
+                outcome.reasons
+            );
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview, "{heading}");
+        }
+        const TITLE: &str = "RESPONSE TO AN APPLICATION FOR A PREMISES LICENCE";
+        let (outcome, _) = facts_for(&notice(TITLE), reply(TITLE, TITLE));
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeMissing),
+            "{:?} {:?}",
+            outcome.proposal,
+            outcome.reasons
+        );
     }
 
     /// A safety agency's notice as the worker extracts it: the title under
