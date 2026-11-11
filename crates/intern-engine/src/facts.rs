@@ -15300,6 +15300,62 @@ Dated: September 16, 2008",
         }
     }
 
+    /// real5-memo-10's shape: minutes titled by the day of the meeting
+    /// they record. The reply copied the title line whole, date and all;
+    /// the type is its kind phrase, which stops at the weekday the date
+    /// opens with and leaves no "of the" dangling before it: "Minutes", not
+    /// "Minutes of the Wednesday". Minutes titled by the meeting itself
+    /// keep their title.
+    #[test]
+    fn a_type_never_keeps_the_weekday_its_date_opens_with() {
+        const MINUTES: &str = "HALVERSTON COMMITTEE ON MARINE STANDARDS (HCMS or Committee)\n\
+MINUTES OF THE WEDNESDAY, FEBRUARY 14, 2024\n\
+WEBINAR MEETING\n\n\
+ATTENDANCE: Brandt, Odalys Lindqvist, Teodor\n\n\
+The Committee met by webinar. Dr. Maren Achterberg, Chair, opened the meeting.";
+        let (outcome, _) = facts_for(MINUTES, |index| ModelFacts {
+            document_type: Some(
+                "Minutes of the Wednesday, February 14, 2024 Webinar Meeting".into(),
+            ),
+            type_evidence: vec![id_of(index, "MINUTES OF THE")],
+            document_date: Some("2024-02-14".into()),
+            date_evidence: vec![id_of(index, "MINUTES OF THE")],
+            parties: vec![party(
+                "Halverston Committee on Marine Standards",
+                Some(PartyRole::Client),
+                &[id_of(index, "HALVERSTON")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Minutes"),
+            "{:?}",
+            outcome.proposal
+        );
+
+        const REGULAR: &str = "MINUTES OF THE REGULAR MEETING OF THE BOARD OF DIRECTORS\n\n\
+Held on March 3, 2024 at the offices of Corvane Media Group LLC.";
+        let (outcome, _) = facts_for(REGULAR, |index| ModelFacts {
+            document_type: Some("MINUTES OF THE REGULAR MEETING OF THE BOARD OF DIRECTORS".into()),
+            type_evidence: vec![id_of(index, "MINUTES OF THE")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "Held on")],
+            parties: vec![party(
+                "Corvane Media Group LLC",
+                Some(PartyRole::Issuer),
+                &[id_of(index, "Held on")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Minutes of the Regular Meeting of the Board of Directors"),
+            "{:?}",
+            outcome.proposal
+        );
+    }
+
     /// A response, a citation with its notification of penalty and a
     /// circular are kinds of document: a reply that names one is typed by
     /// the title line that states it, where "Document" or another page's

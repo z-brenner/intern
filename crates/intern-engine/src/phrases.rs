@@ -225,9 +225,11 @@ pub(crate) fn has_a_kind(words: &[String]) -> bool {
 const LEFT_STOPS: &[&str] = &["this", "the", "a", "an", "our", "your", "its"];
 
 /// Words after which a title line stops naming the document: its date
-/// ("EFFECTIVE SEPTEMBER 1, 2024", "Date reported: ..."), its page, or the
-/// authority it is given under ("NOTICE OF DEPOSITION PURSUANT TO RULE
-/// 30(b)(6)"), which its number would cut to a dangling "Pursuant to Rule".
+/// ("EFFECTIVE SEPTEMBER 1, 2024", "Date reported: ..."), the weekday its
+/// date opens with ("MINUTES OF THE TUESDAY, OCTOBER 29, 2024, HYBRID
+/// MEETING"), its page, or the authority it is given under ("NOTICE OF
+/// DEPOSITION PURSUANT TO RULE 30(b)(6)"), which its number would cut to a
+/// dangling "Pursuant to Rule". A type never keeps its own date.
 const TITLE_STOPS: &[&str] = &[
     "pursuant",
     "no",
@@ -253,7 +255,18 @@ const TITLE_STOPS: &[&str] = &[
     "october",
     "november",
     "december",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
 ];
+
+/// Words a title's complement can open with that complete nothing by
+/// themselves: a title cut before what they introduce ends without them.
+const ARTICLES: &[&str] = &["the", "a", "an"];
 
 /// The type a title line states for a document whose kind is `head`:
 /// the run of the line's words around that noun - back to anything with a
@@ -396,6 +409,15 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
                 end += 1;
             }
         }
+    }
+    // A complement cut by a stop right after its article - "Minutes of the
+    // Tuesday, October 29" - leaves "of the" dangling, which completes
+    // nothing: the title ends before it.
+    while end > at + 1 && {
+        let word = core(tokens[end - 1]);
+        ARTICLES.contains(&word.as_str()) || CONNECTORS.contains(&word.as_str())
+    } {
+        end -= 1;
     }
     // A comma inside the title is the title's own ("Software License,
     // Customization and Maintenance Agreement"); only its ends lose
@@ -1119,6 +1141,28 @@ mod tests {
                 "NOTICE OF DEPOSITION PURSUANT TO RULE 30(b)(6)",
                 "notice",
                 Some("Notice of Deposition"),
+            ),
+            // A title never keeps its date: the weekday it opens with stops
+            // it, and the "of the" left before it completes nothing.
+            (
+                "MINUTES OF THE TUESDAY, OCTOBER 29, 2024, HYBRID MEETING",
+                "minutes",
+                Some("Minutes"),
+            ),
+            (
+                "Minutes of the Wednesday, February 14, 2024 Webinar Meeting",
+                "minutes",
+                Some("Minutes"),
+            ),
+            (
+                "Minutes of the Regular Meeting of the Board of Directors",
+                "minutes",
+                Some("Minutes of the Regular Meeting of the Board of Directors"),
+            ),
+            (
+                "NOTICE OF THE ANNUAL MEETING OF SHAREHOLDERS",
+                "notice",
+                Some("Notice of the Annual Meeting of Shareholders"),
             ),
         ] {
             assert_eq!(title_phrase(line, head).as_deref(), phrase, "{line}");
