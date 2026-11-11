@@ -86,7 +86,7 @@ const MIB: u64 = 1024 * 1024;
 /// at once only with the memory for it available as a document's pages
 /// start to be read (`intern_worker::paddle::pages_at_once`): the two-page
 /// peak and [`HEADROOM`], and on Linux, where [`available_memory_bytes`]
-/// counts them, the weights a loaded accurate model keeps reading - 5 GiB
+/// counts them, the weights a loaded accurate model keeps reading - 8 GiB
 /// on Linux, 3 GiB on Windows. Near a floor it reads one page at a time,
 /// which is what this counts.
 pub const WORKER_PEAK: u64 = 680 * MIB;
@@ -138,6 +138,14 @@ pub const fn min_available_for(tier: ModelTier) -> u64 {
 /// every document. It reads that from the live server
 /// ([`memory_released_by`]); this estimate is for when it cannot
 /// ([`unload_gives_back`]).
+///
+/// Measured with repacked weights. With `--no-repack` ([`tier_server_flags`])
+/// the 9B's high-water mark is 6,133-6,184 MiB, so on Linux the estimate now
+/// credits about 2 GiB more than unloading gives back. It is kept: it stands
+/// in only when the live server cannot be read, and on Windows, where it is
+/// already short, lowering it to that would have the runner with a browser's
+/// 2 GiB held swap the models before every document (11,570 MiB available
+/// before any load, run 43063958237).
 pub const fn resident_estimate(tier: ModelTier) -> u64 {
     match tier {
         ModelTier::Fast => 4_700 * MIB,
@@ -145,19 +153,23 @@ pub const fn resident_estimate(tier: ModelTier) -> u64 {
     }
 }
 
-/// What a loaded tier's server must keep in memory to read at its speed:
-/// less than [`resident_estimate`], because the mapped weights the CPU
-/// backend repacks are read once and never again, and the system reclaims
-/// those pages first. Measured for the 9B under a memory limit on Linux
-/// (`bench/reports/speed-linux-cpu-2026-11-05`): 3.4 GB of anonymous memory
-/// and 2.7 GB of weights it keeps reading, about 6.2 GB in all. At a 6 GB
-/// limit it read a document in 95 s against 72 s with no limit; at 5 GB it
-/// thrashed (421 s). The 4B was not measured under a limit; its resident
-/// set stands in. Windows does not take those pages back at once: right
-/// after a document the 9B's working set on a 16 GiB runner was 8,110 MiB,
-/// the touched originals included, and a minute idle trimmed it to
-/// 6,332-7,528 MiB; what it needs under a squeeze there is not measured
-/// (`bench/reports/windows-memory-2026-11-09`).
+/// What a loaded tier's server must keep in memory to read at its speed.
+/// With repacked weights that was less than [`resident_estimate`], because
+/// the mapped weights the CPU backend repacks are read once and never again,
+/// and the system reclaims those pages first. Measured for the 9B under a
+/// memory limit on Linux (`bench/reports/speed-linux-cpu-2026-11-05`): 3.4
+/// GB of anonymous memory and 2.7 GB of weights it keeps reading, about 6.2
+/// GB in all. At a 6 GB limit it read a document in 95 s against 72 s with
+/// no limit; at 5 GB it thrashed (421 s). With `--no-repack`
+/// ([`tier_server_flags`]) it keeps reading the whole mapped file instead,
+/// all of its resident set in use: 6,133-6,184 MiB at its peak
+/// (`bench/reports/speed-linux-cpu-2026-11-11`), about the same in all and
+/// within this figure; not measured under a limit. The 4B was not measured
+/// under a limit; its resident set stands in. On Windows the 9B's working
+/// set right after a document on a 16 GiB runner was 8,110 MiB with
+/// repacked weights, the touched originals included
+/// (`bench/reports/windows-memory-2026-11-09`), and 5,229-5,491 MiB without
+/// (run 43063958237); what it needs under a squeeze there is not measured.
 pub const fn working_set(tier: ModelTier) -> u64 {
     match tier {
         ModelTier::Fast => 4_700 * MIB,
@@ -240,8 +252,10 @@ pub const fn memory_for_plan(available: u64, loaded: Option<(ModelTier, u64)>) -
 /// it the weights stay mapped from the file and b11946's tiled k-quant kernel
 /// reads them. Measured on the 9B with the recorded requests
 /// (`bench/reports/speed-linux-cpu-2026-11-11`), each runner its own
-/// baseline: the server's peak resident memory fell from 8.96 GB to 6.28 GB
-/// on every set; time per request fell 22-27% on AMD Zen 4 and Zen 5 runners
+/// baseline: the server's peak resident memory (`VmHWM`) fell from
+/// 8,750-8,800 MiB to 6,133-6,184 MiB on every set, and on a 16 GiB Windows
+/// runner its working set right after a document from 8,110 MiB to 5,491
+/// MiB (`runtime-speed.yml` run 43063958237); time per request fell 22-27% on AMD Zen 4 and Zen 5 runners
 /// (AVX-512), and 10-15% with ggml's AVX2 backend pinned, the code path most
 /// laptops load; on an Intel Xeon with AMX it was unchanged. Live on
 /// InternBench and the five real sets the names it gave differed from the

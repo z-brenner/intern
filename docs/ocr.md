@@ -90,7 +90,7 @@ score, the mean over every character, crowds every real reading into
 **Threads and memory.** Each page's networks use two intra-op threads. On a
 machine with four or more logical processors a second page is read at the
 same time, with its own sessions, when enough memory is available as the
-document's pages start to be read - 5 GiB on Linux, 3 GiB on Windows
+document's pages start to be read - 8 GiB on Linux, 3 GiB on Windows
 (`paddle::pages_at_once`, below); otherwise, and below four logical processors,
 one page at a time, on at most half of them. Never more than two pages'
 worth of memory - about 570 MB each at their peak. Four threads on a 4-core
@@ -366,8 +366,10 @@ page (`tiers::WORKER_PEAK`), so the second set of sessions waits for memory
 beyond that: a document's pages are read two at a time only when, as they
 start, the available memory holds the two-page peak (1.45 GB, above the
 highest measured), the plan's 1 GiB of headroom, and on Linux the weights
-a loaded 9B keeps reading (2.7 GB), rounded up to whole GiB: 5 GiB on
-Linux, 3 GiB on Windows. The weights are counted on Linux only because only
+a loaded 9B keeps reading, rounded up to whole GiB: 8 GiB on Linux, 3 GiB
+on Windows. With `--no-repack` (alpha.17) the 9B reads its whole 5.68 GB
+file on every token; with repacked weights it read 2.7 GB of it and the bar
+was 5 GiB. The weights are counted on Linux only because only
 Linux counts them as available: `MemAvailable` takes them for page cache it
 could reclaim, while Windows' available physical memory leaves out the
 server's working set, weights and all. On a 16 GiB Windows runner with the
@@ -375,7 +377,7 @@ server's working set, weights and all. On a 16 GiB Windows runner with the
 nothing else running and 3,535 MiB with another process holding 2 GiB,
 while the server's working set was 8,107-8,110 MiB
 (`runtime-speed.yml` runs 42573531984 and 42574460663, the memory probe;
-`bench/reports/windows-memory-2026-11-09`). A 5 GiB bar there counts the
+`bench/reports/windows-memory-2026-11-09`). Linux's bar of then, 5 GiB, there counts the
 weights twice: that runner cleared it by 290-450 MiB with nothing else
 running and missed it by 1.5 GiB with 2 GiB held, as a laptop with a
 browser open would, where alpha.14 read two pages at once on eight or more
@@ -424,7 +426,7 @@ The shipped configuration:
 | orientation | classifier first, then the search | one pass for a turned page instead of two to four |
 | leveling | past 10 degrees only | lines are cut along their own slopes; leveling bought nothing up to 10 |
 | second reading | binarized, least certain character under 0.9, at most 12 lines a page | most dates for the time; +20% |
-| threads | 2 a page; 2 pages at once from 4 logical processors with 5 GiB (Linux) or 3 GiB (Windows) available, else 1 | 1.8 times as fast as one thread; the model server is idle while pages are read; memory caps the pages at once |
+| threads | 2 a page; 2 pages at once from 4 logical processors with 8 GiB (Linux) or 3 GiB (Windows) available, else 1 | 1.8 times as fast as one thread; the model server is idle while pages are read; memory caps the pages at once |
 | recognition batch | 6 lines | reading lines one at a time drops trailing periods and commas at the end of long lines |
 
 Shipped together: InternBench CER 0.49%, WER 1.78%, dates 29/30, names
