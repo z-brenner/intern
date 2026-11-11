@@ -527,11 +527,13 @@ pub fn escalation_with(
 /// two extra rules, which filed nothing more on that set. The plain
 /// threshold was taken over two tied policies with an extra rule, a choice
 /// the pre-registered rule left open. Replayed through this release's
-/// engine, 0.7 filed 4 right names and 2 wrong ones there, 0.8 3 and 1; on
-/// the five development sets and InternBench 0.7 filed 55 right and 2
-/// wrong, 0.8 39 and none. A name filed wrong is renamed with no one
-/// looking; a right one held is a click. 51 documents cannot certify a
-/// rate, and the counts say so.
+/// engine, 0.7 filed 4 right names and 2 wrong ones there, 0.8 3 and 1,
+/// counting the names the set scores, as the rule does; each also filed a
+/// blank invoice template under the date its TODAY() cell held, which the
+/// set's gold forbids. On the five development sets and InternBench 0.7
+/// filed 55 right and 2 wrong, 0.8 39 and none. A name filed wrong is
+/// renamed with no one looking; a right one held is a click. 51 documents
+/// cannot certify a rate, and the counts say so.
 pub const REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE: f32 = 0.8;
 
 /// The same for the quick model's readings. A quick reading always goes to
