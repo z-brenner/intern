@@ -181,13 +181,18 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // The model's date, when Intern could not find it written in the document
   // and so left it out of the name. Offered until the name carries a date.
   const suggestedDate = item.suggestedDate && !dated ? item.suggestedDate : undefined;
-  const useSuggestedDate = () => editStem(withLeadingDate(stem, suggestedDate!));
+  // A date put into the name takes the offer off screen, and the button that
+  // was pressed with it: focus fell to nothing, and a keyboard user had to
+  // find the panel again to file the name they had just completed. It goes
+  // to the name, which now starts with that date; Enter there files it.
+  const putDate = (date: string) => { editStem(withLeadingDate(stem, date)); filenameRef.current?.focus(); };
+  const useSuggestedDate = () => putDate(suggestedDate!);
   const acceptSuggestedDate = () => submit(withLeadingDate(stem, suggestedDate!));
   // When the name has no date and the model offered none worth showing, the
   // document's own dates - and, last, the file's - are one click each.
   const dateChoices = !dated ? (item.datesInDocument ?? []) : [];
   const fileDate = !dated ? item.fileModifiedDate : undefined;
-  const chooseDate = (date: string) => editStem(withLeadingDate(stem, date));
+  const chooseDate = putDate;
   // Enter files the name, as it does in any one-line field; the IME's Enter
   // that ends a composition is left to the IME. A held Enter repeats, and
   // after the first press the caret is in the next item's name: only the
