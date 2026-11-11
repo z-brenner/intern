@@ -1864,12 +1864,18 @@ pub fn validate_facts_at(
     // DEPARTMENTS AND AGENCIES" - says whom it went to, never one party it
     // can be filed by: a name "to" or "for" such a class, in its parties or
     // in its type, waits for a person, who files it by the office it comes
-    // from.
+    // from. Any other kind is held only for a class it addresses as one
+    // ([`opens_on_a_class`]: an annual report's "Fellow Shareholders"):
+    // a notice's or a certificate's party ending on a plural is a firm as
+    // often as not ("Brandt Achterberg Solicitors").
     let to_a_class = matches!(relation.relation, PartyRelation::To | PartyRelation::For)
-        && relation
-            .parties
-            .iter()
-            .any(|name| names_a_class_of_recipients(name));
+        && relation.parties.iter().any(|name| {
+            if class == DocumentClass::Letter {
+                names_a_class_of_recipients(name)
+            } else {
+                opens_on_a_class(name)
+            }
+        });
     if to_a_class || document_type.as_deref().is_some_and(memorandum_to_a_class) {
         push(&mut reasons, ReviewReason::PartyUnsupported);
     }
@@ -6094,52 +6100,156 @@ const JOB_TITLE_WORDS: &[&str] = &[
 ];
 
 /// Words a class of recipients opens with: "All FHA-Approved Mortgagees",
-/// "Each Participating Lender".
-const CLASS_OPENERS: &[&str] = &["all", "each", "every", "any"];
+/// "Each Participating Lender", "Fellow Shareholders".
+const CLASS_OPENERS: &[&str] = &["all", "each", "every", "any", "fellow"];
 
-/// Plural nouns a class of recipients is headed by besides the posts
-/// [`JOB_TITLE_WORDS`] names: "Fellow Shareholders", "Mortgagees".
+/// Nouns a class of recipients is headed by besides the posts
+/// [`JOB_TITLE_WORDS`] names, in the plural ("Mortgagees", "Interested
+/// Parties") or as a body of people ("Staff", "Faculty").
 const RECIPIENT_CLASSES: &[&str] = &[
     "members",
     "mortgagees",
     "holders",
     "shareholders",
     "stockholders",
+    "policyholders",
+    "stakeholders",
     "employees",
+    "staff",
+    "faculty",
+    "students",
     "residents",
     "tenants",
     "customers",
+    "clients",
     "suppliers",
     "contractors",
+    "providers",
+    "lenders",
+    "borrowers",
+    "creditors",
+    "investors",
+    "licensees",
+    "registrants",
+    "grantees",
+    "applicants",
+    "participants",
+    "parties",
+];
+
+/// Words that say which members of a class a memorandum is sent to, and
+/// never whose name a party bears: "*Regional* Directors", "*Department*
+/// and *Agency* Heads", "*Interested* Parties", "*Company* Secretaries". A
+/// head of anything else before its plural is a name: "Irwin Mitchell
+/// Solicitors", "Pinnacle Property Managers".
+const CLASS_MODIFIERS: &[&str] = &[
+    "regional",
+    "resident",
+    "executive",
+    "senior",
+    "deputy",
+    "acting",
+    "financial",
+    "department",
+    "departmental",
+    "agency",
+    "division",
+    "branch",
+    "office",
+    "field",
+    "district",
+    "area",
+    "local",
+    "state",
+    "federal",
+    "county",
+    "program",
+    "programme",
+    "project",
+    "network",
+    "board",
+    "committee",
+    "company",
+    "participating",
+    "interested",
+    "affected",
+    "eligible",
+    "approved",
+    "licensed",
+    "registered",
+    "current",
+    "prospective",
 ];
 
 /// Words that end the head of a class of recipients: what follows them
-/// says which ("Heads *of* Executive Departments").
-const CLASS_HEAD_ENDS: &[&str] = &["of", "for", "to", "in", "at", "and", "on", "under", "with"];
+/// says which ("Heads *of* Executive Departments"). "And" joins the head's
+/// own nouns ("Department and Agency Heads", "Faculty and Staff").
+const CLASS_HEAD_ENDS: &[&str] = &["of", "for", "to", "in", "at", "on", "under", "with"];
+
+/// The head of a would-be class of recipients: its words before a comma or
+/// a word that says which, past a leading "the".
+fn class_head(name: &str) -> Vec<String> {
+    let head = name.split(',').next().unwrap_or_default();
+    words(head)
+        .into_iter()
+        .skip_while(|word| word == "the")
+        .take_while(|word| !CLASS_HEAD_ENDS.contains(&word.as_str()))
+        .collect()
+}
+
+/// Whether a word heads a class of recipients: a holding or a post in the
+/// plural, or a body of people.
+fn is_class_noun(word: &str) -> bool {
+    RECIPIENT_CLASSES.contains(&word) || is_plural_post(word)
+}
+
+/// Whether `name` opens on a word that addresses a class - "All", "Each",
+/// "Fellow" - and is headed by a class noun, singular after "Each": "All
+/// FHA-Approved Mortgagees", "Each Participating Lender", "Fellow
+/// Shareholders". A name that merely opens on such a word is none: "All
+/// Seasons Landscaping", "Every Mother Counts". It is the class any kind
+/// of document can be addressed to.
+fn opens_on_a_class(name: &str) -> bool {
+    if is_organization_name(name) {
+        return false;
+    }
+    match class_head(name).as_slice() {
+        [first, .., last] if CLASS_OPENERS.contains(&first.as_str()) => {
+            is_class_noun(last)
+                || is_class_noun(&format!("{last}s"))
+                || JOB_TITLE_WORDS.contains(&last.as_str())
+        }
+        _ => false,
+    }
+}
 
 /// Whether `name` names a class of recipients rather than one party: it
-/// opens on "All" or "Each" ("All FHA-Approved Mortgagees", "All Staff"),
-/// or its head - its words before a comma or a word that says which - is a
-/// post or a holding in the plural ("Heads of Executive Departments and
-/// Agencies", "Regional Directors, Officers-in-Charge, and Resident
-/// Officers", "Fellow Shareholders"). An organization's name is none:
-/// "Board of Directors", "Hardware Suppliers Ltd".
+/// opens on a class ([`opens_on_a_class`]), or its head is a class noun
+/// that only words saying which members precede ([`CLASS_MODIFIERS`]):
+/// "Heads of Executive Departments and Agencies", "Regional Directors,
+/// Officers-in-Charge, and Resident Officers", "Department and Agency
+/// Heads", "Interested Parties", "Staff". An organization's name is none
+/// ("Board of Directors", "Hardware Suppliers Ltd"), and neither is a
+/// firm's or a person's that ends on a plural ("Irwin Mitchell
+/// Solicitors", "Julie Heads").
 fn names_a_class_of_recipients(name: &str) -> bool {
     if is_organization_name(name) {
         return false;
     }
-    let head = name.split(',').next().unwrap_or_default();
-    let head_words = words(head);
-    let head_words = head_words
-        .iter()
-        .map(String::as_str)
-        .skip_while(|word| *word == "the")
-        .take_while(|word| !CLASS_HEAD_ENDS.contains(word))
-        .collect::<Vec<_>>();
-    match head_words.as_slice() {
-        [first, _, ..] if CLASS_OPENERS.contains(first) => true,
-        [.., last] => RECIPIENT_CLASSES.contains(last) || is_plural_post(last),
-        [] => false,
+    if opens_on_a_class(name) {
+        return true;
+    }
+    match class_head(name).split_last() {
+        Some((last, before)) => {
+            is_class_noun(last)
+                && before.iter().all(|word| {
+                    word == "and"
+                        || CLASS_MODIFIERS.contains(&word.as_str())
+                        || JOB_TITLE_WORDS.contains(&word.as_str())
+                        || is_class_noun(word)
+                })
+        }
+        None => false,
     }
 }
 
@@ -11845,6 +11955,24 @@ of active General Counsel Memoranda and determined that the following actions ar
             "{:?}",
             outcome.reasons
         );
+        for class in [
+            "Department and Agency Heads",
+            "Interested Parties",
+            "Faculty and Staff",
+            "All Staff",
+        ] {
+            let text = MEMO.replace(
+                "Regional Directors, Officers-in-Charge, and Resident Officers",
+                class,
+            );
+            let outcome = reply(&text, class);
+            assert!(
+                outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+                "{class}: {:?} {:?}",
+                outcome.proposal,
+                outcome.reasons
+            );
+        }
         let named = MEMO.replace(
             "Regional Directors, Officers-in-Charge, and Resident Officers",
             "Corvane Media Group LLC",
@@ -11859,22 +11987,38 @@ of active General Counsel Memoranda and determined that the following actions ar
         );
     }
 
-    /// A class of recipients opens on "All" or "Each", or is headed by a
-    /// post or a holding in the plural; an organization's name, a
-    /// person's, or a body's is none. A memorandum's type can name the
-    /// class it is for; another kind's title naming a class ("Notice to All
-    /// Interested Parties of Intent to Terminate Receivership") is its own.
+    /// A class of recipients opens on "All", "Each" or "Fellow" before a
+    /// class noun, or is headed by a class noun - a post or a holding in
+    /// the plural, a body of people - that only words saying which members
+    /// precede, "and" joining them; an organization's name, a firm's or a
+    /// person's that ends on a plural, or a body's is none. A memorandum's
+    /// type can name the class it is for; another kind's title naming a
+    /// class ("Notice to All Interested Parties of Intent to Terminate
+    /// Receivership") is its own.
     #[test]
     fn a_class_of_recipients_is_told_from_a_party() {
         for class in [
             "All FHA-Approved Mortgagees",
             "All Staff",
+            "All Licensees",
             "Regional Directors, Officers-in-Charge, and Resident Officers",
             "Heads of Executive Departments and Agencies",
             "the Heads of Executive Departments and Agencies",
+            "Department and Agency Heads",
             "Fellow Shareholders",
             "Each Participating Lender",
             "Company Secretaries",
+            "Chief Financial Officers",
+            "Board Members",
+            "Interested Parties",
+            "Faculty and Staff",
+            "Staff",
+            "Licensees",
+            "Stakeholders",
+            "Students",
+            "Policyholders",
+            "Participating Lenders",
+            "Network Providers",
         ] {
             assert!(names_a_class_of_recipients(class), "{class}");
         }
@@ -11885,22 +12029,135 @@ of active General Counsel Memoranda and determined that the following actions ar
             "Odalys Brandt",
             "Office of the General Counsel",
             "Visiting Committee on Advanced Technology",
+            "Irwin Mitchell Solicitors",
+            "Brandt Achterberg Solicitors",
+            "Summit Wealth Advisors",
+            "Apex Consulting Engineers",
+            "Co-op Funeral Directors",
+            "Hamptons Estate Agents",
+            "Pinnacle Property Managers",
+            "All Seasons Landscaping",
+            "All Star Plumbing",
+            "Every Mother Counts",
+            "Kansas City Chiefs",
+            "Allied Suppliers",
+            "Julie Heads",
             "All",
             "",
         ] {
             assert!(!names_a_class_of_recipients(party), "{party}");
         }
+        // Any kind of document is held for a class it addresses as one; a
+        // plural head alone holds only a memorandum's or a letter's name.
+        for class in [
+            "All FHA-Approved Mortgagees",
+            "Fellow Shareholders",
+            "Each Participating Lender",
+        ] {
+            assert!(opens_on_a_class(class), "{class}");
+        }
+        for name in [
+            "Regional Directors, Officers-in-Charge, and Resident Officers",
+            "Interested Parties",
+            "All Seasons Landscaping",
+            "Every Mother Counts",
+        ] {
+            assert!(!opens_on_a_class(name), "{name}");
+        }
         assert!(memorandum_to_a_class(
             "Memorandum for Heads of Executive Departments and Agencies"
         ));
+        assert!(memorandum_to_a_class(
+            "Memorandum for Department and Agency Heads"
+        ));
         assert!(memorandum_to_a_class("Memo to All Staff"));
+        assert!(memorandum_to_a_class("Memorandum to Staff"));
+        assert!(memorandum_to_a_class("Circular to Licensees"));
         assert!(!memorandum_to_a_class("Memorandum"));
+        assert!(!memorandum_to_a_class("Memo to File"));
+        assert!(!memorandum_to_a_class("Memorandum for the Record"));
+        assert!(!memorandum_to_a_class("Memorandum of Understanding"));
         assert!(!memorandum_to_a_class(
             "Memorandum for Kestrel Point Developers LLC"
         ));
         assert!(!memorandum_to_a_class(
             "Notice to All Interested Parties of Intent to Terminate Receivership"
         ));
+    }
+
+    /// A notice to a firm whose name ends on a plural post, and a
+    /// certificate for an insured whose name opens on "All", are filed by
+    /// their parties as before: neither is a class of recipients, and only
+    /// a memorandum or a letter is held for a plural head alone.
+    #[test]
+    fn a_firm_named_like_a_class_is_no_class_of_recipients() {
+        const NOTICE: &str = "NOTICE OF RENT REVIEW\n\n\
+Date: 3 March 2024\n\n\
+To: Brandt Achterberg Solicitors\n\
+From: Harrow & Pike Estates Ltd\n\n\
+Under clause 4 of the lease of 14 Mill Lane, Dalton, the rent will be reviewed on 25 March 2024 \
+and the landlord proposes a new annual rent of 18,000 pounds.";
+        let (outcome, _) = facts_for(NOTICE, |index| ModelFacts {
+            document_type: Some("Notice of Rent Review".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF RENT")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "Date: 3 March")],
+            parties: vec![
+                party(
+                    "Brandt Achterberg Solicitors",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "To:")],
+                ),
+                party(
+                    "Harrow & Pike Estates Ltd",
+                    Some(PartyRole::Sender),
+                    &[id_of(index, "From:")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Brandt Achterberg Solicitors"]
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        const CERTIFICATE: &str = "CERTIFICATE OF LIABILITY INSURANCE\n\n\
+Date: 03/03/2024\n\n\
+INSURED: All Seasons Landscaping\n\
+HOLDER: Calloway Crossing Shopping Center LLC\n\n\
+This certificate is issued as a matter of information only.";
+        let (outcome, _) = facts_for(CERTIFICATE, |index| ModelFacts {
+            document_type: Some("Certificate of Liability Insurance".into()),
+            type_evidence: vec![id_of(index, "CERTIFICATE OF")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "Date:")],
+            parties: vec![
+                party(
+                    "All Seasons Landscaping",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "INSURED:")],
+                ),
+                party(
+                    "Calloway Crossing Shopping Center LLC",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "HOLDER:")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(outcome.proposal.parties, vec!["All Seasons Landscaping"]);
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
     }
 
     /// real5-notice-11's shape: a regulator's enforcement release, its
