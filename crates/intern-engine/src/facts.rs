@@ -5176,8 +5176,12 @@ fn organization_line(line: &str) -> bool {
         || loose_words
             .first()
             .is_some_and(|word| HONORIFICS.contains(word))
-        || line_words.first().is_some_and(|word| names_a_kind(word))
-        || (has_a_kind(&line_words)
+        || line_words
+            .first()
+            .is_some_and(|word| crate::phrases::sets_a_name_apart(word))
+        || (line_words
+            .iter()
+            .any(|word| crate::phrases::sets_a_name_apart(word))
             && !line_words
                 .iter()
                 .any(|word| ORGANIZATION_WORDS.contains(&word.as_str())))
@@ -5289,7 +5293,7 @@ fn named_as_a_person(scope: &ValidationScope<'_>, name: &str) -> bool {
             && !name_words.iter().any(|word| {
                 ORGANIZATION_WORDS.contains(&word.as_str())
                     || crate::cues::ORGANIZATION_ENDINGS.contains(&word.as_str())
-                    || names_a_kind(word)
+                    || crate::phrases::sets_a_name_apart(word)
             })
             // "Thames Water" is as short as a person's name and has no
             // organization's word, but the index read it as a company.
@@ -5443,7 +5447,7 @@ fn looks_like_a_persons_name(line: &str) -> bool {
         && !line_words.iter().any(|word| {
             ORGANIZATION_WORDS.contains(&word.as_str())
                 || crate::cues::ORGANIZATION_ENDINGS.contains(&word.as_str())
-                || names_a_kind(word)
+                || crate::phrases::sets_a_name_apart(word)
         })
 }
 
@@ -13087,6 +13091,199 @@ Rickmansworth,
                 outcome.proposal
             );
         }
+    }
+
+    /// A response, a citation with its notification of penalty and a
+    /// circular are kinds of document: a reply that names one is typed by
+    /// the title line that states it, where "Document" or another page's
+    /// heading stood before. A sentence of the body that talks about a
+    /// response still titles nothing.
+    #[test]
+    fn a_response_a_citation_and_a_circular_are_typed_by_their_titles() {
+        let typed = |outcome: &ValidationOutcome| {
+            outcome
+                .proposal
+                .document_type
+                .as_deref()
+                .map(str::to_lowercase)
+        };
+        // An agency's answer to a request, titled in capitals over its
+        // reference.
+        let (outcome, _) = facts_for(
+            "23 August 2024\n\ns9(2)(a)\n\ns9(2)(a)\nM\u{101}l\u{14d} e lelei\n\n\
+             RESPONSE TO AN OFFICIAL INFORMATION ACT REQUEST (REF: DOIA007-2024/25)\n\n\
+             On 26 July 2024, you contacted the Ministry for Island Peoples (the Ministry) \
+             requesting under\nthe Official Information Act 1982 (OIA), information of all job \
+             titles of staff members.",
+            |index| ModelFacts {
+                document_type: Some(
+                    "RESPONSE TO AN OFFICIAL INFORMATION ACT REQUEST (REF: DOIA007-2024/25)".into(),
+                ),
+                type_evidence: vec![id_of(index, "RESPONSE TO")],
+                document_date: Some("2024-08-23".into()),
+                date_evidence: vec![id_of(index, "23 August 2024")],
+                parties: vec![party(
+                    "Ministry for Island Peoples",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "On 26 July")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            typed(&outcome).as_deref(),
+            Some("response to an official information act request"),
+            "{:?}",
+            outcome.proposal
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // A safety agency's citation, its "To:" field run into the next
+        // column's label: typed by its title, and to no "Inspection
+        // Number".
+        let (outcome, _) = facts_for(
+            "U.S. Department of Works\n\nWorkplace Safety Administration\n1141 Harbour Drive\n\
+             Suite 1006\nMobile, AL 36609\n\nCitation and Notification of Penalty\n\n\
+             To: Inspection Number: 1695478\n\n\
+             | Rowan Brick Company, Inc. | Inspection Date(s): 08/30/2023 | - | 01/02/2024 |\n\
+             | and its successors | Issuance Date: | 02/20/2024 |\n\n\
+             3409 Water Avenue\nSelma, AL 36703\n\n\
+             This Citation and Notification of Penalty (this Citation) describes violations of \
+             the Workplace Safety Act of 1970.",
+            |index| ModelFacts {
+                document_type: Some("Citation and Notification of Penalty".into()),
+                type_evidence: vec![id_of(index, "Citation and Notification")],
+                document_date: Some("2024-02-20".into()),
+                date_evidence: vec![id_of(index, "Issuance Date")],
+                parties: vec![
+                    party(
+                        "Rowan Brick Company, Inc.",
+                        Some(PartyRole::Employer),
+                        &[id_of(index, "Rowan Brick")],
+                    ),
+                    party(
+                        "U.S. Department of Works",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "Department of Works")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Citation and Notification of Penalty")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["U.S. Department of Works"],
+            "{:?}",
+            outcome.proposal
+        );
+        // A circular numbered on its title line, which the reply copied
+        // until its room for a type ran out and cited elsewhere: the kind
+        // stands in, for a person to confirm.
+        let (outcome, _) = facts_for(
+            "Circular 014/2016: Transport Secretary\u{2019}s decision on the findings of the Rail \
+             Arbitration Tribunal (RAT) of 20 December 2015 in relation to six recommendations \
+             of the Part 2 report of the Harlow Review.\n\n# **Documents**\n\n# **Detail**\n\n\
+             - Broad subject: Rail service\n- Issue date: 20 February 2016\n\
+             - From: rail group, workforce directorate, pay and efficiency unit\n\
+             - Addressed to: chief officers of England and Wales\n\n\
+             ### This circular publishes the Transport Secretary\u{2019}s decision on the \
+             findings of the Rail Arbitration Tribunal.",
+            |index| ModelFacts {
+                document_type: Some(
+                    "Circular 014/2016: Transport Secretary's decision on the findings of the \
+                     Rail Arbit"
+                        .into(),
+                ),
+                type_evidence: vec![id_of(index, "Detail")],
+                document_date: Some("2016-02-20".into()),
+                date_evidence: vec![id_of(index, "Issue date")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            typed(&outcome).as_deref(),
+            Some("circular"),
+            "{:?}",
+            outcome.proposal
+        );
+        assert!(
+            outcome.reasons.contains(&ReviewReason::TypeInferred),
+            "{:?}",
+            outcome.reasons
+        );
+        // An email whose body talks about a response is still an email.
+        let (outcome, _) = facts_for(
+            "From: Marsh, Colin (DLR) <colin.marsh@dlr.example>\n\
+             To: Petra Lindqvist <petra.lindqvist@borough.example>\n\
+             Date: Wed, 21 Mar 2018 11:16:03 +0000\n\
+             Subject: RE: 16/4008/F - Quay Trading Estate Re-consultation and response to \
+             Harwell Report. (PLA Ref DC 816)\n\nPetra,\n\n\
+             The response to the PLA is provided below:\n\n\
+             The proposed development is a sufficient distance from the wharves.\n\n\
+             Please confirm acceptance.\n\nRegards,\n\nColin",
+            |index| ModelFacts {
+                document_type: Some(
+                    "Email thread regarding planning application consultation response".into(),
+                ),
+                type_evidence: vec![id_of(index, "Subject:")],
+                document_date: Some("2018-03-21".into()),
+                date_evidence: vec![id_of(index, "Date:")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Email"),
+            "{:?}",
+            outcome.proposal
+        );
+    }
+
+    /// "Response", "Citation", "Notification" and "Circular" are words a
+    /// name is as readily made of as a title: a line of an inside address
+    /// that holds one is still an organization's, and the letter is to it.
+    /// A kind no name is made of still tells a title's line from a name's.
+    #[test]
+    fn a_kind_word_a_name_holds_leaves_an_organizations_line_alone() {
+        assert!(organization_line("First Response Security"));
+        assert!(organization_line("Circular Economy Scotland"));
+        assert!(!organization_line("Final Notice Scotland"));
+        let (outcome, _) = facts_for(
+            "Northgate Borough Council\n\nWARNING LETTER\n\nMarch 4, 2024\n\n\
+             Ms. Dana Whitlock\nOperations Manager\nFirst Response Security\n200 Mill Road\n\n\
+             Dear Ms. Whitlock:\n\nAn officer of the Council inspected the stewarding of the \
+             summer fair.",
+            |index| ModelFacts {
+                document_type: Some("Warning Letter".into()),
+                type_evidence: vec![id_of(index, "WARNING LETTER")],
+                document_date: Some("2024-03-04".into()),
+                date_evidence: vec![id_of(index, "March 4, 2024")],
+                parties: vec![party(
+                    "Dana Whitlock",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Ms. Dana Whitlock")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["First Response Security"],
+            "{:?}",
+            outcome.proposal
+        );
     }
 
     /// A safety agency's notice as the worker extracts it: the title under
