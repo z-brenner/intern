@@ -676,10 +676,14 @@ pub enum ReviewReason {
     /// The model gave no usable type, so the document's own title was used;
     /// a person should confirm it names the document.
     TypeInferred,
-    /// A named party could not be found in the document.
+    /// The document does not settle the filename's party: a named party
+    /// could not be found in it, or the name rests on roles only the reply
+    /// gave, on a default the reply's own reading speaks against, or on a
+    /// class of recipients rather than a party.
     PartyUnsupported,
-    /// An agreement named only one of its parties: an agreement always has
-    /// two sides, so the reply missed the other.
+    /// A party the filename needs is missing: an agreement named only one
+    /// of its two sides, an issued document no issuer, or any document no
+    /// party though the reply named some.
     PartyMissing,
     /// The description asserted something the document does not contain.
     DescriptionUnsupported,
