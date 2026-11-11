@@ -1651,6 +1651,38 @@ pub fn validate_facts_at(
             },
         );
     }
+    // A notice filed in a bankruptcy case is filed in its debtor's case:
+    // "In re: Delta Mills, Inc., et al., Debtors." The reply names who
+    // gives the notice and who it goes to - the creditors' committee that
+    // appears, the creditors that move, the trustee that appoints - and
+    // may leave the debtor out: the caption names it.
+    let debtor = (class == DocumentClass::Notice)
+        .then(|| caption_debtor(scope, &parties))
+        .flatten();
+    if let Some((name, unit)) = &debtor
+        && !parties
+            .iter()
+            .any(|party| normalize_loosely(&party.name) == normalize_loosely(name))
+    {
+        remember(
+            &Found {
+                support: Support::Context,
+                unit: Some(unit),
+                line: Some(name.clone()),
+                miscited: 0,
+            },
+            &mut references,
+        );
+        parties.insert(
+            0,
+            ValidatedParty {
+                name: display_name(name),
+                support: Support::Context,
+                evidence: vec![unit.id.clone()],
+                ..ValidatedParty::default()
+            },
+        );
+    }
     // Who the filename and the description can name: everyone but the
     // people copied and those who sign for a party, each with the role the
     // document supports.
@@ -1672,6 +1704,11 @@ pub fn validate_facts_at(
         }),
         between: between_cue(context, &cast),
         caption: caption_sides(scope, context, &cast),
+        debtor: debtor.and_then(|(name, _)| {
+            let name = normalize_loosely(&display_name(&name));
+            cast.iter()
+                .position(|party| normalize_loosely(&party.name) == name)
+        }),
     };
     let relation = relation_from_roles(class, document_type.as_deref(), &cast, cues);
     // A name that rests on roles the document did not support waits for
@@ -6434,26 +6471,16 @@ const VERSUS_WORDS: &[&str] = &["v", "vs", "versus", "against"];
 /// Harbor Marine Supply, LLC") and one it labels a defendant, respondent
 /// or appellee ("Tavistock Boatworks, Inc., Defendant"), in a document
 /// that sets the case out as "A v. B" under a forum's heading on its first
-/// page ("SUPERIOR COURT OF THE STATE OF WASHINGTON"). A document that only
-/// mentions a case - a law firm's invoice for the matter - has no such
-/// heading.
+/// page ("SUPERIOR COURT OF THE STATE OF WASHINGTON"), wherever the heading
+/// stands there ([`caption_units`]). A document that only mentions a case -
+/// a law firm's invoice for the matter - has no such heading.
 fn caption_sides(
     scope: &ValidationScope<'_>,
     context: &ScopeView,
     cast: &[CastMember],
 ) -> Option<(usize, usize)> {
-    let first_page = scope.context_units().map(|unit| unit.page).min()?;
-    let headed = scope
-        .context_units()
-        .filter(|unit| unit.page == first_page)
-        .take(8)
-        .any(|unit| {
-            let text = normalize_loosely(&unit.text);
-            FORUM_WORDS
-                .iter()
-                .any(|word| !whole_positions(&text, word).is_empty())
-        });
-    if !headed {
+    let caption = caption_units(scope);
+    if caption.is_empty() {
         return None;
     }
     // A caption laid out as a table keeps its labels in cells of their
@@ -6492,7 +6519,7 @@ fn caption_sides(
         .position(|party| labeled(&party.name, ANSWERING_SIDE));
     match (bringing, answering) {
         (Some(bringing), Some(answering)) if bringing != answering => Some((bringing, answering)),
-        _ => caption_block_sides(scope, first_page, cast),
+        _ => caption_block_sides(&caption, cast),
     }
 }
 
@@ -6502,71 +6529,163 @@ fn caption_sides(
 /// LYNCH ... AND MORGAN STANLEY & CO., INCORPORATED, Plaintiffs, v.
 /// THEFLYONTHEWALL.COM, INC., Defendant."), and the parties named after it
 /// down to theirs - a label in the plural too, and the caption laid out as
-/// a table. Each side is the first of the cast the caption names on it.
-fn caption_block_sides(
-    scope: &ValidationScope<'_>,
-    first_page: usize,
-    cast: &[CastMember],
-) -> Option<(usize, usize)> {
-    let text = caption_text(scope, first_page);
-    // Where any of `words` stands in the caption, singular or plural.
-    let positions = |words: &[&str], from: usize, to: usize| {
-        words
-            .iter()
-            .flat_map(|word| {
-                let mut found = whole_positions(&text, word);
-                found.extend(whole_positions(&text, &format!("{word}s")));
-                found
-            })
-            .filter(|at| (from..to).contains(at))
-            .collect::<Vec<_>>()
-    };
-    let forum = positions(FORUM_WORDS, 0, text.len()).into_iter().min()?;
-    let versus = VERSUS_WORDS
-        .iter()
-        .flat_map(|word| whole_positions(&text, word))
-        .filter(|at| *at > forum)
-        .min()?;
-    // The bringing side's label closes its names, before "v."; the answering
-    // side's follows "v." within the caption. A caption that labels
-    // neither side - "LUXO AS, -against- THE WALT DISNEY COMPANY" - still
-    // sets them on either side of its "against".
-    let reach = (versus + CAPTION_REACH).min(text.len());
-    let bringing_label = positions(BRINGING_SIDE, forum, versus).into_iter().max();
-    let answering_label = positions(ANSWERING_SIDE, versus, reach).into_iter().min();
-    let (bringing_label, answering_label) = match (bringing_label, answering_label) {
-        (Some(bringing), Some(answering)) => (bringing, answering),
-        (None, None) => (versus, reach),
-        _ => return None,
-    };
-    let named_in = |from: usize, to: usize| {
+/// a table ([`CaptionLayout`]). Each side is the first of the cast the
+/// caption names on it.
+fn caption_block_sides(caption: &[&EvidenceUnit], cast: &[CastMember]) -> Option<(usize, usize)> {
+    let text = caption_text(caption);
+    let layout = CaptionLayout::of(&text)?;
+    let named_in = |side: std::ops::Range<usize>| {
         cast.iter()
             .enumerate()
             .filter_map(|(index, party)| {
                 whole_positions(&text, &normalize_loosely(&party.name))
                     .into_iter()
-                    .find(|at| (from..to).contains(at))
+                    .find(|at| side.contains(at))
                     .map(|at| (at, index))
             })
             .min()
             .map(|(_, index)| index)
     };
-    let bringing = named_in(forum, bringing_label)?;
-    let answering = named_in(versus, answering_label)?;
+    let bringing = named_in(layout.bringing)?;
+    let answering = named_in(layout.answering)?;
     (bringing != answering).then_some((bringing, answering))
+}
+
+/// Where a caption sets out its two sides, as stretches of its text
+/// ([`caption_text`]): the bringing side's names stand between the forum's
+/// heading and "v.", the answering side's after "v.", and each side's
+/// label closes its names where the caption has one.
+#[derive(Clone, Debug)]
+struct CaptionLayout {
+    /// Where the bringing side's names stand: from the forum's heading to
+    /// the side's label, or to "v.".
+    bringing: std::ops::Range<usize>,
+    /// Where the answering side's names stand: from "v." to the side's
+    /// label, or as far as a caption's answering side can run.
+    answering: std::ops::Range<usize>,
+    /// Whether the answering side's label closes its names: a caption with
+    /// no label sets out its sides, but nothing says where the second ends.
+    answering_closed: bool,
+}
+
+impl CaptionLayout {
+    /// The layout of a caption's text; `None` when it sets no two sides
+    /// against each other under a forum's heading.
+    fn of(text: &str) -> Option<Self> {
+        // Where any of `words` stands in the caption, singular or plural.
+        let positions = |words: &[&str], from: usize, to: usize| {
+            words
+                .iter()
+                .flat_map(|word| {
+                    let mut found = whole_positions(text, word);
+                    found.extend(whole_positions(text, &format!("{word}s")));
+                    found
+                })
+                .filter(|at| (from..to).contains(at))
+                .collect::<Vec<_>>()
+        };
+        let forum = positions(FORUM_WORDS, 0, text.len()).into_iter().min()?;
+        let versus = VERSUS_WORDS
+            .iter()
+            .flat_map(|word| whole_positions(text, word))
+            .filter(|at| *at > forum)
+            .min()?;
+        // The bringing side's label closes its names, before "v."; the
+        // answering side's follows "v." within the caption.
+        let reach = (versus + CAPTION_REACH).min(text.len());
+        let bringing_label = positions(BRINGING_SIDE, forum, versus).into_iter().max();
+        let answering_label = positions(ANSWERING_SIDE, versus, reach).into_iter().min();
+        let (bringing_end, answering_end) = match (bringing_label, answering_label) {
+            (Some(bringing), Some(answering)) => (bringing, answering),
+            // A caption that labels neither side - "LUXO AS, -against- THE
+            // WALT DISNEY COMPANY" - still sets them on either side of its
+            // "against".
+            (None, None) => (versus, reach),
+            // A reader takes a scanned caption's column of labels out of
+            // line: "LUXO AS, / -against- / THE WALT DISNEY COMPANY, PIXAR
+            // / Plaintiff, Case No. ... / ANIMATION STUDIOS ... /
+            // Defendants." The bringing side's label is still the
+            // caption's, under "v." instead of over it, and "v." still
+            // divides the sides.
+            (None, Some(answering)) if !positions(BRINGING_SIDE, versus, reach).is_empty() => {
+                (versus, answering)
+            }
+            // One side labeled and the other's label nowhere: a body's
+            // "against" and "the Defendant", not a caption's.
+            _ => return None,
+        };
+        Some(Self {
+            bringing: forum..bringing_end,
+            answering: versus..answering_end,
+            answering_closed: answering_label.is_some(),
+        })
+    }
 }
 
 /// How far after "v." a caption's answering side and its label can run.
 const CAPTION_REACH: usize = 400;
 
-/// The head of the first page as a caption is read from it: its first
-/// units' text, loosely normalized, in one line, a table's cell marks
-/// left out.
-fn caption_text(scope: &ValidationScope<'_>, first_page: usize) -> String {
-    scope
-        .context_units()
-        .filter(|unit| unit.page == first_page)
-        .take(12)
+/// How many of the first page's opening units name a forum as its heading
+/// however they are set: a filing stamp over the court's name, a form's
+/// title that names its court.
+const FORUM_HEAD_UNITS: usize = 8;
+
+/// How far down its first page a court document's forum heading can
+/// stand, in units, when it is set as a heading: a pleading opens with
+/// its counsel's block - their names, firm, address and telephone,
+/// "Attorneys for Defendants" - and the court's name heads the caption
+/// under it.
+const FORUM_HEADING_REACH: usize = 20;
+
+/// How many units a caption runs for, from its forum's heading down.
+const CAPTION_UNITS: usize = 12;
+
+/// The units a court document's caption is read from: the first page's,
+/// from its forum's heading for as far as a caption runs. The heading is
+/// the first of the page's opening units that names a court, a tribunal
+/// or an arbitration, or, under a block that fills those, the first
+/// that names one on a line in capitals ("UNITED STATES DISTRICT COURT"):
+/// counsel's block above the heading is no part of the caption and takes
+/// none of its room, while a sentence further down that mentions a court
+/// heads nothing. Empty when no forum heads the page.
+fn caption_units<'a>(scope: &ValidationScope<'a>) -> Vec<&'a EvidenceUnit> {
+    let Some(first_page) = scope.context_units().map(|unit| unit.page).min() else {
+        return Vec::new();
+    };
+    let page = || {
+        scope
+            .context_units()
+            .filter(move |unit| unit.page == first_page)
+    };
+    let names_forum = |text: &str| {
+        let text = normalize_loosely(text);
+        FORUM_WORDS
+            .iter()
+            .any(|word| !whole_positions(&text, word).is_empty())
+    };
+    let heading = page()
+        .take(FORUM_HEADING_REACH)
+        .enumerate()
+        .position(|(at, unit)| {
+            if at < FORUM_HEAD_UNITS {
+                names_forum(&unit.text)
+            } else {
+                unit.text
+                    .lines()
+                    .any(|line| in_capitals(line) && names_forum(line))
+            }
+        });
+    match heading {
+        Some(heading) => page().skip(heading).take(CAPTION_UNITS).collect(),
+        None => Vec::new(),
+    }
+}
+
+/// A caption's units as its sides are read from them: their text, loosely
+/// normalized, in one line, a table's cell marks left out.
+fn caption_text(caption: &[&EvidenceUnit]) -> String {
+    caption
+        .iter()
         .map(|unit| normalize_loosely(&unit.text.replace('|', " ")))
         .collect::<Vec<_>>()
         .join(" ")
@@ -6574,83 +6693,65 @@ fn caption_text(scope: &ValidationScope<'_>, first_page: usize) -> String {
 
 /// The side of a case the reply left out, read from the caption itself:
 /// when the first page sets the case out as "A v. B" under a forum's
-/// heading, one side's label closes its names and the other's follows,
-/// and a party is named on one side only, the first organization the
-/// caption names on the other side is the other side. Returned with the
-/// unit that names it and whether it is the bringing side (`true`) or
-/// the answering one.
+/// heading, one side's label closes its names and the other's follows
+/// ([`CaptionLayout`]), and a party is named on one side only, the first
+/// organization the caption names on the other side is the other side.
+/// Returned with the unit that names it and whether it is the bringing
+/// side (`true`) or the answering one.
 fn caption_other_side<'a>(
     scope: &ValidationScope<'a>,
     parties: &[ValidatedParty],
 ) -> Option<(String, &'a EvidenceUnit, bool)> {
-    let first_page = scope.context_units().map(|unit| unit.page).min()?;
-    let text = caption_text(scope, first_page);
-    let positions = |words: &[&str], from: usize, to: usize| {
-        words
-            .iter()
-            .flat_map(|word| {
-                let mut found = whole_positions(&text, word);
-                found.extend(whole_positions(&text, &format!("{word}s")));
-                found
-            })
-            .filter(|at| (from..to).contains(at))
-            .collect::<Vec<_>>()
-    };
-    let forum = positions(FORUM_WORDS, 0, text.len()).into_iter().min()?;
-    let versus = VERSUS_WORDS
-        .iter()
-        .flat_map(|word| whole_positions(&text, word))
-        .filter(|at| *at > forum)
-        .min()?;
-    let reach = (versus + CAPTION_REACH).min(text.len());
-    let bringing_label = positions(BRINGING_SIDE, forum, versus).into_iter().max()?;
-    let answering_label = positions(ANSWERING_SIDE, versus, reach).into_iter().min()?;
-    let named_in = |from: usize, to: usize| {
+    let caption = caption_units(scope);
+    let text = caption_text(&caption);
+    let layout = CaptionLayout::of(&text)?;
+    let named_in = |side: std::ops::Range<usize>| {
         parties.iter().any(|party| {
             !party.copied
                 && !party.signatory
                 && whole_positions(&text, &normalize_loosely(&party.name))
                     .into_iter()
-                    .any(|at| (from..to).contains(&at))
+                    .any(|at| side.contains(&at))
         })
     };
-    let (from, to, bringing) = match (
-        named_in(forum, bringing_label),
-        named_in(versus, answering_label),
+    // A caption that labels neither side names none the reply did not:
+    // nothing says where its second side ends.
+    if !layout.answering_closed {
+        return None;
+    }
+    let (side, bringing) = match (
+        named_in(layout.bringing.clone()),
+        named_in(layout.answering.clone()),
     ) {
-        (true, false) => (versus, answering_label, false),
-        (false, true) => (forum, bringing_label, true),
+        (true, false) => (layout.answering, false),
+        (false, true) => (layout.bringing, true),
         _ => return None,
     };
-    scope
-        .context_units()
-        .filter(|unit| unit.page == first_page)
-        .take(12)
-        .find_map(|unit| {
-            unit.features.organizations.iter().find_map(|organization| {
-                let loose = normalize_loosely(organization);
-                // The court's own heading names no side: "SNOHOMISH
-                // COUNTY" under "SUPERIOR COURT" is the forum, not the
-                // plaintiff.
-                if names_a_forum(&loose) {
-                    return None;
-                }
-                whole_positions(&text, &loose)
-                    .into_iter()
-                    .any(|at| (from..to).contains(&at))
-                    .then(|| written_span(unit, organization))
-                    .flatten()
-                    // The index stops a name at its organization's word:
-                    // "First National Bank of Omaha" is read whole.
-                    .map(|span| {
-                        (
-                            without_sentence_stop(&with_of_phrase(unit, &span)),
-                            unit,
-                            bringing,
-                        )
-                    })
-            })
+    caption.into_iter().find_map(|unit| {
+        unit.features.organizations.iter().find_map(|organization| {
+            let loose = normalize_loosely(organization);
+            // The court's own heading names no side: "SNOHOMISH
+            // COUNTY" under "SUPERIOR COURT" is the forum, not the
+            // plaintiff.
+            if names_a_forum(&loose) {
+                return None;
+            }
+            whole_positions(&text, &loose)
+                .into_iter()
+                .any(|at| side.contains(&at))
+                .then(|| written_span(unit, organization))
+                .flatten()
+                // The index stops a name at its organization's word:
+                // "First National Bank of Omaha" is read whole.
+                .map(|span| {
+                    (
+                        without_sentence_stop(&with_of_phrase(unit, &span)),
+                        unit,
+                        bringing,
+                    )
+                })
         })
+    })
 }
 
 /// Words a court's, a tribunal's or a jurisdiction's heading is made of.
@@ -6680,6 +6781,137 @@ fn names_a_forum(loose: &str) -> bool {
                 !whole_positions(loose, words).is_empty()
             }
         })
+}
+
+/// Words a bankruptcy caption labels the party its case is about with.
+const DEBTOR_LABELS: &[&str] = &["debtor", "debtors"];
+
+/// How many lines and cells a bankruptcy caption can run for from its "In
+/// re" to the label that closes it: the debtor's name, which a table's
+/// cells may split, its chapter and case number, "Jointly Administered".
+const IN_RE_LINES: usize = 8;
+
+/// The debtor of the bankruptcy case a document is filed in, as its
+/// caption names it under a forum's heading on the first page: "In re:"
+/// opens the caption, the debtor's name follows, and the label "Debtor."
+/// or "Debtors." closes it, in a line or a cell of its own or after the
+/// name's comma ("In re: / DELTA MILLS, INC., et al., / Debtors."). The
+/// caption has no "v." and no second side: the case is the debtor's, and
+/// whoever files in it - a creditors' committee, a creditor, the trustee -
+/// files in the debtor's case.
+///
+/// The debtor is the first of `parties` the caption names there, by the
+/// name validation gave it; when the reply named none of them, the first
+/// organization the caption names there, as the caption writes it. Either
+/// comes with the unit that names it. An "In re" with no such label - "IN
+/// RE: ADAMS GOLF, INC., SECURITIES LITIGATION" - names a matter, not a
+/// debtor, and a "debtor" in the sentences under it is no label.
+fn caption_debtor<'a>(
+    scope: &ValidationScope<'a>,
+    parties: &[ValidatedParty],
+) -> Option<(String, &'a EvidenceUnit)> {
+    // The caption's lines, a table's cells each a line of their own, with
+    // the marks a caption's rule is drawn with left out: ")", "§", ":".
+    let caption = caption_units(scope);
+    let lines = caption
+        .iter()
+        .flat_map(|unit| {
+            unit.text
+                .lines()
+                .flat_map(|line| line.split('|'))
+                .map(move |cell| {
+                    let words = cell
+                        .split_whitespace()
+                        .filter(|word| !word.chars().all(|mark| matches!(mark, ')' | '§' | ':')))
+                        .collect::<Vec<_>>();
+                    (*unit, words)
+                })
+        })
+        .filter(|(_, words)| !words.is_empty())
+        .collect::<Vec<_>>();
+    let bare = |word: &str| {
+        word.trim_matches(|character: char| !character.is_alphanumeric())
+            .to_lowercase()
+    };
+    let opens = lines.iter().position(|(_, words)| match words.as_slice() {
+        [first, second, ..] => bare(first) == "in" && bare(second) == "re",
+        _ => false,
+    })?;
+    // The label alone on its line, or closing a line after the name's
+    // comma: "GSC GROUP, INC., et al., Debtors." A sentence that ends on
+    // "the Debtors." labels no one.
+    let label_at = |words: &[&str]| {
+        let (last, before) = words.split_last()?;
+        (DEBTOR_LABELS.contains(&bare(last).as_str())
+            && before.last().is_none_or(|word| word.ends_with(',')))
+        .then_some(before.len())
+    };
+    let (closes, label) = lines
+        .iter()
+        .enumerate()
+        .skip(opens)
+        .take(IN_RE_LINES)
+        .find_map(|(at, (_, words))| label_at(words).map(|label| (at, label)))?;
+    // What stands between "In re" and the label, each word with its unit.
+    let named = (opens..=closes)
+        .flat_map(|at| {
+            let (unit, words) = &lines[at];
+            let from = if at == opens { 2 } else { 0 };
+            let to = if at == closes { label } else { words.len() };
+            words
+                .get(from..to.max(from))
+                .unwrap_or_default()
+                .iter()
+                .map(move |word| (*unit, *word))
+        })
+        .collect::<Vec<_>>();
+    let written = named
+        .iter()
+        .map(|(_, word)| *word)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let loose = normalize_loosely(&written);
+    if let Some(party) = parties
+        .iter()
+        .filter_map(|party| {
+            whole_positions(&loose, &normalize_loosely(&party.name))
+                .first()
+                .map(|at| (*at, party))
+        })
+        .min_by_key(|(at, _)| *at)
+        .map(|(_, party)| party)
+    {
+        let unit = party
+            .evidence
+            .first()
+            .and_then(|id| scope.index.unit(id))
+            .or_else(|| named.first().map(|(unit, _)| *unit))?;
+        return Some((party.name.clone(), unit));
+    }
+    let organization = crate::index::organizations_in(&written)
+        .into_iter()
+        .find(|organization| !names_a_forum(organization))?;
+    // The organization's words as the caption writes them, a "The" before
+    // them the name's own.
+    (0..named.len()).find_map(|start| {
+        (start + 1..=named.len().min(start + 10)).find_map(|end| {
+            let span = named[start..end]
+                .iter()
+                .map(|(_, word)| *word)
+                .collect::<Vec<_>>()
+                .join(" ");
+            (normalize_loosely(&span) == organization).then(|| {
+                let span = span.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '"'));
+                let name = match start.checked_sub(1).map(|article| named[article].1) {
+                    Some(article) if article.eq_ignore_ascii_case("the") => {
+                        format!("{article} {span}")
+                    }
+                    _ => span.to_owned(),
+                };
+                (without_sentence_stop(&name), named[start].0)
+            })
+        })
+    })
 }
 
 /// Room an extension takes at the end of a filename, its dot included.
@@ -12458,6 +12690,400 @@ Rickmansworth,
             "{:?}",
             outcome.proposal
         );
+    }
+
+    /// A pleading opens with its counsel's block - names, firm, address,
+    /// telephone - and the court's heading stands under it, past where a
+    /// page's opening units end. The caption is read from the heading down,
+    /// so the block takes none of its room: a scanned notice of appeal as
+    /// the reader extracts it, the docket number and the title run into the
+    /// caption's lines. A sentence that far down which only mentions a
+    /// court and its case heads no caption.
+    #[test]
+    fn a_caption_under_counsels_block_is_read_from_its_forums_heading() {
+        const COUNSEL: &str = "Rowan D. Keeling (admitted pro hac vice) Charles L. Hartwell \
+(admitted pro hac vice)\n\n\
+| Keeling Cove & Hartwell P.C. | PLEDU.S. DC |\n\
+| One Pitcairn Place |\n\
+| 165 Township Line Rd. | OCT 13 2009 |\n\n\
+Jenkintown, PA 19046\n\n\
+(215) 555-0110\n\n\
+M: Y.\n\n\
+and Barry N. Gutterfield Gutterfield & Associates The Lincoln Building 60 East 42d Street, \
+46th Floor New York, NY 10165 Attorneys for Defendants\n\n";
+        const CAPTION: &str = "UNITED STATES DISTRICT COURT\n\n\
+SOUTHERN DISTRICT OF NEW YORK SENDAI MARINE INSURANCE COMPANY OF AMERICA, and SENDAI MARINE \
+INSURANCE,\n\n\
+INC. NO.: 07 CIV. 2735 (DC)\n\n\
+Plaintiffs, JUDGE CHIN\n\n\
+- against - NOTICE OF APPEAL\n\n\
+NORTHFOLK EASTERN RAILWAY COMPANY, NORTHFOLK EASTERN CORPORATION, and THE KANSAS PLAINS \
+RAILWAY COMPANY\n\n\
+Defendants. Notice is hereby given that defendants hereby appeal to the United States Court \
+of Appeals for the Second Circuit from the Judgment entered in this action.\n\n\
+Dated: October 13, 2009";
+        const LIEN: &str = "NOTICE OF CHARGING LIEN\n\n\
+Please take notice that the undersigned claim a lien on any recovery in the action pending in \
+the United States District Court for the Southern District of New York, in which Plaintiff \
+Sendai Marine Insurance Company of America proceeds against Defendant Northfolk Eastern \
+Railway Company.\n\n\
+Dated: October 13, 2009";
+        let sides = |title: &'static str, plaintiff: &'static str, defendant: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(title.into()),
+                type_evidence: vec![id_of(index, title)],
+                document_date: Some("2009-10-13".into()),
+                date_evidence: vec![id_of(index, "Dated")],
+                parties: vec![
+                    party(
+                        plaintiff,
+                        Some(PartyRole::Client),
+                        &[id_of(index, plaintiff)],
+                    ),
+                    party(
+                        defendant,
+                        Some(PartyRole::Client),
+                        &[id_of(index, defendant)],
+                    ),
+                ],
+                ..ModelFacts::default()
+            }
+        };
+        let (outcome, index) = facts_for(
+            &format!("{COUNSEL}{CAPTION}"),
+            sides(
+                "NOTICE OF APPEAL",
+                "SENDAI MARINE INSURANCE COMPANY OF AMERICA",
+                "NORTHFOLK EASTERN RAILWAY COMPANY",
+            ),
+        );
+        // The heading stands past the page's opening units.
+        let heading = index
+            .units()
+            .iter()
+            .position(|unit| unit.text.contains("DISTRICT COURT"))
+            .unwrap();
+        assert!(heading >= FORUM_HEAD_UNITS, "{heading}");
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::Between,
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec![
+                "SENDAI MARINE INSURANCE COMPANY OF AMERICA",
+                "NORTHFOLK EASTERN RAILWAY COMPANY"
+            ]
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // Under the same block, a notice that names the court and the
+        // sides of a case only in the sentence it gives is no document of
+        // the case.
+        let (outcome, _) = facts_for(
+            &format!("{COUNSEL}{LIEN}"),
+            sides(
+                "NOTICE OF CHARGING LIEN",
+                "Sendai Marine Insurance Company of America",
+                "Northfolk Eastern Railway Company",
+            ),
+        );
+        assert_ne!(
+            outcome.proposal.party_relation,
+            PartyRelation::Between,
+            "{:?}",
+            outcome.proposal
+        );
+    }
+
+    /// A reader takes a scanned caption's column of labels out of line:
+    /// "Plaintiff," comes after "-against-" and the other side's first
+    /// names, while "Defendants." keeps its place. "-against-" still divides
+    /// the sides: the notice is between them, and a reply that kept one
+    /// side takes the other from the caption. A notice whose body is
+    /// "against" someone and speaks of "the Defendant" under a caption
+    /// that sets no sides out has no label out of place, and no side to
+    /// add.
+    #[test]
+    fn a_caption_with_a_label_out_of_its_place_is_divided_by_its_versus() {
+        const DISMISSAL: &str = "UNITED STATES DISTRICT COURT SOUTHERN DISTRICT OF NEW YORK\n\n\
+LUMO AS,\n\n\
+-against-\n\n\
+THE WALTER DABNEY COMPANY, PIXEL\n\n\
+x\n\n:\n\n:\n\n\
+Plaintiff, Case No. 09 Civ 7689 (LTS)\n\n\
+NOTICE OF DISMISSAL\n\n\
+ANIMATION STUDIOS, JOHN DOES, JANE :\n\n\
+DOES and XYZ COMPANIES\n\n\
+Defendants.\n\n\
+Pursuant to Rule 41(a) of the Federal Rules of Civil Procedure, plaintiff hereby dismisses\n\n\
+this action with prejudice and without costs or disbursements to any party.\n\n\
+Dated: New York, New York\n\n\
+November 2, 2009\n\n\
+Respectfully submitted,\n\n\
+CARROW, LIEBERT & LATHAM, P.C.\n\n\
+Attorneys for Plaintiff";
+        let dismissal = |parties: Vec<(&'static str, PartyRole)>| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some("NOTICE OF DISMISSAL".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF DISMISSAL")],
+                document_date: Some("2009-11-02".into()),
+                date_evidence: vec![id_of(index, "November 2, 2009")],
+                parties: parties
+                    .iter()
+                    .map(|(name, role)| party(name, Some(*role), &[id_of(index, name)]))
+                    .collect(),
+                ..ModelFacts::default()
+            }
+        };
+        // Both sides named, with roles the document supports nowhere.
+        let (outcome, _) = facts_for(
+            DISMISSAL,
+            dismissal(vec![
+                ("LUMO AS", PartyRole::Client),
+                ("THE WALTER DABNEY COMPANY", PartyRole::Contractor),
+            ]),
+        );
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::Between,
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["LUMO AS", "THE WALTER DABNEY COMPANY"]
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // One side named: the other is the caption's.
+        let (outcome, _) = facts_for(DISMISSAL, dismissal(vec![("LUMO AS", PartyRole::Issuer)]));
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::Between,
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["LUMO AS", "THE WALTER DABNEY COMPANY"]
+        );
+        // A notice filed in a consolidated matter, its caption an "In re"
+        // with no sides: the "against" and "the Defendant" are its body's.
+        let (outcome, _) = facts_for(
+            "Case 1:99-cv-00371-GMS Document 377 Filed 09/16/2008 Page 1 of 3\n\n\
+UNITED STATES DISTRICT COURT DISTRICT OF DELAWARE\n\n\
+| IN RE: ALDER GOLF, INC., | con con con con | CIVIL ACTION NO. 99-371-GMS |\n\
+| SECURITIES LITIGATION | | (CONSOLIDATED) |\n\n\
+NOTICE OF BANKRUPTCY\n\n\
+PLEASE TAKE NOTICE that, on September 15, 2008 (the \"Commencement Date\"), Lehigh Brothers \
+Holdings Inc. (the \"Defendant\") commenced a case under chapter 11 of title 11 of the United \
+States Code.\n\n\
+PLEASE BE ADVISED that nothing herein stays the claims pending against Marlow Underwriters, \
+Inc., which the Defendant does not own.\n\n\
+Dated: September 16, 2008",
+            |index| ModelFacts {
+                document_type: Some("NOTICE OF BANKRUPTCY".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF BANKRUPTCY")],
+                document_date: Some("2008-09-16".into()),
+                date_evidence: vec![id_of(index, "Dated")],
+                parties: vec![party(
+                    "Lehigh Brothers Holdings Inc.",
+                    Some(PartyRole::Borrower),
+                    &[id_of(index, "Lehigh")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Lehigh Brothers Holdings Inc."],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+    }
+
+    /// A bankruptcy caption sets no two sides against each other: "In re:"
+    /// names the debtor, and "Debtors." closes the name. A notice filed in
+    /// the case is for the debtor, whatever the reply called it and
+    /// whether or not the reply named it: the creditors' committee that
+    /// appears, the movants that set a hearing and the creditors the
+    /// trustee appoints are not who the case is about. The caption's rule
+    /// may be drawn with ")" or "§", and a table's cells may split the
+    /// name. An "In re" that names a matter, with no label to close it, is
+    /// no debtor's, though the notice under it speaks of "the debtor".
+    #[test]
+    fn a_notice_in_a_bankruptcy_case_is_for_the_debtor_its_caption_names() {
+        let notice = |title: &'static str,
+                      dated: &'static str,
+                      date: &'static str,
+                      parties: Vec<(&'static str, PartyRole)>| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(title.into()),
+                type_evidence: vec![id_of(index, title)],
+                document_date: Some(date.into()),
+                date_evidence: vec![id_of(index, dated)],
+                parties: parties
+                    .iter()
+                    .map(|(name, role)| party(name, Some(*role), &[id_of(index, name)]))
+                    .collect(),
+                ..ModelFacts::default()
+            }
+        };
+        // The reply named the debtor, as the committee's "employer".
+        let (outcome, _) = facts_for(
+            "IN THE UNITED STATES BANKRUPTCY COURT FOR THE DISTRICT OF DELAWARE\n\n\
+In re: Chapter 11\n\n\
+| CALDER MILLS, INC., et al., | Case No. 06-11144 (CSS) |\n\
+| Debtors. | (Jointly Administered) |\n\n\
+NOTICE OF APPEARANCE AND DEMAND FOR NOTICES AND PAPERS\n\n\
+Please take notice that the Official Committee of Unsecured Creditors (the \"Committee\")\n\n\
+of Calder Mills, Inc., et al., hereby appears in the above-captioned cases by and through its\n\n\
+proposed counsel, Strand & Lowell LLP and Cozen Hartley; such counsel hereby\n\n\
+enter their appearance pursuant to 11 U.S.C. § 1109(b) and Bankruptcy Rule 9010(b).\n\n\
+Dated: October 25, 2006",
+            notice(
+                "NOTICE OF APPEARANCE AND DEMAND FOR NOTICES AND PAPERS",
+                "Dated",
+                "2006-10-25",
+                vec![
+                    (
+                        "Official Committee of Unsecured Creditors",
+                        PartyRole::Client,
+                    ),
+                    ("Calder Mills, Inc.", PartyRole::Employer),
+                    ("Strand & Lowell LLP", PartyRole::Contractor),
+                ],
+            ),
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Calder Mills, Inc."],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // The reply named only the movants; counsel's block stands over
+        // the court's heading, and the rule is drawn with ")".
+        let (outcome, _) = facts_for(
+            "HEARING DATE: OCTOBER 24, 2011 AT 11:00 A.M. (PREVAILING EASTERN TIME)\n\
+OBJECTION DEADLINE: OCTOBER 20, 2011 AT 4:00 P.M. (PREVAILING EASTERN TIME)\n\n\
+LATIMER & WATTS\n\n\
+885 Third Avenue New York, NY 10022-4834 (212) 555-0120 David S. Heller Adam Goldberg\n\n\
+-and\n\n\
+233 S. Wacker Drive, Suite 5800 Chicago, IL 60606 (312) 555-0177 Douglas Bacon\n\n\
+ATTORNEYS FOR HARROW RECOVERY IIA GP, L.P., HARROW RECOVERY III GP, L.P., and HARROW RIIA, LLC\n\n\
+UNITED STATES BANKRUPTCY COURT FOR THE SOUTHERN DISTRICT OF NEW YORK\n\n\
+In re: ) Chapter 11 )\n\n\
+HARROW GROUP, INC., et al. ) Case No. 10-14653 (AJG)\n\n\
+)\n\n\
+Jointly Administered\n\n\
+Debtors. ) ) )\n\n\
+NOTICE OF HEARING\n\n\
+PLEASE TAKE NOTICE that on September 30, 2011, Harrow Recovery IIA GP, L.P.\n\n\
+(\"GPIIA\") and Harrow Recovery III GP, L.P. (\"GPIII\") filed the Motion to Deem Late Claims \
+Timely Filed.\n\n\
+Dated: October 5, 2011",
+            notice(
+                "NOTICE OF HEARING",
+                "Dated",
+                "2011-10-05",
+                vec![
+                    ("Harrow Recovery IIA GP, L.P.", PartyRole::Client),
+                    ("Harrow Recovery III GP, L.P.", PartyRole::Client),
+                ],
+            ),
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["HARROW GROUP, INC."],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        // The debtor's name split across a table's cells, the rule drawn
+        // with "§", the label in the singular; the reply named the
+        // creditors the notice appoints.
+        let (outcome, _) = facts_for(
+            "Case 05-80340 Document 26 Filed in TXSB on 02/15/05 Page 1 of 2\n\n\
+UNITED STATES BANKRUPTCY COURT SOUTHERN DISTRICT OF TEXAS GALVESTON DIVISION\n\n\
+IN RE: § CASE NO:\n\n\
+§\n\n\
+| SLATE OUTLET, | INC. | § § | 05-80340-G3-11 (Chapter 11) |\n\
+| DEBTOR | | § | |\n\n\
+NOTICE OF APPOINTMENT OF OFFICIAL COMMITTEE OF UNSECURED CREDITORS\n\n\
+TO THE HONORABLE LETITIA Z. CLARK\n\n\
+UNITED STATES BANKRUPTCY JUDGE:\n\n\
+| COMES NOW | the United States | Trustee (“UST”), who | through the undersigned | attorney, |\n\
+| pursuant | to Section 1102(a) and (b) | of the | Bankruptcy Code, hereby appoints the | following eligible |\n\n\
+creditors to the official committee of unsecured creditors in the above captioned case:\n\n\
+QRP Inc.\n\n\
+Attn: Marc Applegate\n\n\
+Readers Wholesale Distributors, Inc.\n\n\
+Attn: James Constable\n\n\
+Dated: February 15, 2005",
+            notice(
+                "NOTICE OF APPOINTMENT OF OFFICIAL COMMITTEE OF UNSECURED CREDITORS",
+                "Dated",
+                "2005-02-15",
+                vec![
+                    ("QRP Inc.", PartyRole::Contractor),
+                    (
+                        "Readers Wholesale Distributors, Inc.",
+                        PartyRole::Contractor,
+                    ),
+                ],
+            ),
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["SLATE OUTLET, INC."],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        // A consolidated matter's "In re", under a district court's
+        // heading: no label closes it, and the "debtor" of the sentence
+        // under it is no one the caption names.
+        let (outcome, _) = facts_for(
+            "Case 1:99-cv-00371-GMS Document 377 Filed 09/16/2008 Page 1 of 3\n\n\
+UNITED STATES DISTRICT COURT DISTRICT OF DELAWARE\n\n\
+| IN RE: ALDER GOLF, INC., | con con con con | CIVIL ACTION NO. 99-371-GMS |\n\
+| SECURITIES LITIGATION | | (CONSOLIDATED) |\n\n\
+NOTICE OF BANKRUPTCY\n\n\
+PLEASE TAKE NOTICE that section 362 of the Bankruptcy Code stays any further action against \
+the debtor.\n\n\
+Lehigh Brothers Holdings Inc. (the \"Defendant\") commenced a case under chapter 11 of title 11 \
+of the United States Code on September 15, 2008.\n\n\
+Dated: September 16, 2008",
+            notice(
+                "NOTICE OF BANKRUPTCY",
+                "Dated",
+                "2008-09-16",
+                vec![("Lehigh Brothers Holdings Inc.", PartyRole::Borrower)],
+            ),
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Lehigh Brothers Holdings Inc."],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
     }
 
     /// A body's name ends on its noun ("Committee", "Board") or puts it
