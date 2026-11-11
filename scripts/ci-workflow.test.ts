@@ -366,3 +366,23 @@ describe('the server speed battery', () => {
     expect(steps.find((step) => step.includes('actions/upload-artifact@'))).toContain('live-slots/out/');
   });
 });
+
+// The replays' baselines are written at the accurate model's review gate
+// (tiers::REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE), so the app files what CI
+// scores as ready. A gate moved in the engine and not here, or here and not
+// in the engine, holds the replays to a readiness the app does not have.
+describe('the review gate CI replays at', () => {
+  it('is the accurate model\'s gate, in every replay and in the corpus recording script', async () => {
+    const tiers = await readFile('crates/intern-engine/src/tiers.rs', 'utf8');
+    const constant = tiers.match(/pub const REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE: f32 = ([\d.]+);/);
+    expect(constant, 'tiers.rs defines the accurate gate').not.toBeNull();
+    const gate = constant![1];
+    const workflow = await ci();
+    const replays = [...workflow.matchAll(/--min-token-confidence ([\d.]+)/g)].map((match) => match[1]);
+    expect(replays).toHaveLength(3);
+    for (const value of replays) expect(value).toBe(gate);
+    const recording = await readFile('scripts/record-corpus.ps1', 'utf8');
+    const recorded = [...recording.matchAll(/--min-token-confidence ([\d.]+)/g)].map((match) => match[1]);
+    expect(recorded).toEqual([gate]);
+  });
+});

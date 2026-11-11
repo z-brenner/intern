@@ -341,10 +341,10 @@ Inputs:
 cargo run --release --locked -p intern-bench -- run --corpus bench/generated \
   --gold bench/gold.json --manifest bench/manifest.json \
   --replay bench/recording.json --baseline bench/baseline.json \
-  --min-token-confidence 0.7 --output report.json --markdown report.md
+  --min-token-confidence 0.8 --output report.json --markdown report.md
 ```
 
-`--min-token-confidence 0.7` is the accurate model's review gate
+`--min-token-confidence 0.8` is the accurate model's review gate
 (`REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE` in `crates/intern-engine/src/tiers.rs`);
 `bench/baseline.json` was written at it, so a replay without it reports more
 documents ready than the app would file, and fails the readiness comparison.

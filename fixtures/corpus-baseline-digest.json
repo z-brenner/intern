@@ -173,8 +173,8 @@
         "filename_correct": true,
         "parties_correct": true,
         "party_forbidden": false,
-        "readiness_match": true,
-        "ready": true,
+        "readiness_match": false,
+        "ready": false,
         "type_correct": true,
         "type_present": true
       }

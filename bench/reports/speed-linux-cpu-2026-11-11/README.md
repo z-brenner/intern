@@ -51,19 +51,41 @@ over two rounds on the same runner, each slot warmed first. Raw summaries:
 
 ## Memory
 
-The server's peak resident memory (`VmHWM`) over each whole live set, from
-`candidate-bench.yml` runs 42973633153 (repacked) and 42983156560
-(`--no-repack`), both on InternBench and the five real sets:
+The server's peak resident memory (`VmHWM`, which Linux reports in KiB)
+over each whole live set, from `candidate-bench.yml` runs 42973633153
+(repacked) and 42983156560 (`--no-repack`), both on InternBench and the
+five real sets (`battery.json`, `server_peak_rss_kb`):
 
 | | Repacked | `--no-repack` |
 | --- | ---: | ---: |
-| Peak resident memory, every set | 8.96-9.01 GB | 6.28-6.33 GB |
+| Peak resident memory, every set | 8,750-8,800 MiB | 6,133-6,184 MiB |
 
-2.7 GB less, about 30%. The memory floors in `tiers.rs`
-(`MIN_AVAILABLE_FOR_ACCURATE`, the resident estimate) were measured with
-repacked weights and are left as they are: they now ask for more than the
-9B needs, which errs toward the 4B. Lowering them needs the Windows memory
-probe (`runtime-speed.yml` with `probe: memory`) run with this flag.
+2,616 MiB (2.7 GB) less, about 30%. The model file is 5,417 MiB, so
+without repacking all but about 0.7 GiB of the resident set is the mapped
+file, which the server now reads on every token.
+
+On Windows (`runtime-speed.yml` with `probe: memory`, run 43063958237, a
+16 GiB runner, four threads), the 9B's working set right after a document
+was 5,491 MiB, and 5,229-5,491 MiB from load to a minute idle, against
+8,107-8,110 MiB right after a document with repacked weights
+(`bench/reports/windows-memory-2026-11-09`). The machine had 8,208 MiB
+available with it loaded and nothing else running (5,410-5,570 before),
+and 5,939 MiB with another process holding 2 GiB (3,535 before).
+
+The memory floors in `tiers.rs` are left as they are, and that is not
+conservatism: `MIN_AVAILABLE_FOR_ACCURATE` counts what the 9B must keep
+resident to read at its speed, 6.2 GB with repacked weights (3.4 GB of
+anonymous memory and the 2.7 GB of the file it kept reading; the rest of
+the file was the original of the copy, read once). Without the copy it
+keeps reading the whole file, and its peak resident set, 6,133-6,184 MiB,
+is about the same. What changed is memory it never needed. One bar did
+depend on the old layout: on Linux, where `MemAvailable` counts mapped
+weights as reclaimable, a second OCR page is read at once only with the
+weights the 9B keeps reading counted on top (`paddle::pages_at_once`).
+Those are now the whole 5.68 GB file, not 2.7 GB, and the bar rises from 5
+to 8 GiB. The fallback estimate of what unloading the 9B gives back
+(`tiers::resident_estimate`, used only when the live server cannot be read)
+is kept at its repacked figure; see its comment.
 
 ## Names
 
@@ -85,5 +107,6 @@ processor makes. Within that drift, no difference in accuracy was found.
 ## Not measured
 
 - The fast model with `--no-repack`.
-- Windows: the speed, and the memory the machine reports available.
+- Windows: the speed (`runtime-speed.yml` run 43063962365 was still
+  running when this was written).
 - An Intel laptop with AVX-VNNI (above).

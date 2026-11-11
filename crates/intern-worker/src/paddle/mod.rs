@@ -300,10 +300,13 @@ const GIB: u64 = 1024 * 1024 * 1024;
 /// InternBench (`VmHWM`): 1.30-1.42 GB in twelve runs, against 0.75-0.92 GB
 /// one page at a time (docs/ocr.md), with room above the highest.
 const TWO_PAGE_PEAK: u64 = 1_450 * MB;
-/// The weights a loaded accurate model keeps reading: 2.7 GB of its 5.7 GB
-/// file (`intern_engine::tiers::working_set`). On Linux they are page cache,
-/// which the available memory counts although the model needs them.
-const MODEL_WEIGHTS_IN_USE: u64 = 2_700 * MB;
+/// The weights a loaded accurate model keeps reading: its whole 5.68 GB
+/// file. It runs with `--no-repack` (`intern_engine::tiers::tier_server_flags`),
+/// so every weight matrix is read where the file maps it; with repacked
+/// weights it was 2.7 GB of the file, the rest copied out once and left. On
+/// Linux they are page cache, which the available memory counts although
+/// the model needs them.
+const MODEL_WEIGHTS_IN_USE: u64 = 5_680 * MB;
 /// What the tier plan leaves for the person's own work
 /// (`intern_engine::tiers::HEADROOM`).
 const HEADROOM: u64 = GIB;
@@ -318,7 +321,8 @@ const HEADROOM: u64 = GIB;
 /// running, and 3,535 MiB with another process holding 2 GiB, while the
 /// server's working set was 8,107-8,110 MiB, 4.9 GB of it the mapped file
 /// (`bench/reports/windows-memory-2026-11-09`, runs 42573531984 and
-/// 42574460663).
+/// 42574460663). With `--no-repack` the working set was 5,491 MiB and
+/// 8,208 MiB were available (run 43063958237).
 const AVAILABLE_COUNTS_MODEL_WEIGHTS: bool = !cfg!(windows);
 
 /// The memory that must be available for two pages at once, the model's
@@ -335,7 +339,7 @@ const fn two_pages_min_available(counts_model_weights: bool) -> u64 {
 }
 
 /// Memory that must be available when a document's pages start to be read
-/// for two of them to be read at once: 5 GiB on Linux, the worker's
+/// for two of them to be read at once: 8 GiB on Linux, the worker's
 /// two-page peak, the weights a loaded accurate model keeps reading, and the
 /// person's headroom, rounded up; 3 GiB on Windows, where the available
 /// memory already leaves the weights out.
@@ -345,10 +349,13 @@ const fn two_pages_min_available(counts_model_weights: bool) -> u64 {
 /// machine near a model's memory floor a second set of sessions would come
 /// out of the person's headroom, or out of the model's weights. There pages
 /// are read one at a time, as a 4-core machine read them through alpha.16.
-/// Counting the weights on Windows too would have counted them twice: the
-/// runner above, at 5,410-5,570 MiB, would have been at the edge of 5 GiB
-/// with nothing else open, and below it with a browser, where alpha.14
-/// read two pages at once on any machine with eight logical processors.
+/// Counting the weights on Windows too would count them twice: the runner
+/// above, at 5,410-5,570 MiB with repacked weights, would have been at the
+/// edge of 5 GiB with nothing else open, and below it with a browser, where
+/// alpha.14 read two pages at once on any machine with eight logical
+/// processors; with the whole file counted it would need 8 GiB, which that
+/// runner did not have with a browser's 2 GiB held even without repacking
+/// (5,939 MiB, run 43063958237).
 pub const TWO_PAGES_MIN_AVAILABLE: u64 = two_pages_min_available(AVAILABLE_COUNTS_MODEL_WEIGHTS);
 
 /// How many pages to read at once: the `workers` the thread budget allows
@@ -556,7 +563,7 @@ mod tests {
     /// A second page is read at once only with the memory for it there: the
     /// bar is a rounding up of the tier plan's headroom, the two-page peak
     /// above the one page the plan counts, and, where the available memory
-    /// counts them, the model's weights - 5 GiB on Linux, 3 GiB on Windows.
+    /// counts them, the model's weights - 8 GiB on Linux, 3 GiB on Windows.
     #[test]
     fn a_second_page_waits_for_the_memory_it_needs() {
         const {
@@ -566,11 +573,11 @@ mod tests {
             );
             assert!(two_pages_min_available(false) >= TWO_PAGE_PEAK + HEADROOM);
         }
-        assert_eq!(two_pages_min_available(true), 5 * GIB);
+        assert_eq!(two_pages_min_available(true), 8 * GIB);
         assert_eq!(two_pages_min_available(false), 3 * GIB);
         assert_eq!(
             TWO_PAGES_MIN_AVAILABLE,
-            if cfg!(windows) { 3 * GIB } else { 5 * GIB }
+            if cfg!(windows) { 3 * GIB } else { 8 * GIB }
         );
         assert_eq!(HEADROOM, intern_engine::tiers::HEADROOM);
         assert_eq!(pages_at_once(2, Some(TWO_PAGES_MIN_AVAILABLE)), 2);

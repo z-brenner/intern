@@ -759,12 +759,17 @@ The accurate model alone also runs with `--no-repack`
 [`bench/reports/speed-linux-cpu-2026-11-11`](../bench/reports/speed-linux-cpu-2026-11-11/README.md)):
 llama.cpp otherwise keeps a second, interleaved copy of every Q4_K weight
 matrix for its older x86 GEMM. Without it the 9B's peak resident memory fell
-from 8.96 GB to 6.28 GB, and a document took 22-27% less time on AMD Zen 4
-and 5, 10-15% less on the AVX2 path most laptops load, and the same on an
-Intel Xeon with AMX; its names differed from the repacked run's no more
-than two repacked runs on different processors differ. The memory floors
-below were measured with repacked weights and are kept, so they now err
-toward the fast model.
+from 8,750-8,800 MiB to 6,133-6,184 MiB on Linux and its working set right
+after a document from 8,110 MiB to 5,491 MiB on a 16 GiB Windows runner
+(`runtime-speed.yml` run 43063958237), and a document took 22-27% less time
+on AMD Zen 4 and 5, 10-15% less on the AVX2 path most laptops load, and the
+same on an Intel Xeon with AMX; its names differed from the repacked run's
+no more than two repacked runs on different processors differ. The memory
+floors below are unchanged: the copy it drops was memory the 9B read once
+and never needed, and what it keeps reading - now its whole file, before
+2.7 GB of it and the copy - comes to about the same. Where the available
+memory counts the weights as reclaimable (Linux), the bar for reading two
+OCR pages at once counts the whole file now (8 GiB, [OCR](ocr.md)).
 
 ### Two models, one at a time
 
@@ -784,8 +789,10 @@ judge it as they judge the 9B's, but whatever they make of it the queue holds
 it with `FAST_MODEL_READING` (`tiers::hold_fast_reading`), as the builds
 before alpha.13 held Bonsai's: on the four real-document sets the 4B filed
 a wrong name for about every right one at any gate threshold
-(`bench/reports/model-qualification-2026-11`), where the 9B at its 0.7
-gate files one wrong name in seven. What sets a quick reading apart beyond
+(`bench/reports/model-qualification-2026-11`), where the 9B at the 0.7
+gate it had then filed one wrong name in seven. Its gate is 0.8 from
+alpha.17 (`tiers::REVIEW_BELOW_TOKEN_CONFIDENCE_ACCURATE`,
+[`bench/reports/review-gate-2026-11`](../bench/reports/review-gate-2026-11/README.md)). What sets a quick reading apart beyond
 that is whether it stands in: made while the accurate model was wanted and
 not installed yet, or did not fit in memory, it is provisional, and once the
 accurate model can read - its download verified, or memory back - the queue
@@ -815,9 +822,11 @@ available memory for it (`MemAvailable` on Linux, `GlobalMemoryStatusEx` on
 Windows; memory that cannot be read counts as enough): what its server must
 keep resident to read at its speed (Qwen3.5 4B about 4.7 GB, its whole
 resident set; Qwen3.5 9B about 6.2 GB, measured under a memory limit in
-`bench/reports/speed-linux-cpu-2026-11-05`: 3.4 GB of anonymous memory and
-the 2.7 GB of mapped weights it reads on every token, the rest of the mapped
-file being the original of what was repacked and reclaimable at no cost), the
+`bench/reports/speed-linux-cpu-2026-11-05` with repacked weights: 3.4 GB of
+anonymous memory and the 2.7 GB of mapped weights it reads on every token,
+the rest of the mapped file being the original of what was repacked and
+reclaimable at no cost; with `--no-repack` it reads the whole file, and its
+peak resident set, all of it in use, was 6,133-6,184 MiB), the
 parser worker's 0.71 GB OCR peak, and 1 GiB left for the person's own work -
 6.5 GiB for the quick model, 8 GiB for the accurate one. A 16 GB laptop has
 the latter with a browser open, and not with a browser and an office suite at
@@ -832,7 +841,8 @@ stay in its working set until it exits or the system trims them. When the
 server cannot be read, an estimate stands in: the resident high-water mark
 less the model file (`tiers::unload_gives_back`), about right on Linux. On
 Windows that estimate is far short. On a 16 GiB runner the 9B's working set
-right after a document was 8,110 MiB where the estimate credits 2,883 MiB. By
+right after a document was 8,110 MiB with repacked weights (5,491 MiB
+without) where the estimate credits 2,883 MiB. By
 `plan()`'s arithmetic on the probe's numbers, with 2 GiB held by another
 process, as a browser holds it, the estimate would have stood the loaded 9B
 down for the 4B before the next document and the loaded 4B down for the 9B
