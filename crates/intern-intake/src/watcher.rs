@@ -28,8 +28,8 @@ use crate::{
     identity::MachineIdentity,
     scan::{
         ArrivalProbe, FileFacts, Glimpse, Hydration, IntakeAdmission, IntakeConfig, IntakeHost,
-        IntakeStatus, ItemState, StabilityTracker, SystemHydration, is_conflict_copy, list_intake,
-        modified_secs, relative_slash_path, walk_intake,
+        IntakeStatus, ItemState, Listing, StabilityTracker, SystemHydration, is_conflict_copy,
+        list_intake, modified_secs, next_look_after, relative_slash_path, walk_intake,
     },
 };
 
@@ -377,6 +377,9 @@ fn run(
     // Whether the look between scans called for the scan about to run, and
     // when the scan after it was already due.
     let mut probed: Option<Instant> = None;
+    // How long the last listing of the folder took, which spaces the looks
+    // out on a folder that is slow to list.
+    let mut listing_took = std::time::Duration::ZERO;
     loop {
         let (config, generation, requested) = {
             let mut control = lock(&shared.control);
@@ -398,7 +401,9 @@ fn run(
         // this is news to it, whether or not the scan caught it. A scan the
         // look itself called for follows a listing just taken.
         if config.arrival_probe_interval.is_some() && probed.is_none() {
-            probe.rebase(list_intake(&config.intake_root, &config.extensions).ok());
+            let (listing, took) = timed_listing(&config);
+            probe.rebase(listing.ok());
+            listing_took = took;
         }
         // Claims `hand_over` took: the queue has their items from that
         // moment, exactly as for a claim this loop took itself. One taken in
@@ -448,7 +453,11 @@ fn run(
         let look_every = config
             .arrival_probe_interval
             .filter(|every| arriving == 0 && *every < interval);
-        let mut next_look = look_every.map(|every| Instant::now() + every);
+        // On a folder slow to list the looks come further apart, and on one
+        // slow enough not before the scan that is due.
+        let look_in =
+            |after, listing_took| Instant::now().checked_add(next_look_after(after, listing_took));
+        let mut next_look = look_every.and_then(|every| look_in(every, listing_took));
         loop {
             let until = next_look.map_or(deadline, |look| look.min(deadline));
             if wait_or_wake(shared, until) || Instant::now() >= deadline {
@@ -457,7 +466,9 @@ fn run(
             let Some(every) = look_every else {
                 break;
             };
-            let glimpse = match list_intake(&config.intake_root, &config.extensions) {
+            let (listing, took) = timed_listing(&config);
+            listing_took = took;
+            let glimpse = match listing {
                 Ok(listing) => probe.look(listing),
                 // The folder cannot be listed; the scan that is due will
                 // say so. The next listing that works starts over.
@@ -467,8 +478,8 @@ fn run(
                 }
             };
             match glimpse {
-                Glimpse::Nothing => next_look = Some(Instant::now() + every),
-                Glimpse::Wait => next_look = Some(Instant::now() + config.arrival_burst_window),
+                Glimpse::Nothing => next_look = look_in(every, listing_took),
+                Glimpse::Wait => next_look = look_in(config.arrival_burst_window, listing_took),
                 Glimpse::Scan => {
                     probed = Some(deadline);
                     break;
@@ -494,6 +505,14 @@ fn next_scan_due(
         Some(due) if arriving == 0 && due > now => due,
         _ => now + interval,
     }
+}
+
+/// Lists the folder for the look between scans ([`list_intake`]), and says
+/// how long that took.
+fn timed_listing(config: &IntakeConfig) -> (std::io::Result<Listing>, std::time::Duration) {
+    let started = Instant::now();
+    let listing = list_intake(&config.intake_root, &config.extensions);
+    (listing, started.elapsed())
 }
 
 /// Waits until `until`, or until the loop is woken or shut down. True when

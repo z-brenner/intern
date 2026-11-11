@@ -28,6 +28,14 @@ pub const ARRIVAL_PROBE_INTERVAL: Duration = Duration::from_secs(3);
 /// turning up - so that files dropped together are first seen by one scan,
 /// and so claimed by one, as they are when a scan happens upon them.
 pub const ARRIVAL_BURST_WINDOW: Duration = Duration::from_secs(1);
+/// The look between scans waits at least this many times as long as its
+/// last listing of the folder took (`next_look_after`), so that listing
+/// the folder never takes more than about one part in this many of the
+/// time, however big or slow the folder is. A folder whose listing takes
+/// more than 30 ms is looked at less often than [`ARRIVAL_PROBE_INTERVAL`],
+/// and one whose listing takes a fifth of a second no more often than it is
+/// scanned: not between scans at all.
+pub const ARRIVAL_PROBE_LOAD: u32 = 100;
 
 #[derive(Clone, Debug)]
 pub struct IntakeConfig {
@@ -525,6 +533,13 @@ impl ArrivalProbe {
     }
 }
 
+/// How long the look between scans waits before it lists the folder again:
+/// `every`, or [`ARRIVAL_PROBE_LOAD`] times as long as the last listing
+/// took, whichever is longer.
+pub(crate) fn next_look_after(every: Duration, listing_took: Duration) -> Duration {
+    every.max(listing_took.saturating_mul(ARRIVAL_PROBE_LOAD))
+}
+
 /// A file only becomes claimable once it has been observed with an
 /// identical `(size, mtime)` for at least `min_quiet_seconds` on the clock.
 ///
@@ -808,8 +823,11 @@ pub(crate) fn modified_secs(metadata: &fs::Metadata) -> i64 {
 mod tests {
     use std::{fs, path::PathBuf};
 
+    use std::time::Duration;
+
     use super::{
-        ARRIVAL_PROBE_INTERVAL, ArrivalProbe, Glimpse, IntakeConfig, Listing, list_intake,
+        ARRIVAL_BURST_WINDOW, ARRIVAL_PROBE_INTERVAL, ARRIVAL_PROBE_LOAD, ArrivalProbe,
+        DEFAULT_SCAN_INTERVAL, Glimpse, IntakeConfig, Listing, list_intake, next_look_after,
         walk_intake,
     };
     use crate::cloud::{CloudProviderKind, CloudRoot};
@@ -989,6 +1007,39 @@ mod tests {
         assert_eq!(
             probe.look(listing(&[("dropped.pdf", 20, 200), ("more.pdf", 5, 300)])),
             Glimpse::Nothing
+        );
+    }
+
+    /// Listing a folder costs more the more it holds, and the look's cost is
+    /// bounded all the same: it waits at least [`ARRIVAL_PROBE_LOAD`] times
+    /// as long as its last listing took. A folder of tens of thousands of
+    /// files that takes 47 ms to list is looked at every 4.7 s rather than
+    /// every 3, and one that takes a fifth of a second is not looked at
+    /// between its scans at all.
+    #[test]
+    fn a_folder_slow_to_list_is_looked_at_less_often() {
+        let every = ARRIVAL_PROBE_INTERVAL;
+        assert_eq!(next_look_after(every, Duration::ZERO), every);
+        assert_eq!(next_look_after(every, Duration::from_millis(2)), every);
+        assert_eq!(next_look_after(every, every / ARRIVAL_PROBE_LOAD), every);
+        assert_eq!(
+            next_look_after(every, Duration::from_millis(47)),
+            Duration::from_millis(4_700)
+        );
+        assert!(next_look_after(every, Duration::from_millis(200)) >= DEFAULT_SCAN_INTERVAL);
+        // The burst window stretches the same way.
+        assert_eq!(
+            next_look_after(ARRIVAL_BURST_WINDOW, Duration::from_millis(5)),
+            ARRIVAL_BURST_WINDOW
+        );
+        assert_eq!(
+            next_look_after(ARRIVAL_BURST_WINDOW, Duration::from_millis(20)),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            next_look_after(every, Duration::MAX),
+            Duration::MAX,
+            "no overflow"
         );
     }
 
