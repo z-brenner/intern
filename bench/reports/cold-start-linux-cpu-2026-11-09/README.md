@@ -135,6 +135,28 @@ outcome (30.1 s against 11.6 s); its log was not kept, and review could
 not reproduce it on that box under load from other work, so it is not
 counted here.
 
+That run was also before the merge changed the launch path (one upstream
+server, the folder asked of it) and before the restore was checked. The
+test ran again on 2026-11-11 at 100c282, which has both, on the shared box
+(its Xeon loads the `sapphirerapids` backend), with the same server and
+model, under load from other builds:
+[`live-slots-local-2026-11-11.txt`](live-slots-local-2026-11-11.txt). It
+passed: the same 492 tokens and 174,210,604 bytes saved, checkpoints at 477
+and 488 read back, the file restored whole (the server read all of it), 477
+cached and 451 processed on the first reading after the restore, and the
+agreement's reply the same in all three readings. Its times are not
+comparable to the runner's. This is not the `live_slots` job: that is still
+the check to run, on a runner, at a release commit.
+
+On the same server, a slot file restored after being damaged as a crash can
+leave it was answered with success every time: zero-filled from its
+checkpoint list on (n_read 63,809,628 of 221,884,404 bytes), one byte short
+(the same n_read; the server logged "truncated context checkpoint appendix
+... ignored"), and cut where the list starts (n_read equal to the file).
+The app now reads every file back before a restore and requires the
+server to have read all of it (`SlotKeeper::restore`), which turns away all
+three.
+
 The first measurement of the mechanism, with `cold-start.py` and the 2B on
 this box's AMX build (the slot saved after `0000`, before the even-state
 rule), gave `cache_n` 0 and 0 without the restore and 477 and 477 with it,
