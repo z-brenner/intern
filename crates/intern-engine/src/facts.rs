@@ -2844,6 +2844,30 @@ const MAIL_PROVIDERS: &[&str] = &[
     "btinternet",
     "comcast",
     "verizon",
+    // Access providers that give their customers addresses: a company of
+    // the same name ("AT&T", "Orange", "Sky") writes from it as readily as
+    // anyone, so their domains say nothing either.
+    "att",
+    "sbcglobal",
+    "bellsouth",
+    "cox",
+    "charter",
+    "earthlink",
+    "mac",
+    "yandex",
+    "orange",
+    "free",
+    "sky",
+    "virginmedia",
+    "ntlworld",
+    "talktalk",
+    "shaw",
+    "rogers",
+    "bigpond",
+    "t-online",
+    "web",
+    "libero",
+    "naver",
 ];
 
 /// Labels of a domain that name a kind of site or a host, never whose it
@@ -2894,10 +2918,12 @@ fn address_domain_labels(line: &str) -> Vec<String> {
 
 /// Whether a domain's label spells an organization's name: the name run
 /// together ("nfpa" for "NFPA", "c-spanarchives" for "C-SPAN Archives"),
-/// its first word ("enron" for "ENRON CORP", "lambeth" for "Lambeth
-/// Council"), the name with more after it ("hdrinc" for "HDR", "iccsafe"
-/// for "ICC"), or its initials ("dgs" for "Department of General
-/// Services"). Fewer than three letters spell nothing.
+/// the name with more after it ("hdrinc" for "HDR", "iccsafe" for "ICC"),
+/// its initials ("dgs" for "Department of General Services"), or its
+/// first word where nothing but the organization's form or noun follows
+/// it ("enron" for "ENRON CORP", "lambeth" for "Lambeth Council"). A first
+/// word a name goes on from is any word: "national" spells no "National
+/// Grid". Fewer than three letters spell nothing.
 fn domain_spells(label: &str, name: &str) -> bool {
     let label = label
         .chars()
@@ -2917,9 +2943,13 @@ fn domain_spells(label: &str, name: &str) -> bool {
         .filter(|word| !STOPWORDS.contains(&word.as_str()))
         .filter_map(|word| word.chars().next())
         .collect::<String>();
+    let only_its_form = name_words[1..].iter().all(|word| {
+        crate::cues::ORGANIZATION_ENDINGS.contains(&word.as_str())
+            || ORGANIZATION_WORDS.contains(&word.as_str())
+    });
     long_enough(&label)
         && ((long_enough(&whole) && label.starts_with(&whole))
-            || (long_enough(first) && label == *first)
+            || (long_enough(first) && label == *first && only_its_form)
             || (name_words.len() > 1 && long_enough(&initials) && label == initials))
 }
 
@@ -11997,6 +12027,7 @@ Contractor: QRPA";
             ),
             // A mail provider's domain, a display name's "@", no address.
             ("Mara Quill <mara.quill@gmail.com>", vec![]),
+            ("Bruce <bruce@att.net>", vec![]),
             ("Betts, Bruce@DHS", vec![]),
             ("Saul Ravenscroft", vec![]),
         ] {
@@ -12017,6 +12048,9 @@ Contractor: QRPA";
             ("dhs", "Dhsworth", false),
             ("ca", "CA", false),
             ("pax", "KESTREL CORP", false),
+            // A first word a name goes on from is any word.
+            ("national", "National Grid", false),
+            ("harbour", "Harbour Fairs Ltd", false),
         ] {
             assert_eq!(domain_spells(label, name), spelled, "{label} {name}");
         }
