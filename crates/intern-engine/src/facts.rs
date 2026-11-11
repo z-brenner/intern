@@ -615,7 +615,7 @@ pub fn validate_facts_at(
     if let Some(value) = document_type.as_deref()
         && no_kind_of_its_own(Some(value))
         && head_before_party(value, &names)
-            .is_some_and(|(head, introduced)| introduced && !has_a_kind(&words(&head)))
+            .is_some_and(|(head, introduced)| introduced && !heads_by_its_own_kind(&head))
         && layout.laid_out_as_letter(scope)
     {
         document_type = Some("Letter".to_owned());
@@ -631,11 +631,22 @@ pub fn validate_facts_at(
     // changes is the name's point (CUAD's "AMENDMENT NO. 3", which names the
     // agreement it amends only in its first paragraph). So does a notice
     // alone: the IRS's CP161, filed as "Notice from" the taxpayer it is
-    // sent to, is one of a hundred kinds the word covers.
+    // sent to, is one of a hundred kinds the word covers. A response, a
+    // notification or a citation alone says as little: what it answers,
+    // tells or cites is the name's point ("Response to an Official
+    // Information Act Request", "Citation and Notification of Penalty").
     if document_type.as_deref().is_some_and(|value| {
         matches!(
             normalize(value).trim(),
-            "letter" | "document" | "agreement" | "amendment" | "addendum" | "notice"
+            "letter"
+                | "document"
+                | "agreement"
+                | "amendment"
+                | "addendum"
+                | "notice"
+                | "response"
+                | "notification"
+                | "citation"
         )
     }) {
         push(&mut reasons, ReviewReason::TypeMissing);
@@ -3087,10 +3098,9 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
                 let line = line.trim_matches(|c: char| c == '*' || c.is_whitespace());
                 let line_words = words(line);
                 let label = 1;
-                let head = line_words
-                    .get(label..)?
-                    .iter()
-                    .find(|word| names_a_kind(word))?;
+                let head = (label..line_words.len())
+                    .find(|&at| crate::phrases::names_a_kind_at(&line_words, at))
+                    .map(|at| &line_words[at])?;
                 let phrase = title_phrase(line, head)?;
                 let phrase_words = words(&phrase);
                 let numbered = |end: usize| {
@@ -3116,10 +3126,10 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
             }
             // The longest title any kind word on the line heads: "Lease
             // Agreement", not "Lease"; "Packing Slip", whatever follows.
-            words(&line)
-                .iter()
-                .filter(|word| names_a_kind(word))
-                .filter_map(|word| title_phrase(&line, word))
+            let line_words = words(&line);
+            (0..line_words.len())
+                .filter(|&at| crate::phrases::names_a_kind_at(&line_words, at))
+                .filter_map(|at| title_phrase(&line, &line_words[at]))
                 .max_by_key(|phrase| phrase.split_whitespace().count())
                 .map(|phrase| (phrase, line.trim().to_owned()))
         })
@@ -3236,13 +3246,30 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
             value = phrase;
         }
     }
-    // A party's name, and the connector that introduces it.
+    // A party's name, and the connector that introduces it, where what
+    // is left names a kind of its own.
     if let Some((head, _)) = head_before_party(&value, parties)
+        && heads_by_its_own_kind(&head)
         && let Some(kept) = keep(&head.split_whitespace().collect::<Vec<_>>())
     {
         value = kept;
     }
     value
+}
+
+/// Whether the head a title keeps before a party's name
+/// ([`head_before_party`]) names a kind of its own: one that sets a name
+/// apart ("Newsletter" of "Newsletter of the Saltmarsh Point Homeowners
+/// Association", "Notice" of "Notice to the QRA of ..."). A response, a
+/// notification, a citation or a circular cut from what it answers or
+/// tells ("Response" of "Response to the ONS Engagement on Adjustment of
+/// Migration Statistics") is a word a name holds as readily, alone: it
+/// says what the paper does with the party, not what the paper is, and a
+/// letter so titled is a letter.
+fn heads_by_its_own_kind(head: &str) -> bool {
+    words(head)
+        .iter()
+        .any(|word| crate::phrases::sets_a_name_apart(word))
 }
 
 /// The head of a title that names a party the reply named after its first
@@ -15733,6 +15760,158 @@ Held on March 3, 2024 at the offices of Corvane Media Group LLC.";
             vec!["First Response Security"],
             "{:?}",
             outcome.proposal
+        );
+    }
+
+    /// A company's name that holds a kind a name is as readily made of is
+    /// no type: a reply that copied the letterhead's name as its type is
+    /// not supported by it, and the letter stands in as it does for any
+    /// other name ("Rapid Repair Plumbing"). A letterhead in capitals
+    /// titles nothing, and neither does a field the word labels
+    /// ("CITATION: R. v. ..."), as a "CASE REF:" field titles nothing.
+    #[test]
+    fn a_name_that_holds_a_kind_word_types_nothing() {
+        let letter = |head: &str| {
+            format!(
+                "{head}\n12 Quay Street\nLondon\n\n4 March 2024\n\nMs. Dana Whitlock\n\
+                 Harbour Fairs Ltd\n1 Pier Road\nLondon\n\nDear Ms. Whitlock:\n\n\
+                 Thank you for your order of stands for the summer fair, which we will deliver \
+                 on 1 May.\n\nYours sincerely,\n\nTom Hale"
+            )
+        };
+        let reply = |company: &'static str, typed: bool| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: typed.then(|| company.into()),
+                type_evidence: if typed {
+                    vec![id_of(index, company)]
+                } else {
+                    Vec::new()
+                },
+                document_date: Some("2024-03-04".into()),
+                date_evidence: vec![id_of(index, "4 March 2024")],
+                parties: vec![
+                    party(company, Some(PartyRole::Sender), &[id_of(index, company)]),
+                    party(
+                        "Harbour Fairs Ltd",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "Harbour Fairs Ltd")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            }
+        };
+        let (control, _) = facts_for(
+            &letter("Rapid Repair Plumbing"),
+            reply("Rapid Repair Plumbing", true),
+        );
+        assert_eq!(control.proposal.document_type.as_deref(), Some("Letter"));
+        assert!(control.reasons.contains(&ReviewReason::TypeUnsupported));
+        for company in [
+            "Citation Capital",
+            "Notification Services Inc",
+            "First Response Security Ltd",
+            "Circular Economy Scotland",
+            "Rapid Response Plumbing",
+        ] {
+            let (outcome, _) = facts_for(&letter(company), reply(company, true));
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Letter"),
+                "{company}: {:?}",
+                outcome.reasons
+            );
+            assert!(
+                outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+                "{company}: {:?}",
+                outcome.reasons
+            );
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview, "{company}");
+        }
+        // A letterhead in capitals, and no type from the reply.
+        for company in ["CITATION CAPITAL", "FIRST RESPONSE SECURITY"] {
+            let (outcome, _) = facts_for(&letter(company), reply(company, false));
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Letter"),
+                "{company}: {:?}",
+                outcome.reasons
+            );
+        }
+        // A court's decision that opens on its citation field.
+        let decision = |field: &str| {
+            format!(
+                "{field} R. v. HARLOW, 2021 ONCA 123\nDATE: 20210304\n\n\
+                 COURT OF APPEAL FOR ONTARIO\n\nBetween\n\nHer Majesty the Queen\n\n\
+                 Respondent\n\nand\n\nPeter Harlow\n\nAppellant"
+            )
+        };
+        let no_type = |_: &EvidenceIndex| ModelFacts::default();
+        let (control, _) = facts_for(&decision("CASE REF:"), no_type);
+        let (outcome, _) = facts_for(&decision("CITATION:"), no_type);
+        assert_eq!(
+            outcome.proposal.document_type, control.proposal.document_type,
+            "{:?}",
+            outcome.reasons
+        );
+        assert_ne!(outcome.proposal.document_type.as_deref(), Some("Citation"));
+    }
+
+    /// A response, a notification or a citation alone names no kind a
+    /// person could file by, as a notice alone names none: the name waits
+    /// for a person even when the page states the word as its heading and
+    /// both parties are supported. The title that completes it is filed.
+    #[test]
+    fn a_bare_response_notification_or_citation_waits_for_a_person() {
+        let notice = |heading: &str| {
+            format!(
+                "Northgate Borough Council\nTown Hall\nNorthgate NG1 1AA\n\n{heading}\n\n\
+                 4 March 2024\n\nTo: Harbour Fairs Ltd, 1 Pier Road, Northgate\n\n\
+                 Northgate Borough Council has considered the application of Harbour Fairs Ltd \
+                 for a licence to hold the summer fair on the Common."
+            )
+        };
+        let reply = |typed: &'static str, cited: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(typed.into()),
+                type_evidence: vec![id_of(index, cited)],
+                document_date: Some("2024-03-04".into()),
+                date_evidence: vec![id_of(index, "4 March 2024")],
+                parties: vec![
+                    party(
+                        "Northgate Borough Council",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "Northgate Borough Council\nTown Hall")],
+                    ),
+                    party(
+                        "Harbour Fairs Ltd",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "To: Harbour Fairs Ltd")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            }
+        };
+        for (heading, typed) in [
+            ("RESPONSE", "Response"),
+            ("NOTIFICATION", "Notification"),
+            ("CITATION", "Citation"),
+        ] {
+            let (outcome, _) = facts_for(&notice(heading), reply(typed, heading));
+            assert!(
+                outcome.reasons.contains(&ReviewReason::TypeMissing),
+                "{heading}: {:?} {:?}",
+                outcome.proposal,
+                outcome.reasons
+            );
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview, "{heading}");
+        }
+        const TITLE: &str = "RESPONSE TO AN APPLICATION FOR A PREMISES LICENCE";
+        let (outcome, _) = facts_for(&notice(TITLE), reply(TITLE, TITLE));
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeMissing),
+            "{:?} {:?}",
+            outcome.proposal,
+            outcome.reasons
         );
     }
 
