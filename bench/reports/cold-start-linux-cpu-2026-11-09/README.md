@@ -96,7 +96,10 @@ every recorded reply of InternBench and the real-document sets came from
 instructions computed in pieces. A restored app computes them in one
 piece, as an app already did in any lifetime whose first document was
 long; on the purchase order above the two states give different replies.
-No live accuracy run has yet been made in the even state. Most documents are that long
+No live accuracy run had been made in the even state when this was measured;
+one was made later the same day, with the longer warm-up (the candidate
+benchmark's run 42625355879 at `a29e446`; docs/architecture.md, "The
+instructions across a restart"). Most documents are that long
 (InternBench's median prompt is 1,347 tokens). Before saving, it sends the
 instructions-only request (the same turns, then "JSON only.", one token of
 reply), so the file holds the instructions and none of the document.
