@@ -106,7 +106,8 @@ it('the runner scores with the pipeline the release gate accepts, unless told ot
 // (tiers::tier_server_flags in crates/intern-engine/src/tiers.rs). Every
 // script that starts a model the way the app does must pass that tier's
 // flags, no more and no fewer, or the QA and release scores, the
-// recordings of record, the memory probe and the live InternBench runs
+// recordings of record, the memory probe, the Windows speed runs
+// (runtime-speed.yml) and the live InternBench runs
 // (scripts/run-internbench.sh, which candidate-bench.yml drives) describe a
 // server the app never runs.
 it('starts each model with its own flags wherever the app launch is copied', async () => {
@@ -120,7 +121,12 @@ it('starts each model with its own flags wherever the app launch is copied', asy
   }
   expect(rows.accurate).toContain('"--no-repack"');
   const map = `$TierFlags = @{ accurate = @(${rows.accurate}); fast = @(${rows.fast}) }`;
-  for (const path of ['scripts/run-model-evaluation.ps1', 'scripts/record-corpus.ps1', 'scripts/probe-windows-memory.ps1']) {
+  for (const path of [
+    'scripts/run-model-evaluation.ps1',
+    'scripts/record-corpus.ps1',
+    'scripts/probe-windows-memory.ps1',
+    '.github/workflows/runtime-speed.yml',
+  ]) {
     const script = await readFile(path, 'utf8');
     expect(script, `${path} carries both tiers' flags`).toContain(map);
     expect(script, `${path} passes the tier's flags`).toMatch(/\$\w+ \+= \$TierFlags\[\$Tier\]/);
@@ -152,18 +158,23 @@ it('starts each model with its own flags wherever the app launch is copied', asy
 
 // The app's thread rule (server.rs default_threads): every logical
 // processor, clamped, with a fallback when the count cannot be read.
-// run-internbench.sh says its default is the app's.
-it("runs InternBench live on the app's thread count unless told otherwise", async () => {
-  const [server, bench] = await Promise.all([
-    readFile('crates/intern-engine/src/server.rs', 'utf8'),
-    readFile('scripts/run-internbench.sh', 'utf8'),
-  ]);
+const appThreadRule = async () => {
+  const server = await readFile('crates/intern-engine/src/server.rs', 'utf8');
   const rule =
     /pub fn default_threads\(\) -> usize \{\s*std::thread::available_parallelism\(\)\s*\.map\(\|value\| value\.get\(\)\)\s*\.unwrap_or\((\d+)\)\s*\.clamp\((\d+), (\d+)\)\s*\}/.exec(
       server,
     );
   expect(rule, 'server.rs default_threads is every logical processor, clamped').not.toBeNull();
   const [, unread, least, most] = rule!;
+  return { unread, least, most };
+};
+
+// run-internbench.sh says its default is the app's.
+it("runs InternBench live on the app's thread count unless told otherwise", async () => {
+  const [{ unread, least, most }, bench] = await Promise.all([
+    appThreadRule(),
+    readFile('scripts/run-internbench.sh', 'utf8'),
+  ]);
   expect(bench).toContain(
     [
       'if [ -z "${THREADS:-}" ]; then',
@@ -174,4 +185,19 @@ it("runs InternBench live on the app's thread count unless told otherwise", asyn
     ].join('\n'),
   );
   expect(bench).toContain('--threads "$THREADS" --threads-batch "$THREADS"');
+});
+
+// The Windows lab launches take the same rule: the memory probe sets its
+// own threads, and runtime-speed.yml records the speed runs' in
+// lab/context.json, which the replay step reads back.
+it("times and probes Windows on the app's thread count", async () => {
+  const [{ least, most }, probe, speed] = await Promise.all([
+    appThreadRule(),
+    readFile('scripts/probe-windows-memory.ps1', 'utf8'),
+    readFile('.github/workflows/runtime-speed.yml', 'utf8'),
+  ]);
+  expect(probe).toContain(`$Threads = [Math]::Max(${least}, [Math]::Min(${most}, [Environment]::ProcessorCount))`);
+  expect(speed).toContain(`threads = [Math]::Max(${least}, [Math]::Min(${most}, [int]$env:NUMBER_OF_PROCESSORS))`);
+  expect(speed).toContain('$Threads = (Get-Content lab\\context.json -Raw | ConvertFrom-Json).threads');
+  expect(speed).toContain('"--threads", "$Threads", "--threads-batch", "$Threads"');
 });
