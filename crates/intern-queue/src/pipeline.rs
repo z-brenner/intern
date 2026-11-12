@@ -3988,8 +3988,14 @@ impl Pipeline {
             self.repository.mark_revalidated(id, &self.release)?;
             Ok(Some(false))
         };
+        // A row this build cannot read - a newer build left it with a status
+        // before applying that this one has never heard of - is left as it
+        // is too. Left due, it was the next due at every drain, and the
+        // scheduler, which runs the next pass at once while more is due,
+        // drained it again for as long as Intern ran, no later document
+        // validated again.
         let Some(item) = self.store.get(id)? else {
-            return Ok(Some(false));
+            return left();
         };
         let Some(stored_json) = self.repository.load_proposal_json(id)? else {
             return left();

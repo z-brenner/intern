@@ -561,6 +561,55 @@ fn a_drain_validates_one_waiting_document_again_and_says_more_may_be_due() {
     }
 }
 
+/// A waiting row this build cannot read - a newer build left it with a
+/// status before applying that this one has never heard of - is left as it
+/// is and considered for the release, as any document left as it was. It
+/// used to be left due: every drain came back to it and said more was due,
+/// the app's scheduler ran the next pass at once for that, and so drained
+/// the same row for as long as Intern ran, no later document ever validated
+/// again.
+#[test]
+fn a_waiting_row_this_build_cannot_read_is_considered_once() {
+    let rig = Rig::new(None, false);
+    let first = rig.release("0.1.0-alpha.18");
+    let [unreadable, readable] = ["one.pdf", "two.pdf"].map(|name| rig.add(&first, name));
+    assert!(!first.run_until_idle().unwrap());
+    drop(first);
+    let database = Connection::open(rig.database()).unwrap();
+    database
+        .execute(
+            "UPDATE queue_items SET previous_status = 'held_by_newer_build' WHERE id = ?1",
+            [unreadable],
+        )
+        .unwrap();
+
+    *rig.runtime.gate.lock().unwrap() = Some(STRICTER);
+    let next = rig.release("0.1.0-alpha.19");
+    assert!(next.run_until_idle().unwrap(), "the unreadable row");
+    assert!(next.run_until_idle().unwrap(), "the next one");
+    assert!(!next.run_until_idle().unwrap(), "none left");
+
+    assert!(!rig.revalidated(unreadable), "nothing read for it");
+    let considered: String = database
+        .query_row(
+            "SELECT release FROM revalidations WHERE queue_item_id = ?1",
+            [unreadable],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(considered, "0.1.0-alpha.19");
+    let status: String = database
+        .query_row(
+            "SELECT status FROM queue_items WHERE id = ?1",
+            [unreadable],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "ready", "left as it is");
+    assert!(rig.revalidated(readable));
+    assert_eq!(item(&next, readable).status, QueueStatus::NeedsReview);
+}
+
 /// A stored reply stands in for a fresh reading only for the same request
 /// to the same model file. A document the reader now reads differently, one
 /// read before readings recorded their request, and - after another update
