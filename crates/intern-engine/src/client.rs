@@ -625,20 +625,22 @@ fn reply_settings() -> Value {
 /// stored reply is validated again under
 /// ([`crate::tiers::runtime_identity`]).
 ///
-/// Bump it with any change to either reading. The test
+/// Bump it by hand with any change to either reading. The test
 /// `the_reading_of_a_reply_is_pinned_to_its_version` pins what this version
-/// reads from a few replies, and fails until it is bumped and the new
-/// reading pinned.
+/// reads from a few replies: it fails when a change reads these replies
+/// otherwise, and its message says to bump the version and pin the new
+/// reading. A change those replies do not exercise, it does not see.
 pub const REPLY_READING_VERSION: u32 = 1;
 
 /// The identity of what every request shares beside its turns and grammar
 /// and what is read from every reply: the reply settings
 /// ([`reply_settings`]) and the version of how a reply is read
 /// ([`REPLY_READING_VERSION`]), as the SHA-256 of the settings as JSON, a
-/// zero byte, and the version. A release that changes any setting, or how a
-/// reply is read, changes it: a reply given under other settings is not the
-/// one a request would get now, and one read otherwise is not what this
-/// release would make of it ([`crate::tiers::runtime_identity`]).
+/// zero byte, and the version. A release that changes any setting changes
+/// it, and so does one that bumps the version for a change to how a reply
+/// is read: a reply given under other settings is not the one a request
+/// would get now, and one read otherwise is not what this release would
+/// make of it ([`crate::tiers::runtime_identity`]).
 pub fn reply_settings_identity() -> String {
     reply_settings_identity_of(&reply_settings(), REPLY_READING_VERSION)
 }
@@ -723,8 +725,8 @@ pub fn instructions_only_request(model_id: &str, profile: Option<PromptProfile>)
 /// `[value, role, id]`, counts by its value alone: its role and id are
 /// answers of their own, not the date or the name.
 ///
-/// What it reads is stored in the reply's place, so a change to it bumps
-/// [`REPLY_READING_VERSION`].
+/// What it reads is stored in the reply's place, so a change to it must
+/// bump [`REPLY_READING_VERSION`].
 pub(crate) fn token_confidence(tokens: &[TokenLogprob]) -> Option<TokenConfidence> {
     let mut text = Vec::new();
     let mut ranges = Vec::with_capacity(tokens.len());
@@ -978,7 +980,7 @@ pub(crate) fn proposal_from_text(
 /// the calendar is no date, as in the digest pipeline.
 ///
 /// What it reads is stored in the reply's place, so a change to it - or to
-/// [`compact_wire`] or `WireFacts::into_domain` behind it - bumps
+/// [`compact_wire`] or `WireFacts::into_domain` behind it - must bump
 /// [`REPLY_READING_VERSION`].
 pub(crate) fn facts_from_text(
     content: &str,
@@ -1564,7 +1566,7 @@ impl WireFacts {
     /// The facts this reply gives, as an analysis stores them: ids mapped
     /// back through `handles`, values trimmed, and what is not on the
     /// calendar, not a role, blank, or past a cap left out. A change to what
-    /// it keeps bumps [`REPLY_READING_VERSION`].
+    /// it keeps must bump [`REPLY_READING_VERSION`].
     fn into_domain(self, handles: &EvidenceHandles) -> Option<ModelProposal> {
         if !self.confidence.is_finite() || !(0.0..=1.0).contains(&self.confidence) {
             return None;
@@ -2819,10 +2821,12 @@ mod tests {
     /// set aside, a date off the calendar, a role that is not one of ours,
     /// a blank name, more parties and key facts than are kept - and the
     /// token figures read from a digest, a fields and a compact reply.
-    /// Any change to how a reply is read changes the digest: bump
+    /// A change to how these replies are read changes the digest: bump
     /// [`REPLY_READING_VERSION`], so that what a release that read replies
     /// otherwise stored is not validated again as this one's reading, and
-    /// pin the new digest.
+    /// pin the new digest. A change they do not exercise leaves it as it
+    /// is: none cites more than one subject, identifier or amount id, so
+    /// those caps read them the same at any value from one up.
     #[test]
     fn the_reading_of_a_reply_is_pinned_to_its_version() {
         let replies = [

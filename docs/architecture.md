@@ -1612,7 +1612,8 @@ read again is declined, since no reply of the accurate model's is stored for
 it. The stored reply - rebuilt from its facts and token figures as the release
 that read it took them off the wire, since validation completed the stored
 copy and the reply itself is not kept (`client::REPLY_READING_VERSION` is part
-of the runtime identity, and moves with any change to how a reply is read) -
+of the runtime identity, and is bumped by hand with any change to how a reply
+is read) -
 then goes through the same validation and composition as a fresh one, in
 about a tenth of a second. A new record replaces the old only when it says
 something different, in a transaction that checks the row and the record are
