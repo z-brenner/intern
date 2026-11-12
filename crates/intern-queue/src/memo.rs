@@ -5,18 +5,24 @@
 //! document is claimed more than once without its bytes changing - put back
 //! because no model was loaded to ask, a second attempt after a model
 //! failure, Re-analyze, a provisional reading read again by the accurate
-//! model, a waiting document validated again after an update - and each of
-//! those read it again in full for the same text. The memo hands back what
-//! the reader made of it the last time instead.
+//! model - and each of those read it again in full for the same text. The
+//! memo hands back what the reader made of it the last time instead, within
+//! one run of Intern: it starts empty, so the first reading of a document
+//! after a restart - an update's included - is a fresh one.
 //!
 //! It is keyed by the queue item, the SHA-256 of the bytes the item was
-//! checked against just before extraction, and the path that would be read,
-//! so a file that changed, or a document read from anywhere else, never
-//! finds an entry. It holds at most [`EXTRACTION_MEMO_ENTRIES`] documents and
+//! checked against just before extraction, and the document's own path, so a
+//! file that changed, or a document now at another path, never finds an
+//! entry. The path is the document's, not the one the reader was handed: a
+//! document admitted on a provider's proof is read from a private snapshot
+//! made afresh for every claim, whose bytes are proven to be the ones the
+//! hash names, and the reader makes the same of them wherever the copy lies.
+//! It holds at most [`EXTRACTION_MEMO_ENTRIES`] documents and
 //! [`EXTRACTION_MEMO_BYTES`] of them, the least recently used going first;
 //! one larger than that is never kept. Nothing in it is written to disk, and
 //! the queue drops a document's entry when the document is canceled or
-//! removed, and every entry at shutdown.
+//! removed, and every entry at shutdown - including what a reading still
+//! under way would have kept ([`Reading`]).
 
 use std::{
     collections::VecDeque,
@@ -49,10 +55,20 @@ impl Entry {
     }
 }
 
+#[derive(Default)]
+struct Kept {
+    /// Least recently used first.
+    entries: VecDeque<Entry>,
+    /// The readings under way, each as its item and the ticket it began
+    /// with: what one makes of its document is kept only while it is still
+    /// listed here.
+    readings: Vec<(i64, u64)>,
+    next_ticket: u64,
+}
+
 /// Extractions the queue may hand back instead of reading a document again.
 pub struct ExtractionMemo {
-    /// Least recently used first.
-    entries: Mutex<VecDeque<Entry>>,
+    kept: Mutex<Kept>,
     max_entries: usize,
     max_bytes: usize,
 }
@@ -67,45 +83,93 @@ impl ExtractionMemo {
     /// A memo of at most `max_entries` documents and `max_bytes` of them.
     pub fn with_limits(max_entries: usize, max_bytes: usize) -> Self {
         Self {
-            entries: Mutex::new(VecDeque::new()),
+            kept: Mutex::new(Kept::default()),
             max_entries,
             max_bytes,
         }
     }
 
     /// What the reader made of item `item_id` the last time, when it read
-    /// exactly these bytes from exactly this path.
+    /// exactly these bytes of the document at `path`.
     pub fn get(&self, item_id: i64, source_hash: &str, path: &Path) -> Option<DocumentSource> {
-        let mut entries = self.entries();
-        let found = entries
+        let mut kept = self.kept();
+        let found = kept
+            .entries
             .iter()
             .position(|entry| entry.is(item_id, source_hash, path))?;
-        let entry = entries.remove(found)?;
+        let entry = kept.entries.remove(found)?;
         let source = entry.source.clone();
-        entries.push_back(entry);
+        kept.entries.push_back(entry);
         Some(source)
     }
 
-    /// Keeps what the reader made of item `item_id`, in place of anything
-    /// kept for it before, and lets the least recently used documents go
-    /// until the limits hold. A document larger than the whole memo is not
-    /// kept, and nothing is let go for it.
-    pub fn keep(&self, item_id: i64, source_hash: &str, path: &Path, source: &DocumentSource) {
+    /// Begins a reading of item `item_id`, before the reader is asked: what
+    /// it makes of the document is kept ([`Reading::keep`]) only if nothing
+    /// forgot the item while it read - a cancel or a removal landing during
+    /// a minute of OCR drops the entry the reading has not made yet, too.
+    /// Another reading of the same item begun meanwhile takes its place.
+    pub fn reading(&self, item_id: i64) -> Reading<'_> {
+        let mut kept = self.kept();
+        let ticket = kept.next_ticket;
+        kept.next_ticket = kept.next_ticket.wrapping_add(1);
+        kept.readings.retain(|(id, _)| *id != item_id);
+        kept.readings.push((item_id, ticket));
+        Reading {
+            memo: self,
+            item_id,
+            ticket,
+        }
+    }
+
+    /// Drops whatever is kept for item `item_id`, and whatever a reading of
+    /// it under way would keep.
+    pub fn forget(&self, item_id: i64) {
+        let mut kept = self.kept();
+        kept.entries.retain(|entry| entry.item_id != item_id);
+        kept.readings.retain(|(id, _)| *id != item_id);
+    }
+
+    /// Drops everything, and whatever the readings under way would keep.
+    pub fn clear(&self) {
+        let mut kept = self.kept();
+        kept.entries.clear();
+        kept.readings.clear();
+    }
+
+    /// How many documents are kept, and how many bytes of them.
+    pub fn held(&self) -> (usize, usize) {
+        let kept = self.kept();
+        (
+            kept.entries.len(),
+            kept.entries.iter().map(|entry| entry.bytes).sum(),
+        )
+    }
+
+    /// Keeps what `reading` made of its document, in place of anything kept
+    /// for the item before, and lets the least recently used documents go
+    /// until the limits hold - unless the item was forgotten since the
+    /// reading began. A document larger than the whole memo is not kept, and
+    /// nothing is let go for it.
+    fn keep(&self, reading: &Reading<'_>, source_hash: &str, path: &Path, source: &DocumentSource) {
         let bytes = json_bytes(source);
-        let mut entries = self.entries();
-        entries.retain(|entry| entry.item_id != item_id);
+        let mut kept = self.kept();
+        if !kept.readings.contains(&(reading.item_id, reading.ticket)) {
+            return;
+        }
+        kept.entries
+            .retain(|entry| entry.item_id != reading.item_id);
         if bytes > self.max_bytes || self.max_entries == 0 {
             return;
         }
-        let mut held = entries.iter().map(|entry| entry.bytes).sum::<usize>();
-        while entries.len() >= self.max_entries || held + bytes > self.max_bytes {
-            match entries.pop_front() {
+        let mut held = kept.entries.iter().map(|entry| entry.bytes).sum::<usize>();
+        while kept.entries.len() >= self.max_entries || held + bytes > self.max_bytes {
+            match kept.entries.pop_front() {
                 Some(evicted) => held -= evicted.bytes,
                 None => break,
             }
         }
-        entries.push_back(Entry {
-            item_id,
+        kept.entries.push_back(Entry {
+            item_id: reading.item_id,
             source_hash: source_hash.to_owned(),
             path: path.to_path_buf(),
             bytes,
@@ -113,28 +177,37 @@ impl ExtractionMemo {
         });
     }
 
-    /// Drops whatever is kept for item `item_id`.
-    pub fn forget(&self, item_id: i64) {
-        self.entries().retain(|entry| entry.item_id != item_id);
-    }
-
-    /// Drops everything.
-    pub fn clear(&self) {
-        self.entries().clear();
-    }
-
-    /// How many documents are kept, and how many bytes of them.
-    pub fn held(&self) -> (usize, usize) {
-        let entries = self.entries();
-        (entries.len(), entries.iter().map(|entry| entry.bytes).sum())
-    }
-
-    fn entries(&self) -> std::sync::MutexGuard<'_, VecDeque<Entry>> {
+    fn kept(&self) -> std::sync::MutexGuard<'_, Kept> {
         // A panic while the lock was held left at worst an entry too few or
         // too many; every entry is still whole.
-        self.entries
+        self.kept
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// One reading of a document under way ([`ExtractionMemo::reading`]). It
+/// ends when it is dropped, whatever came of it.
+pub struct Reading<'a> {
+    memo: &'a ExtractionMemo,
+    item_id: i64,
+    ticket: u64,
+}
+
+impl Reading<'_> {
+    /// Keeps what the reader made of the document, the bytes `source_hash`
+    /// of the document at `path`, unless its item was forgotten since the
+    /// reading began.
+    pub fn keep(&self, source_hash: &str, path: &Path, source: &DocumentSource) {
+        self.memo.keep(self, source_hash, path, source);
+    }
+}
+
+impl Drop for Reading<'_> {
+    fn drop(&mut self) {
+        let mut kept = self.memo.kept();
+        let this = (self.item_id, self.ticket);
+        kept.readings.retain(|reading| *reading != this);
     }
 }
 
@@ -174,13 +247,13 @@ mod tests {
 
     /// A document comes back only for the item, the bytes and the path it
     /// was read for: a changed file, the same text under another item, or
-    /// the same item read from elsewhere finds nothing.
+    /// the same item now at another path finds nothing.
     #[test]
     fn an_extraction_comes_back_only_for_the_same_bytes_at_the_same_path() {
         let memo = ExtractionMemo::default();
         let path = Path::new("/inbox/scan.pdf");
         let source = text("INVOICE 1001");
-        memo.keep(7, "aaaa", path, &source);
+        memo.reading(7).keep("aaaa", path, &source);
 
         assert_eq!(memo.get(7, "aaaa", path), Some(source.clone()));
         assert_eq!(memo.get(7, "bbbb", path), None, "the file changed");
@@ -191,14 +264,14 @@ mod tests {
         );
 
         // A new reading of the item replaces the old one, whatever it was.
-        memo.keep(7, "bbbb", path, &text("INVOICE 1002"));
+        memo.reading(7).keep("bbbb", path, &text("INVOICE 1002"));
         assert_eq!(memo.get(7, "aaaa", path), None);
         assert_eq!(memo.get(7, "bbbb", path), Some(text("INVOICE 1002")));
         assert_eq!(memo.held().0, 1);
 
         memo.forget(7);
         assert_eq!(memo.get(7, "bbbb", path), None);
-        memo.keep(9, "cccc", path, &source);
+        memo.reading(9).keep("cccc", path, &source);
         memo.clear();
         assert_eq!(memo.held(), (0, 0));
     }
@@ -213,12 +286,13 @@ mod tests {
         let memo = ExtractionMemo::with_limits(3, size * 3);
         let path = Path::new("/inbox/a.pdf");
         for id in 1..=3 {
-            memo.keep(id, "h", path, &text(["ONE", "TWO", "SIX"][id as usize - 1]));
+            memo.reading(id)
+                .keep("h", path, &text(["ONE", "TWO", "SIX"][id as usize - 1]));
         }
         assert_eq!(memo.held(), (3, size * 3));
         // Item 1 is used, so item 2 is the least recently used.
         assert!(memo.get(1, "h", path).is_some());
-        memo.keep(4, "h", path, &text("TEN"));
+        memo.reading(4).keep("h", path, &text("TEN"));
         assert_eq!(memo.held(), (3, size * 3));
         assert!(
             memo.get(2, "h", path).is_none(),
@@ -234,7 +308,7 @@ mod tests {
             media_type: "image/png".into(),
             bytes: vec![0; size * 3],
         });
-        memo.keep(5, "h", path, &scan);
+        memo.reading(5).keep("h", path, &scan);
         assert!(memo.get(5, "h", path).is_none(), "too large to keep");
         assert_eq!(memo.held().0, 3, "and nothing went for it");
 
@@ -244,12 +318,49 @@ mod tests {
         long.pages.push(SourcePage::new(2, "TWO", PageOrigin::Ocr));
         let long_size = json_bytes(&long);
         let memo = ExtractionMemo::with_limits(8, long_size * 2);
-        memo.keep(1, "h", path, &one);
-        memo.keep(2, "h", path, &long);
+        memo.reading(1).keep("h", path, &one);
+        memo.reading(2).keep("h", path, &long);
         assert_eq!(memo.held(), (2, size + long_size));
-        memo.keep(3, "h", path, &long);
+        memo.reading(3).keep("h", path, &long);
         assert_eq!(memo.held(), (2, long_size * 2));
         assert!(memo.get(1, "h", path).is_none(), "made room for");
         assert!(memo.get(2, "h", path).is_some() && memo.get(3, "h", path).is_some());
+    }
+
+    /// A reading keeps nothing when its item was forgotten while it read -
+    /// a cancel or a removal during a long OCR - or the memo cleared, or
+    /// another reading of the item begun since; and a reading that ends,
+    /// whatever came of it, leaves nothing behind.
+    #[test]
+    fn a_reading_keeps_nothing_for_an_item_forgotten_while_it_read() {
+        let memo = ExtractionMemo::default();
+        let path = Path::new("/inbox/scan.pdf");
+        let source = text("INVOICE 1001");
+
+        let canceled = memo.reading(7);
+        memo.forget(7);
+        canceled.keep("aaaa", path, &source);
+        assert_eq!(memo.get(7, "aaaa", path), None, "canceled while read");
+
+        let stopping = memo.reading(7);
+        memo.clear();
+        stopping.keep("aaaa", path, &source);
+        assert_eq!(memo.get(7, "aaaa", path), None, "shut down while read");
+
+        let earlier = memo.reading(7);
+        let later = memo.reading(7);
+        earlier.keep("aaaa", path, &source);
+        assert_eq!(memo.get(7, "aaaa", path), None, "read again since");
+        later.keep("aaaa", path, &source);
+        assert_eq!(memo.get(7, "aaaa", path), Some(source.clone()));
+
+        // Another item's cancel takes nothing from this one's reading.
+        let reading = memo.reading(8);
+        memo.forget(9);
+        reading.keep("bbbb", path, &source);
+        assert_eq!(memo.get(8, "bbbb", path), Some(source));
+
+        drop((canceled, stopping, earlier, later, reading));
+        assert!(memo.kept().readings.is_empty(), "every reading ended");
     }
 }

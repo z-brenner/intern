@@ -1744,20 +1744,22 @@ impl Pipeline {
             });
         };
         // The bytes were checked against the item's fingerprint just above
-        // (or are the verified snapshot of them): what the reader made of
-        // exactly these, read from exactly here, is what it would make of
-        // them again. Only a fresh reading says anything about the reader.
-        let remembered = self.memo.get(item.id, &item.source_hash, extraction_path);
+        // (or are a verified snapshot of them, wherever that copy lies):
+        // what the reader made of exactly these bytes of this document is
+        // what it would make of them again. Only a fresh reading says
+        // anything about the reader.
+        let remembered = self.memo.get(item.id, &item.source_hash, &item.source_path);
         let fresh = remembered.is_none();
         let extracted = match remembered {
             Some(source) => Ok(source),
-            None => self
-                .worker
-                .extract(&request_id, extraction_path, &mut forward_progress)
-                .inspect(|source| {
-                    self.memo
-                        .keep(item.id, &item.source_hash, extraction_path, source);
-                }),
+            None => {
+                let reading = self.memo.reading(item.id);
+                self.worker
+                    .extract(&request_id, extraction_path, &mut forward_progress)
+                    .inspect(|source| {
+                        reading.keep(&item.source_hash, &item.source_path, source);
+                    })
+            }
         };
         let source = match extracted {
             Ok(source) => source,
@@ -3672,20 +3674,23 @@ impl Pipeline {
         let Some(path) = evidence.extraction_path(&item.source_path) else {
             return left();
         };
-        let source = match self.memo.get(id, &item.source_hash, path) {
+        let source = match self.memo.get(id, &item.source_hash, &item.source_path) {
             Some(source) => source,
-            None => match self
-                .worker
-                .extract(&format!("revalidate-{id}"), path, &mut |_| {})
-            {
-                Ok(source) => {
-                    self.memo.keep(id, &item.source_hash, path, &source);
-                    source
+            None => {
+                let reading = self.memo.reading(id);
+                match self
+                    .worker
+                    .extract(&format!("revalidate-{id}"), path, &mut |_| {})
+                {
+                    Ok(source) => {
+                        reading.keep(&item.source_hash, &item.source_path, &source);
+                        source
+                    }
+                    // Stopped by shutdown: due again at the next start.
+                    Err(_) if self.shutting_down.load(Ordering::SeqCst) => return Ok(None),
+                    Err(_) => return left(),
                 }
-                // Stopped by shutdown: due again at the next start.
-                Err(_) if self.shutting_down.load(Ordering::SeqCst) => return Ok(None),
-                Err(_) => return left(),
-            },
+            }
         };
         let extension = item
             .source_path

@@ -1264,6 +1264,78 @@ fn a_document_put_back_for_want_of_a_model_is_read_only_once() {
     assert_eq!(item.processing_failures, 0);
 }
 
+/// Admits every document on a provider's proof of its bytes, read from a
+/// private snapshot made afresh for every check, as Microsoft's word on an
+/// uploader is: the snapshot's path is new each time, its bytes proven to
+/// be the document's.
+struct FreshSnapshots {
+    snapshots: PrivateSnapshotDirectory,
+    made: AtomicUsize,
+}
+
+impl intern_queue::AdmissionGuard for FreshSnapshots {
+    fn authorize(
+        &self,
+        path: &Path,
+        _stage: intern_queue::AdmissionStage,
+    ) -> Result<intern_queue::AdmissionEvidence, PipelineError> {
+        let mut writer = self
+            .snapshots
+            .create_for_supported_extension("pdf")
+            .unwrap();
+        io::Write::write_all(&mut writer, &fs::read(path).unwrap()).unwrap();
+        self.made.fetch_add(1, Ordering::SeqCst);
+        let name = path.file_name().unwrap().to_string_lossy();
+        Ok(intern_queue::AdmissionEvidence::verified_snapshot(
+            format!("{name}-hash"),
+            writer.finish().unwrap(),
+        ))
+    }
+}
+
+/// A document a provider vouched for is read from a new private snapshot at
+/// every claim, so a memo keyed by the path read never found it again. It
+/// is keyed by the document's own path: put back twice for want of a
+/// model, it is read once, from the first of its three snapshots.
+#[test]
+fn a_document_read_from_a_fresh_snapshot_each_claim_is_read_only_once() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["vouched.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(READABLE))]));
+    let not_ready = || Err(ModelFailure::fatal("MODEL_NOT_READY"));
+    let model = Arc::new(FakeModel::new(vec![
+        not_ready(),
+        not_ready(),
+        Ok(proposal(0.94, false)),
+    ]));
+    let guard = Arc::new(FreshSnapshots {
+        snapshots: PrivateSnapshotDirectory::new(temp.path().join("snapshots")).unwrap(),
+        made: AtomicUsize::new(0),
+    });
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    )
+    .with_admission_guard(guard.clone());
+    pipeline.enqueue_files(&paths).unwrap();
+
+    for _ in 0..3 {
+        pipeline.run_until_idle().unwrap();
+    }
+
+    assert_eq!(model.calls.load(Ordering::SeqCst), 3);
+    assert!(guard.made.load(Ordering::SeqCst) >= 3, "a snapshot a claim");
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1, "read once");
+    assert_eq!(
+        pipeline.list().unwrap().remove(0).status,
+        QueueStatus::Ready
+    );
+}
+
 /// Only the same bytes find what the reader made of them: a file that
 /// changed while it waited is read again, and so is one a person canceled
 /// and then retried - a cancel drops what was kept for it.
