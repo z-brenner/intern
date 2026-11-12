@@ -6,7 +6,7 @@ import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
 import { StatusCell } from './StatusCell';
 import { isUnreadable, itemActions, keptOriginal, withoutReviewPrefix } from '../features/review/actions';
-import { itemFlaggedFields, itemReasonCodes, nameParts } from '../features/queue/check';
+import { itemFlaggedFields, itemReasonCodes, nameParts, partyEnding, withParty } from '../features/queue/check';
 import type { ReasonField } from '../lib/reasons';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
@@ -226,6 +226,15 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   const dateChoices = !dated ? (item.datesInDocument ?? []) : [];
   const fileDate = !dated ? item.fileModifiedDate : undefined;
   const chooseDate = putDate;
+  // The other parties the document names, when the name gives the wrong
+  // one: a click puts one in place of the party the name ends with - which
+  // used to mean retyping fifteen to forty characters - and the caret stays
+  // in the name, where Enter files it. The one the name now gives is
+  // pressed.
+  const partyChoices = item.partyChoices ?? [];
+  const knownParties = [...(item.nameParties ?? []), ...partyChoices];
+  const chooseParty = (party: string) => { editStem(withParty(stem, party, knownParties)); filenameRef.current?.focus(); };
+  const partyInName = partyChoices.length > 0 ? partyEnding(stem, knownParties) : undefined;
   // Enter files the name, as it does in any one-line field; the IME's Enter
   // that ends a composition is left to the IME. A held Enter repeats, and
   // after the first press the caret is in the next item's name: only the
@@ -407,6 +416,13 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         <div className="chips">
           {dateChoices.map((date) => <button type="button" key={date} className="chip" disabled={busy} onClick={() => chooseDate(date)}>{date}</button>)}
           {fileDate && <button type="button" className="chip chip--file" disabled={busy} title="The file's last-modified date on this computer, not a date from the document" onClick={() => chooseDate(fileDate)}>{fileDate} · file date</button>}
+        </div>
+      </div>}
+      {partyChoices.length > 0 && <div className="party-choices" role="group" aria-label="Other parties to choose from">
+        <p className="field-label">Other parties the document names</p>
+        <span className="sr-only" id={`${fieldId}-party-choices`}>Puts this party in the filename in place of the one it gives.</span>
+        <div className="chips">
+          {partyChoices.map((party) => <button type="button" key={party} className="chip" disabled={busy} aria-pressed={party === partyInName} aria-describedby={`${fieldId}-party-choices`} onClick={() => chooseParty(party)}>{party}</button>)}
         </div>
       </div>}
       {suggestedDate && <div className="suggestion" role="group" aria-label="Suggested date">

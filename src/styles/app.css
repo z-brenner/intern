@@ -396,12 +396,14 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .suggestion p svg { flex: none; margin-top: 2px; }
 .suggestion-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .suggestion-actions button { min-height: 34px; }
-.date-choices { margin: 0 0 16px; }
-.date-choices .field-label { margin-bottom: 8px; }
+.date-choices, .party-choices { margin: 0 0 16px; }
+.date-choices .field-label, .party-choices .field-label { margin-bottom: 8px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { min-height: 30px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; cursor: pointer; }
 .chip:hover:not(:disabled) { background: var(--surface-subtle); border-color: var(--text-muted); }
 .chip--file { color: var(--text-muted); }
+/* The party a name now gives, among the others it could: chosen, not alarming. */
+.chip[aria-pressed='true'] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
 /* The model's figure for its own reading, kept for anyone who wants it but
    set as a detail: what is wrong, said above, is what decides a review. The
    selector outweighs ".inspector section p", whose zero margin used to butt

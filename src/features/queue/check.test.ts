@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkCell, checkText, itemFlaggedFields, itemReasonCodes, nameParts } from './check';
+import { checkCell, checkText, itemFlaggedFields, itemReasonCodes, nameParts, withParty } from './check';
 import { reasonCodes, shortReason } from '../../lib/reasons';
 import type { QueueItem } from '../../types';
 
@@ -65,5 +65,35 @@ describe('a proposed name in parts', () => {
     const typed = nameParts('Lease for 12 Main St.pdf', ['date', 'type', 'parties']);
     expect(typed.some((part) => part.flagged)).toBe(false);
     expect(typed.map((part) => part.text).join('')).toBe('Lease for 12 Main St.pdf');
+  });
+});
+
+describe('another party put in a name', () => {
+  it('takes the place of the party the name gives, however its type reads', () => {
+    expect(withParty('2012-06-19 Letter to U.S. Department of Justice', 'Morgan, Lewis & Bockius LLP', ['U.S. Department of Justice']))
+      .toBe('2012-06-19 Letter to Morgan, Lewis & Bockius LLP');
+    // A type with a connecting word of its own keeps it: the backend said which words are the party.
+    expect(withParty('2007-04-24 Application for Certification for City of Victorville', 'California Energy Commission', ['City of Victorville']))
+      .toBe('2007-04-24 Application for Certification for California Energy Commission');
+    // A name with no date yet is still a name with a party.
+    expect(withParty('Letter to Carl Malamud', 'Department of the Air Force', ['Carl Malamud'])).toBe('Letter to Department of the Air Force');
+  });
+
+  it('replaces the second side of a "between", and an earlier choice', () => {
+    const offered = ['Google Inc', 'Research In Motion Ltd'];
+    const once = withParty('2008-01-24 Notice of Voluntary Dismissal between PA Advisors, LLC and WPP Group PLC', 'Google Inc', ['PA Advisors, LLC', 'WPP Group PLC', ...offered]);
+    expect(once).toBe('2008-01-24 Notice of Voluntary Dismissal between PA Advisors, LLC and Google Inc');
+    expect(withParty(once, 'Research In Motion Ltd', ['PA Advisors, LLC', 'WPP Group PLC', ...offered]))
+      .toBe('2008-01-24 Notice of Voluntary Dismissal between PA Advisors, LLC and Research In Motion Ltd');
+    // Choosing the party already there changes nothing.
+    expect(withParty(once, 'Google Inc', ['PA Advisors, LLC', 'WPP Group PLC', ...offered])).toBe(once);
+  });
+
+  it('falls back to the run the Check line marks, and adds a party to a name with none', () => {
+    // The party typed over by hand: the words after the connecting word.
+    expect(withParty('2024-02-09 Invoice INV-3301 from Fabrikm', 'Fabrikam Inc', ['Fabrikam Inc.'])).toBe('2024-02-09 Invoice INV-3301 from Fabrikam Inc');
+    // No party: one is added the way Intern names a party with no stated relation.
+    expect(withParty('2023-10-05 Requester Invoice', 'Sam Brownell', [])).toBe('2023-10-05 Requester Invoice - Sam Brownell');
+    expect(withParty('', 'Sam Brownell', [])).toBe('Sam Brownell');
   });
 });

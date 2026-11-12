@@ -108,3 +108,32 @@ export function nameParts(name: string, flagged: readonly ReasonField[]): NamePa
   push(extension);
   return parts;
 }
+
+/**
+ * A name's stem with `party` in place of the party it ends with: the
+ * reviewer's one-click fix for a name that gives the wrong party.
+ *
+ * `known` are parties the stem may end with, as the name writes them: the
+ * proposed name's own (the backend reads them with the grammar that composed
+ * it, so a type holding "for" is never taken for a party) and the choices
+ * offered, one of which an earlier click put there. The longest the stem ends
+ * with is replaced, so of "between A and B" only the second side, B, and
+ * "between" keeps both its sides. A name ending in none of them - its party
+ * typed over by hand - has the run after its connecting word replaced, the
+ * one the Check line marks; a name with no party at all gets one after
+ * " - ", as Intern names a party it gives no relation to.
+ */
+export function withParty(stem: string, party: string, known: readonly string[]): string {
+  const ending = partyEnding(stem, [...known, party]);
+  if (ending) return `${stem.slice(0, stem.length - ending.length)}${party}`;
+  const date = LEADING_DATE.exec(stem)?.[0] ?? '';
+  const relation = date ? RELATION.exec(stem.slice(date.length)) : null;
+  if (relation) return `${stem.slice(0, date.length + relation.index + relation[0].length)}${party}`;
+  const kept = stem.trimEnd();
+  return kept ? `${kept} - ${party}` : party;
+}
+
+/** The longest of `known` a name's stem ends with, as its last words: the party it now gives, of those. */
+export function partyEnding(stem: string, known: readonly string[]): string | undefined {
+  return [...known].filter(Boolean).sort((a, b) => b.length - a.length).find((run) => stem.endsWith(` ${run}`));
+}
