@@ -283,6 +283,14 @@ pub struct OcrResult {
     /// it does not, and then `text` is all there is.
     #[serde(default)]
     pub lines: Vec<OcrLine>,
+    /// The page has nothing on it to read: OCR read nothing, and the page
+    /// carries no marks either ([`page_is_blank`]) - the back of a sheet a
+    /// scanner kept, a separator. OCR is in no doubt about such a page. A
+    /// page OCR read nothing on that does carry marks - too faint or too
+    /// rough for it to find a line on - is not blank but unread. The worker
+    /// decides this from the page it rendered; no engine says it.
+    #[serde(default)]
+    pub blank: bool,
 }
 
 /// One line of an OCR reading: what it says, where it sits, and how sure
@@ -305,6 +313,7 @@ impl OcrResult {
             mean_confidence,
             rotation_degrees: 0,
             lines: Vec::new(),
+            blank: false,
         }
     }
 
@@ -316,6 +325,20 @@ impl OcrResult {
     pub fn with_lines(mut self, lines: Vec<OcrLine>) -> Self {
         self.lines = lines;
         self
+    }
+
+    /// Whether the page has nothing on it to read (see
+    /// [`OcrResult::blank`]).
+    pub fn with_blank(mut self, blank: bool) -> Self {
+        self.blank = blank;
+        self
+    }
+
+    /// Whether this reading leaves its page in doubt: read, but under
+    /// [`CONFIDENT_READING`]. A blank page is in no doubt - there is nothing
+    /// on it to misread - though it reads at confidence 0.
+    pub fn is_unsure(&self) -> bool {
+        !self.blank && self.mean_confidence < CONFIDENT_READING
     }
 }
 
@@ -1805,6 +1828,11 @@ fn read_job<O: OcrBackend + ?Sized>(
         }
         readings.push(reading);
     }
+    if job.whole_page
+        && let (Some(Ok(reading)), Some(piece)) = (readings.first_mut(), job.pieces.first())
+    {
+        mark_blank(reading, &piece.image);
+    }
     let vision = match (job.whole_page, readings.first()) {
         (true, Some(Ok(reading))) if reading.mean_confidence < CONFIDENT_READING => {
             let rotation = reading.rotation_degrees;
@@ -1822,6 +1850,50 @@ fn read_job<O: OcrBackend + ?Sized>(
         readings,
         sizes,
         vision,
+    }
+}
+
+/// How far from a page's paper, in levels of gray, a pixel has to be to be
+/// a mark on it. Under it is the grain of a flat page as it renders; a
+/// faded carbon's strokes, blurred, are still 10-50 levels from the paper.
+pub const MARK_LEVELS: u8 = 6;
+
+/// One pixel in this many may be a mark on a page that is still blank: a
+/// speck, a few millimetres of dust at 300 DPI, not a word.
+pub const BLANK_PAGE_PIXELS: u64 = 10_000;
+
+/// Whether a rendered page carries nothing at all: all but one pixel in
+/// [`BLANK_PAGE_PIXELS`] lies within [`MARK_LEVELS`] of its paper, the
+/// commonest gray on it.
+///
+/// OCR reads nothing on a blank page and reports confidence 0, which is
+/// also what it reports for a page it could not find a line on: a faded
+/// carbon or a fax of a fax that a person can still read. Only the first
+/// is in no doubt, so a page OCR read nothing on is blank only if it looks
+/// it: the back of a sheet saved flat, a separator. A page whose paper has
+/// grain, shadow or bleed-through is not, and stays as unsure as before.
+pub fn page_is_blank(image: &DynamicImage) -> bool {
+    let gray = image.to_luma8();
+    let mut shades = [0_u64; 256];
+    for shade in gray.as_raw() {
+        shades[usize::from(*shade)] += 1;
+    }
+    let pixels = shades.iter().sum::<u64>();
+    let paper = (0..=u8::MAX)
+        .max_by_key(|shade| shades[usize::from(*shade)])
+        .unwrap_or(u8::MAX);
+    let marks = (0..=u8::MAX)
+        .filter(|shade| shade.abs_diff(paper) >= MARK_LEVELS)
+        .map(|shade| shades[usize::from(shade)])
+        .sum::<u64>();
+    marks.saturating_mul(BLANK_PAGE_PIXELS) <= pixels
+}
+
+/// Marks a reading of a whole page as blank if OCR read nothing on it and
+/// the page carries nothing ([`page_is_blank`]).
+fn mark_blank(reading: &mut OcrResult, page: &DynamicImage) {
+    if reading.text.trim().is_empty() && page_is_blank(page) {
+        reading.blank = true;
     }
 }
 
@@ -2286,8 +2358,9 @@ pub fn extract_image(
     let page_count = 1 + frames.directories.len();
     let rendered = RenderedPage::new(0, image);
     cancel.report_progress("ocr", 0, Some(page_count));
-    let result = recognize_timed(ocr, &rendered, cancel)?;
-    let mut low_confidence = result.mean_confidence < CONFIDENT_READING;
+    let mut result = recognize_timed(ocr, &rendered, cancel)?;
+    mark_blank(&mut result, &rendered.image);
+    let mut low_confidence = result.is_unsure();
     let optional_image = Some(cancel.timed(
         |timings| &mut timings.vision_micros,
         || page_image(0, &rendered.image, result.rotation_degrees),
@@ -2328,8 +2401,9 @@ pub fn extract_image(
             break;
         };
         let rendered = RenderedPage::new(index + 1, image);
-        let result = recognize_timed(ocr, &rendered, cancel)?;
-        low_confidence |= result.mean_confidence < CONFIDENT_READING;
+        let mut result = recognize_timed(ocr, &rendered, cancel)?;
+        mark_blank(&mut result, &rendered.image);
+        low_confidence |= result.is_unsure();
         let size = rendered.image.dimensions();
         drop(rendered);
         let page = cancel.timed(

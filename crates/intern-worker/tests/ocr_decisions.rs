@@ -5,9 +5,11 @@
 
 use std::collections::HashMap;
 
+use image::{DynamicImage, Rgb, RgbImage};
 use intern_worker::extract::{
-    CONFIDENT_READING, ExtractionError, OcrResult, OrientationPasses, better_reading,
-    orientation_search_is_worthwhile, read_upright,
+    BLANK_PAGE_PIXELS, CONFIDENT_READING, ExtractionError, MARK_LEVELS, OcrResult,
+    OrientationPasses, better_reading, orientation_search_is_worthwhile, page_is_blank,
+    read_upright,
 };
 
 /// Measured on the corpus: a page read in the orientation OSD asked for
@@ -88,6 +90,59 @@ fn a_blank_page_costs_one_recognition_pass() {
     assert!(!orientation_search_is_worthwhile(&blank));
     // What the search used to ask, and why it kept going.
     assert!(blank.mean_confidence < CONFIDENT_READING);
+}
+
+/// Letter paper at 100 DPI, one shade all over.
+fn sheet(shade: u8) -> RgbImage {
+    RgbImage::from_pixel(850, 1100, Rgb([shade; 3]))
+}
+
+/// The back of a sheet saved flat, or a separator, is one shade: blank,
+/// white or dark, and still blank with grain under [`MARK_LEVELS`] or a
+/// speck of dust on it.
+#[test]
+fn a_flat_page_is_blank() {
+    assert!(page_is_blank(&DynamicImage::ImageRgb8(sheet(255))));
+    assert!(page_is_blank(&DynamicImage::ImageRgb8(sheet(24))));
+
+    let mut grained = sheet(255);
+    for (x, y, pixel) in grained.enumerate_pixels_mut() {
+        if (x + y) % 3 == 0 {
+            *pixel = Rgb([255 - (MARK_LEVELS - 1); 3]);
+        }
+    }
+    // A speck: just under one pixel in BLANK_PAGE_PIXELS.
+    let speck = (850 * 1100 / BLANK_PAGE_PIXELS) as u32;
+    for x in 0..speck {
+        grained.put_pixel(400 + x, 500, Rgb([0, 0, 0]));
+    }
+    assert!(page_is_blank(&DynamicImage::ImageRgb8(grained)));
+}
+
+/// A page OCR found no line on can still carry writing a person reads:
+/// a faded carbon's gray strokes, a short handwritten note. It is not
+/// blank.
+#[test]
+fn a_page_with_faint_writing_is_not_blank() {
+    let mut faded = sheet(255);
+    // Two short rows of strokes 25 levels under the paper.
+    for y in [300, 330] {
+        for x in (200..420).step_by(4) {
+            for dy in 0..12 {
+                faded.put_pixel(x, y + dy, Rgb([230, 230, 230]));
+            }
+        }
+    }
+    assert!(!page_is_blank(&DynamicImage::ImageRgb8(faded)));
+
+    // Nor is a dark page with light writing on it.
+    let mut negative = sheet(24);
+    for x in 100..300 {
+        for y in 100..105 {
+            negative.put_pixel(x, y, Rgb([200, 200, 200]));
+        }
+    }
+    assert!(!page_is_blank(&DynamicImage::ImageRgb8(negative)));
 }
 
 #[test]

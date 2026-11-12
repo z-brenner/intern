@@ -91,6 +91,21 @@ the same pages read upside down score 23-46. The recognizer's own line
 score, the mean over every character, crowds every real reading into
 98-100 and could not tell them apart.
 
+**A blank page** - the back of a sheet a duplex scanner kept, a separator -
+reads as nothing, at confidence 0. So does a page with writing too faint or
+too rough for the detector to find a line in, which a person may still
+read, and only that one is in doubt. A page OCR read nothing on is blank
+only if it looks it: all but one pixel in 10,000 within 6 levels of gray of
+its paper, its commonest shade (`extract::page_is_blank`). A blank page
+reports no confidence and raises no `LOW_OCR_CONFIDENCE`, which would send
+the whole document to review; it still becomes the page image if no page
+before it did, as before. A page with marks on it - grain, shadow,
+bleed-through, a faded carbon - reads at 0 and raises the warning as it
+always has. Of the 448 development files one page is blank,
+real3-letter-07's last, rendered flat white; synthetic fax pages printed at
+gray 200-235 and blurred 3-5 pixels, on which the detector finds no line,
+are not.
+
 **Threads and memory.** Each page's networks use two intra-op threads. On a
 machine with four or more logical processors a second page is read at the
 same time, with its own sessions, when enough memory is available as the
