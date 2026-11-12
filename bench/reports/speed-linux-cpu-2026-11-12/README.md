@@ -10,9 +10,11 @@ faster (it does not), and whether the fast model should run with
 of `speed-linux-cpu-2026-10-29/requests`), baseline and variant alternated
 over two rounds on one runner, each slot warmed first, the app's flags
 (`--parallel 1 --ctx-size 8192 --cache-ram 0 -ub 256 --prio -1 --poll 0
---no-mmproj`, two threads) on upstream llama.cpp `b11946`. For the 9B the
-baseline carries `--no-repack` too (`base_args`), so each variant is timed
-against the 9B as the app launches it. Raw summaries: `battery.json`.
+--no-mmproj`) on upstream llama.cpp `b11946`, with two threads where the
+app would take four on these four-processor runners (every logical
+processor, at most eight). For the 9B the baseline carries `--no-repack`
+too (`base_args`), so each variant is timed against the 9B's flags as the
+app launches it. Raw summaries: `battery.json`.
 
 ## Prompt-lookup speculative decoding: rejected
 
@@ -53,10 +55,11 @@ weights are read where the file maps them.
 | 43274013741, Windows | AMD EPYC 7763 | 53.9 s -> 51.7 s | **-4.2%** | 32.0 s -> 30.6 s (median) | 7.13 -> 7.08 tokens/s (median) | - |
 
 The Linux row is `speed-battery.yml` as above; the Windows row is
-`runtime-speed.yml` with `probe: no-repack-fast`, the 4B launched as the
-app does, alternately without and with the flag, twice each, on every third
-recorded request, on one runner with four logical processors and two server
-threads (`windows-fast-no-repack.json`). The four replies that changed on
+`runtime-speed.yml` with `probe: no-repack-fast`, the 4B launched with the
+app's flags but two server threads where the app would take four,
+alternately without and with the flag, twice each, on every third recorded
+request, on one runner with four logical processors
+(`windows-fast-no-repack.json`). The four replies that changed on
 Linux differ as replies differ between two processors: the line a date is
 quoted from, the order of two parties, the case of a type, a subject's
 wording; both variant rounds gave the same four.

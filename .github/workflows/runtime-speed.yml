@@ -77,8 +77,10 @@ jobs:
             cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
             logical_processors = [int]$env:NUMBER_OF_PROCESSORS
             # The app's own rule for its server's threads (server.rs default_threads):
-            # half the logical processors, between 2 and 12.
-            threads = [Math]::Max(2, [Math]::Min(12, [int][Math]::Floor([int]$env:NUMBER_OF_PROCESSORS / 2)))
+            # every logical processor, between 2 and 8. Until alpha.18 this took
+            # half of them, between 2 and 12, the app's rule only up to alpha.13:
+            # two threads on a four-processor runner, where the app takes four.
+            threads = [Math]::Max(2, [Math]::Min(8, [int]$env:NUMBER_OF_PROCESSORS))
           } | ConvertTo-Json | Set-Content lab\context.json -Encoding utf8NoBOM
           Get-Content lab\context.json
       - name: Replay the requests (accurate, fast, accurate again)
@@ -87,26 +89,31 @@ jobs:
           $ErrorActionPreference = "Stop"
           $Threads = (Get-Content lab\context.json -Raw | ConvertFrom-Json).threads
           $Port = 18200
+          # Each model's own flags, as the app adds them to its launch
+          # (tiers::tier_server_flags in crates/intern-engine/src/tiers.rs).
+          $TierFlags = @{ accurate = @("--no-repack"); fast = @("--no-repack") }
           $Runs = @(@("upstream", "accurate", "upstream-1"), @("upstream", "fast", "fast-1"), @("upstream", "accurate", "upstream-2"))
           $Every = 1
-          # A model's own flag, alternated on one runner: the app launches
-          # both with --no-repack (tiers::tier_server_flags).
+          # A model's own flag, alternated on one runner: the repacked runs
+          # leave the tier's flags out, the no-repack runs pass them as the
+          # app does (--no-repack, for both models).
           if ("${{ inputs.probe }}" -like "no-repack*") {
             $Tier = if ("${{ inputs.probe }}" -eq "no-repack-fast") { "fast" } else { "accurate" }
-            $Runs = @(@("upstream", $Tier, "repacked-1", ""), @("upstream", $Tier, "no-repack-1", "--no-repack"),
-              @("upstream", $Tier, "repacked-2", ""), @("upstream", $Tier, "no-repack-2", "--no-repack"))
+            $Runs = @(@("upstream", $Tier, "repacked-1", $false), @("upstream", $Tier, "no-repack-1", $true),
+              @("upstream", $Tier, "repacked-2", $false), @("upstream", $Tier, "no-repack-2", $true))
             $Every = 3
           }
           foreach ($Run in $Runs) {
-            $Runtime = $Run[0]; $Label = $Run[2]
-            $Model = (Resolve-Path "lab\$($Run[1]).gguf").Path
+            $Runtime = $Run[0]; $Tier = $Run[1]; $Label = $Run[2]
+            $Model = (Resolve-Path "lab\$Tier.gguf").Path
             $Server = @(Get-ChildItem -LiteralPath "lab\$Runtime" -Recurse -File -Filter "llama-server.exe")[0].FullName
-            # The app's launch (server.rs arguments_for and its measured flags), no API key.
+            # The app's launch (server.rs arguments_for, its measured flags and
+            # the tier's own), without the API key and the slot folder.
             $Arguments = @("--host", "127.0.0.1", "--port", "$Port", "--model", $Model,
               "--parallel", "1", "--ctx-size", "8192", "--n-gpu-layers", "0",
               "--threads", "$Threads", "--threads-batch", "$Threads", "--jinja", "--no-webui",
               "--cache-ram", "0", "-ub", "256", "--prio", "-1", "--poll", "0", "--no-mmproj")
-            if ($Run.Count -gt 3 -and $Run[3]) { $Arguments += $Run[3] }
+            if ($Run.Count -lt 4 -or $Run[3]) { $Arguments += $TierFlags[$Tier] }
             $Process = Start-Process -FilePath $Server -ArgumentList $Arguments -PassThru -NoNewWindow `
               -RedirectStandardOutput "lab\$Label-server.out.log" -RedirectStandardError "lab\$Label-server.log"
             $Healthy = $false
