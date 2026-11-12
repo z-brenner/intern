@@ -3896,10 +3896,12 @@ impl Pipeline {
     /// The new record replaces the old one only when it says something
     /// different, in a write transaction that checks the row and the record
     /// are still exactly what was read, so an approval made meanwhile is
-    /// never overwritten. Its revision moves, so the window replaces any
-    /// draft it holds of the old name, and a document that becomes ready is
-    /// filed when automatic renaming is on, exactly as after a reading. Each
-    /// document is considered once per release, whatever came of it.
+    /// never overwritten. Its revision moves only when its name or sentence
+    /// does, so the window replaces a draft only of a proposal that changed,
+    /// and keeps what the reviewer typed when only readiness or reasons
+    /// moved; a document that becomes ready is filed when automatic renaming
+    /// is on, exactly as after a reading. Each document is considered once
+    /// per release, whatever came of it.
     pub fn revalidate_waiting(&self) -> PipelineResult<usize> {
         let _run = self
             .run_lock
@@ -4021,7 +4023,15 @@ impl Pipeline {
             read_through();
             return left();
         }
-        again.revision = record.revision + 1;
+        // As in `recompose`: the window replaces a reviewer's draft only
+        // when the name or the sentence it was typed over changed, so one
+        // whose readiness or reasons alone moved keeps what they typed.
+        again.revision =
+            if again.filename != record.filename || again.description != record.description {
+                record.revision + 1
+            } else {
+                record.revision
+            };
         let next = queue_status_for(again.status);
         match self.repository.store_revalidation(
             id,
@@ -5465,8 +5475,9 @@ fn untouched_provisional(record: &ProposalRecord) -> bool {
 /// Whether a reading validated again says what the stored one says: all of
 /// it but the record's revision and the analysis's measurements - the times
 /// of the work done again, and which model read it as the boundary words it
-/// now. Only a record that says something new replaces the old one and
-/// moves its revision, which throws away the reviewer's draft.
+/// now. Only a record that says something new replaces the old one, and it
+/// moves the revision - which throws away the reviewer's draft - only when
+/// its name or sentence is new too.
 fn same_reading(stored: &ProposalRecord, again: &ProposalRecord) -> bool {
     let mut again = again.clone();
     again
