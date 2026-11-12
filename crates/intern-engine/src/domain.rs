@@ -102,47 +102,7 @@ impl DocumentSource {
             .map(|page| page.text.chars().count())
             .sum()
     }
-
-    /// The parser warnings, each marked by whether it bears on the facts
-    /// read from this document.
-    ///
-    /// `LOW_OCR_CONFIDENCE` says OCR was unsure of some page. A page it read
-    /// as nothing at all - the blank back of a scanned sheet, a separator -
-    /// comes back at confidence 0 and raises it for the whole document,
-    /// though no fact can come from a page with no text. So where every page
-    /// that can have raised it is blank, and another page has text, it is
-    /// kept but bears on no fact. Where any of those pages has text, or no
-    /// page has any, it bears on the facts as before.
-    pub fn fact_warnings(&self) -> Vec<ParserWarning> {
-        let has_text = |page: &SourcePage| !page.text.trim().is_empty();
-        let mut unsure = self.pages.iter().filter(|page| {
-            page.ocr_confidence
-                .is_some_and(|confidence| confidence <= UNSURE_OCR_CONFIDENCE)
-        });
-        let only_blank_pages_unsure = unsure.next().is_some_and(|page| !has_text(page))
-            && unsure.all(|page| !has_text(page))
-            && self.pages.iter().any(has_text);
-        self.parser_warnings
-            .iter()
-            .map(|warning| {
-                if only_blank_pages_unsure && warning.code == LOW_OCR_WARNING {
-                    ParserWarning::new(LOW_OCR_WARNING, false)
-                } else {
-                    warning.clone()
-                }
-            })
-            .collect()
-    }
 }
-
-/// The warning the parser worker, and the host reading its reply, raise for
-/// a document with a page OCR was unsure of.
-pub const LOW_OCR_WARNING: &str = "LOW_OCR_CONFIDENCE";
-
-/// The most a stored page's OCR confidence can be and still be a page that
-/// raised [`LOW_OCR_WARNING`]: the worker warns below 75, and a page
-/// stores its confidence rounded, so 74.6 is stored as 75.
-const UNSURE_OCR_CONFIDENCE: u32 = 75;
 
 /// What a document-defining date actually means.
 ///
