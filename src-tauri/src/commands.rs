@@ -645,7 +645,7 @@ const VERIFICATION_STAMP: &str = ".verified.json";
 /// one server binary for every file, and one of 1 named the one model
 /// earlier builds pinned; neither vouches for anything now.
 const VERIFICATION_STAMP_SCHEMA: u32 = 4;
-/// The schema of the stamps alpha.15 to alpha.17 wrote, whose entries say
+/// The schema of the stamps alpha.13 to alpha.17 wrote, whose entries say
 /// only that a file passed its digest against the pin they record.
 const DIGEST_ONLY_STAMP_SCHEMA: u32 = 3;
 
@@ -1537,8 +1537,11 @@ impl RuntimeModel {
     /// ([`RuntimeModel::start_early`]). Started at every sign-in, the
     /// accurate model was read from disk, 5.7 GB, and held until the idle
     /// unload ten minutes later, on every day with no document in that time.
-    /// A server that will not start is found by that document instead, and
-    /// set aside then ([`RuntimeModel::ensure`]).
+    /// A server that will not start is found by that document instead
+    /// ([`RuntimeModel::load`]): set aside when the other model can read in
+    /// its place, the document handed back to wait when it cannot, and its
+    /// stamp entry dropped either way, so the next launch checks it in full
+    /// and a lone model's failure reaches setup then.
     fn start_verified(&self, cancellation: &CancellationToken) -> Result<(), CommandError> {
         let lifecycle = self
             .lifecycle
@@ -9768,7 +9771,7 @@ mod runtime_tests {
         assert_eq!(relaunch("1.0.0"), (Some(false), 0, 1));
     }
 
-    /// The stamps alpha.15 to alpha.17 wrote (schema 3) name the build once
+    /// The stamps alpha.13 to alpha.17 wrote (schema 3) name the build once
     /// for the whole stamp. The first launch of this build trusts their
     /// digests - the pin each records, the size and date of each file - and
     /// self-tests the model it starts; it rewrites the stamp in this
@@ -9927,6 +9930,47 @@ mod runtime_tests {
         assert_eq!(launched(&rig), [ModelTier::Fast]);
         assert!(runtime.tier_failure(ModelTier::Accurate).is_some());
         assert_eq!(runtime.stamped(ModelTier::Accurate), None);
+    }
+
+    /// With one model installed there is none to read in its place. A
+    /// vouched model whose server will not start is found by the first
+    /// document, which is handed back to wait (MODEL_NOT_READY), and the
+    /// queue stops for it after its grace, as for a model that stopped
+    /// responding. Nothing is set aside; its stamp entry is dropped, so the
+    /// next launch checks it in full and setup says why it will not start.
+    #[test]
+    fn a_lone_vouched_model_that_will_not_start_is_found_by_the_first_document() {
+        let install = Install::new("sign-in-refused-alone");
+        verified(&install.runtime(&Rig::new(), "1.0.0"));
+        let launch = || {
+            let rig = Rig::new();
+            *rig.refuse_launch.lock().unwrap() = Some(ModelTier::Fast);
+            let runtime = install.runtime(&rig, "1.0.0");
+            queue_waits(&runtime, false);
+            let (setup, _states) = manager(&runtime, ModelSource::Local);
+            settle(&setup);
+            (rig, runtime, setup)
+        };
+
+        let (rig, runtime, setup) = launch();
+        assert_eq!(setup.get().unwrap().state, SetupStatus::Ready);
+        assert!(setup.model_ready.load(Ordering::SeqCst));
+        assert_eq!(rig.refused.load(Ordering::SeqCst), 0, "nothing started");
+        assert_eq!(
+            runtime.analyze(&probe(), "pdf", &[]).unwrap_err(),
+            ModelFailure::retryable("MODEL_NOT_READY")
+        );
+        assert_eq!(rig.refused.load(Ordering::SeqCst), 1);
+        assert_eq!(runtime.tier_failure(ModelTier::Fast), None);
+        assert_eq!(runtime.stamped(ModelTier::Fast), None);
+
+        let (rig, _runtime, setup) = launch();
+        let state = setup.get().unwrap();
+        assert_eq!(
+            (state.state, state.error.as_deref()),
+            (SetupStatus::Failed, Some("MODEL_SERVER_START_FAILED"))
+        );
+        assert_eq!(rig.hash_count(), 1, "checked in full");
     }
 
     /// The question a launch asks, as `initialize` puts it to the queue: a

@@ -1274,7 +1274,7 @@ before a document depends on it - one that fails is set aside and the other
 reads - and through no digest: until alpha.17 the first launch after every
 update read both models end to end again, 8.4 GB, to find the digests it
 already had. A failed self-test removes its entry, so that file is read in
-full next time. The stamps alpha.15 to alpha.17 wrote (schema 3) are read for
+full next time. The stamps alpha.13 to alpha.17 wrote (schema 3) are read for
 their digests alone; one of an earlier schema - the single-model build's, or
 one that recorded a single server binary for every file - vouches for nothing.
 A launch that finds both checks standing for the model the next document
@@ -1287,8 +1287,15 @@ has the model started as before. Waiting means what the next run would read
 (`Pipeline::has_document_waiting`): nothing while the queue is paused, not a
 document in doubt that waits for the machine to be shown to work, and not
 one behind a rename left applying. A server that will not start is found by
-the first document instead of at launch, and set aside there as it would be
-at launch, the document read by the other model.
+the first document instead of at launch. With the other model installed it is
+set aside there, as it would be at launch, and the document read by the other
+model. With one model there is none to read instead: the document is handed
+back to wait, as when no model is loaded, and the queue stops for it once
+that has gone on for four minutes (`MODEL_MISSING_GRACE`), as for a model that
+stopped responding. Either way its stamp entry is dropped, so the next launch
+checks that model in full and setup says why it will not start. The stamp
+records the server binary's size and date, not the libraries beside it, so a
+runtime library quarantined since the last launch is found this way too.
 Within a session the digest is read at most once: restarts - a cancel, a
 recovery, a swap, a reload after idle - start a file that still looks exactly
 as it did when it was checked, and refuse one that does not. The
