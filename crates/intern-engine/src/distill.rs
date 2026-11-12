@@ -156,7 +156,7 @@ pub fn distill(source: &DocumentSource, budget: DigestBudget) -> DocumentDigest 
         source_characters,
         compressed,
         image_included: source.page_image.is_some(),
-        parser_warnings: source.parser_warnings.clone(),
+        parser_warnings: source.fact_warnings(),
     }
 }
 

@@ -20,7 +20,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::domain::{DocumentSource, PageImage, PageOrigin, ParserWarning, SourcePage};
+use crate::domain::{self, DocumentSource, PageImage, PageOrigin, ParserWarning, SourcePage};
 use crate::structure::PageLayout;
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -306,9 +306,9 @@ pub fn adapt_document(document: WorkerDocument) -> Result<DocumentSource, Extrac
     if low_confidence
         && !parser_warnings
             .iter()
-            .any(|warning| warning.code == "LOW_OCR_CONFIDENCE")
+            .any(|warning| warning.code == domain::LOW_OCR_WARNING)
     {
-        parser_warnings.push(ParserWarning::new("LOW_OCR_CONFIDENCE", true));
+        parser_warnings.push(ParserWarning::new(domain::LOW_OCR_WARNING, true));
     }
     if document.truncated
         && !parser_warnings
@@ -335,7 +335,7 @@ pub fn adapt_document(document: WorkerDocument) -> Result<DocumentSource, Extrac
         })
         .transpose()?;
 
-    Ok(DocumentSource {
+    let mut source = DocumentSource {
         pages: document
             .pages
             .into_iter()
@@ -351,7 +351,12 @@ pub fn adapt_document(document: WorkerDocument) -> Result<DocumentSource, Extrac
             .collect(),
         parser_warnings,
         page_image,
-    })
+    };
+    // A blank page OCR read as nothing raises the low-confidence warning
+    // but bears on no fact (see [`DocumentSource::fact_warnings`]); the
+    // source says so as it is stored.
+    source.parser_warnings = source.fact_warnings();
+    Ok(source)
 }
 
 /// What a worker's error event for a request means to the host. The code,
@@ -1083,6 +1088,90 @@ The work covers the 2026 CRM implementation, its deliverables, and its fees.\n\n
         assert_eq!(
             unknown.parser_warnings,
             vec![ParserWarning::new("SOMETHING_NEW", true)]
+        );
+    }
+
+    /// A scan whose pages OCR read, and a last page it read as nothing, as
+    /// the worker sends them: the blank page comes back at confidence 0 with
+    /// no text, raises the low-confidence warning, and is the page image.
+    fn scan_with_last_page(last_text: &str, last_confidence: f32) -> DocumentSource {
+        let reply = json!({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": "r",
+            "event": {"type": "parsed", "document": {
+                "pages": [
+                    {"page_number": 1, "text": LONG_SHEET, "source": "ocr",
+                        "ocr_confidence": 91.4, "vision_escalated": false},
+                    {"page_number": 2, "text": "DATE\nFILMED\n\n7/28/94", "source": "ocr",
+                        "ocr_confidence": 100.0, "vision_escalated": false},
+                    {"page_number": 3, "text": last_text, "source": "ocr",
+                        "ocr_confidence": last_confidence, "vision_escalated": true}
+                ],
+                "warnings": ["LOW_OCR_CONFIDENCE"],
+                "truncated": false,
+                "optional_image": null,
+            }},
+        });
+        parsed(&reply.to_string()).unwrap()
+    }
+
+    /// No fact can come from a page OCR read nothing on, so a blank page
+    /// does not send a scan whose other pages read well to review. The
+    /// warning stays, marked as bearing on no fact.
+    #[test]
+    fn a_blank_page_read_unsurely_bears_on_no_fact() {
+        use crate::domain::{ProposalStatus, ReviewReason};
+
+        let blank = scan_with_last_page("", 0.0);
+        assert_eq!(
+            blank.parser_warnings,
+            vec![ParserWarning::new("LOW_OCR_CONFIDENCE", false)]
+        );
+        let outcome = validated(&blank);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(!outcome.reasons.contains(&ReviewReason::ParserWarning));
+        // Whitespace is no text either.
+        assert!(
+            !scan_with_last_page(" \n\n ", 0.0).parser_warnings[0].field_affecting,
+            "a page of whitespace is blank"
+        );
+    }
+
+    /// The nearest look-alikes keep the warning bearing on the facts: a
+    /// last page OCR read a few words of unsurely may hold the date or a
+    /// party, and a document whose every unsure page is blank but which has
+    /// no text anywhere else has nothing that reads well.
+    #[test]
+    fn an_unsure_page_with_text_still_bears_on_the_facts() {
+        use crate::domain::{ProposalStatus, ReviewReason};
+
+        let unsure = scan_with_last_page("Recd. JUL 2 1994\nW. Hanford", 41.0);
+        assert_eq!(
+            unsure.parser_warnings,
+            vec![ParserWarning::new("LOW_OCR_CONFIDENCE", true)]
+        );
+        let outcome = validated(&unsure);
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        assert!(outcome.reasons.contains(&ReviewReason::ParserWarning));
+
+        // A page stored at 75 may have been read at 74.6, below the line.
+        let at_the_line = scan_with_last_page("Recd. JUL 2 1994", 74.6);
+        assert!(at_the_line.parser_warnings[0].field_affecting);
+
+        let nothing_read = parsed(
+            r#"{"protocol_version":1,"request_id":"r","event":{"type":"parsed","document":{
+                "pages":[{"page_number":1,"text":"","source":"ocr","ocr_confidence":0.0,"vision_escalated":true}],
+                "warnings":["LOW_OCR_CONFIDENCE"],"truncated":false,"optional_image":null}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            nothing_read.parser_warnings,
+            vec![ParserWarning::new("LOW_OCR_CONFIDENCE", true)]
         );
     }
 

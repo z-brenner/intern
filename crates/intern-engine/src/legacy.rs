@@ -51,7 +51,7 @@ pub fn legacy_digest(source: &DocumentSource) -> DocumentDigest {
         page_count: source.pages.len(),
         source_characters,
         image_included: source.page_image.is_some(),
-        parser_warnings: source.parser_warnings.clone(),
+        parser_warnings: source.fact_warnings(),
     }
 }
 

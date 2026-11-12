@@ -540,8 +540,8 @@ impl Engine {
 
         guard_analysis(|| {
             let validation_started = Instant::now();
-            let scope =
-                ValidationScope::new(&prepared.index, &prepared.context, &source.parser_warnings);
+            let warnings = source.fact_warnings();
+            let scope = ValidationScope::new(&prepared.index, &prepared.context, &warnings);
             let mut outcome = validate_facts(proposal, &scope);
             self.apply_gates(&mut outcome, source, token_confidence);
             let validation_micros = micros_since(validation_started);
