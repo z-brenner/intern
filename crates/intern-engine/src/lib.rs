@@ -58,7 +58,7 @@ pub mod tiers;
 pub mod validate;
 pub mod worker;
 
-pub use client::{EvidenceHandles, ModelClient, ModelRequest, Proposer, ProposerReply};
+pub use client::{EvidenceHandles, ModelClient, ModelRequest, NoModel, Proposer, ProposerReply};
 pub use distill::{DigestBudget, DocumentDigest, distill, source_from_text};
 pub use domain::*;
 pub use engine::{Engine, Pipeline, PreparedDigest, PreparedEvidence, estimated_prompt_tokens};
@@ -90,7 +90,11 @@ pub use worker::{
 ///
 /// 3 added, the same way, which local model read a document
 /// ([`AnalysisTelemetry::read_by`]).
-pub const ENGINE_CONTRACT_VERSION: u32 = 3;
+///
+/// 4 added, the same way, the identity of the request a reply answered and
+/// of the model file that gave it ([`AnalysisTelemetry::request_sha256`],
+/// [`AnalysisTelemetry::model_sha256`]).
+pub const ENGINE_CONTRACT_VERSION: u32 = 4;
 
 #[cfg(feature = "benchmark-transport")]
 pub mod benchmark_transport;

@@ -241,6 +241,43 @@ pub trait Proposer: Send + Sync {
     }
 }
 
+/// A model that is never asked: what an engine stands on that only
+/// validates replies it already has ([`crate::engine::Engine::revalidate`]).
+/// Every request fails as one to a server that is not there would.
+///
+/// It reports the context of the model whose replies are validated again:
+/// a prompt is fitted to that context, so the request the engine would send,
+/// and with it whether a stored reply answers it, depends on it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NoModel {
+    context_tokens: Option<usize>,
+}
+
+impl NoModel {
+    /// Standing in for a model whose context is `tokens`.
+    pub const fn with_context(tokens: usize) -> Self {
+        Self {
+            context_tokens: Some(tokens),
+        }
+    }
+
+    /// Standing in for the local server, at the context [`ModelClient`]
+    /// gives it unless told otherwise.
+    pub const fn local() -> Self {
+        Self::with_context(crate::server::CONTEXT_TOKENS as usize)
+    }
+}
+
+impl Proposer for NoModel {
+    fn propose(&self, _request: &ModelRequest) -> EngineResult<ModelProposal> {
+        Err(request_failed())
+    }
+
+    fn context_tokens(&self) -> Option<usize> {
+        self.context_tokens
+    }
+}
+
 pub struct ModelClient {
     endpoint: Url,
     api_key: String,
@@ -1537,22 +1574,11 @@ impl WireFacts {
             amount_evidence: self.amount_ids.resolve(handles, 1, &mut unknown),
             unknown_evidence: unknown,
         };
-        Some(ModelProposal {
-            document_type: facts.document_type.clone(),
-            document_date: facts.document_date.clone(),
-            date_role: facts.date_role,
-            parties: facts
-                .parties
-                .iter()
-                .map(|party| party.name.clone())
-                .collect(),
-            party_relation: PartyRelation::None,
-            description: String::new(),
-            confidence: self.confidence,
-            needs_review: self.needs_review,
-            evidence: Evidence::default(),
-            facts: Some(Box::new(facts)),
-        })
+        Some(ModelProposal::from_facts(
+            facts,
+            self.confidence,
+            self.needs_review,
+        ))
     }
 }
 

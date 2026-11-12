@@ -224,6 +224,37 @@ pub struct ModelProposal {
     pub facts: Option<Box<ModelFacts>>,
 }
 
+impl ModelProposal {
+    /// An evidence-pipeline reply as the client reads it off the wire: the
+    /// facts, and the fields above them filled from the facts alone - the
+    /// type, date, role and party names as replied, no relation, no
+    /// description, no evidence text. Validation completes those from the
+    /// evidence it is shown.
+    ///
+    /// The one place such a reply is built, so a reply stored after
+    /// validation completed it can be turned back into exactly the reply the
+    /// model gave: its facts, confidence and flag are kept as replied
+    /// ([`crate::engine::Engine::revalidate`]).
+    pub fn from_facts(facts: ModelFacts, confidence: f32, needs_review: bool) -> Self {
+        Self {
+            document_type: facts.document_type.clone(),
+            document_date: facts.document_date.clone(),
+            date_role: facts.date_role,
+            parties: facts
+                .parties
+                .iter()
+                .map(|party| party.name.clone())
+                .collect(),
+            party_relation: PartyRelation::None,
+            description: String::new(),
+            confidence,
+            needs_review,
+            evidence: Evidence::default(),
+            facts: Some(Box::new(facts)),
+        }
+    }
+}
+
 /// A semantic role a party plays in a document.
 ///
 /// The model is never made to choose one: a role the evidence does not
@@ -819,6 +850,23 @@ pub struct AnalysisTelemetry {
     /// model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_by: Option<ModelReading>,
+    /// The identity of the request the model's reply answered
+    /// ([`crate::client::ModelRequest::sha256`]): the prompt, its grammar,
+    /// its system turn, its evidence handles and its profile. What lets a
+    /// later release tell that the request it would send for the same text
+    /// is this one, byte for byte, so the stored reply can be validated
+    /// again under its rules without asking the model
+    /// ([`crate::engine::Engine::revalidate`]). Absent from analyses stored
+    /// before it was kept, which are never revalidated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_sha256: Option<String>,
+    /// The SHA-256 the manifest pins for the model file that gave the
+    /// reply, set by the caller that knows which file that was (the desktop
+    /// app's local runtime). A stored reply stands in for a fresh one only
+    /// for the same request to the same file. Absent for a hosted model and
+    /// from analyses stored before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_sha256: Option<String>,
 }
 
 /// The local model that produced an analysis.
