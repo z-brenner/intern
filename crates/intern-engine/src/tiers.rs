@@ -1317,7 +1317,9 @@ mod tests {
     /// A runtime's identity is the same from one launch to the next and
     /// moves with each thing that shapes a reply: the reply settings, any
     /// launch argument - another micro-batch, a tier's own flag - and the
-    /// llama.cpp build. The tiers differ by the accurate model's flag. The
+    /// llama.cpp build. The two tiers launch with the same flags since the
+    /// 4B took `--no-repack` too, so they share one runtime; a reading's
+    /// model file (`model_sha256`) and its tier tell them apart. The
     /// build is read from the release's pinned downloads, whatever else the
     /// release build adds to them, and none is named by a file that pins
     /// none.
@@ -1327,7 +1329,7 @@ mod tests {
         assert!(build.starts_with("b11946:8a702bb0"), "{build}");
         let accurate = runtime_identity(ModelTier::Accurate).unwrap();
         assert_eq!(runtime_identity(ModelTier::Accurate).unwrap(), accurate);
-        assert_ne!(runtime_identity(ModelTier::Fast).unwrap(), accurate);
+        assert_eq!(runtime_identity(ModelTier::Fast).unwrap(), accurate);
 
         let settings = crate::client::reply_settings_identity();
         let arguments = LlamaServer::arguments_for(

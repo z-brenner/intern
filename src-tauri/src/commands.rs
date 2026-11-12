@@ -11144,9 +11144,14 @@ mod runtime_tests {
             &|reading| reading.telemetry.model_sha256 = Some(MODEL_SHA256.into())
         ));
         // Another sampler, server argument or llama.cpp build: the same
-        // request to the same file can be answered differently.
+        // request to the same file can be answered differently. (The two
+        // tiers launch alike, so the other tier's runtime is this one.)
+        assert_eq!(
+            tiers::runtime_identity(ModelTier::Fast),
+            stored.telemetry.runtime_sha256
+        );
         assert!(declined(&|reading| {
-            reading.telemetry.runtime_sha256 = tiers::runtime_identity(ModelTier::Fast);
+            reading.telemetry.runtime_sha256 = Some("0".repeat(64));
         }));
         assert!(declined(&|reading| reading.telemetry.runtime_sha256 = None));
         assert!(declined(&|reading| {
