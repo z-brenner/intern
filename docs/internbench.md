@@ -321,8 +321,9 @@ Inputs:
 * `sets` (default `internbench`): comma-separated from `internbench` (the
   synthetic corpus), `real1` (`sample.json`), `real2`
   (`sample-heldout.json`), `real3` (`sample-heldout2.json`), `real4`
-  (`sample-heldout3.json`), `real5` (`sample-heldout4.json`) and `real6`
-  (`sample-heldout5.json`), the real documents fetched by
+  (`sample-heldout3.json`), `real5` (`sample-heldout4.json`), `real6`
+  (`sample-heldout5.json`) and `real7` (`sample-heldout6.json`), the real
+  documents fetched by
   `scripts/realdocs-eval/fetch.py` from their public sources; a source that
   is down costs its document, not the run.
 * `threads` (default `4`): the server's model threads.

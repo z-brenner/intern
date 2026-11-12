@@ -30,7 +30,7 @@ on:
           Comma-separated: internbench (the synthetic corpus), real1
           (sample.json), real2 (sample-heldout.json), real3 (sample-heldout2.json),
           real4 (sample-heldout3.json), real5 (sample-heldout4.json),
-          real6 (sample-heldout5.json)
+          real6 (sample-heldout5.json), real7 (sample-heldout6.json)
         required: false
         default: internbench
         type: string
@@ -100,6 +100,7 @@ jobs:
               "real4": "sample-heldout3.json",
               "real5": "sample-heldout4.json",
               "real6": "sample-heldout5.json",
+              "real7": "sample-heldout6.json",
           }
           problems = []
           try:
