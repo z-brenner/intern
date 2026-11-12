@@ -580,8 +580,9 @@ pub(crate) struct PipelineIntakeHost {
     app: AppHandle,
     identity: MachineIdentity,
     filed_index: Arc<SharedFiledIndex>,
-    /// Told when a scan finds a file arriving: a document is on its way, and
-    /// the model it will be read by can load while the file settles.
+    /// Told when a scan finds a file arriving in a folder whose arrivals are
+    /// this machine's own: a document is on its way, and the model it will
+    /// be read by can load while the file settles.
     expect_document: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -675,8 +676,16 @@ impl IntakeHost for PipelineIntakeHost {
     fn status_changed(&self, status: &IntakeStatus) {
         // A file is held for `intern_intake::DEFAULT_MIN_QUIET_SECONDS` from
         // when a scan first sees it before it is handed over: time the model
-        // it will be read by can load in.
-        if status.arriving > 0 {
+        // it will be read by can load in - where what arrives is this
+        // machine's to read. In the shared Inbox most arrivals are
+        // teammates' uploads, told apart only once they settle; signalled,
+        // each would load the model on every laptop watching the folder.
+        if status.arriving > 0
+            && self
+                .app
+                .state::<Arc<crate::microsoft_intake::MicrosoftIntake>>()
+                .admits_arrivals_as_own()
+        {
             (self.expect_document)();
         }
         let dto = status_dto(

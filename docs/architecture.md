@@ -955,7 +955,14 @@ A model is started before its document reaches it when one is on its way
 (`RuntimeModel::start_early`): when a scan of the watched folder first sees a
 file arriving - the watcher then waits at least ten seconds for it to hold
 still - and when a person adds documents, which are copied and extracted
-before they are read. Loading the model and restoring its saved instructions
+before they are read. A watched folder signals arrivals only when what arrives
+there is this machine's own: a private folder on its own disk, or "my folder"
+(`MicrosoftIntake::admits_arrivals_as_own`). In the shared Inbox a document is
+this machine's only once Microsoft says its account uploaded it, which is not
+asked until the file has settled, and most arrivals are teammates' uploads it
+never reads: signalled, each would load the model on every laptop watching the
+folder. This machine's own uploads there load it when they are claimed, as
+before. Loading the model and restoring its saved instructions
 then overlap that wait instead of adding to the document's. It is the start
 the document would make, made early: the plan as it stands with the memory
 free then, under the same `lifecycle` lock and generation, self-tested the
@@ -969,8 +976,8 @@ stops a model: one already loaded is only kept from going idle, so it cannot
 interrupt a document being read, and a burst of arrivals starts one load. It
 starts nothing while the queue would not read what arrives - the model not
 ready, or the queue paused. A file that turns out not to be a document -
-unsupported, a duplicate, a teammate's upload - costs that one load, which
-goes idle and is unloaded ten minutes later like any other. The gain was not
+unsupported, or a duplicate - costs that one load, which goes idle and is
+unloaded ten minutes later like any other. The gain was not
 measured live. It is at most the load and the restore - the 9B took 3.1 to
 5.1 s from start to healthy with its file in the page cache and 44 to 106 ms
 to restore ([`bench/reports/cold-start-linux-cpu-2026-11-09`](../bench/reports/cold-start-linux-cpu-2026-11-09/README.md)),

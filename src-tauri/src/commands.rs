@@ -1962,12 +1962,14 @@ impl RuntimeModel {
     }
 
     /// Starts, on a thread of its own, the model the next document will be
-    /// read by: one has just been seen arriving in the watched folder, or a
-    /// person has just added some. Loading it - and restoring its saved
-    /// instructions - then overlaps the ten seconds the watcher waits for a
-    /// file to hold still, and the document's extraction, instead of being
-    /// added to the document's wait once the queue reaches it. Returns the
-    /// thread, which nothing needs to wait for, when one was started.
+    /// read by: one has just been seen arriving in a watched folder whose
+    /// arrivals are this machine's own (not the shared Inbox, where most are
+    /// teammates' uploads), or a person has just added some. Loading it -
+    /// and restoring its saved instructions - then overlaps the ten seconds
+    /// the watcher waits for a file to hold still, and the document's
+    /// extraction, instead of being added to the document's wait once the
+    /// queue reaches it. Returns the thread, which nothing needs to wait for,
+    /// when one was started.
     ///
     /// It is the start a document makes, made early ([`RuntimeModel::ensure`]
     /// through [`RuntimeModel::load`]): under `lifecycle`, for the generation
@@ -1977,12 +1979,12 @@ impl RuntimeModel {
     /// during the load stops what it loads as it would a document's. A
     /// document that reaches the model meanwhile waits for the load and its
     /// self-test, and is read only by a model that passed it - this one, or,
-    /// when it fails, the one planned without it. It never
-    /// unloads a model: one already loaded is only kept from going idle (the
-    /// document reads with it, or swaps it as it would have), and while a
-    /// document is being read the slot is never empty. A file that turns out
-    /// not to be a document - unsupported, a duplicate, a teammate's - costs
-    /// one load, which goes idle and is unloaded as any other.
+    /// when it fails, the one planned without it. It never unloads a model:
+    /// one already loaded is only kept from going idle (the document reads
+    /// with it, or swaps it as it would have), and while a document is being
+    /// read the slot is never empty. A file that turns out not to be a
+    /// document - unsupported, or a duplicate - costs one load, which goes
+    /// idle and is unloaded as any other.
     ///
     /// Nothing while the runtime is held, or has no tested model to load,
     /// and one thread at a time: a burst of arrivals starts one model.
