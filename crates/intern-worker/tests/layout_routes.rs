@@ -713,6 +713,207 @@ fn a_page_read_again_does_not_keep_later_pages_from_the_page_image() {
     assert!(document.pages[1].vision_escalated);
 }
 
+/// Somebody else's OCR layer under a scan, drawn twice over it, as a
+/// searchable scan's layer sometimes is: every line comes twice, as PDFium
+/// reads it, and every word box lies on its double. Its words are clean.
+fn doubled_prior_ocr(page_index: usize) -> PdfPageInspection {
+    let lines = [
+        "Department of Environmental Quality",
+        "June 17, 2025",
+        "CERTIFIED MAIL: 7018 1830 0001 6172",
+        "City of Harlow",
+        "c/o Dana Pruitt, Public Works Director",
+        "Re: Notice of Civil Penalty Assessment",
+    ];
+    let mut runs = Vec::new();
+    let mut text = Vec::new();
+    for (row, line) in lines.iter().enumerate() {
+        let y = 60 + row as u32 * 14;
+        runs.push(run(54, y, line, 9));
+        runs.push(run(54, y, line, 9));
+        text.push(format!("{line}\r\n{line}"));
+    }
+    let mut page = native_page(page_index, &text.join("\r\n"), runs);
+    page.image_coverage = 1.0;
+    let native = page.native.as_mut().unwrap();
+    native.text_objects = 12;
+    native.invisible_text_objects = 12;
+    page
+}
+
+/// PP-OCR's reading of the scan under [`doubled_prior_ocr`].
+const DOUBLED_READING: &str = "Department of Environmental Quality\nJune 17, 2025\n\
+CERTIFIED MAIL: 7018 1830 0001 6172\nCity of Harlow\n\
+c/o Dana Pruitt, Public Works Director\nRe: Notice of Civil Penalty Assessment";
+
+struct ScanReading(f32);
+
+impl OcrBackend for ScanReading {
+    fn recognize(
+        &self,
+        _page: &RenderedPage,
+        _cancel: &CancellationToken,
+    ) -> Result<OcrResult, ExtractionError> {
+        Ok(OcrResult::new(DOUBLED_READING, self.0))
+    }
+}
+
+/// A layer whose words are clean but that would not read well as it is -
+/// drawn twice, it would be rebuilt into a layout that repeats every line -
+/// is read again on the pages a document's facts are on, and a confident
+/// reading takes its place.
+#[test]
+fn a_prior_ocr_layer_that_would_not_read_well_is_read_again_on_a_key_page() {
+    let layer = doubled_prior_ocr(0);
+    let signals = intern_worker::layout::measure_signals(
+        layer.native.as_ref().unwrap(),
+        &layer.native_text,
+        layer.image_coverage,
+    );
+    assert!(
+        signals.overlap >= 100 && signals.garbage == 0,
+        "{signals:?}"
+    );
+    let pdf = StandInPdf::new(vec![layer]);
+
+    let document = read(&pdf, &ScanReading(97.0));
+
+    let page = &document.pages[0];
+    assert_eq!(page.source, PageSource::Ocr);
+    assert_eq!(page.layout.as_ref().unwrap().route, PageRoute::Ocr);
+    assert_eq!(
+        page.text.matches("June 17, 2025").count(),
+        1,
+        "{}",
+        page.text
+    );
+    assert_eq!(pdf.renders.load(Ordering::SeqCst), 1);
+    assert!(document.warnings.is_empty());
+}
+
+/// The look-alikes stay as they are: the same layer on a page in the middle
+/// of a long document, which is not read again for its layout; a reading
+/// that is not confident, which leaves a layer whose words are clean; and
+/// the same text drawn visibly, which is nobody's OCR.
+#[test]
+fn a_prior_ocr_layer_off_the_key_pages_or_read_unsurely_is_kept() {
+    // The first two pages and the last are read again; the middle ones are
+    // not.
+    let pdf = StandInPdf::new((0..5).map(doubled_prior_ocr).collect());
+
+    let document = read(&pdf, &ScanReading(97.0));
+
+    let sources = document
+        .pages
+        .iter()
+        .map(|page| page.source)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sources,
+        [
+            PageSource::Ocr,
+            PageSource::Ocr,
+            PageSource::Native,
+            PageSource::Native,
+            PageSource::Ocr
+        ]
+    );
+    let middle = &document.pages[2];
+    assert_eq!(middle.layout.as_ref().unwrap().route, PageRoute::Layout);
+    assert_eq!(
+        middle.text.matches("June 17, 2025").count(),
+        2,
+        "the layer, as it reads: {}",
+        middle.text
+    );
+    assert_eq!(pdf.renders.load(Ordering::SeqCst), 3);
+
+    // A reading under the confident line leaves a layer whose words are
+    // clean - there are no OCR errors for it to have fewer of - and the
+    // layer reads as it would have had it not been read again.
+    let unsure = read(
+        &StandInPdf::new(vec![doubled_prior_ocr(0)]),
+        &ScanReading(68.0),
+    );
+    assert_eq!(unsure.pages[0].source, PageSource::Native);
+    assert_eq!(
+        unsure.pages[0].layout.as_ref().unwrap().route,
+        PageRoute::Layout
+    );
+    assert_eq!(unsure.pages[0].text, middle.text);
+
+    // Drawn visibly, the same text is the document's own, and is read as it
+    // always was.
+    let mut visible = doubled_prior_ocr(0);
+    visible.native.as_mut().unwrap().invisible_text_objects = 0;
+    let own = read(&StandInPdf::new(vec![visible]), &NoOcr);
+    assert_eq!(own.pages[0].source, PageSource::Native);
+    assert_eq!(
+        own.pages[0].layout.as_ref().unwrap().route,
+        PageRoute::Layout
+    );
+}
+
+/// A sparse layer - a short letter's few lines - covers too little of the
+/// scan under it for the scan to count as text the layer already holds, so
+/// the scan would be read as an image region and its lines merged into the
+/// layer's, every line twice. Read again instead, the page is read once,
+/// with the same one OCR pass.
+#[test]
+fn a_sparse_prior_ocr_layer_is_read_once_not_merged_with_its_own_scan() {
+    let text =
+        "Dear Ms. Okafor:\r\nThank you for your letter of March 4, 2019.\r\nYours sincerely,";
+    let runs = vec![
+        run(54, 120, "Dear Ms. Okafor:", 9),
+        run(54, 140, "Thank you for your letter of March 4, 2019.", 9),
+        run(54, 170, "Yours sincerely,", 9),
+    ];
+    let mut layer = native_page(0, text, runs);
+    layer.image_coverage = 1.0;
+    let native = layer.native.as_mut().unwrap();
+    native.images = vec![[0, 0, 6120, 7920]];
+    native.text_objects = 3;
+    native.invisible_text_objects = 3;
+    let signals = intern_worker::layout::measure_signals(
+        layer.native.as_ref().unwrap(),
+        &layer.native_text,
+        layer.image_coverage,
+    );
+    assert_eq!(
+        intern_worker::layout::router::text_route(&signals),
+        PageRoute::OcrRegions,
+        "{signals:?}"
+    );
+    struct LetterReading;
+    impl OcrBackend for LetterReading {
+        fn recognize(
+            &self,
+            page: &RenderedPage,
+            _cancel: &CancellationToken,
+        ) -> Result<OcrResult, ExtractionError> {
+            // The whole page, not a region cut from it.
+            assert_eq!(page.image.width(), 255);
+            Ok(OcrResult::new(
+                "Dear Ms. Okafor:\nThank you for your letter of March 4, 2019.\nYours sincerely,",
+                98.0,
+            ))
+        }
+    }
+    let pdf = StandInPdf::new(vec![layer]);
+
+    let document = read(&pdf, &LetterReading);
+
+    let page = &document.pages[0];
+    assert_eq!(page.source, PageSource::Ocr);
+    assert_eq!(
+        page.text.matches("March 4, 2019").count(),
+        1,
+        "{}",
+        page.text
+    );
+    assert_eq!(pdf.renders.load(Ordering::SeqCst), 1);
+}
+
 /// A page of native text with a pasted image across its lower half, which
 /// holds the signature date.
 fn page_with_an_image_region() -> PdfPageInspection {

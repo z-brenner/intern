@@ -15,7 +15,7 @@ use image::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::layout::{NativePage, PageLayout, PageRoute, RouteSignals, measure_signals, route_page};
+use crate::layout::{NativePage, PageLayout, PageRoute, RouteSignals, measure_signals};
 use crate::limits::{
     MAX_DOCUMENT_CHARS, MAX_DOCUMENT_LAYOUT_PARTS, MAX_EXTRACTION_DURATION, MAX_PAGE_CHARS,
     MAX_PAGE_LAYOUT_PARTS, MAX_VISION_LONG_EDGE, MIN_OCR_DPI, RENDER_DPI, ResourceLimits,
@@ -668,8 +668,9 @@ enum PagePlan {
         /// Tenths of a point per rendered pixel.
         scale: f64,
     },
-    /// A text layer that is a bad prior OCR, read again. The fresh reading
-    /// replaces it only if it is better.
+    /// A text layer that is somebody else's OCR, read again: it reads badly,
+    /// or would not read well as it is. The fresh reading replaces it only
+    /// if it is better.
     Reread {
         inspection: PdfPageInspection,
         signals: RouteSignals,
@@ -712,7 +713,7 @@ fn ends_the_document(error: &ExtractionError) -> bool {
 
 /// Reads a PDF.
 ///
-/// Every page is routed ([`crate::layout::route_page`]) on what inspection
+/// Every page is routed ([`crate::layout::router::route_page_at`]) on what inspection
 /// measured. Pages read from their text are finished in the loop. Pages
 /// that need OCR are rendered one at a time - PDFium is not thread-safe, and
 /// the backend that inspected the document is the one that renders it -
@@ -769,6 +770,7 @@ where
             cancel.report_progress("reading", page_index, Some(page_count));
             match plan_page(
                 inspection,
+                page_count,
                 pdf,
                 path,
                 limits,
@@ -848,6 +850,7 @@ fn halted(cancel: &CancellationToken, started: Instant, limits: &ResourceLimits)
 #[allow(clippy::too_many_arguments)]
 fn plan_page<O: OcrBackend + Sync + ?Sized>(
     mut inspection: PdfPageInspection,
+    page_count: usize,
     pdf: &dyn PdfBackend,
     path: &Path,
     limits: &ResourceLimits,
@@ -872,7 +875,8 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
         |timings| &mut timings.analysis_micros,
         || (page_needs_ocr(&inspection), signals_of(&inspection)),
     );
-    let route = route_page(&signals, needs_ocr);
+    let key_page = crate::layout::router::is_key_page(page_index, page_count);
+    let route = crate::layout::router::route_page_at(&signals, needs_ocr, key_page);
 
     if needs_ocr {
         // This page has no text worth keeping, so it has to be rendered to be
@@ -1086,14 +1090,12 @@ fn display_width(inspection: &PdfPageInspection) -> f64 {
 fn native_route(route: PageRoute, signals: &RouteSignals) -> PageRoute {
     match route {
         PageRoute::Fast | PageRoute::Layout => route,
-        PageRoute::Ocr | PageRoute::OcrRegions => route_page(
-            &RouteSignals {
+        PageRoute::Ocr | PageRoute::OcrRegions => {
+            crate::layout::router::text_route(&RouteSignals {
                 image_region: 0,
-                garbage: 0,
                 ..*signals
-            },
-            false,
-        ),
+            })
+        }
     }
 }
 
@@ -1219,13 +1221,17 @@ impl NativeRead {
     }
 }
 
-/// Whether a fresh OCR reading of a page whose text layer looked like bad
-/// OCR is better than that layer: confident, or with fewer of the errors
-/// that sent the page to be read again.
+/// Whether a fresh OCR reading of a page whose text layer is somebody
+/// else's OCR is better than that layer: confident, or, for a layer read
+/// again for its OCR errors, with fewer of them. A layer read again only
+/// because it would not read well as it is (see
+/// [`crate::layout::router::route_page_at`]) shows no more errors than a
+/// fresh reading may, so only a confident reading replaces it.
 fn reread_is_better(reading: &OcrResult, signals: &RouteSignals) -> bool {
+    use crate::layout::router::{garbage_score, thresholds::GARBAGE_LAYER};
     !reading.text.trim().is_empty()
         && (reading.mean_confidence >= CONFIDENT_READING
-            || crate::layout::router::garbage_score(&reading.text) < signals.garbage)
+            || (signals.garbage >= GARBAGE_LAYER && garbage_score(&reading.text) < signals.garbage))
 }
 
 /// Puts the pages back in order and makes every decision that depends on
@@ -1294,7 +1300,7 @@ fn assemble(
                 )
             }
             PagePlan::Reread {
-                inspection,
+                mut inspection,
                 signals,
                 vision,
             } => {
@@ -1324,12 +1330,15 @@ fn assemble(
                         )
                     }
                     fresh => {
-                        // The layer stays, but a reading that came back
-                        // unsure says the page is hard to read either way:
-                        // the image it was rendered with goes with the
-                        // layer's text, as it would with a scan's.
+                        // The layer stays, read the way its text routes it,
+                        // as it would have been had it not been read again.
+                        // But a reading that came back unsure says the page
+                        // is hard to read either way: the image it was
+                        // rendered with goes with the layer's text, as it
+                        // would with a scan's.
                         let reread_vision = fresh.and_then(|(_, _, page_vision)| page_vision);
                         let route = native_route(PageRoute::Ocr, &signals);
+                        runs(&mut inspection, route)?;
                         (
                             native_page(page_number, inspection, signals, route, stop, &mut unheld)
                                 .finish(&mut budget),
