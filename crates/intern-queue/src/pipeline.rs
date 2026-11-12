@@ -909,8 +909,13 @@ impl ProposalRecord {
     /// respelled side of a "between" as a lesson is read (see
     /// [`lesson_from_edit`]), and otherwise the one party after the type it
     /// kept, whatever the connecting word (see [`approved_party`]). An edit
-    /// to the type leaves the parties as proposed. `extension` is the
-    /// source file's.
+    /// to the type of a name that gave a party, keeping its party clause -
+    /// the connecting word and the party - leaves the parties as proposed,
+    /// however the type changed. One that changes the clause as well and
+    /// lengthens the type with words that begin with a connecting word
+    /// reads those words as part of the party: "Notice to Tenants from City
+    /// of Boston" for "Notice from Acme Property" gives "Tenants from City
+    /// of Boston". `extension` is the source file's.
     pub fn as_filed(&self, extension: &str, filename: &str) -> ValidatedProposal {
         let styled = self.styled_proposal();
         let mut filed = proposal_as_applied(&styled, filename);

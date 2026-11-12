@@ -205,7 +205,13 @@ pub fn compose_styled_filename(
 /// word, party, `and`, party - rather than by finding the smallest edit,
 /// because the smallest edit lies: "Acme and Contoso" becomes "Acme Corp and
 /// Contoso Inc" by inserting text one character into the connector, and a
-/// diff would credit it all to one party.
+/// diff would credit it all to one party. A name that still ends with the
+/// party clause the proposed one gave is an edit to the type, even where
+/// the words added to the type begin with the clause's own connecting word
+/// and so would read as a longer party too: "Application for Certification
+/// for City of Victorville" for "Application for City of Victorville"
+/// teaches the type "Application for Certification", as [`approved_party`]
+/// reads it.
 pub fn lesson_from_edit(
     proposal: &ValidatedProposal,
     extension: &str,
@@ -234,12 +240,16 @@ pub fn lesson_from_edit(
                 .strip_suffix(clause.text.as_str())
                 .and_then(|rest| rest.strip_suffix(connector.as_str()));
             match (type_unchanged, clause_unchanged) {
-                (Some(new_clause), _) if new_clause != clause.text => clause.lesson(new_clause)?,
+                // The party clause kept whole, so the type changed - also
+                // where it was lengthened with the clause's own connecting
+                // word, which reads as a longer party too ("Application for
+                // Certification for City of Victorville").
                 (_, Some(new_type)) => HouseRule::new(
                     RuleKind::DocumentType,
                     proposal.document_type.clone()?,
                     new_type,
                 ),
+                (Some(new_clause), None) => clause.lesson(new_clause)?,
                 // Both the type and the party clause changed, or the
                 // connecting word did: a decision about this document.
                 _ => return None,
@@ -884,6 +894,53 @@ mod tests {
         )
         .unwrap();
         assert_eq!(prefixed.to, "Signed Statement of Work");
+    }
+
+    /// A type lengthened with the connecting word of the party clause it
+    /// kept reads as a longer type or as a longer party alike: "Application
+    /// for Certification for City of Victorville" for "Application for City
+    /// of Victorville". It is read as the type, as [`approved_party`] reads
+    /// it, and teaches no party "Certification for City of Victorville".
+    #[test]
+    fn a_type_lengthened_with_its_partys_connecting_word_teaches_the_type() {
+        let application = proposal(
+            Some("Application"),
+            &["City of Victorville"],
+            PartyRelation::For,
+        );
+        let proposed = name(&application);
+        assert_eq!(
+            proposed,
+            "2026-04-01 Application for City of Victorville.pdf"
+        );
+        let approved = "2026-04-01 Application for Certification for City of Victorville.pdf";
+        let lesson = lesson_from_edit(&application, "pdf", &proposed, approved)
+            .expect("the type changed and nothing else did");
+        assert_eq!(
+            (lesson.kind, lesson.from.as_str(), lesson.to.as_str()),
+            (
+                RuleKind::DocumentType,
+                "Application",
+                "Application for Certification"
+            )
+        );
+        assert_eq!(
+            approved_party(&application, "pdf", &proposed, approved),
+            None
+        );
+
+        // The party alone changed, its new name ending in the old: a party.
+        let lesson = lesson_from_edit(
+            &application,
+            "pdf",
+            &proposed,
+            "2026-04-01 Application for Friends of City of Victorville.pdf",
+        )
+        .expect("the party changed and nothing else did");
+        assert_eq!(
+            (lesson.kind, lesson.to.as_str()),
+            (RuleKind::Party, "Friends of City of Victorville")
+        );
     }
 
     #[test]

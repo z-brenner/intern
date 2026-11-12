@@ -4124,9 +4124,12 @@ fn a_party_put_in_a_name_that_gave_none_teaches_no_type() {
 /// A document filed by party goes in the folder of the party its approved
 /// name gives: another party the document names, chosen in review - with
 /// the connecting word changed too, as it often must be - or the
-/// reviewer's own spelling of the one proposed. The filing report says the
-/// same. It used to go in the folder of the party the reviewer had just
-/// taken out of the name.
+/// reviewer's own spelling of the one proposed, or the one proposed where
+/// the reviewer only lengthened the type in front of it, whatever word the
+/// added words begin with. The filing report says the same. It used to go
+/// in the folder of the party the reviewer had just taken out of the name,
+/// and then for a lengthened type in one named after the type's added words
+/// and the party ("Sales Staff with Acme Corporation").
 #[test]
 fn a_party_chosen_in_review_is_the_party_the_document_is_filed_under() {
     let temp = tempdir().unwrap();
@@ -4141,6 +4144,8 @@ fn a_party_chosen_in_review_is_the_party_the_document_is_filed_under() {
         ("2024-04-12", "April 12, 2024"),
         ("2024-05-03", "May 3, 2024"),
         ("2024-06-07", "June 7, 2024"),
+        ("2024-07-19", "July 19, 2024"),
+        ("2024-08-02", "August 2, 2024"),
     ];
     let (pipeline, filing) = reading_pipeline(
         temp.path(),
@@ -4160,6 +4165,8 @@ fn a_party_chosen_in_review_is_the_party_the_document_is_filed_under() {
             source(&inbox, "a.pdf"),
             source(&inbox, "b.pdf"),
             source(&inbox, "c.pdf"),
+            source(&inbox, "d.pdf"),
+            source(&inbox, "e.pdf"),
         ])
         .unwrap()
         .into_iter()
@@ -4180,6 +4187,8 @@ fn a_party_chosen_in_review_is_the_party_the_document_is_filed_under() {
         "2024-04-12 Employment Agreement with Beacon Staffing LLC.pdf",
         "2024-05-03 Employment Agreement for John Smith.pdf",
         "2024-06-07 Employment Agreement with ACME.pdf",
+        "2024-07-19 Employment Agreement for Sales Staff with Acme Corporation.pdf",
+        "2024-08-02 Employment Agreement with Benefits with Acme Corporation.pdf",
     ];
     for (id, name) in queued.iter().zip(approved) {
         pipeline.approve(*id, name, "An agreement.").unwrap();
@@ -4204,10 +4213,19 @@ fn a_party_chosen_in_review_is_the_party_the_document_is_filed_under() {
         filed.join("John Smith").join(approved[1])
     );
     assert_eq!(destination(queued[2]), filed.join("ACME").join(approved[2]));
+    for lengthened in [3, 4] {
+        assert_eq!(
+            destination(queued[lengthened]),
+            filed.join("Acme Corporation").join(approved[lengthened]),
+            "only the type changed"
+        );
+    }
     let heard = filing.filed.lock().unwrap();
     assert_eq!(heard[0].proposal.parties, vec!["Beacon Staffing LLC"]);
     assert_eq!(heard[1].proposal.parties, vec!["John Smith"]);
     assert_eq!(heard[2].proposal.parties, vec!["ACME"]);
+    assert_eq!(heard[3].proposal.parties, vec!["Acme Corporation"]);
+    assert_eq!(heard[4].proposal.parties, vec!["Acme Corporation"]);
     assert_eq!(
         record_of(&pipeline, queued[0]).analysis.proposal.parties,
         vec!["Acme Corporation"],
