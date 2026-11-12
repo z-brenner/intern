@@ -1715,7 +1715,14 @@ impl RuntimeModel {
     /// the model is not idle. Holding both, nothing can ask the model
     /// anything while it goes, so no request is interrupted and no
     /// generation moves.
-    fn unload_if_idle(&self) -> bool {
+    ///
+    /// Nor when `documents_waiting` says a document is about to be read,
+    /// which is asked only of a model that would otherwise go. The scheduler
+    /// unloads at the top of every pass, the pass a new document wakes among
+    /// them, and a model idle for ten minutes was unloaded there and loaded
+    /// again at once for that document - every load reads the file, and the
+    /// accurate model's is 5.7 GB.
+    fn unload_if_idle(&self, documents_waiting: impl FnOnce() -> bool) -> bool {
         let Ok(_lifecycle) = self.lifecycle.try_lock() else {
             return false;
         };
@@ -1729,7 +1736,7 @@ impl RuntimeModel {
         let idle = last_used.is_none_or(|last| {
             (self.senses.now)().saturating_duration_since(last) >= tiers::IDLE_UNLOAD_AFTER
         });
-        if engine.is_none() || !idle {
+        if engine.is_none() || !idle || documents_waiting() {
             return false;
         }
         let process = self
@@ -2981,7 +2988,8 @@ impl SetupManager {
     /// What the scheduler does for the local model between passes over the
     /// queue, at least every `RECOVER_INTERVAL` and at every wake.
     ///
-    /// Unloads a model nothing has asked anything for a while; resumes, while
+    /// Unloads a model nothing has asked anything for a while, unless this
+    /// pass is about to read a document with it; resumes, while
     /// the local model is the one chosen, a background download the person
     /// started in an earlier session and did not pause - one with a partial
     /// file to resume, of either model; the accurate one not when they asked
@@ -2989,7 +2997,9 @@ impl SetupManager {
     /// the accurate model can read, sends back to be read the documents the
     /// fast one read in its place that nobody has acted on.
     fn tick(self: &Arc<Self>, pipeline: &Pipeline, settings: &AppSettings) {
-        self.runtime.unload_if_idle();
+        // A queue that cannot answer keeps nothing loaded, as before.
+        self.runtime
+            .unload_if_idle(|| pipeline.has_document_waiting().unwrap_or(false));
         if settings.model_source != ModelSource::Local {
             return;
         }
@@ -8813,7 +8823,7 @@ mod runtime_tests {
             MIN_AVAILABLE_FOR_ACCURATE,
         },
     };
-    use intern_queue::{AnalyzerBoundary, ModelFailure, ModelSource};
+    use intern_queue::{AnalyzerBoundary, AppSettings, ModelFailure, ModelSource};
 
     use super::{
         CommandError, LaunchedRuntime, LlamaLauncher, ProgressThrottle, RuntimeLauncher,
@@ -11337,7 +11347,7 @@ mod runtime_tests {
 
         rig.reply(Reply::Calibration);
         world.advance(IDLE_UNLOAD_AFTER);
-        assert!(runtime.unload_if_idle());
+        assert!(runtime.unload_if_idle(|| false));
         runtime.analyze(&probe(), "pdf", &[]).unwrap();
         assert_eq!(rig.launches(), 2);
         assert_eq!(
@@ -11358,13 +11368,13 @@ mod runtime_tests {
         verified(&runtime);
 
         world.advance(IDLE_UNLOAD_AFTER - Duration::from_secs(1));
-        assert!(!runtime.unload_if_idle());
+        assert!(!runtime.unload_if_idle(|| false));
         assert!(runtime.running());
         world.advance(Duration::from_secs(1));
-        assert!(runtime.unload_if_idle());
+        assert!(runtime.unload_if_idle(|| false));
         assert!(!runtime.running());
         assert_eq!(rig.alive.load(Ordering::SeqCst), 0);
-        assert!(!runtime.unload_if_idle(), "nothing left to unload");
+        assert!(!runtime.unload_if_idle(|| false), "nothing left to unload");
         assert!(runtime.serviceable(), "the queue still runs");
 
         let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
@@ -11387,7 +11397,7 @@ mod runtime_tests {
         let request = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
         rig.wait_in_flight();
         world.advance(IDLE_UNLOAD_AFTER * 2);
-        assert!(!runtime.unload_if_idle());
+        assert!(!runtime.unload_if_idle(|| false));
         rig.reply(Reply::Calibration);
         runtime.cancel().unwrap();
         assert_eq!(
@@ -11402,10 +11412,45 @@ mod runtime_tests {
         let canceling = Arc::clone(&runtime);
         let cancel = std::thread::spawn(move || canceling.cancel());
         gate.wait_reached();
-        assert!(!runtime.unload_if_idle());
+        assert!(!runtime.unload_if_idle(|| false));
         gate.open();
         assert_eq!(cancel.join().unwrap(), Ok(()));
         assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1);
+    }
+
+    /// The scheduler unloads at the top of every pass, the pass a new
+    /// document wakes among them: a model idle for ten minutes is kept for a
+    /// pass that is about to read a document with it, and the queue is asked
+    /// only about a model that would otherwise go. A paused queue reads
+    /// nothing, and keeps nothing loaded.
+    #[test]
+    fn an_idle_model_is_kept_for_a_pass_that_reads_a_document() {
+        let install = Install::new("tier-idle-waiting");
+        let rig = Rig::new();
+        let world = World::new();
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        let (setup, _states) = manager(&runtime, ModelSource::Local);
+        settle(&setup);
+        assert!(runtime.running());
+
+        assert!(!runtime.unload_if_idle(|| panic!("asked about a model in use")));
+        world.advance(IDLE_UNLOAD_AFTER);
+        assert!(!runtime.unload_if_idle(|| true));
+        assert!(runtime.running());
+
+        // Through the scheduler's tick, asking the queue.
+        let data = folder("tier-idle-waiting");
+        let (pipeline, _) = queue(&data);
+        pipeline
+            .enqueue_files(&[write(&data, "notice.pdf", b"%PDF-1.7 a notice")])
+            .unwrap();
+        setup.tick(&pipeline, &AppSettings::default());
+        assert!(runtime.running(), "kept for the document");
+        pipeline.pause();
+        setup.tick(&pipeline, &AppSettings::default());
+        assert!(!runtime.running(), "paused, nothing will read it");
+        assert_eq!(rig.launches(), 1);
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     /// A document whose model must be loaded first, canceled while it loads:
