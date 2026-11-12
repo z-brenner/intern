@@ -296,6 +296,13 @@ change:
   4-core machine, two alternating runs each, the 28 take 60.2 s to
   extract before and 116.5 s after: 0.5-5.5 s more on each of the 18, and
   up to 1.1 s less on the 10.
+* Read live by Qwen3.5 9B (real3-6, which hold 27 of the 28) and compared
+  with alpha.17's own recordings: 9 names right instead of 7, and 4 filed
+  without review, all right, instead of 1
+  ([`bench/reports/ocr-layer-live-2026-11`](../bench/reports/ocr-layer-live-2026-11/README.md)).
+  The run first showed a wrong one: the clean text joined a subject line to
+  its case number, and the type took "Case" from "Case No."; the engine now
+  leaves a number's label out of a type (`phrases::labels_the_number`).
 
 What it cannot do: a stamp or a date written by hand that the layer missed,
 PP-OCR often misses too - read again, real3-letter-09's stamp reads
