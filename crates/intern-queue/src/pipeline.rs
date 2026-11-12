@@ -269,6 +269,23 @@ pub enum Revalidation {
     NotNow,
 }
 
+/// What a model boundary can tell about validating a stored reading again
+/// from the stored reading alone, before the document is read again for it
+/// ([`AnalyzerBoundary::may_revalidate`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RevalidationOutlook {
+    /// Nothing in the stored reading rules it out: the document is read
+    /// again, and [`AnalyzerBoundary::revalidate`] decides.
+    Possible,
+    /// The stored reply cannot stand in for a fresh one - another model
+    /// file, tier or runtime would read the document now, or the reading is
+    /// not one the boundary can vouch for - so the document is left as it
+    /// is, and not read.
+    Declined,
+    /// Nothing can be told yet, so the document is asked about again later.
+    NotNow,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelFailure {
     pub code: String,
@@ -327,6 +344,16 @@ pub trait AnalyzerBoundary: Send + Sync {
         _stored: &DocumentAnalysis,
     ) -> Revalidation {
         Revalidation::Declined
+    }
+    /// The checks of [`Self::revalidate`] that need no text, made from the
+    /// stored reading alone before the document is read again for it.
+    /// Reading a scan again is seconds of OCR, and after an update - which
+    /// restarts Intern, so the extraction memo is empty - every waiting
+    /// document would otherwise be read only to hear that another model
+    /// file, tier or runtime reads it now. Declined by default, as
+    /// `revalidate` is.
+    fn may_revalidate(&self, _stored: &DocumentAnalysis) -> RevalidationOutlook {
+        RevalidationOutlook::Declined
     }
     fn recover(&self, _failure: &ModelFailure) -> Result<(), ModelFailure> {
         Ok(())
@@ -893,6 +920,10 @@ pub struct Pipeline {
     /// person that an earlier release read (see
     /// [`Pipeline::revalidate_waiting`]). Empty: nothing is validated again.
     release: String,
+    /// The item whose document is being read for validating it again, 0
+    /// for none: no claim marks it active, so a cancel or a removal looks
+    /// here to stop that reading.
+    revalidating: AtomicI64,
 }
 
 /// Which waiting renames one scheduler pass applies.
@@ -1021,6 +1052,7 @@ impl Pipeline {
             data_folder,
             memo: ExtractionMemo::default(),
             release: String::new(),
+            revalidating: AtomicI64::new(0),
         }
     }
 
@@ -3382,6 +3414,9 @@ impl Pipeline {
                 _ => {}
             }
         }
+        // A document being read only to be validated again under a new
+        // release is no claim's, and is stopped here.
+        self.stop_revalidation(id);
         // A canceled document is not read again unless a person asks, and
         // then from the start.
         self.memo.forget(id);
@@ -3589,9 +3624,11 @@ impl Pipeline {
     /// and few change what the model is asked; but a rule a release
     /// improves used to reach only documents read after it, while the
     /// documents already waiting in review - most of them - kept the
-    /// reading the old rules made. Validating one again costs extracting it
-    /// once more (nothing, while the extraction memo holds it) and a tenth
-    /// of a second or so of validation, against 35 to 180 seconds of model.
+    /// reading the old rules made. Validating one again costs reading the
+    /// document once more - a fresh extraction, since an update restarts
+    /// Intern and the extraction memo starts empty: about 3 s a document on
+    /// the real sets, up to about 95 s for a long scan - and a tenth of a
+    /// second or so of validation, against 35 to 180 seconds of model.
     ///
     /// A document is validated again only when all of these hold, and is
     /// otherwise left exactly as it is:
@@ -3602,10 +3639,15 @@ impl Pipeline {
     /// - its reading recorded the request its reply answered
     ///   (`AnalysisTelemetry::request_sha256`), which readings made before
     ///   alpha.18 did not;
+    /// - the model boundary finds nothing in the stored reading alone that
+    ///   rules it out - another model file, tier or runtime would read it
+    ///   now ([`AnalyzerBoundary::may_revalidate`]) - which it asks before
+    ///   the document is read, so that what an update changes for every
+    ///   document costs no reading of any;
     /// - its file still has the bytes it was read from;
     /// - the model boundary finds the request a fresh reading would send now
-    ///   byte for byte the stored one, to the same model file
-    ///   ([`AnalyzerBoundary::revalidate`]).
+    ///   byte for byte the stored one, to the same model file under the same
+    ///   runtime ([`AnalyzerBoundary::revalidate`]).
     ///
     /// The new record replaces the old one only when it says something
     /// different, in a write transaction that checks the row and the record
@@ -3660,6 +3702,11 @@ impl Pipeline {
         if !self.waits_as_read(&item, &record)? {
             return left();
         }
+        match self.model.may_revalidate(&record.analysis) {
+            RevalidationOutlook::Possible => {}
+            RevalidationOutlook::Declined => return left(),
+            RevalidationOutlook::NotNow => return Ok(None),
+        }
         let Ok(evidence) = self.authorize_item(&item, AdmissionStage::Extract) else {
             return left();
         };
@@ -3677,11 +3724,16 @@ impl Pipeline {
         let source = match self.memo.get(id, &item.source_hash, &item.source_path) {
             Some(source) => source,
             None => {
+                // Read under its own request, which a cancel or a removal of
+                // the item meanwhile stops (`stop_revalidation`); what it
+                // makes of the document is then not kept either.
                 let reading = self.memo.reading(id);
-                match self
+                self.revalidating.store(id, Ordering::SeqCst);
+                let extracted = self
                     .worker
-                    .extract(&format!("revalidate-{id}"), path, &mut |_| {})
-                {
+                    .extract(&revalidation_request(id), path, &mut |_| {});
+                self.revalidating.store(0, Ordering::SeqCst);
+                match extracted {
                     Ok(source) => {
                         reading.keep(&item.source_hash, &item.source_path, &source);
                         source
@@ -3712,8 +3764,17 @@ impl Pipeline {
                 Revalidation::Declined => return left(),
                 Revalidation::NotNow => return Ok(None),
             };
+        // Read and validated on this installation, as a claim's reading is:
+        // once the reading stands, changed or not, the intake hears so -
+        // which also takes back the "verified" its admission check just
+        // noted for a document a provider vouched for.
+        let read_through = || {
+            self.admission
+                .processed(&item.source_path, &item.source_hash);
+        };
         let mut again = self.record_for(&item, analysis, &extension, &existing)?;
         if same_reading(&record, &again) {
+            read_through();
             return left();
         }
         again.revision = record.revision + 1;
@@ -3732,6 +3793,7 @@ impl Pipeline {
             Err(error) if error.code == "STATE_CONFLICT" => return left(),
             Err(error) => return Err(error),
         }
+        read_through();
         self.settle_new_record(&item, &again, next)?;
         Ok(Some(true))
     }
@@ -3758,6 +3820,16 @@ impl Pipeline {
         Ok(as_read && self.store.listed_receipts(item.id)?.newest.is_none())
     }
 
+    /// Stops the reading of item `id`'s document for validating it again,
+    /// if one is under way: the item was canceled or removed meanwhile.
+    fn stop_revalidation(&self, id: i64) {
+        if self.revalidating.load(Ordering::SeqCst) == id {
+            // A reading that has just ended is no longer the reader's to
+            // stop; its result is not kept (the memo forgets the item).
+            let _ = self.worker.cancel(&revalidation_request(id));
+        }
+    }
+
     /// Takes an item out of the queue, with its proposal and receipts.
     ///
     /// An item whose files were left unsettled is removed only once the
@@ -3771,6 +3843,7 @@ impl Pipeline {
             self.reject_deferred_reconciliation_mutation(id)?;
         }
         self.repository.remove_item(id)?;
+        self.stop_revalidation(id);
         self.memo.forget(id);
         self.events.queue_changed();
         Ok(())
@@ -5492,6 +5565,12 @@ fn worker_error(error: WorkerFailure) -> PipelineError {
 
 fn database_error(_: rusqlite::Error) -> PipelineError {
     PipelineError::new("DATABASE_UNAVAILABLE", "pipeline database operation failed")
+}
+
+/// The reader's request id for reading item `id`'s document to validate it
+/// again: no claim's, so no attempt number.
+fn revalidation_request(id: i64) -> String {
+    format!("revalidate-{id}")
 }
 
 /// The row status a reading's proposal status puts its document in.

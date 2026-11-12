@@ -22,9 +22,10 @@ use intern_engine::{
     ProposerReply, SourcePage, TokenConfidence,
 };
 use intern_queue::{
+    AdmissionEvidence, AdmissionGuard, AdmissionStage,
     pipeline::{
-        AnalyzerBoundary, ModelFailure, Pipeline, PipelineEventSink, PipelineItem,
-        PipelineProgress, Revalidation, WorkerBoundary, WorkerFailure,
+        AnalyzerBoundary, ModelFailure, Pipeline, PipelineError, PipelineEventSink, PipelineItem,
+        PipelineProgress, Revalidation, RevalidationOutlook, WorkerBoundary, WorkerFailure,
     },
     settings::{AppSettings, SettingsStore},
 };
@@ -113,6 +114,8 @@ impl Proposer for AgreementReader {
 struct EvidenceRuntime {
     gate: Mutex<Option<f32>>,
     pin: Mutex<String>,
+    /// The runtime cannot tell yet which model would read a document.
+    unsure: Mutex<bool>,
     readings: AtomicUsize,
     revalidations: AtomicUsize,
 }
@@ -122,6 +125,7 @@ impl EvidenceRuntime {
         Self {
             gate: Mutex::new(gate),
             pin: Mutex::new("9b-file-sha256".into()),
+            unsure: Mutex::new(false),
             readings: AtomicUsize::new(0),
             revalidations: AtomicUsize::new(0),
         }
@@ -150,6 +154,20 @@ impl AnalyzerBoundary for EvidenceRuntime {
             .map_err(|error| ModelFailure::fatal(error.code().as_str()))?;
         analysis.telemetry.model_sha256 = Some(self.pin.lock().unwrap().clone());
         Ok(analysis)
+    }
+
+    /// The model file is known without the text: a reading by another one
+    /// is declined before the document is read for it.
+    fn may_revalidate(&self, stored: &DocumentAnalysis) -> RevalidationOutlook {
+        if *self.unsure.lock().unwrap() {
+            RevalidationOutlook::NotNow
+        } else if stored.telemetry.model_sha256.as_deref()
+            == Some(self.pin.lock().unwrap().as_str())
+        {
+            RevalidationOutlook::Possible
+        } else {
+            RevalidationOutlook::Declined
+        }
     }
 
     fn revalidate(
@@ -181,12 +199,19 @@ impl AnalyzerBoundary for EvidenceRuntime {
     }
 }
 
+/// What happens while a request is being read, as a person acting on the
+/// window meanwhile.
+type DuringRead = Box<dyn Fn(&str) + Send + Sync>;
+
 /// A reader that reads each file as the text it was told the file holds,
-/// and remembers every request it was sent.
+/// and remembers every request it was sent and every one it was told to
+/// stop.
 #[derive(Default)]
 struct TextWorker {
     texts: Mutex<HashMap<String, String>>,
     requests: Mutex<Vec<String>>,
+    cancels: Mutex<Vec<String>>,
+    during_read: Mutex<Option<DuringRead>>,
 }
 
 impl TextWorker {
@@ -200,6 +225,15 @@ impl TextWorker {
     fn requests(&self) -> Vec<String> {
         self.requests.lock().unwrap().clone()
     }
+
+    /// How many requests to read item `id`'s document for validation the
+    /// reader was sent.
+    fn revalidation_reads(&self) -> usize {
+        self.requests()
+            .iter()
+            .filter(|request| request.starts_with("revalidate-"))
+            .count()
+    }
 }
 
 impl WorkerBoundary for TextWorker {
@@ -210,6 +244,9 @@ impl WorkerBoundary for TextWorker {
         _progress: &mut dyn FnMut(ExtractProgress),
     ) -> Result<DocumentSource, WorkerFailure> {
         self.requests.lock().unwrap().push(request_id.to_owned());
+        if let Some(during) = self.during_read.lock().unwrap().as_ref() {
+            during(request_id);
+        }
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         self.texts
             .lock()
@@ -221,12 +258,34 @@ impl WorkerBoundary for TextWorker {
             .ok_or_else(|| WorkerFailure::new("PARSE_FAILED", false, false))
     }
 
-    fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+    fn cancel(&self, request_id: &str) -> Result<(), WorkerFailure> {
+        self.cancels.lock().unwrap().push(request_id.to_owned());
         Ok(())
     }
 
     fn restart(&self) -> Result<(), WorkerFailure> {
         Ok(())
+    }
+}
+
+/// Admits every file as a local one, and remembers each document the
+/// pipeline said it read to the end.
+#[derive(Default)]
+struct Admissions {
+    processed: Mutex<Vec<PathBuf>>,
+}
+
+impl AdmissionGuard for Admissions {
+    fn authorize(
+        &self,
+        _path: &Path,
+        _stage: AdmissionStage,
+    ) -> Result<AdmissionEvidence, PipelineError> {
+        Ok(AdmissionEvidence::local())
+    }
+
+    fn processed(&self, path: &Path, _hash: &str) {
+        self.processed.lock().unwrap().push(path.to_path_buf());
     }
 }
 
@@ -246,6 +305,7 @@ struct Rig {
     filed: PathBuf,
     worker: Arc<TextWorker>,
     runtime: Arc<EvidenceRuntime>,
+    admissions: Arc<Admissions>,
 }
 
 impl Rig {
@@ -261,6 +321,7 @@ impl Rig {
             temp,
             worker: Arc::new(TextWorker::default()),
             runtime: Arc::new(EvidenceRuntime::new(gate)),
+            admissions: Arc::new(Admissions::default()),
         };
         rig.settings()
             .save(&AppSettings {
@@ -290,6 +351,7 @@ impl Rig {
             self.settings(),
         )
         .unwrap()
+        .with_admission_guard(self.admissions.clone())
         .with_release(release)
     }
 
@@ -396,6 +458,10 @@ fn a_waiting_reading_is_validated_again_under_a_new_release_without_the_model() 
         again.reasons
     );
     assert_eq!(again.analysis.model_proposal, read.analysis.model_proposal);
+    // The intake hears the document was read through, as after a reading.
+    let path = rig.inbox.join("waiting.pdf");
+    let processed = rig.admissions.processed.lock().unwrap().clone();
+    assert_eq!(processed.iter().filter(|done| **done == path).count(), 2);
 
     // Once per release.
     assert_eq!(next.revalidate_waiting().unwrap(), 0);
@@ -407,7 +473,9 @@ fn a_waiting_reading_is_validated_again_under_a_new_release_without_the_model() 
 /// to the same model file. A document the reader now reads differently, one
 /// read before readings recorded their request, and - after another update
 /// that pins a new model file - every document, are left exactly as they
-/// were; the one read before requests were recorded is not even read again.
+/// were. The one read before requests were recorded is not even read
+/// again, and neither is any document once the model file has changed: the
+/// runtime says so from the stored reading alone, before any OCR.
 #[test]
 fn a_reading_whose_request_or_model_would_differ_is_left_as_it_was() {
     let rig = Rig::new(None, false);
@@ -446,12 +514,90 @@ fn a_reading_whose_request_or_model_would_differ_is_left_as_it_was() {
     *rig.runtime.gate.lock().unwrap() = None;
     *rig.runtime.pin.lock().unwrap() = "another-file-sha256".into();
     let after = [reread, unrecorded, control].map(|id| rig.stored(id));
+    let reads = rig.worker.revalidation_reads();
     let last = rig.release("0.1.0-alpha.20");
     assert_eq!(last.revalidate_waiting().unwrap(), 0);
     for (id, stored) in [reread, unrecorded, control].into_iter().zip(&after) {
         assert_eq!(&rig.stored(id), stored, "item {id} was left as it was");
     }
     assert_eq!(item(&last, control).status, QueueStatus::NeedsReview);
+    assert_eq!(rig.worker.revalidation_reads(), reads, "nothing read again");
+}
+
+/// A runtime that cannot tell yet which model would read a document - none
+/// checked since the update - has nothing read for it, and the documents
+/// stay due: validated once it can tell.
+#[test]
+fn a_runtime_that_cannot_tell_yet_has_nothing_read_and_is_asked_again() {
+    let rig = Rig::new(None, false);
+    let first = rig.release("0.1.0-alpha.18");
+    let id = rig.add(&first, "waiting.pdf");
+    first.run_until_idle().unwrap();
+    drop(first);
+
+    *rig.runtime.gate.lock().unwrap() = Some(STRICTER);
+    *rig.runtime.unsure.lock().unwrap() = true;
+    let next = rig.release("0.1.0-alpha.19");
+    assert_eq!(next.revalidate_waiting().unwrap(), 0);
+    next.run_until_idle().unwrap();
+    assert_eq!(rig.worker.revalidation_reads(), 0, "nothing read");
+    assert_eq!(item(&next, id).status, QueueStatus::Ready);
+
+    *rig.runtime.unsure.lock().unwrap() = false;
+    assert_eq!(next.revalidate_waiting().unwrap(), 1);
+    assert_eq!(item(&next, id).status, QueueStatus::NeedsReview);
+    assert_eq!(rig.runtime.readings.load(Ordering::SeqCst), 1, "no model");
+}
+
+/// A person who cancels or removes a waiting document while it is being
+/// read for validation stops that reading, and nothing it made of the
+/// document is kept: the canceled document, retried, is read again from
+/// the start - even when the reading finished as the cancel landed.
+#[test]
+fn a_document_canceled_or_removed_while_read_for_validation_keeps_nothing() {
+    let rig = Rig::new(None, false);
+    let first = rig.release("0.1.0-alpha.18");
+    let canceled = rig.add(&first, "canceled.pdf");
+    let removed = rig.add(&first, "removed.pdf");
+    first.run_until_idle().unwrap();
+    drop(first);
+    let before = rig.stored(canceled);
+
+    *rig.runtime.gate.lock().unwrap() = Some(STRICTER);
+    let next = Arc::new(rig.release("0.1.0-alpha.19"));
+    let window = Arc::downgrade(&next);
+    *rig.worker.during_read.lock().unwrap() = Some(Box::new(move |request: &str| {
+        let pipeline = window.upgrade().unwrap();
+        if request == format!("revalidate-{canceled}") {
+            pipeline.cancel(canceled).unwrap();
+        } else if request == format!("revalidate-{removed}") {
+            pipeline.remove(removed, false).unwrap();
+        }
+    }));
+    assert_eq!(next.revalidate_waiting().unwrap(), 0);
+    *rig.worker.during_read.lock().unwrap() = None;
+
+    assert_eq!(
+        rig.worker.cancels.lock().unwrap().clone(),
+        vec![
+            format!("revalidate-{canceled}"),
+            format!("revalidate-{removed}")
+        ],
+        "each reading was stopped"
+    );
+    assert_eq!(item(&next, canceled).status, QueueStatus::Canceled);
+    assert_eq!(rig.stored(canceled), before, "left as it was");
+    assert!(next.list().unwrap().iter().all(|item| item.id != removed));
+
+    let reads = rig.worker.requests().len();
+    next.retry(canceled).unwrap();
+    next.run_until_idle().unwrap();
+    assert_eq!(
+        rig.worker.requests()[reads..],
+        [format!("queue-{canceled}-1")],
+        "read again from the start"
+    );
+    assert_eq!(item(&next, canceled).status, QueueStatus::NeedsReview);
 }
 
 /// Nothing a person has acted on is validated again: an approval waiting for
