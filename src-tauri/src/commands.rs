@@ -12492,7 +12492,7 @@ mod runtime_tests {
 
     /// Reads every file as the calibration notice and remembers each
     /// request; reading one to validate it again takes `takes` by the
-    /// world's clock, as a long scan's OCR does.
+    /// world's clock.
     struct NoticeReader {
         world: World,
         takes: Duration,
@@ -12545,9 +12545,10 @@ mod runtime_tests {
     /// again, each a fresh extraction that no model takes part in, while the
     /// model the update's self-test loaded stays loaded. One a pass, the
     /// scheduler's next pass begun at once, so its idle unload runs between
-    /// them: with each extraction taking six minutes, as a long scan's can,
-    /// the model goes once it has been idle ten, with a document still due.
-    /// Validated within one pass, they kept it loaded until the last was
+    /// them: with each extraction taking six minutes by the test's clock,
+    /// standing in for a stretch of the sweep (about 120 documents at 3 s
+    /// each), the model goes once it has been idle ten, with a document still
+    /// due. Validated within one pass, they kept it loaded until the last was
     /// done.
     #[test]
     fn the_idle_unload_runs_between_documents_validated_again() {
