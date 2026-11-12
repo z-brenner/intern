@@ -30,6 +30,7 @@ on:
           - speed
           - memory
           - no-repack
+          - no-repack-fast
 
 permissions:
   contents: read
@@ -88,11 +89,12 @@ jobs:
           $Port = 18200
           $Runs = @(@("upstream", "accurate", "upstream-1"), @("upstream", "fast", "fast-1"), @("upstream", "accurate", "upstream-2"))
           $Every = 1
-          # The accurate model's own flag, alternated on one runner: the app
-          # launches it with --no-repack (tiers::tier_server_flags).
-          if ("${{ inputs.probe }}" -eq "no-repack") {
-            $Runs = @(@("upstream", "accurate", "repacked-1", ""), @("upstream", "accurate", "no-repack-1", "--no-repack"),
-              @("upstream", "accurate", "repacked-2", ""), @("upstream", "accurate", "no-repack-2", "--no-repack"))
+          # A model's own flag, alternated on one runner: the app launches
+          # both with --no-repack (tiers::tier_server_flags).
+          if ("${{ inputs.probe }}" -like "no-repack*") {
+            $Tier = if ("${{ inputs.probe }}" -eq "no-repack-fast") { "fast" } else { "accurate" }
+            $Runs = @(@("upstream", $Tier, "repacked-1", ""), @("upstream", $Tier, "no-repack-1", "--no-repack"),
+              @("upstream", $Tier, "repacked-2", ""), @("upstream", $Tier, "no-repack-2", "--no-repack"))
             $Every = 3
           }
           foreach ($Run in $Runs) {
