@@ -549,12 +549,18 @@ impl Engine {
     /// retrieved and fitted to the model's context - and the request built
     /// for it must be byte for byte the one `stored`'s reply answered
     /// ([`AnalysisTelemetry::request_sha256`]). The reply, turned back into
-    /// exactly what the model gave ([`ModelProposal::from_facts`]: the
-    /// stored one was completed by validation), then goes through the
-    /// validation and composition a fresh reply goes through, with the
-    /// token probabilities and server timings it came with. Whether the
-    /// model that gave it is the one that would be asked now is the
-    /// caller's to know ([`AnalysisTelemetry::model_sha256`]).
+    /// what the client read off the wire when the model gave it
+    /// ([`ModelProposal::from_facts`]: the stored one was completed by
+    /// validation), then goes through the validation and composition a
+    /// fresh reply goes through, with the token figures and server timings
+    /// it came with. Neither the reply's text nor its token probabilities
+    /// are stored, so its facts and token figures are what the release that
+    /// read it made of them. Whether the model that gave it is the one that
+    /// would be asked now, and whether this release reads a reply as that
+    /// one did, is the caller's to know
+    /// ([`AnalysisTelemetry::model_sha256`], and
+    /// [`AnalysisTelemetry::runtime_sha256`], which carries
+    /// [`crate::client::REPLY_READING_VERSION`]).
     ///
     /// `None` - leave the stored analysis as it is - when the request would
     /// not be the same (the text reads differently now, or retrieval or the

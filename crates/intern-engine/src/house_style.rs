@@ -205,7 +205,13 @@ pub fn compose_styled_filename(
 /// word, party, `and`, party - rather than by finding the smallest edit,
 /// because the smallest edit lies: "Acme and Contoso" becomes "Acme Corp and
 /// Contoso Inc" by inserting text one character into the connector, and a
-/// diff would credit it all to one party.
+/// diff would credit it all to one party. A name that still ends with the
+/// party clause the proposed one gave is an edit to the type, even where
+/// the words added to the type begin with the clause's own connecting word
+/// and so would read as a longer party too: "Application for Certification
+/// for City of Victorville" for "Application for City of Victorville"
+/// teaches the type "Application for Certification", as [`approved_party`]
+/// reads it.
 pub fn lesson_from_edit(
     proposal: &ValidatedProposal,
     extension: &str,
@@ -234,12 +240,16 @@ pub fn lesson_from_edit(
                 .strip_suffix(clause.text.as_str())
                 .and_then(|rest| rest.strip_suffix(connector.as_str()));
             match (type_unchanged, clause_unchanged) {
-                (Some(new_clause), _) if new_clause != clause.text => clause.lesson(new_clause)?,
+                // The party clause kept whole, so the type changed - also
+                // where it was lengthened with the clause's own connecting
+                // word, which reads as a longer party too ("Application for
+                // Certification for City of Victorville").
                 (_, Some(new_type)) => HouseRule::new(
                     RuleKind::DocumentType,
                     proposal.document_type.clone()?,
                     new_type,
                 ),
+                (Some(new_clause), None) => clause.lesson(new_clause)?,
                 // Both the type and the party clause changed, or the
                 // connecting word did: a decision about this document.
                 _ => return None,
@@ -283,9 +293,16 @@ pub fn named_parties(proposal: &ValidatedProposal, extension: &str, proposed: &s
 /// " - " that adds a party to a name that gave none. Read with the grammar
 /// that composed `proposed`, so a type holding "for" is kept whole.
 ///
-/// `None` where `approved` changes the type, gives no party, or gives two
-/// ("between"), and where `proposed` is not a name `proposal` composes;
-/// `proposal` is as for [`lesson_from_edit`].
+/// `None` where `approved` no longer starts with the proposed type, gives no
+/// party, or gives two ("between"), and where `proposed` is not a name
+/// `proposal` composes; `proposal` is as for [`lesson_from_edit`]. `None`
+/// too where `approved` lengthens the type in front of the party clause it
+/// kept: "Notice to Tenants from Acme Property" for "Notice from Acme
+/// Property" is an edit to the type, and "Tenants from Acme Property" no
+/// party. A type lengthened in front of a party that changed as well
+/// ("Notice to Tenants from City of Boston") reads as that party's words
+/// all the same - "Tenants from City of Boston" - since nothing here says
+/// which parties the document names.
 pub fn approved_party(
     proposal: &ValidatedProposal,
     extension: &str,
@@ -295,6 +312,16 @@ pub fn approved_party(
     let extension = sanitize_extension(extension);
     let shape = NameShape::of(proposal, &editable_stem(proposed, &extension), &extension)?;
     let after = editable_stem(approved, &extension);
+    // A type lengthened in front of the party clause it kept ("Notice to
+    // Tenants from Acme Property") is an edit to the type: no party is read.
+    if let Some(clause) = shape.clause.as_ref()
+        && let Some(kept_type) = after
+            .strip_suffix(clause.text.as_str())
+            .and_then(|rest| rest.strip_suffix(format!(" {} ", clause.connector).as_str()))
+        && kept_type != shape.type_segment
+    {
+        return None;
+    }
     let rest = after
         .strip_prefix(shape.type_segment.as_str())?
         .strip_prefix(' ')?;
@@ -869,6 +896,53 @@ mod tests {
         assert_eq!(prefixed.to, "Signed Statement of Work");
     }
 
+    /// A type lengthened with the connecting word of the party clause it
+    /// kept reads as a longer type or as a longer party alike: "Application
+    /// for Certification for City of Victorville" for "Application for City
+    /// of Victorville". It is read as the type, as [`approved_party`] reads
+    /// it, and teaches no party "Certification for City of Victorville".
+    #[test]
+    fn a_type_lengthened_with_its_partys_connecting_word_teaches_the_type() {
+        let application = proposal(
+            Some("Application"),
+            &["City of Victorville"],
+            PartyRelation::For,
+        );
+        let proposed = name(&application);
+        assert_eq!(
+            proposed,
+            "2026-04-01 Application for City of Victorville.pdf"
+        );
+        let approved = "2026-04-01 Application for Certification for City of Victorville.pdf";
+        let lesson = lesson_from_edit(&application, "pdf", &proposed, approved)
+            .expect("the type changed and nothing else did");
+        assert_eq!(
+            (lesson.kind, lesson.from.as_str(), lesson.to.as_str()),
+            (
+                RuleKind::DocumentType,
+                "Application",
+                "Application for Certification"
+            )
+        );
+        assert_eq!(
+            approved_party(&application, "pdf", &proposed, approved),
+            None
+        );
+
+        // The party alone changed, its new name ending in the old: a party.
+        let lesson = lesson_from_edit(
+            &application,
+            "pdf",
+            &proposed,
+            "2026-04-01 Application for Friends of City of Victorville.pdf",
+        )
+        .expect("the party changed and nothing else did");
+        assert_eq!(
+            (lesson.kind, lesson.to.as_str()),
+            (RuleKind::Party, "Friends of City of Victorville")
+        );
+    }
+
     #[test]
     fn an_edit_that_touches_two_fields_or_the_connectors_teaches_nothing() {
         let proposal = proposal(
@@ -1058,9 +1132,27 @@ mod tests {
             .as_deref(),
             Some("Sam Brownell")
         );
+
+        let notice = proposal(Some("Notice"), &["Acme Property"], PartyRelation::From);
+        let proposed = name(&notice);
+        assert_eq!(proposed, "2026-04-01 Notice from Acme Property.pdf");
+        for (approved, party) in [
+            (
+                "2026-04-01 Notice from City of Boston.pdf",
+                "City of Boston",
+            ),
+            ("2026-04-01 Notice to Acme Property.pdf", "Acme Property"),
+        ] {
+            assert_eq!(
+                approved_party(&notice, "pdf", &proposed, approved).as_deref(),
+                Some(party),
+                "{approved}"
+            );
+        }
     }
 
-    /// No party is read from a name whose type changed, that gives two
+    /// No party is read from a name whose type changed - replaced, or
+    /// lengthened in front of the party clause it kept - that gives two
     /// sides, or none, or from a proposed name not composed from the
     /// proposal.
     #[test]
@@ -1072,9 +1164,37 @@ mod tests {
             "2026-04-01 Letter between Carl Malamud and Department of the Air Force.pdf",
             "2026-04-01 Letter.pdf",
             "2026-04-01 Letter to .pdf",
+            "2026-04-01 Letter from Jane Doe to Carl Malamud.pdf",
         ] {
             assert_eq!(
                 approved_party(&letter, "pdf", &proposed, approved),
+                None,
+                "{approved}"
+            );
+        }
+        for (document_type, parties, relation, approved) in [
+            (
+                "Notice",
+                &["Acme Property"][..],
+                PartyRelation::From,
+                "2026-04-01 Notice to Tenants from Acme Property.pdf",
+            ),
+            (
+                "Invoice",
+                &["Acme"][..],
+                PartyRelation::From,
+                "2026-04-01 Invoice for March from Acme.pdf",
+            ),
+            (
+                "Agreement",
+                &["Acme", "Contoso"][..],
+                PartyRelation::Between,
+                "2026-04-01 Agreement for Services between Acme and Contoso.pdf",
+            ),
+        ] {
+            let lengthened = proposal(Some(document_type), parties, relation);
+            assert_eq!(
+                approved_party(&lengthened, "pdf", &name(&lengthened), approved),
                 None,
                 "{approved}"
             );
