@@ -11612,6 +11612,63 @@ mod runtime_tests {
         let _ = std::fs::remove_dir_all(&data);
     }
 
+    /// A document the admission guard cannot check right now - Microsoft out
+    /// of reach - is put back as queued on every pass and read on none, so it
+    /// keeps no model loaded: the idle unload goes ahead, as before the queue
+    /// was asked.
+    #[test]
+    fn a_document_put_back_on_every_pass_keeps_no_model_loaded() {
+        struct CannotCheckNow;
+
+        impl intern_queue::AdmissionGuard for CannotCheckNow {
+            fn authorize(
+                &self,
+                _path: &Path,
+                stage: intern_queue::AdmissionStage,
+            ) -> Result<intern_queue::AdmissionEvidence, intern_queue::PipelineError> {
+                if stage == intern_queue::AdmissionStage::Enqueue {
+                    Ok(intern_queue::AdmissionEvidence::local())
+                } else {
+                    Err(intern_queue::PipelineError::retryable(
+                        "UPLOADER_UNVERIFIED",
+                        "Microsoft could not be reached.",
+                    ))
+                }
+            }
+        }
+
+        let install = Install::new("tier-idle-put-back");
+        let rig = Rig::new();
+        let world = World::new();
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        let (setup, _states) = manager(&runtime, ModelSource::Local);
+        settle(&setup);
+        assert!(runtime.running());
+        let data = folder("tier-idle-put-back");
+        let pipeline = queue(&data)
+            .0
+            .with_admission_guard(Arc::new(CannotCheckNow));
+        pipeline
+            .enqueue_files(&[write(&data, "upload.pdf", b"%PDF-1.7 an upload")])
+            .unwrap();
+        assert!(pipeline.has_document_waiting().unwrap());
+
+        pipeline.run_until_idle().unwrap();
+        world.advance(IDLE_UNLOAD_AFTER);
+        setup.tick(&pipeline, &AppSettings::default());
+        assert!(
+            !runtime.running(),
+            "unloaded with the document still put back"
+        );
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(
+            pipeline.list().unwrap()[0].status,
+            super::QueueStatus::Queued
+        );
+        assert_eq!(rig.launches(), 1);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
     /// What a launch with nothing waiting leaves: both models installed, the
     /// accurate one vouched for by the stamp, nothing loaded.
     fn launched_idle(install: &Install, rig: &Arc<Rig>, world: &World) -> Arc<RuntimeModel> {

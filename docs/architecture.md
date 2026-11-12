@@ -942,7 +942,12 @@ back; the next document loads it again without reading the file, since this
 session already checked it. The unload runs at the top of every scheduler pass,
 and is skipped on a pass that is about to read a document
 (`Pipeline::has_document_waiting`): the pass a new document wakes used to
-unload a model idle for ten minutes and load it again at once. The review
+unload a model idle for ten minutes and load it again at once. A document the
+last pass put back unread does not count - one the admission guard cannot
+check right now, while Microsoft is out of reach, is put back on every pass
+and is the next to claim each time, and counted, it kept the model loaded for
+as long as that lasted; should a pass read it after all, it costs one load,
+as before. The review
 panel says which model read a document, and that a provisional reading will
 be read again.
 

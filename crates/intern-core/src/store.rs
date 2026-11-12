@@ -492,20 +492,19 @@ impl QueueStore {
         Ok(Some(item))
     }
 
-    /// Whether [`Self::claim_next`] would take a row now, without taking
-    /// it: a queued document, with nothing else being extracted, read or
-    /// applied, that is not in doubt waiting for the machine to be shown to
-    /// work. What the app asks before it lets the model go, or loads it at
+    /// The row [`Self::claim_next`] would take now, without taking it: a
+    /// queued document, with nothing else being extracted, read or applied,
+    /// that is not in doubt waiting for the machine to be shown to work.
+    /// What the app asks before it lets the model go, or loads it at
     /// sign-in: a document in doubt over a reader crash can wait for days for
     /// a document of its kind, and one behind a rename left applying waits
     /// for the recovery, so neither keeps a model loaded that nothing reads.
-    pub fn has_claimable(&self) -> InternResult<bool> {
+    pub fn next_claimable(&self) -> InternResult<Option<i64>> {
         let connection = self.lock()?;
-        Ok(connection
+        connection
             .query_row(NEXT_TO_CLAIM, [], |row| row.get::<_, i64>(0))
             .optional()
-            .map_err(InternError::from)?
-            .is_some())
+            .map_err(InternError::from)
     }
 
     pub fn renew_lease(&self, id: i64) -> InternResult<QueueItem> {
