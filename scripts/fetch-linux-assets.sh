@@ -42,7 +42,13 @@ fi
 # THE LLAMA.CPP PIN. The local models run on ggml-org's llama.cpp, its own
 # prebuilt Ubuntu x86-64 release, from runtime/llama-upstream/. Its pin is
 # these three values and nothing else: the environment cannot choose another,
-# and moving it means changing all three from the release's page.
+# and moving it means changing all three from the release's page. Two of them
+# are written again elsewhere and move with it: the release and the SHA-256
+# are LINUX_RUNTIME_BUILD in crates/intern-engine/src/tiers.rs, the build a
+# Linux reading's runtime identity names, and the release is the one the
+# Windows package pins in src-tauri/resources/runtime-assets.json. A test
+# fails until each matches this one (tiers.rs, and
+# scripts/llama-runtime-pins.test.ts).
 LLAMA_UPSTREAM_RELEASE="b11946"
 LLAMA_UPSTREAM_SIZE=22647372
 LLAMA_UPSTREAM_SHA256="9e44e1a59e971f0de3fbf74fa46355ab48fed7bb51c1c16b56a96c355947f8dd"
