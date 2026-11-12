@@ -29,6 +29,7 @@ on:
         options:
           - speed
           - memory
+          - no-repack
 
 permissions:
   contents: read
@@ -86,6 +87,14 @@ jobs:
           $Threads = (Get-Content lab\context.json -Raw | ConvertFrom-Json).threads
           $Port = 18200
           $Runs = @(@("upstream", "accurate", "upstream-1"), @("upstream", "fast", "fast-1"), @("upstream", "accurate", "upstream-2"))
+          $Every = 1
+          # The accurate model's own flag, alternated on one runner: the app
+          # launches it with --no-repack (tiers::tier_server_flags).
+          if ("${{ inputs.probe }}" -eq "no-repack") {
+            $Runs = @(@("upstream", "accurate", "repacked-1", ""), @("upstream", "accurate", "no-repack-1", "--no-repack"),
+              @("upstream", "accurate", "repacked-2", ""), @("upstream", "accurate", "no-repack-2", "--no-repack"))
+            $Every = 3
+          }
           foreach ($Run in $Runs) {
             $Runtime = $Run[0]; $Label = $Run[2]
             $Model = (Resolve-Path "lab\$($Run[1]).gguf").Path
@@ -95,6 +104,7 @@ jobs:
               "--parallel", "1", "--ctx-size", "8192", "--n-gpu-layers", "0",
               "--threads", "$Threads", "--threads-batch", "$Threads", "--jinja", "--no-webui",
               "--cache-ram", "0", "-ub", "256", "--prio", "-1", "--poll", "0", "--no-mmproj")
+            if ($Run.Count -gt 3 -and $Run[3]) { $Arguments += $Run[3] }
             $Process = Start-Process -FilePath $Server -ArgumentList $Arguments -PassThru -NoNewWindow `
               -RedirectStandardOutput "lab\$Label-server.out.log" -RedirectStandardError "lab\$Label-server.log"
             $Healthy = $false
@@ -107,7 +117,7 @@ jobs:
             }
             if (-not $Healthy) { Get-Content "lab\$Label-server.log" -Tail 40; throw "$Runtime llama-server did not become healthy" }
             python scripts/bonsai-eval/replay-requests.py --server "http://127.0.0.1:$Port" --wire $env:REQUESTS `
-              --skip-first --warm-up --reference $env:REQUESTS --out "lab\$Label.json"
+              --skip-first --warm-up --every $Every --reference $env:REQUESTS --out "lab\$Label.json"
             if ($LASTEXITCODE -ne 0) { throw "The replay against $Runtime failed" }
             Stop-Process -Id $Process.Id -Force
             Start-Sleep -Seconds 3
