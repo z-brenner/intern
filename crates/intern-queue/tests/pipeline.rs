@@ -3780,6 +3780,100 @@ fn a_party_put_in_a_name_that_gave_none_teaches_no_type() {
     );
 }
 
+/// A document filed by party goes in the folder of the party its approved
+/// name gives: another party the document names, chosen in review - with
+/// the connecting word changed too, as it often must be - or the
+/// reviewer's own spelling of the one proposed. The filing report says the
+/// same. It used to go in the folder of the party the reviewer had just
+/// taken out of the name.
+#[test]
+fn a_party_chosen_in_review_is_the_party_the_document_is_filed_under() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let with_employer = |iso: &str, written: &str| ModelProposal {
+        parties: vec!["Acme Corporation".into()],
+        party_relation: PartyRelation::With,
+        ..dated_proposal(iso, written)
+    };
+    let dates = [
+        ("2024-04-12", "April 12, 2024"),
+        ("2024-05-03", "May 3, 2024"),
+        ("2024-06-07", "June 7, 2024"),
+    ];
+    let (pipeline, filing) = reading_pipeline(
+        temp.path(),
+        dates
+            .iter()
+            .map(|(_, written)| placed_agreement(written))
+            .collect(),
+        dates
+            .iter()
+            .map(|(iso, written)| with_employer(iso, written))
+            .collect(),
+        &PLACED_PARTIES,
+        DestinationLayout::Party,
+    );
+    let queued = pipeline
+        .enqueue_files(&[
+            source(&inbox, "a.pdf"),
+            source(&inbox, "b.pdf"),
+            source(&inbox, "c.pdf"),
+        ])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let first = record_of(&pipeline, queued[0]);
+    assert_eq!(
+        first.filename,
+        "2024-04-12 Employment Agreement with Acme Corporation.pdf"
+    );
+    assert_eq!(
+        first.party_choices(),
+        vec!["John Smith", "Beacon Staffing LLC"]
+    );
+
+    let approved = [
+        "2024-04-12 Employment Agreement with Beacon Staffing LLC.pdf",
+        "2024-05-03 Employment Agreement for John Smith.pdf",
+        "2024-06-07 Employment Agreement with ACME.pdf",
+    ];
+    for (id, name) in queued.iter().zip(approved) {
+        pipeline.approve(*id, name, "An agreement.").unwrap();
+    }
+    let filed = temp.path().join("filed");
+    let destination = |id: i64| {
+        let item = pipeline
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == id)
+            .unwrap();
+        assert_eq!(item.status, QueueStatus::Completed);
+        item.receipt.unwrap().destination
+    };
+    assert_eq!(
+        destination(queued[0]),
+        filed.join("Beacon Staffing LLC").join(approved[0])
+    );
+    assert_eq!(
+        destination(queued[1]),
+        filed.join("John Smith").join(approved[1])
+    );
+    assert_eq!(destination(queued[2]), filed.join("ACME").join(approved[2]));
+    let heard = filing.filed.lock().unwrap();
+    assert_eq!(heard[0].proposal.parties, vec!["Beacon Staffing LLC"]);
+    assert_eq!(heard[1].proposal.parties, vec!["John Smith"]);
+    assert_eq!(heard[2].proposal.parties, vec!["ACME"]);
+    assert_eq!(
+        record_of(&pipeline, queued[0]).analysis.proposal.parties,
+        vec!["Acme Corporation"],
+        "the analysis keeps the document's reading"
+    );
+}
+
 /// The reviewer's name is the reviewer's. A second identical respelling makes
 /// the spelling Intern's own and every waiting document is recomposed under
 /// it - but not the one being approved, whose name a person has just typed:

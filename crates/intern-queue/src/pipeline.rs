@@ -14,7 +14,8 @@ use intern_core::{
 };
 use intern_engine::{
     DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
-    RuleKind, Support, ValidatedProposal, compose_styled_filename, counterparty_view,
+    RuleKind, Support, ValidatedProposal, approved_party, compose_styled_filename,
+    counterparty_view,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
     is_own_name, lesson_from_edit, named_parties, party_as_named, sanitize_folder_name,
@@ -833,6 +834,54 @@ impl ProposalRecord {
     /// the place of. `extension` is the source file's.
     pub fn named_parties(&self, extension: &str) -> Vec<String> {
         named_parties(&self.styled_proposal(), extension, &self.filename)
+    }
+
+    /// The validated facts as the name `filename` the document is filed
+    /// under gives them: its date (see [`proposal_as_applied`]), and the
+    /// party a reviewer put in place of one the proposed name gave - another
+    /// party the document names, chosen in review, or their own spelling.
+    /// The layout folder and the filing report are read from this, so a
+    /// document filed by party goes in the folder of the party its name
+    /// gives, not the one the reviewer took out of it.
+    ///
+    /// The name is read with the grammar that composed the proposed one: a
+    /// respelled side of a "between" as a lesson is read (see
+    /// [`lesson_from_edit`]), and otherwise the one party after the type it
+    /// kept, whatever the connecting word (see [`approved_party`]). An edit
+    /// to the type leaves the parties as proposed. `extension` is the
+    /// source file's.
+    pub fn as_filed(&self, extension: &str, filename: &str) -> ValidatedProposal {
+        let styled = self.styled_proposal();
+        let mut filed = proposal_as_applied(&styled, filename);
+        if self.is_synthetic() {
+            return filed;
+        }
+        let proposed = compose_styled_filename(&styled, &self.house_rules, extension, &[]).value;
+        if let Some(edit) = lesson_from_edit(&styled, extension, &proposed, filename)
+            .filter(|edit| edit.kind == RuleKind::Party)
+        {
+            for party in &mut filed.parties {
+                if edit.matches(party) {
+                    party.clone_from(&edit.to);
+                }
+            }
+        } else if let Some(party) = approved_party(&styled, extension, &proposed, filename)
+            && filed
+                .parties
+                .first()
+                .is_none_or(|first| HouseRule::key(first) != HouseRule::key(&party))
+        {
+            // In place of the party the proposed name gave, which is the
+            // first: a name with one party gives the first of them.
+            filed
+                .parties
+                .retain(|other| HouseRule::key(other) != HouseRule::key(&party));
+            match filed.parties.first_mut() {
+                Some(first) => *first = party,
+                None => filed.parties.push(party),
+            }
+        }
+        filed
     }
 
     /// Whether the edit `lesson` was read from puts in the name a party the
@@ -2741,7 +2790,13 @@ impl Pipeline {
             Some(record) => target_folder(
                 settings,
                 &item.source_path,
-                &proposal_as_applied(&record.styled_proposal(), filename),
+                &record.as_filed(
+                    item.source_path
+                        .extension()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or_default(),
+                    filename,
+                ),
             ),
             None => destination_root(settings, &item.source_path),
         };
@@ -4964,8 +5019,12 @@ fn filed_document(
             source_hash: source_hash.to_owned(),
             destination: receipt.destination.clone(),
             description: proposal.description.clone(),
-            proposal: proposal_as_applied(
-                &proposal.styled_proposal(),
+            proposal: proposal.as_filed(
+                receipt
+                    .source
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default(),
                 &receipt
                     .destination
                     .file_name()
