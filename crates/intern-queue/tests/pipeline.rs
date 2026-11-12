@@ -1229,6 +1229,232 @@ fn model_not_ready_requeues_without_counting_a_failure() {
     );
 }
 
+/// A document put back because no model was loaded to ask is claimed again
+/// with the same bytes, and used to be read again in full - OCR and all -
+/// on every pass. What the reader made of it the first time is kept in
+/// memory and handed back: one extraction, however many claims.
+#[test]
+fn a_document_put_back_for_want_of_a_model_is_read_only_once() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["scan.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(READABLE))]));
+    let not_ready = || Err(ModelFailure::fatal("MODEL_NOT_READY"));
+    let model = Arc::new(FakeModel::new(vec![
+        not_ready(),
+        not_ready(),
+        Ok(proposal(0.94, false)),
+    ]));
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    );
+    pipeline.enqueue_files(&paths).unwrap();
+
+    for _ in 0..3 {
+        pipeline.run_until_idle().unwrap();
+    }
+
+    assert_eq!(model.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1, "read once");
+    let item = pipeline.list().unwrap().remove(0);
+    assert_eq!(item.status, QueueStatus::Ready);
+    assert_eq!(item.processing_failures, 0);
+}
+
+/// Admits every document on a provider's proof of its bytes, read from a
+/// private snapshot made afresh for every check, as Microsoft's word on an
+/// uploader is: the snapshot's path is new each time, its bytes proven to
+/// be the document's.
+struct FreshSnapshots {
+    snapshots: PrivateSnapshotDirectory,
+    made: AtomicUsize,
+}
+
+impl intern_queue::AdmissionGuard for FreshSnapshots {
+    fn authorize(
+        &self,
+        path: &Path,
+        _stage: intern_queue::AdmissionStage,
+    ) -> Result<intern_queue::AdmissionEvidence, PipelineError> {
+        let mut writer = self
+            .snapshots
+            .create_for_supported_extension("pdf")
+            .unwrap();
+        io::Write::write_all(&mut writer, &fs::read(path).unwrap()).unwrap();
+        self.made.fetch_add(1, Ordering::SeqCst);
+        let name = path.file_name().unwrap().to_string_lossy();
+        Ok(intern_queue::AdmissionEvidence::verified_snapshot(
+            format!("{name}-hash"),
+            writer.finish().unwrap(),
+        ))
+    }
+}
+
+/// A document a provider vouched for is read from a new private snapshot at
+/// every claim, so a memo keyed by the path read never found it again. It
+/// is keyed by the document's own path: put back twice for want of a
+/// model, it is read once, from the first of its three snapshots.
+#[test]
+fn a_document_read_from_a_fresh_snapshot_each_claim_is_read_only_once() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["vouched.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(READABLE))]));
+    let not_ready = || Err(ModelFailure::fatal("MODEL_NOT_READY"));
+    let model = Arc::new(FakeModel::new(vec![
+        not_ready(),
+        not_ready(),
+        Ok(proposal(0.94, false)),
+    ]));
+    let guard = Arc::new(FreshSnapshots {
+        snapshots: PrivateSnapshotDirectory::new(temp.path().join("snapshots")).unwrap(),
+        made: AtomicUsize::new(0),
+    });
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    )
+    .with_admission_guard(guard.clone());
+    pipeline.enqueue_files(&paths).unwrap();
+
+    for _ in 0..3 {
+        pipeline.run_until_idle().unwrap();
+    }
+
+    assert_eq!(model.calls.load(Ordering::SeqCst), 3);
+    assert!(guard.made.load(Ordering::SeqCst) >= 3, "a snapshot a claim");
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1, "read once");
+    assert_eq!(
+        pipeline.list().unwrap().remove(0).status,
+        QueueStatus::Ready
+    );
+}
+
+/// Only the same bytes find what the reader made of them: a file that
+/// changed while it waited is read again, and so is one a person canceled
+/// and then retried - a cancel drops what was kept for it.
+#[test]
+fn a_changed_or_canceled_document_is_read_again_from_the_start() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["edited.pdf", "canceled.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(parsed(
+            "Employment Agreement mentioning Acme Corporation only.",
+        )),
+        Ok(parsed(READABLE)),
+        Ok(parsed(READABLE)),
+        Ok(parsed(READABLE)),
+    ]));
+    let not_ready = || Err(ModelFailure::fatal("MODEL_NOT_READY"));
+    let model = Arc::new(FakeModel::new(vec![
+        not_ready(),
+        Ok(proposal(0.94, false)),
+        not_ready(),
+        Ok(proposal(0.94, false)),
+    ]));
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        model,
+        Arc::clone(&files),
+        AppSettings::default(),
+    );
+    let ids = pipeline
+        .enqueue_files(&paths)
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+    // Signed while it waited: new bytes, new text.
+    files.trust(&paths[0], "edited.pdf-signed");
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(
+        worker.calls.load(Ordering::SeqCst),
+        3,
+        "the new bytes were read"
+    );
+    let edited = item_of(&pipeline, ids[0]);
+    assert_eq!(edited.source_hash, "edited.pdf-signed");
+    assert_eq!(
+        edited.status,
+        QueueStatus::Ready,
+        "read from the signed text"
+    );
+
+    // The second document was read and put back; canceled, then retried,
+    // it is read again rather than handed what was kept for it.
+    assert_eq!(status_of(&pipeline, ids[1]), QueueStatus::Queued);
+    pipeline.cancel(ids[1]).unwrap();
+    pipeline.retry(ids[1]).unwrap();
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 4);
+    assert_eq!(status_of(&pipeline, ids[1]), QueueStatus::Ready);
+}
+
+/// Re-analyze of a document whose bytes have not changed reads it again
+/// with the model, not the reader - as long as the memo still holds it. A
+/// memo of one document holds only the last one read.
+#[test]
+fn reanalyze_of_unchanged_bytes_reuses_the_extraction_the_memo_still_holds() {
+    for (entries, extractions) in [(8, 2), (1, 4)] {
+        let temp = tempdir().unwrap();
+        let files = Arc::new(FakeFiles::default());
+        let paths = documents(temp.path(), &files, &["one.pdf", "two.pdf"]);
+        let worker = Arc::new(FakeWorker::new(
+            (0..4).map(|_| Ok(parsed(READABLE))).collect(),
+        ));
+        let model = Arc::new(FakeModel::new(
+            (0..4).map(|_| Ok(proposal(0.94, false))).collect(),
+        ));
+        let pipeline = pipeline(
+            temp.path(),
+            Arc::clone(&worker),
+            Arc::clone(&model),
+            files,
+            AppSettings::default(),
+        )
+        .with_extraction_memo(entries, 1 << 20);
+        let ids = pipeline
+            .enqueue_files(&paths)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(worker.calls.load(Ordering::SeqCst), 2);
+
+        for id in &ids {
+            pipeline.reanalyze(*id).unwrap();
+        }
+        pipeline.run_until_idle().unwrap();
+
+        assert_eq!(
+            model.calls.load(Ordering::SeqCst),
+            4,
+            "read again by the model"
+        );
+        assert_eq!(
+            worker.calls.load(Ordering::SeqCst),
+            extractions,
+            "a memo of {entries}"
+        );
+        for id in ids {
+            assert_eq!(status_of(&pipeline, id), QueueStatus::Ready);
+        }
+    }
+}
+
 /// A local server whose restart failed leaves no model loaded for as long as
 /// the app runs. Every pass used to read the head document again in full and
 /// put it back, with nothing failed, nothing paused and nothing on screen. A

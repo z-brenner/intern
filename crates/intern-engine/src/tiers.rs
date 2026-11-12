@@ -19,11 +19,15 @@
 //! Settings, a model that finished downloading, or memory that came back takes
 //! effect at the next document with nothing restarted.
 
+use std::path::Path;
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::domain::{DocumentAnalysis, ProposalStatus, ReviewReason};
 use crate::manifest::ModelTier;
-use crate::server::ServerOptions;
+use crate::server::{LlamaServer, ServerOptions};
 
 /// What a person asked for in Settings.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -324,6 +328,91 @@ pub fn server_options(tier: ModelTier) -> ServerOptions {
             .collect(),
         ..ServerOptions::default()
     }
+}
+
+/// The identity of everything besides the request and the model file that
+/// shapes the reply `tier`'s local server gives
+/// ([`crate::domain::AnalysisTelemetry::runtime_sha256`]):
+/// - the reply settings every request carries - sampler, reply limit,
+///   prompt cache, template switches
+///   ([`crate::client::reply_settings_identity`]);
+/// - the arguments the server is launched with for the tier
+///   ([`server_options`], [`LlamaServer::arguments_for`]): the context, the
+///   threads, the measured flags - `-ub 128` or `512` in place of 256
+///   changed most replies - and the tier's own, such as the accurate model's
+///   `--no-repack`. What varies from one launch to the next and shapes no
+///   reply - the port, the key, where the model file and the slot folder
+///   lie - is left out;
+/// - the llama.cpp build the release ships ([`pinned_runtime_build`]).
+///
+/// A stored reply stands in for a fresh one only where this, the request
+/// and the model file are all the same. `None` when the release pins no
+/// build, and then nothing is validated again.
+pub fn runtime_identity(tier: ModelTier) -> Option<String> {
+    let build = pinned_runtime_build()?;
+    let arguments = LlamaServer::arguments_for(
+        Path::new("model"),
+        None,
+        0,
+        "",
+        &ServerOptions {
+            slot_directory: None,
+            ..server_options(tier)
+        },
+    );
+    Some(runtime_identity_of(
+        &crate::client::reply_settings_identity(),
+        &arguments,
+        build,
+    ))
+}
+
+/// [`runtime_identity`] of its three parts.
+fn runtime_identity_of(reply_settings: &str, arguments: &[String], build: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(reply_settings.as_bytes());
+    for argument in arguments {
+        hasher.update([0_u8]);
+        hasher.update(argument.as_bytes());
+    }
+    hasher.update([0_u8, 1_u8]);
+    hasher.update(build.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// The id of the llama.cpp runtime among the release's pinned downloads.
+const RUNTIME_ASSET_ID: &str = "llama.cpp-upstream";
+
+/// The llama.cpp runtime this release ships, as its pinned downloads name it
+/// (`src-tauri/resources/runtime-assets.json`): the build's version and the
+/// SHA-256 of the archive its server is installed from, `b11946:8a70...`.
+/// The release build adds entries of its own to that file before compiling,
+/// and leaves this one as it is. `None` when the file names none.
+pub fn pinned_runtime_build() -> Option<&'static str> {
+    static BUILD: OnceLock<Option<String>> = OnceLock::new();
+    BUILD
+        .get_or_init(|| {
+            runtime_build_in(include_str!(
+                "../../../src-tauri/resources/runtime-assets.json"
+            ))
+        })
+        .as_deref()
+}
+
+/// The pinned llama.cpp runtime in `assets`, a release's pinned downloads.
+fn runtime_build_in(assets: &str) -> Option<String> {
+    let assets: serde_json::Value =
+        serde_json::from_str(assets.trim_start_matches('\u{feff}')).ok()?;
+    let runtime = assets
+        .get("downloads")?
+        .as_array()?
+        .iter()
+        .find(|download| {
+            download.get("id").and_then(serde_json::Value::as_str) == Some(RUNTIME_ASSET_ID)
+        })?;
+    let version = runtime.get("version")?.as_str()?;
+    let sha256 = runtime.get("sha256")?.as_str()?;
+    (!version.is_empty() && !sha256.is_empty()).then(|| format!("{version}:{sha256}"))
 }
 
 /// The folder, inside the sidecar folder, that holds the llama.cpp runtime
@@ -1223,6 +1312,67 @@ mod tests {
         assert_eq!(IDLE_UNLOAD_AFTER.as_secs(), 600);
         assert_eq!(tier_server_flags(ModelTier::Accurate), ["--no-repack"]);
         assert_eq!(tier_server_flags(ModelTier::Fast), ["--no-repack"]);
+    }
+
+    /// A runtime's identity is the same from one launch to the next and
+    /// moves with each thing that shapes a reply: the reply settings, any
+    /// launch argument - another micro-batch, a tier's own flag - and the
+    /// llama.cpp build. The tiers differ by the accurate model's flag. The
+    /// build is read from the release's pinned downloads, whatever else the
+    /// release build adds to them, and none is named by a file that pins
+    /// none.
+    #[test]
+    fn a_runtime_identity_moves_with_whatever_shapes_a_reply() {
+        let build = pinned_runtime_build().expect("the release pins a llama.cpp build");
+        assert!(build.starts_with("b11946:8a702bb0"), "{build}");
+        let accurate = runtime_identity(ModelTier::Accurate).unwrap();
+        assert_eq!(runtime_identity(ModelTier::Accurate).unwrap(), accurate);
+        assert_ne!(runtime_identity(ModelTier::Fast).unwrap(), accurate);
+
+        let settings = crate::client::reply_settings_identity();
+        let arguments = LlamaServer::arguments_for(
+            Path::new("model"),
+            None,
+            0,
+            "",
+            &server_options(ModelTier::Accurate),
+        );
+        let base = runtime_identity_of(&settings, &arguments, build);
+        assert_eq!(base, accurate);
+        let micro_batch = arguments
+            .iter()
+            .map(|argument| {
+                if argument == "256" {
+                    "512".to_owned()
+                } else {
+                    argument.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_ne!(micro_batch, arguments);
+        for other in [
+            runtime_identity_of("another sampler", &arguments, build),
+            runtime_identity_of(&settings, &micro_batch, build),
+            runtime_identity_of(&settings, &arguments[..arguments.len() - 1], build),
+            runtime_identity_of(&settings, &arguments, "b12140:1fa7f1c4"),
+        ] {
+            assert_ne!(other, base);
+        }
+
+        let enriched = r#"{"schema_version": 1, "downloads": [
+            {"id": "llama.cpp-upstream", "version": "b11946", "sha256": "8a70"},
+            {"id": "vcpkg", "packages": ["tesseract"]}
+        ]}"#;
+        assert_eq!(runtime_build_in(enriched).as_deref(), Some("b11946:8a70"));
+        assert_eq!(
+            runtime_build_in(&format!("\u{feff}{enriched}")).as_deref(),
+            Some("b11946:8a70")
+        );
+        assert_eq!(
+            runtime_build_in(r#"{"downloads": [{"id": "pdfium"}]}"#),
+            None
+        );
+        assert_eq!(runtime_build_in("not json"), None);
     }
 
     #[test]

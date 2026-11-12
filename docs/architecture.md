@@ -1542,6 +1542,77 @@ a date that said "another document". A match sends the document to review with
 `NEAR_DUPLICATE`, named after the filing it repeats and the machine that made
 it; it is never filed on its own, and an undo forgets the fingerprint.
 
+### Reading a document again
+
+A document is often claimed again with the same bytes: put back because no
+model was loaded to ask, given its second attempt after a model failure, sent
+back by Re-analyze, or re-read by the accurate model after a provisional
+reading. Each claim used to extract it again in full, and for a scan that is
+OCR - on the real sets about 3 s a document on average, and up to 95 s for
+one long scan. The queue now keeps the last eight extractions, 32 MiB of them
+at most, in memory (`intern_queue::memo`) and hands back what the reader made
+of a document instead of reading it again, within one run of Intern: the memo
+starts empty, so the first reading after a restart is always a fresh one. An
+entry is keyed by the queue item, the SHA-256 the item was checked against
+just before extraction, and the document's own path, so a file that changed
+never finds one. It is the document's path, not the one read: a document
+admitted on Microsoft's proof is read from a private snapshot made afresh for
+every claim, whose bytes are proven to be the ones the hash names. Canceling
+or removing a document drops its entry, and what a reading of it still under
+way would have kept; shutdown drops them all, and nothing is written to disk.
+A remembered extraction proves nothing about the reader now, so it clears no
+doubt over a reader crash.
+
+### A new release and the documents already waiting
+
+Most releases change how a reply is validated or a name is composed; few
+change what the model is asked. A rule a release improves used to reach only
+documents read after it, while the documents already waiting in review kept
+the reading the old rules made. So every analysis now records the identity of
+the request its reply answered (`AnalysisTelemetry::request_sha256`, the
+`ModelRequest::sha256` recordings are keyed by), the SHA-256 the manifest
+pins for the model file that answered (`model_sha256`), and the identity of
+the runtime that ran it (`runtime_sha256`, `tiers::runtime_identity`): the
+reply settings every request carries - greedy sampling, the reply limit, the
+prompt cache, the template's thinking switch - the server's launch arguments
+for the tier, and the llama.cpp build the release pins in
+`runtime-assets.json`. The same request to the same file can be answered
+differently under another reply limit, micro-batch or build. After an update
+each waiting document is validated again from its stored reply, with no model
+call, when all three still hold (`Pipeline::revalidate_waiting`).
+
+The queue does it when it has nothing to read, one document at a time, so a
+document that arrives meanwhile is read first, and considers each document
+once per release (the `revalidations` table). It touches only a document
+nobody has acted on - the test the provisional re-read makes: never approved,
+edited, filed, kept or taken back, no rename of it ever begun - that waits for
+nothing but what its reading said, whose file still has the bytes it was read
+from. The runtime first rules out what it can from the stored reading alone,
+before the document is read (`AnalyzerBoundary::may_revalidate`): the plan
+must have the same tier read it first now, from the same model file, under
+the same runtime, and a launch of that tier must ask for token probabilities
+exactly when the reading has them. An update that changes any of these for
+every document so costs no reading of any. Otherwise the document is
+extracted again - a fresh extraction, since the update restarted Intern: about
+3 s a document on the real sets, up to about 95 s for a long scan - under a
+request of its own that a cancel or a removal meanwhile stops. The request
+that tier's engine would build for the text must then be byte for byte the
+stored one (`Engine::revalidate`, which prepares the document exactly as
+`analyze` does), and in the cascade a quick reading the accurate model would
+read again is declined, since no reply of the accurate model's is stored for
+it. The stored reply - rebuilt from its facts as the model gave it, since
+validation completed the stored copy - then goes through the same validation
+and composition as a fresh one, in about a tenth of a second. A new record
+replaces the old only when it says something different, in a transaction that
+checks the row and the record are still exactly what was read, with its
+revision moved so the window drops its draft; a document that becomes ready
+is filed when automatic renaming is on, as after any reading. Readings stored
+before alpha.18 recorded none of the three identities and are left alone.
+Replayed over every development recording (989 readings of both models), a
+reading validated again under the same rules is identical to itself, and
+under the 0.8 gate in place of none it is identical to a fresh replay under
+0.8 in all 989, including the 269 whose readiness the gate moved.
+
 ## Measuring it
 
 Every stage after the model is deterministic, which is what makes accuracy
@@ -1566,8 +1637,11 @@ construction, validation and naming times, how many re-distillations fitting
 the prompt took, the prompt's characters and estimated tokens, and, from the
 local server's own reply, `model`: prompt tokens evaluated and reused from
 its cache, and prefill and generation time. `inference_millis` stays the wall
-time of the request. All of it is measurement only: nothing reads it to
-decide anything, and none of it is sent anywhere.
+time of the request. All of it is measurement only, and none of it is sent
+anywhere. The exceptions are the three identities beside it: the request the
+reply answered, the model file that gave it and the runtime that ran it,
+which decide whether a stored reply may be validated again after an update
+(see above).
 
 ## What it costs
 

@@ -29,8 +29,8 @@ use serde::{Deserialize, Serialize};
 use crate::client::{MAX_REPLY_TOKENS, ModelClient, ModelRequest, Proposer, ProposerReply};
 use crate::distill::{DigestBudget, DocumentDigest, distill};
 use crate::domain::{
-    AnalysisTelemetry, DocumentAnalysis, DocumentSource, ProposalStatus, ReviewReason,
-    TokenConfidence, ValidationOutcome,
+    AnalysisTelemetry, DocumentAnalysis, DocumentSource, ModelProposal, ProposalStatus,
+    ReviewReason, TokenConfidence, ValidationOutcome,
 };
 use crate::error::{EngineError, EngineErrorCode, EngineResult};
 use crate::evidence::stated_dates;
@@ -374,6 +374,7 @@ impl Engine {
                     prompt_characters,
                     estimated_prompt_tokens,
                     model,
+                    request_sha256: Some(request.sha256()),
                     ..AnalysisTelemetry::default()
                 },
             );
@@ -525,18 +526,98 @@ impl Engine {
         extension: &str,
         existing_names: &[&str],
     ) -> EngineResult<DocumentAnalysis> {
+        let inference_started = Instant::now();
+        let reply = self.client.propose_measured(&prepared.request)?;
+        let inference_millis =
+            u64::try_from(inference_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.finish_prepared(
+            source,
+            prepared,
+            reply,
+            inference_millis,
+            extension,
+            existing_names,
+        )
+    }
+
+    /// Validates and names a document again from the reply a model already
+    /// gave for it, without asking the model: what a fresh reading would
+    /// make of it under this engine's rules, provided the model would be
+    /// asked exactly what it was asked then.
+    ///
+    /// The document is prepared as [`Self::analyze`] prepares it - indexed,
+    /// retrieved and fitted to the model's context - and the request built
+    /// for it must be byte for byte the one `stored`'s reply answered
+    /// ([`AnalysisTelemetry::request_sha256`]). The reply, turned back into
+    /// exactly what the model gave ([`ModelProposal::from_facts`]: the
+    /// stored one was completed by validation), then goes through the
+    /// validation and composition a fresh reply goes through, with the
+    /// token probabilities and server timings it came with. Whether the
+    /// model that gave it is the one that would be asked now is the
+    /// caller's to know ([`AnalysisTelemetry::model_sha256`]).
+    ///
+    /// `None` - leave the stored analysis as it is - when the request would
+    /// not be the same (the text reads differently now, or retrieval or the
+    /// prompt changed), when the stored analysis kept no request identity
+    /// or no evidence-pipeline reply, for the digest pipeline, and when the
+    /// work fails. Only the request sent first is compared: a reply to the
+    /// halved request that follows a model's "too large" is never matched,
+    /// since nothing stored says what the first one was.
+    pub fn revalidate(
+        &self,
+        source: &DocumentSource,
+        extension: &str,
+        existing_names: &[&str],
+        stored: &DocumentAnalysis,
+    ) -> Option<DocumentAnalysis> {
+        if self.pipeline != Pipeline::Evidence {
+            return None;
+        }
+        let answered = stored.telemetry.request_sha256.as_deref()?;
+        let replied = stored.model_proposal.as_ref()?;
+        let facts = replied.facts.as_deref()?.clone();
+        let prepared = self.prepare(source).ok()?;
+        if prepared.request.sha256() != answered {
+            return None;
+        }
+        let reply = ProposerReply {
+            proposal: ModelProposal::from_facts(facts, replied.confidence, replied.needs_review),
+            token_confidence: stored.token_confidence,
+            token_trace: None,
+            timings: stored.telemetry.model,
+        };
+        self.finish_prepared(
+            source,
+            &prepared,
+            reply,
+            stored.telemetry.inference_millis,
+            extension,
+            existing_names,
+        )
+        .ok()
+    }
+
+    /// Everything [`Self::analyze_prepared`] does once the model has
+    /// answered: validation, the gates after it, and composition. The one
+    /// path a reply takes, fresh or stored.
+    fn finish_prepared(
+        &self,
+        source: &DocumentSource,
+        prepared: &PreparedEvidence,
+        reply: ProposerReply,
+        inference_millis: u64,
+        extension: &str,
+        existing_names: &[&str],
+    ) -> EngineResult<DocumentAnalysis> {
         let request = &prepared.request;
         let prompt_characters = request.input_characters();
         let estimated_prompt_tokens = request_tokens(request);
-        let inference_started = Instant::now();
         let ProposerReply {
             proposal,
             token_confidence,
             timings: model,
             ..
-        } = self.client.propose_measured(request)?;
-        let inference_millis =
-            u64::try_from(inference_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        } = reply;
 
         guard_analysis(|| {
             let validation_started = Instant::now();
@@ -578,6 +659,9 @@ impl Engine {
                     context_units: u32::try_from(prepared.context.units.len()).unwrap_or(u32::MAX),
                     context_tier: Some(prepared.context.tier),
                     read_by: None,
+                    request_sha256: Some(request.sha256()),
+                    model_sha256: None,
+                    runtime_sha256: None,
                 },
             );
             analysis.text_fingerprint = source_fingerprint(source).map(fingerprint::encode);
@@ -776,6 +860,7 @@ pub fn barely_readable(source: &DocumentSource) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::NoModel;
     use crate::distill::source_from_text;
     use crate::domain::{PageImage, PageOrigin, SourcePage};
 
@@ -1424,6 +1509,166 @@ mod tests {
                 assert_eq!(analysis.stated_dates, vec!["2024-01-02"]);
             }
         }
+    }
+
+    /// [`Reader`] behind the local server's context, reporting `confidence`
+    /// for its date and party tokens, as the local client does.
+    struct LocalReader {
+        answer: fn(&[(String, String)]) -> String,
+        confidence: Option<crate::domain::TokenConfidence>,
+    }
+
+    impl Proposer for LocalReader {
+        fn propose(&self, request: &ModelRequest) -> EngineResult<crate::domain::ModelProposal> {
+            Reader(self.answer).propose(request)
+        }
+
+        fn propose_measured(&self, request: &ModelRequest) -> EngineResult<ProposerReply> {
+            Ok(ProposerReply {
+                proposal: self.propose(request)?,
+                token_confidence: self.confidence,
+                token_trace: None,
+                timings: Some(SERVER_TIMINGS),
+            })
+        }
+
+        fn context_tokens(&self) -> Option<usize> {
+            NoModel::local().context_tokens()
+        }
+    }
+
+    /// The calibration notice, read by a local model that answers it right,
+    /// and the analysis as a queue stores it and reads it back.
+    fn stored_reading(
+        confidence: Option<crate::domain::TokenConfidence>,
+    ) -> (DocumentSource, DocumentAnalysis) {
+        let probe = crate::setup::semantic_probes().unwrap().remove(0);
+        let engine = Engine::with_proposer(Box::new(LocalReader {
+            answer: calibration_reply,
+            confidence,
+        }));
+        let analysis = engine.analyze(&probe.document, "pdf", &[]).unwrap();
+        let stored = serde_json::from_str(&serde_json::to_string(&analysis).unwrap()).unwrap();
+        assert_eq!(stored, analysis, "an analysis reads back as it was written");
+        (probe.document, stored)
+    }
+
+    /// An analysis with the per-stage times of the work done again cleared:
+    /// everything else must be what the first reading made.
+    fn untimed(mut analysis: DocumentAnalysis) -> DocumentAnalysis {
+        let telemetry = &mut analysis.telemetry;
+        telemetry.distill_micros = 0;
+        telemetry.index_micros = 0;
+        telemetry.retrieval_micros = 0;
+        telemetry.prompt_micros = 0;
+        telemetry.validation_micros = 0;
+        telemetry.naming_micros = 0;
+        analysis
+    }
+
+    /// An analysis remembers the request its reply answered, in both
+    /// pipelines, and the reply stored with it, validated again under the
+    /// same rules by an engine with no model behind it, is exactly what
+    /// the reading made of it: the reply the model gave is recovered from
+    /// the one validation completed, its token probabilities and the
+    /// server's figures ride along, and only the stages run again are timed
+    /// again.
+    #[test]
+    fn a_stored_reply_validated_again_is_what_its_reading_made_of_it() {
+        let (source, stored) = stored_reading(Some(LOW));
+        let request = Engine::with_proposer(Box::new(NoModel::local()))
+            .prepare(&source)
+            .unwrap()
+            .request;
+        assert_eq!(
+            stored.telemetry.request_sha256.as_deref(),
+            Some(request.sha256().as_str())
+        );
+        assert_eq!(stored.telemetry.model_sha256, None, "the caller's to set");
+        assert_eq!(stored.telemetry.runtime_sha256, None, "the caller's to set");
+
+        let again = Engine::with_proposer(Box::new(NoModel::local()))
+            .revalidate(&source, "pdf", &[], &stored)
+            .expect("the same request, answered");
+
+        assert_eq!(untimed(again.clone()), untimed(stored.clone()));
+        assert_eq!(
+            again.telemetry.inference_millis,
+            stored.telemetry.inference_millis
+        );
+        assert_eq!(again.telemetry.model, Some(SERVER_TIMINGS));
+        assert_eq!(again.token_confidence, Some(LOW));
+
+        let digest = analyze_with(
+            Engine::with_proposer(Box::new(Scored(None))).with_pipeline(Pipeline::Digest),
+        );
+        let digest_request = ModelRequest::from_digest(&distill(
+            &source_from_text(
+                "CONSULTING AGREEMENT\n\nThis Agreement is effective as of April 1, 2026.\n\
+                 It is made between Acme Corporation and the consultant for advisory services.",
+            ),
+            DigestBudget::default(),
+        ));
+        assert_eq!(
+            digest.telemetry.request_sha256,
+            Some(digest_request.sha256())
+        );
+    }
+
+    /// What changed in the rules reaches a stored reply without the model:
+    /// a review gate the reading was not under sends the same reply to
+    /// review now, and the engine that says so has no model to ask.
+    #[test]
+    fn a_changed_rule_reaches_a_stored_reply_without_asking_the_model() {
+        let (source, stored) = stored_reading(Some(LOW));
+        assert_eq!(stored.status, ProposalStatus::Ready, "{stored:#?}");
+
+        let stricter = Engine::with_proposer(Box::new(NoModel::local()))
+            .with_min_token_confidence(0.5)
+            .revalidate(&source, "pdf", &[], &stored)
+            .expect("the same request, answered");
+
+        assert_eq!(stricter.status, ProposalStatus::NeedsReview);
+        assert!(
+            stricter
+                .review_reasons
+                .contains(&ReviewReason::LowConfidence)
+        );
+        assert_eq!(stricter.filename, stored.filename);
+        assert_eq!(stricter.model_proposal, stored.model_proposal);
+    }
+
+    /// A stored reply answers only the request it was given: not one built
+    /// from text that reads differently now, not one asked another way, and
+    /// nothing at all for an analysis that kept no request, for a reply
+    /// with no facts, or for the digest pipeline.
+    #[test]
+    fn a_stored_reply_answers_only_the_request_it_was_given() {
+        let (source, stored) = stored_reading(None);
+        let engine = Engine::with_proposer(Box::new(NoModel::local()));
+        assert!(engine.revalidate(&source, "pdf", &[], &stored).is_some());
+
+        let mut reread = source.clone();
+        reread.pages[0].text.push_str("\nPage 1 of 1");
+        assert_eq!(engine.revalidate(&reread, "pdf", &[], &stored), None);
+
+        let profiled = Engine::with_proposer(Box::new(NoModel::local()))
+            .with_prompt_profile(Some(PromptProfile::Bonsai2));
+        assert_eq!(profiled.revalidate(&source, "pdf", &[], &stored), None);
+
+        let mut unkept = stored.clone();
+        unkept.telemetry.request_sha256 = None;
+        assert_eq!(engine.revalidate(&source, "pdf", &[], &unkept), None);
+
+        let mut factless = stored.clone();
+        if let Some(reply) = factless.model_proposal.as_mut() {
+            reply.facts = None;
+        }
+        assert_eq!(engine.revalidate(&source, "pdf", &[], &factless), None);
+
+        let digest =
+            Engine::with_proposer(Box::new(NoModel::local())).with_pipeline(Pipeline::Digest);
+        assert_eq!(digest.revalidate(&source, "pdf", &[], &stored), None);
     }
 
     /// The digest pipeline, asked for, sends the digest prompt under the
