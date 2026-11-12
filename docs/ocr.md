@@ -316,8 +316,9 @@ or more, confidence 50 or more). Over every development document - real1-6,
 InternBench and the generated fixtures, 448 files - it saves 30 of 616
 recognition passes, on 10 documents: eight single-page images go from four
 passes to one (2.2-10.3 s to 0.7-2.6 s each on a 4-core machine), and the
-66- and 35-page scans real4-letter-06 and real4-letter-13 save three each
-(68.3 s to 63.9 s and 58.9 s to 50.8 s, mean of two alternating runs).
+113- and 36-page scans real4-letter-06 and real4-letter-13 (66 and 35 pages
+read by OCR) save three passes each - a few seconds, which two runs of each
+cannot tell from the spread between runs (51-67 s for real4-letter-13).
 Every one of the 448 reads byte-for-byte as before. The pages still
 searched, on 11 documents (the fixtures' rotated scan and image files among
 them), are not plainly upright.
