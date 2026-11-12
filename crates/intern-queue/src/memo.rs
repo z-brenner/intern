@@ -21,7 +21,8 @@
 //! [`EXTRACTION_MEMO_BYTES`] of them, the least recently used going first;
 //! one larger than that is never kept. Nothing in it is written to disk, and
 //! the queue drops a document's entry when the document is canceled or
-//! removed, and every entry at shutdown - including what a reading still
+//! removed - one at a time, or cleared away with Discard waiting or Clear
+//! history - and every entry at shutdown, including what a reading still
 //! under way would have kept ([`Reading`]).
 
 use std::{
@@ -127,6 +128,21 @@ impl ExtractionMemo {
         let mut kept = self.kept();
         kept.entries.retain(|entry| entry.item_id != item_id);
         kept.readings.retain(|(id, _)| *id != item_id);
+    }
+
+    /// The items anything is kept for, or a reading of which is under way,
+    /// each once.
+    pub fn items(&self) -> Vec<i64> {
+        let kept = self.kept();
+        let mut items = kept
+            .entries
+            .iter()
+            .map(|entry| entry.item_id)
+            .chain(kept.readings.iter().map(|(item_id, _)| *item_id))
+            .collect::<Vec<_>>();
+        items.sort_unstable();
+        items.dedup();
+        items
     }
 
     /// Drops everything, and whatever the readings under way would keep.
@@ -274,6 +290,22 @@ mod tests {
         memo.reading(9).keep("cccc", path, &source);
         memo.clear();
         assert_eq!(memo.held(), (0, 0));
+    }
+
+    /// The items listed are those an entry is kept for and those a reading
+    /// is under way for, each once, until they are forgotten.
+    #[test]
+    fn the_items_listed_are_those_kept_or_being_read() {
+        let memo = ExtractionMemo::default();
+        let path = Path::new("/inbox/scan.pdf");
+        memo.reading(7).keep("aaaa", path, &text("INVOICE 1001"));
+        let again = memo.reading(7);
+        let first = memo.reading(3);
+        assert_eq!(memo.items(), vec![3, 7]);
+        memo.forget(7);
+        assert_eq!(memo.items(), vec![3]);
+        drop((again, first));
+        assert!(memo.items().is_empty());
     }
 
     /// The limits hold: the least recently used document goes first, a

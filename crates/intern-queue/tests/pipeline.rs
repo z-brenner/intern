@@ -1402,6 +1402,82 @@ fn a_changed_or_canceled_document_is_read_again_from_the_start() {
     assert_eq!(status_of(&pipeline, ids[1]), QueueStatus::Ready);
 }
 
+/// Discard waiting and Clear history take documents out of the queue in
+/// bulk, as Remove does one at a time, and what the memo kept of them goes
+/// with them. It used to stay, holding one of the few places the memo has:
+/// in a memo of two, the next document read pushed out one still waiting
+/// instead, and Re-analyze of that one read it again.
+#[test]
+fn a_document_cleared_away_in_bulk_leaves_nothing_in_the_memo() {
+    for discard in [true, false] {
+        let temp = tempdir().unwrap();
+        let files = Arc::new(FakeFiles::default());
+        let paths = documents(
+            temp.path(),
+            &files,
+            &["waiting.pdf", "cleared.pdf", "next.pdf"],
+        );
+        let worker = Arc::new(FakeWorker::new(
+            (0..4).map(|_| Ok(parsed(READABLE))).collect(),
+        ));
+        let read = || Ok(proposal(0.94, false));
+        let model = Arc::new(FakeModel::new(vec![
+            read(),
+            if discard {
+                Err(ModelFailure::fatal("MODEL_NOT_READY"))
+            } else {
+                read()
+            },
+            read(),
+            read(),
+        ]));
+        let pipeline = pipeline(
+            temp.path(),
+            Arc::clone(&worker),
+            model,
+            files,
+            AppSettings::default(),
+        )
+        .with_extraction_memo(2, 1 << 20);
+        let ids = pipeline
+            .enqueue_files(&paths[..2])
+            .unwrap()
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(status_of(&pipeline, ids[0]), QueueStatus::Ready);
+        if discard {
+            // Read, and put back for want of a model.
+            assert_eq!(status_of(&pipeline, ids[1]), QueueStatus::Queued);
+            assert_eq!(pipeline.discard_waiting().unwrap(), 1);
+        } else {
+            // Read, and kept under its own name: done, and cleared away.
+            pipeline.keep_original(ids[1]).unwrap();
+            assert_eq!(status_of(&pipeline, ids[1]), QueueStatus::Completed);
+            assert_eq!(pipeline.clear_history().unwrap(), 1);
+        }
+        assert!(
+            pipeline
+                .list()
+                .unwrap()
+                .iter()
+                .all(|item| item.id != ids[1])
+        );
+
+        pipeline.enqueue_files(&paths[2..]).unwrap();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(worker.calls.load(Ordering::SeqCst), 3);
+        pipeline.reanalyze(ids[0]).unwrap();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(
+            worker.calls.load(Ordering::SeqCst),
+            3,
+            "the memo still held the waiting document (discard: {discard})"
+        );
+    }
+}
+
 /// Re-analyze of a document whose bytes have not changed reads it again
 /// with the model, not the reader - as long as the memo still holds it. A
 /// memo of one document holds only the last one read.

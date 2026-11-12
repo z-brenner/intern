@@ -4430,6 +4430,7 @@ impl Pipeline {
             }
         }
         let removed = self.store.clear_terminal()?;
+        self.forget_removed();
         // A claim waits for the intake watcher to see its item gone; with
         // the watcher off, it never will.
         if self
@@ -4448,8 +4449,23 @@ impl Pipeline {
     /// awaiting a human decision stays put.
     pub fn discard_waiting(&self) -> PipelineResult<usize> {
         let removed = self.store.discard_queued()?;
+        self.forget_removed();
         self.events.queue_changed();
         Ok(removed)
+    }
+
+    /// Drops what the extraction memo holds for every document no longer in
+    /// the queue, as [`Self::remove`] does for one: Discard waiting and Clear
+    /// history delete rows without naming them. An item id is never used
+    /// again, so one the queue no longer has is gone for good; what is kept
+    /// for an item the queue could not be asked about stays until it ages
+    /// out.
+    fn forget_removed(&self) {
+        for id in self.memo.items() {
+            if matches!(self.store.get(id), Ok(None)) {
+                self.memo.forget(id);
+            }
+        }
     }
 
     fn reject_deferred_reconciliation_mutation(&self, id: i64) -> PipelineResult<()> {

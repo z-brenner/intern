@@ -1565,8 +1565,9 @@ just before extraction, and the document's own path, so a file that changed
 never finds one. It is the document's path, not the one read: a document
 admitted on Microsoft's proof is read from a private snapshot made afresh for
 every claim, whose bytes are proven to be the ones the hash names. Canceling
-or removing a document drops its entry, and what a reading of it still under
-way would have kept; shutdown drops them all, and nothing is written to disk.
+or removing a document - one at a time, or with Discard waiting or Clear
+history - drops its entry, and what a reading of it still under way would have
+kept; shutdown drops them all, and nothing is written to disk.
 A remembered extraction proves nothing about the reader now, so it clears no
 doubt over a reader crash.
 
