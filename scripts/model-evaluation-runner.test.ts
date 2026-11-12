@@ -102,23 +102,26 @@ it('the runner scores with the pipeline the release gate accepts, unless told ot
   }
 });
 
-// The accurate model is launched with flags of its own
+// Each model is launched with flags of its own
 // (tiers::tier_server_flags in crates/intern-engine/src/tiers.rs). Every
-// script that starts it the way the app does must pass them, or the QA and
-// release scores, the recordings of record and the memory probe describe a
-// server the app never runs.
-it('starts the accurate model with its own flags wherever the app launch is copied', async () => {
+// script that starts a model the way the app does must pass that tier's
+// flags, no more and no fewer, or the QA and release scores, the
+// recordings of record and the memory probe describe a server the app
+// never runs.
+it('starts each model with its own flags wherever the app launch is copied', async () => {
   const tiers = await readFile('crates/intern-engine/src/tiers.rs', 'utf8');
-  const row = tiers.match(/ModelTier::Accurate => &\[([^\]]*)\]/);
-  expect(row, 'the accurate tier has a row in tier_server_flags').not.toBeNull();
-  const flags = [...row![1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
-  expect(flags).toContain('--no-repack');
+  const quoted = (text: string) => [...text.matchAll(/"([^"]+)"/g)].map((match) => `"${match[1]}"`).join(', ');
+  const rows: Record<string, string> = {};
+  for (const [tier, variant] of [['accurate', 'Accurate'], ['fast', 'Fast']] as const) {
+    const row = tiers.match(new RegExp(`ModelTier::${variant} => &\\[([^\\]]*)\\]`));
+    expect(row, `the ${tier} tier has a row in tier_server_flags`).not.toBeNull();
+    rows[tier] = quoted(row![1]);
+  }
+  expect(rows.accurate).toContain('"--no-repack"');
+  const map = `$TierFlags = @{ accurate = @(${rows.accurate}); fast = @(${rows.fast}) }`;
   for (const path of ['scripts/run-model-evaluation.ps1', 'scripts/record-corpus.ps1', 'scripts/probe-windows-memory.ps1']) {
     const script = await readFile(path, 'utf8');
-    for (const flag of flags) {
-      expect(script, `${path} passes ${flag} for the accurate model`).toMatch(
-        new RegExp(`\\$Tier -eq "accurate"\\) \\{ \\$\\w+ \\+= "${flag}" \\}`),
-      );
-    }
+    expect(script, `${path} carries both tiers' flags`).toContain(map);
+    expect(script, `${path} passes the tier's flags`).toMatch(/\$\w+ \+= \$TierFlags\[\$Tier\]/);
   }
 });

@@ -287,11 +287,15 @@ pub const fn memory_for_plan(available: u64, loaded: Option<(ModelTier, u64)>) -
 /// laptops load; on an Intel Xeon with AMX it was unchanged. Live on
 /// InternBench and the five real sets the names it gave differed from the
 /// repacked run's no more than two repacked runs on different processors
-/// differ from each other. The fast model was not measured with it, so it
-/// keeps the repacked layout.
+/// differ from each other.
+///
+/// The fast model runs with it from alpha.18. On an AMD EPYC 7763 (AVX2)
+/// the 4B took 8.6% less time per recorded request (58.2 s to 53.2 s,
+/// `speed-battery.yml` run 43257828551), 4 of 13 replies changing as they
+/// do between processors.
 pub const fn tier_server_flags(tier: ModelTier) -> &'static [&'static str] {
     match tier {
-        ModelTier::Fast => &[],
+        ModelTier::Fast => &["--no-repack"],
         ModelTier::Accurate => &["--no-repack"],
     }
 }
@@ -1189,10 +1193,8 @@ mod tests {
             assert_eq!(options.extra_arguments, tier_server_flags(tier));
         }
         assert_eq!(IDLE_UNLOAD_AFTER.as_secs(), 600);
-        // Measured on the 9B only: the 4B keeps llama.cpp's repacked
-        // weights.
         assert_eq!(tier_server_flags(ModelTier::Accurate), ["--no-repack"]);
-        assert!(tier_server_flags(ModelTier::Fast).is_empty());
+        assert_eq!(tier_server_flags(ModelTier::Fast), ["--no-repack"]);
     }
 
     #[test]
