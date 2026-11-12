@@ -55,10 +55,11 @@ weights are read where the file maps them.
 | 43274013741, Windows | AMD EPYC 7763 | 53.9 s -> 51.7 s | **-4.2%** | 32.0 s -> 30.6 s (median) | 7.13 -> 7.08 tokens/s (median) | - |
 
 The Linux row is `speed-battery.yml` as above; the Windows row is
-`runtime-speed.yml` with `probe: no-repack-fast`, the 4B launched as the
-app does, alternately without and with the flag, twice each, on every third
-recorded request, on one runner with four logical processors and two server
-threads (`windows-fast-no-repack.json`). The four replies that changed on
+`runtime-speed.yml` with `probe: no-repack-fast`, the 4B launched with the
+app's flags but two server threads where the app would take four,
+alternately without and with the flag, twice each, on every third recorded
+request, on one runner with four logical processors
+(`windows-fast-no-repack.json`). The four replies that changed on
 Linux differ as replies differ between two processors: the line a date is
 quoted from, the order of two parties, the case of a type, a subject's
 wording; both variant rounds gave the same four.
