@@ -2330,8 +2330,9 @@ impl RuntimeModel {
     /// gave it, and for one the plan would now have another tier read
     /// first, or read from another file or under another runtime
     /// ([`tiers::runtime_identity`]: the reply settings, the server's
-    /// arguments, the llama.cpp build), or that a launch of its tier could
-    /// not have given as it is stored ([`RuntimeLauncher::may_revalidate`]).
+    /// arguments, the llama.cpp build, and the version of how the client
+    /// reads a reply), or that a launch of its tier could not have given as
+    /// it is stored ([`RuntimeLauncher::may_revalidate`]).
     /// Not yet while the models are held or no plan can be made.
     fn revalidation_plan(
         &self,

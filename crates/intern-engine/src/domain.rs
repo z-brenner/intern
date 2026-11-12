@@ -232,9 +232,9 @@ impl ModelProposal {
     /// evidence it is shown.
     ///
     /// The one place such a reply is built, so a reply stored after
-    /// validation completed it can be turned back into exactly the reply the
-    /// model gave: its facts, confidence and flag are kept as replied
-    /// ([`crate::engine::Engine::revalidate`]).
+    /// validation completed it can be turned back into the reply as the
+    /// client read it off the wire: its facts, confidence and flag are kept
+    /// as read ([`crate::engine::Engine::revalidate`]).
     pub fn from_facts(facts: ModelFacts, confidence: f32, needs_review: bool) -> Self {
         Self {
             document_type: facts.document_type.clone(),
@@ -870,11 +870,14 @@ pub struct AnalysisTelemetry {
     /// The identity of everything else that shaped the reply
     /// ([`crate::tiers::runtime_identity`]): the reply settings every
     /// request carries, the local server's launch arguments for the tier,
-    /// and the llama.cpp build the release ships. Set, like `model_sha256`,
-    /// by the caller that launched the server. The same request to the same
-    /// file under another sampler, reply limit, micro-batch or build can be
-    /// answered differently, so a stored reply stands in for a fresh one
-    /// only where this is the same too. Absent where `model_sha256` is.
+    /// the llama.cpp build the release ships, and the version of how the
+    /// client reads a reply ([`crate::client::REPLY_READING_VERSION`]). Set,
+    /// like `model_sha256`, by the caller that launched the server. The same
+    /// request to the same file under another sampler, reply limit,
+    /// micro-batch or build can be answered differently, and a reply read
+    /// otherwise is stored otherwise, so a stored reply stands in for a
+    /// fresh one only where this is the same too. Absent where
+    /// `model_sha256` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_sha256: Option<String>,
 }
