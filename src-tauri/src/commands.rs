@@ -932,6 +932,13 @@ struct RuntimeModel {
     /// Set while an early start's thread is under way
     /// ([`RuntimeModel::start_early`]).
     starting_early: AtomicBool,
+    /// Set while [`RuntimeModel::start`] launches a server, until its engine
+    /// is in the slot or the start gives up ([`Launching`]). The server's
+    /// model is in memory by the time the server answers, inside the launch,
+    /// and the plan credits it only once its engine is in the slot
+    /// ([`RuntimeModel::plan`]), so a plan made meanwhile waits for the
+    /// launch ([`RuntimeModel::plan_between_launches`]).
+    launching: AtomicBool,
     /// Each tier's model as this session last checked it.
     checks: Mutex<std::collections::BTreeMap<ModelTier, TierCheck>>,
     /// Serializes the stamp's read-modify-write: the setup thread and the
@@ -977,6 +984,25 @@ fn queue_waiting_on(pipeline: &Arc<Pipeline>) -> QueueWaiting {
             .upgrade()
             .is_some_and(|pipeline| pipeline.has_document_waiting().unwrap_or(true))
     })
+}
+
+/// [`RuntimeModel::launching`], set for as long as this lives: from before a
+/// server is launched until its engine is in the slot, or the start has
+/// given up - whichever way it leaves [`RuntimeModel::start`], an error or a
+/// panic included, so no plan waits on a launch that is over.
+struct Launching<'a>(&'a AtomicBool);
+
+impl<'a> Launching<'a> {
+    fn begin(mark: &'a AtomicBool) -> Self {
+        mark.store(true, Ordering::SeqCst);
+        Self(mark)
+    }
+}
+
+impl Drop for Launching<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 impl RuntimeModel {
@@ -1029,6 +1055,7 @@ impl RuntimeModel {
             held: AtomicBool::new(false),
             self_testing: AtomicBool::new(false),
             starting_early: AtomicBool::new(false),
+            launching: AtomicBool::new(false),
             checks: Mutex::new(std::collections::BTreeMap::new()),
             stamp_lock: Mutex::new(()),
             last_tier: Mutex::new(None),
@@ -1302,6 +1329,36 @@ impl RuntimeModel {
         )
     }
 
+    /// [`Self::plan`], made with no server launching: one that was, when it
+    /// began or when it ended, is waited for under `lifecycle`, which every
+    /// launch holds, and the plan made again.
+    ///
+    /// A server's model is in memory by the time the server answers, which
+    /// the launch waits for, and so before its engine is in the slot, where
+    /// the plan credits it. Planned meanwhile, a document was judged against
+    /// memory the loading model already held, credited to nothing: on a
+    /// 16 GiB Windows machine with 11,461 MiB available before an early
+    /// start, the 9B's working set (5,229 MiB or more with `--no-repack`)
+    /// left about 6,200 MiB, under [`tiers::MIN_AVAILABLE_FOR_ACCURATE`], and
+    /// the document, planned onto the 4B, unloaded the 9B the early start
+    /// had just loaded, loaded the 4B, and was read by it provisionally, to
+    /// be read again later.
+    fn plan_between_launches(&self) -> Option<TierPlan> {
+        let launching = || self.launching.load(Ordering::SeqCst);
+        if !launching() {
+            let plan = self.plan();
+            if !launching() {
+                return plan;
+            }
+        }
+        drop(
+            self.lifecycle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        self.plan()
+    }
+
     /// What unloading the loaded `tier`'s server would add to the memory the
     /// machine reports available: what the live server holds that the machine
     /// does not already count ([`tiers::memory_released_by`]) - on Windows its
@@ -1564,6 +1621,9 @@ impl RuntimeModel {
                 message: "local model process is already running".into(),
             });
         }
+        // Until the engine is in the slot below - dropped after the slot
+        // guards, so after it is filled and let go - or this gives up.
+        let _launching = Launching::begin(&self.launching);
         let launched = self.launcher.launch(&self.manifest, tier)?;
         let mut server = self
             .server
@@ -2067,9 +2127,11 @@ impl RuntimeModel {
     /// self-tested the first time, and set aside if it fails - so a hold, a
     /// cancel or shutdown in the meantime starts nothing, and one that comes
     /// during the load stops what it loads as it would a document's. A
-    /// document that reaches the model meanwhile waits for the load and its
-    /// self-test, and is read only by a model that passed it - this one, or,
-    /// when it fails, the one planned without it. It never unloads a model:
+    /// document that reaches the model meanwhile is planned once the server
+    /// is up and its model credited ([`RuntimeModel::plan_between_launches`]),
+    /// waits for the load and its self-test, and is read only by a model
+    /// that passed it - this one, or, when it fails, the one planned without
+    /// it. It never unloads a model:
     /// one already loaded is only kept from going idle (the document reads
     /// with it, or swaps it as it would have), and while a document is being
     /// read the slot is never empty. A file that turns out not to be a
@@ -2332,7 +2394,8 @@ impl RuntimeModel {
     /// ([`tiers::runtime_identity`]: the reply settings, the server's
     /// arguments, the llama.cpp build), or that a launch of its tier could
     /// not have given as it is stored ([`RuntimeLauncher::may_revalidate`]).
-    /// Not yet while the models are held or no plan can be made.
+    /// Not yet while the models are held, a server launches, or no plan can
+    /// be made.
     fn revalidation_plan(
         &self,
         stored: &DocumentAnalysis,
@@ -2346,10 +2409,15 @@ impl RuntimeModel {
         ) else {
             return Err(RevalidationOutlook::Declined);
         };
-        if self.is_held() {
+        // Nor while a server launches, when the plan would judge the memory
+        // its model already holds as gone ([`Self::plan_between_launches`]):
+        // an accurate model's reading was declined for the release as if the
+        // plan would now have the quick one read it.
+        let launching = || self.launching.load(Ordering::SeqCst);
+        if self.is_held() || launching() {
             return Err(RevalidationOutlook::NotNow);
         }
-        let Some(plan) = self.plan() else {
+        let Some(plan) = self.plan().filter(|_| !launching()) else {
             return Err(RevalidationOutlook::NotNow);
         };
         if plan.first != read_by.tier
@@ -2377,7 +2445,9 @@ impl AnalyzerBoundary for RuntimeModel {
         existing_names: &[&str],
     ) -> Result<DocumentAnalysis, ModelFailure> {
         let asked = self.generation.load(Ordering::SeqCst);
-        let mut plan = match self.plan() {
+        // Not while a server launches: an early start's, say, whose model
+        // holds memory its empty slot does not credit yet.
+        let mut plan = match self.plan_between_launches() {
             Some(plan) => plan,
             None => {
                 // Nothing checked yet: a verified start may be under way.
@@ -2386,7 +2456,7 @@ impl AnalyzerBoundary for RuntimeModel {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner),
                 );
-                match self.plan() {
+                match self.plan_between_launches() {
                     Some(plan) if !self.overtaken_since(asked) => plan,
                     _ if self.overtaken_since(asked) => return Err(self.overtaken()),
                     _ => return Err(ModelFailure::retryable("MODEL_NOT_READY")),
@@ -2401,7 +2471,7 @@ impl AnalyzerBoundary for RuntimeModel {
                 Err(ReadFailure::Unusable) if !replanned => {
                     replanned = true;
                     plan = self
-                        .plan()
+                        .plan_between_launches()
                         .ok_or_else(|| ModelFailure::retryable("MODEL_NOT_READY"))?;
                 }
                 Err(ReadFailure::Unusable) => {
@@ -2472,7 +2542,8 @@ impl AnalyzerBoundary for RuntimeModel {
     /// fast reading would not be read again by the accurate model, whose
     /// reply no reading stores. The fast model's reading is held for a
     /// person, and a provisional one is due its re-read, as after any
-    /// reading. Not yet, when no plan can be made, or Intern is stopping.
+    /// reading. Not yet, when no plan can be made, a server is launching, or
+    /// Intern is stopping.
     fn revalidate(
         &self,
         source: &DocumentSource,
@@ -9292,6 +9363,8 @@ mod runtime_tests {
         refuse_launch: Mutex<Option<ModelTier>>,
         /// How many launches were refused that way.
         refused: AtomicUsize,
+        /// The next launch panics, as a bug in starting a server would.
+        panic_launch: AtomicBool,
         /// What each tier's running server says stopping it would give back
         /// to the machine's available memory: its working set on Windows. A
         /// tier with none set says it cannot be read, as a server whose
@@ -9325,6 +9398,7 @@ mod runtime_tests {
                 reply_gate: Mutex::new(None),
                 refuse_launch: Mutex::new(None),
                 refused: AtomicUsize::new(0),
+                panic_launch: AtomicBool::new(false),
                 server_memory: Mutex::new(std::collections::BTreeMap::new()),
                 after_reads: Mutex::new(Vec::new()),
                 saved_state: Mutex::new(std::collections::BTreeSet::new()),
@@ -9496,6 +9570,10 @@ mod runtime_tests {
             if let Some(gate) = gate {
                 gate.pass();
             }
+            assert!(
+                !self.rig.panic_launch.swap(false, Ordering::SeqCst),
+                "a launch that panics"
+            );
             if *self.rig.refuse_launch.lock().unwrap() == Some(tier) {
                 self.rig.refused.fetch_add(1, Ordering::SeqCst);
                 return Err(CommandError {
@@ -11283,6 +11361,56 @@ mod runtime_tests {
         );
     }
 
+    /// While a server launches - here a cancel's restart of the 9B - its
+    /// model holds memory its empty slot does not credit yet. Planned then,
+    /// on the Windows runner's numbers, the accurate model's reading was
+    /// declined for the release as if the plan would now have the quick one
+    /// read it; it is left due, and validated again once the server is up.
+    #[test]
+    fn a_reading_is_not_judged_while_a_server_launches() {
+        let install = Install::new("revalidate-launching");
+        install.install_accurate();
+        let rig = Rig::new();
+        rig.server_holds(ModelTier::Accurate, Some(WINDOWS_ACCURATE_LAUNCHED));
+        let world = World::new();
+        world.memory(Some(WINDOWS_NOTHING_LOADED));
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        verified(&runtime);
+        let loaded = WINDOWS_NOTHING_LOADED - WINDOWS_ACCURATE_LAUNCHED;
+        world.memory(Some(loaded));
+        let stored = runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        assert_eq!(read_by(&stored).tier, ModelTier::Accurate);
+        assert_eq!(
+            runtime.may_revalidate(&stored),
+            RevalidationOutlook::Possible
+        );
+
+        let gate = Arc::new(Gate::default());
+        *rig.launch_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let canceling = Arc::clone(&runtime);
+        let cancel = std::thread::spawn(move || canceling.cancel());
+        gate.wait_reached();
+        *rig.launch_gate.lock().unwrap() = None;
+        assert!(loaded < MIN_AVAILABLE_FOR_ACCURATE);
+        assert_eq!(runtime.may_revalidate(&stored), RevalidationOutlook::NotNow);
+        assert_eq!(
+            runtime.revalidate(&probe(), "pdf", &[], &stored),
+            Revalidation::NotNow
+        );
+        gate.open();
+        assert_eq!(cancel.join().unwrap(), Ok(()));
+
+        assert_eq!(
+            runtime.may_revalidate(&stored),
+            RevalidationOutlook::Possible
+        );
+        assert!(matches!(
+            runtime.revalidate(&probe(), "pdf", &[], &stored),
+            Revalidation::Revalidated(_)
+        ));
+        assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1);
+    }
+
     /// A local model that answers the calibration notice right, behind the
     /// local server's context, with the token probabilities a launch asks
     /// for: what a launch's client hands its engine.
@@ -11628,6 +11756,11 @@ mod runtime_tests {
     const WINDOWS_FAST_BEFORE: u64 = 12_162 * MIB;
     const WINDOWS_FAST_LOADED: u64 = 8_233 * MIB;
     const WINDOWS_FAST_WORKING_SET: u64 = 4_514 * MIB;
+    /// The 9B's working set with `--no-repack` on a 16 GiB Windows runner,
+    /// the least it held from load to a minute idle (5,229-5,491 MiB,
+    /// `runtime-speed.yml` run 43063958237): in place by the time its server
+    /// answers, while its slot is still empty.
+    const WINDOWS_ACCURATE_LAUNCHED: u64 = 5_229 * MIB;
 
     /// What the probe found on Windows: credited only the estimate, the 9B
     /// loaded on a 16 GiB machine with a browser open is judged not to fit
@@ -12503,6 +12636,107 @@ mod runtime_tests {
         assert_eq!(reading.tier, ModelTier::Accurate);
         assert_eq!(rig.launches(), 1);
         assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1);
+    }
+
+    /// The same, with the memory a launching server holds: the 9B's working
+    /// set is in place by the time its server answers, while its slot, where
+    /// the plan credits it, is still empty. A document planned meanwhile on
+    /// the Windows runner's numbers saw about 6,200 MiB, under the accurate
+    /// model's floor, and was planned onto the quick model - which unloaded
+    /// the 9B the early start had just loaded, loaded the 4B, and read the
+    /// document provisionally. It is planned once the launch is over, with
+    /// the 9B credited, and read by it.
+    #[test]
+    fn a_document_during_an_early_start_is_planned_with_what_it_loads() {
+        let install = Install::new("early-start-memory");
+        let rig = Rig::new();
+        let world = World::new();
+        let runtime = launched_idle(&install, &rig, &world);
+        world.memory(Some(WINDOWS_NOTHING_LOADED));
+        rig.server_holds(ModelTier::Accurate, Some(WINDOWS_ACCURATE_LAUNCHED));
+        rig.server_holds(ModelTier::Fast, Some(WINDOWS_FAST_WORKING_SET));
+
+        let gate = Arc::new(Gate::default());
+        *rig.launch_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let early = runtime.start_early().expect("an early start");
+        gate.wait_reached();
+        *rig.launch_gate.lock().unwrap() = None;
+        let launching = WINDOWS_NOTHING_LOADED - WINDOWS_ACCURATE_LAUNCHED;
+        assert!(launching < MIN_AVAILABLE_FOR_ACCURATE);
+        world.memory(Some(launching));
+        let analyzing = Arc::clone(&runtime);
+        let document = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
+        std::thread::sleep(Duration::from_millis(100));
+        gate.open();
+        early.join().unwrap();
+
+        let reading = read_by(&document.join().unwrap().unwrap());
+        assert_eq!(
+            (reading.tier, reading.provisional),
+            (ModelTier::Accurate, false)
+        );
+        assert_eq!(launched(&rig), [ModelTier::Accurate], "one launch");
+        assert_eq!(
+            rig.most_alive.load(Ordering::SeqCst),
+            1,
+            "never two servers"
+        );
+    }
+
+    /// A plan waits only while a server launches: the mark is up through the
+    /// launch, and down again however the start ends - its engine in the
+    /// slot, the launch discarded for a hold that came meanwhile, a server
+    /// that would not start, or a launch that panicked.
+    #[test]
+    fn the_launching_mark_comes_down_however_a_start_ends() {
+        let install = Install::new("launching-mark");
+        let rig = Rig::new();
+        let world = World::new();
+        let runtime = launched_idle(&install, &rig, &world);
+        let launching = || runtime.launching.load(Ordering::SeqCst);
+        let gated = || {
+            let gate = Arc::new(Gate::default());
+            *rig.launch_gate.lock().unwrap() = Some(Arc::clone(&gate));
+            let early = runtime.start_early().expect("an early start");
+            gate.wait_reached();
+            *rig.launch_gate.lock().unwrap() = None;
+            assert!(launching(), "up while the server launches");
+            (gate, early)
+        };
+
+        let (gate, early) = gated();
+        gate.open();
+        early.join().unwrap();
+        assert!(runtime.running());
+        assert!(!launching(), "its engine is in the slot");
+
+        world.advance(IDLE_UNLOAD_AFTER);
+        assert!(runtime.unload_if_idle(|| false));
+        let (gate, early) = gated();
+        runtime.hold().unwrap();
+        gate.open();
+        early.join().unwrap();
+        assert!(!runtime.running());
+        assert!(!launching(), "discarded for the hold");
+        runtime.release();
+
+        let lifecycle = runtime.lifecycle.lock().unwrap();
+        *rig.refuse_launch.lock().unwrap() = Some(ModelTier::Accurate);
+        assert!(
+            runtime
+                .start(&lifecycle, ModelTier::Accurate, true)
+                .is_err()
+        );
+        assert!(!launching(), "the server would not start");
+        *rig.refuse_launch.lock().unwrap() = None;
+        rig.panic_launch.store(true, Ordering::SeqCst);
+        let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.start(&lifecycle, ModelTier::Accurate, true)
+        }));
+        assert!(started.is_err(), "the launch panicked");
+        assert!(!launching(), "the launch panicked");
+        drop(lifecycle);
+        assert_eq!(rig.alive.load(Ordering::SeqCst), 0);
     }
 
     /// A document that reaches a model while an early start is still running
