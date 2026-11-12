@@ -46,8 +46,8 @@ on:
       base_args:
         description: >-
           llama-server flags added to the baseline and every variant alike,
-          after the app's own: a tier's own flags, e.g. "--no-repack" for the
-          accurate model as the app launches it (tiers::tier_server_flags)
+          after the app's own: a tier's own flags, "--no-repack" for either
+          model as the app launches it (tiers::tier_server_flags)
         required: false
         default: ""
         type: string
