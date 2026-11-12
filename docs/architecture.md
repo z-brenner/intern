@@ -835,8 +835,10 @@ one named constant.
 The memory guard: a model is loaded only when the machine reports enough
 available memory for it (`MemAvailable` on Linux, `GlobalMemoryStatusEx` on
 Windows; memory that cannot be read counts as enough): what its server must
-keep resident to read at its speed (Qwen3.5 4B about 4.7 GB, its whole
-resident set; Qwen3.5 9B 6,043 MiB, measured at a 6 GB memory limit in
+keep resident to read at its speed (Qwen3.5 4B 4,700 MiB, its resident set
+with repacked weights, kept as an upper bound now that its peak resident
+set with `--no-repack` is 3,260-3,315 MiB; Qwen3.5 9B 6,043 MiB, measured
+at a 6 GB memory limit in
 `bench/reports/speed-linux-cpu-2026-11-05` with repacked weights: 3,317 MiB
 of anonymous memory and 2,726 MiB of mapped weights it read on every token,
 the rest of the mapped file being the original of what was repacked and
@@ -883,10 +885,11 @@ at every pause. A loaded 4B is therefore asked for
 2,048 MiB more than the floor before it makes way for the 9B
 (`tiers::UPGRADE_MARGIN`, in `tiers::memory_for_plan`): the largest gap
 measured, with room to spare. At 1,024 MiB, the margin of alpha.15 and
-alpha.16, the `--no-repack` numbers would still swap the models at every pause
-on a machine with about 7,763 to 8,333 MiB available before any load. In both
-runs the 4B was probed after the 9B, and part of its figure is the rest of the
-machine releasing memory while it was loaded, so the margin errs toward
+alpha.16, the 9B-only `--no-repack` numbers would still swap the models at
+every pause on a machine with 7,763 to 8,332 MiB available before any load;
+with both models' flags, as alpha.18 launches them, 1,024 MiB would not. In
+every run the 4B was probed after the 9B, and part of its figure is the rest
+of the machine releasing memory while it was loaded, so the margin errs toward
 keeping the smaller model. A loaded 9B is still stood down at the floor
 itself, so the margin keeps the smaller model longer, never the larger, and a
 machine whose memory drifts around the floor is not swapped back and forth
