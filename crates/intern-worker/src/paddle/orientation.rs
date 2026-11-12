@@ -60,6 +60,31 @@ pub fn pass_is_final(reading: &PassReading) -> bool {
     blank || (!reading.sideways && upright_reading_is_accepted(&reading.result))
 }
 
+/// The least confidence at which a first pass read at no turn is plainly
+/// the page the right way up, though too unsure to be accepted outright.
+/// Real readings score 92-100 and the same pages read upside down 23-46
+/// (`docs/ocr.md`); a poor scan read the right way up lands between.
+pub const PLAINLY_UPRIGHT_CONFIDENCE: f32 = 50.0;
+/// ...and the words it has to read: a page of text, not a few marks that
+/// happened to read well.
+pub const PLAINLY_UPRIGHT_WORDS: usize = 20;
+
+/// Whether a pass read at no turn is plainly the page the right way up:
+/// not lying on its side, a page's worth of words, and more confident than
+/// any page read the wrong way up comes back.
+///
+/// A poor scan - a faded carbon, a fax - read upright comes back at 50-74
+/// and is not final, so the search used to read it three more times, at
+/// every other turn. A turn that is wrong reads as gibberish under 50 and
+/// cannot beat it ([`better_pass`] keeps the more confident reading), so
+/// those passes only cost time.
+pub fn plainly_upright(reading: &PassReading) -> bool {
+    reading.result.rotation_degrees % 360 == 0
+        && !reading.sideways
+        && reading.result.mean_confidence >= PLAINLY_UPRIGHT_CONFIDENCE
+        && reading.result.text.split_whitespace().count() >= PLAINLY_UPRIGHT_WORDS
+}
+
 /// Of two passes over the same page, the one to keep.
 ///
 /// A pass that read the page the right way round beats one that read it on
@@ -135,7 +160,7 @@ pub fn search_orientation<E>(
     mut read: impl FnMut(u16) -> Result<PassReading, E>,
 ) -> Result<OcrResult, E> {
     let mut best = read(first)?;
-    if pass_is_final(&best) {
+    if pass_is_final(&best) || plainly_upright(&best) {
         return Ok(best.result);
     }
     for turn in search_order(first, best.sideways, suggested) {
@@ -285,6 +310,52 @@ mod tests {
         .unwrap();
         assert_eq!(turns, vec![180, 0]);
         assert_eq!(result.rotation_degrees, 0);
+    }
+
+    /// A faded invoice as PP-OCR reads it the right way up: every line, but
+    /// not one of them sure.
+    const FADED: &str = "INVOICE No. 4471\nDate: 3/14/1998\nSold to: Hargrove Feed & Seed\n\
+        12 bags layer pellets @ 9.40 112.80\n4 rolls baling twine @ 6.15 24.60\n\
+        Paid by check No. 2291 Thank you for your business";
+
+    #[test]
+    fn a_poor_reading_that_is_plainly_upright_ends_the_search() {
+        let mut turns = Vec::new();
+        let result = search_orientation::<()>(0, None, |turn| {
+            turns.push(turn);
+            Ok(match turn {
+                0 => pass(FADED, 62.0, false, 0),
+                _ => pass("ɐ ɟ ʇ 9 ∀ 'z", 31.0, false, turn),
+            })
+        })
+        .unwrap();
+        assert_eq!(turns, vec![0]);
+        assert_eq!(result.text, FADED);
+        assert!(FADED.split_whitespace().count() >= PLAINLY_UPRIGHT_WORDS);
+    }
+
+    /// What is not plainly upright still has the other turns tried: a pass
+    /// at the classifier's turn, a pass as unsure as a page read upside
+    /// down, a few words, or a page lying on its side.
+    #[test]
+    fn a_poor_reading_that_may_be_turned_still_searches() {
+        let searched = |first: u16, upright: PassReading| {
+            let mut turns = Vec::new();
+            search_orientation::<()>(first, None, |turn| {
+                turns.push(turn);
+                Ok(if turn == first {
+                    upright.clone()
+                } else {
+                    pass("x7 ;r q", 30.0, false, turn)
+                })
+            })
+            .unwrap();
+            turns.len()
+        };
+        assert_eq!(searched(180, pass(FADED, 62.0, false, 180)), 4);
+        assert_eq!(searched(0, pass(FADED, 46.0, false, 0)), 4);
+        assert_eq!(searched(0, pass("Date: 3/14/1998 Paid", 62.0, false, 0)), 4);
+        assert_eq!(searched(0, pass(FADED, 62.0, true, 0)), 4);
     }
 
     #[test]

@@ -372,6 +372,26 @@ describe('TauriBridge', () => {
     expect(items[1]).not.toHaveProperty('omittedParties');
   });
 
+  it('carries the other parties a review item could be named for, with the words of the name they replace', async () => {
+    const fake = fakeTransport({
+      queue_list: [
+        { id: 1, originalFilename: 'letter.pdf', status: 'needs_review', proposedFilename: '2012-06-19 Letter to U.S. Department of Justice.pdf', partyChoices: ['Morgan, Lewis & Bockius LLP', 'STARS Alliance LLC'], nameParties: ['U.S. Department of Justice'] },
+        { id: 2, originalFilename: 'nda.pdf', status: 'needs_review', proposedFilename: '2026-04-01 NDA with Acme.pdf', partyChoices: [], nameParties: ['Acme'] },
+        { id: 3, originalFilename: 'memo.pdf', status: 'needs_review', proposedFilename: '2026-04-01 Memorandum.pdf', partyChoices: ['Contoso'] },
+      ],
+    });
+
+    const items = await new TauriBridge(fake.transport).listItems();
+
+    expect(items[0]).toMatchObject({ partyChoices: ['Morgan, Lewis & Bockius LLP', 'STARS Alliance LLC'], nameParties: ['U.S. Department of Justice'] });
+    // No choice, nothing to replace.
+    expect(items[1]).not.toHaveProperty('partyChoices');
+    expect(items[1]).not.toHaveProperty('nameParties');
+    // A name not known to end with its parties still offers the choice.
+    expect(items[2].partyChoices).toEqual(['Contoso']);
+    expect(items[2]).not.toHaveProperty('nameParties');
+  });
+
   // The review panel takes a named local reading to mean the evidence is the
   // document's own lines. The backend sent `readBy` and this bridge dropped
   // it, so in the desktop app every local reading's evidence was introduced

@@ -14,16 +14,18 @@ use intern_core::{
 };
 use intern_engine::{
     DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
-    RuleKind, ValidatedProposal, compose_styled_filename, counterparty_view,
+    RuleKind, Support, ValidatedProposal, approved_party, compose_styled_filename,
+    counterparty_view,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
-    lesson_from_edit, sanitize_folder_name,
+    is_own_name, lesson_from_edit, named_parties, party_as_named, sanitize_folder_name,
     setup::{semantic_probes, validate_semantic_probe},
 };
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use crate::admission::{AdmissionEvidence, AdmissionGuard, AdmissionStage, LocalAdmission};
+use crate::memo::ExtractionMemo;
 use crate::paths::display_path;
 use crate::settings::{AppSettings, DestinationLayout, SettingsStore, normalize_own_names};
 
@@ -251,6 +253,40 @@ impl From<InternError> for PipelineError {
     }
 }
 
+/// What a model boundary makes of a stored reading it is asked to validate
+/// again without a model ([`AnalyzerBoundary::revalidate`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Revalidation {
+    /// The stored reply validated and named again under this release's
+    /// rules: what a fresh reading would make of the document, its reply
+    /// being the one stored.
+    Revalidated(Box<DocumentAnalysis>),
+    /// The stored reply cannot stand in for a fresh one - the request or
+    /// the model would differ, or a fresh reading would ask a model for
+    /// something no reply is stored for - so the document is left as it is.
+    Declined,
+    /// Nothing can be told yet - which model would read the document is
+    /// not known yet - so the document is asked about again later.
+    NotNow,
+}
+
+/// What a model boundary can tell about validating a stored reading again
+/// from the stored reading alone, before the document is read again for it
+/// ([`AnalyzerBoundary::may_revalidate`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RevalidationOutlook {
+    /// Nothing in the stored reading rules it out: the document is read
+    /// again, and [`AnalyzerBoundary::revalidate`] decides.
+    Possible,
+    /// The stored reply cannot stand in for a fresh one - another model
+    /// file, tier or runtime would read the document now, or the reading is
+    /// not one the boundary can vouch for - so the document is left as it
+    /// is, and not read.
+    Declined,
+    /// Nothing can be told yet, so the document is asked about again later.
+    NotNow,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelFailure {
     pub code: String,
@@ -294,6 +330,32 @@ pub trait AnalyzerBoundary: Send + Sync {
         extension: &str,
         existing_names: &[&str],
     ) -> Result<DocumentAnalysis, ModelFailure>;
+    /// Validates and names a document again from the model's reply stored
+    /// in `stored`, without asking a model, when that reply is the one a
+    /// fresh reading would get: the request a fresh reading would send now
+    /// is byte for byte the one it answered, to the same model file, and
+    /// nothing after it would ask a model anything more. Declined by
+    /// default: a boundary that cannot tell never lets a stored reply stand
+    /// in for a fresh one.
+    fn revalidate(
+        &self,
+        _source: &DocumentSource,
+        _extension: &str,
+        _existing_names: &[&str],
+        _stored: &DocumentAnalysis,
+    ) -> Revalidation {
+        Revalidation::Declined
+    }
+    /// The checks of [`Self::revalidate`] that need no text, made from the
+    /// stored reading alone before the document is read again for it.
+    /// Reading a scan again is seconds of OCR, and after an update - which
+    /// restarts Intern, so the extraction memo is empty - every waiting
+    /// document would otherwise be read only to hear that another model
+    /// file, tier or runtime reads it now. Declined by default, as
+    /// `revalidate` is.
+    fn may_revalidate(&self, _stored: &DocumentAnalysis) -> RevalidationOutlook {
+        RevalidationOutlook::Declined
+    }
     fn recover(&self, _failure: &ModelFailure) -> Result<(), ModelFailure> {
         Ok(())
     }
@@ -736,6 +798,219 @@ impl ProposalRecord {
             .0;
         counterparty_view(&styled, &self.own_names)
     }
+
+    /// The other parties the document names, offered to a reviewer to put
+    /// in the name with one click when it gives the wrong one: the fix used
+    /// to be retyping fifteen to forty characters. Each is a party
+    /// validation found the document to state, and none is a party the name
+    /// gives already, the person's own organization, someone the document
+    /// only copies in, or someone who signs for a party - none of those is a
+    /// filename's party. They come in the order the model gave them, which
+    /// puts the side it read as the document's first, written as a composed
+    /// name writes a party, and at most [`MAX_PARTY_CHOICES`] of them.
+    ///
+    /// Read from the stored analysis alone, with no model call. Empty for a
+    /// name with nothing behind it to offer from: a copy's, one typed for an
+    /// unreadable document, and a reading with no validated facts (the
+    /// digest pipeline's, or one stored before the facts were kept).
+    pub fn party_choices(&self) -> Vec<String> {
+        let Some(facts) = self
+            .analysis
+            .facts
+            .as_ref()
+            .filter(|_| !self.is_synthetic())
+        else {
+            return Vec::new();
+        };
+        let (named, _) = self.name_view();
+        let mut taken = named
+            .parties
+            .iter()
+            .chain(&self.analysis.proposal.parties)
+            .flat_map(|party| party_keys(party))
+            .collect::<Vec<_>>();
+        let model: Vec<String> = self
+            .analysis
+            .model_proposal
+            .as_ref()
+            .map(|reply| match reply.facts.as_deref() {
+                Some(facts) if !facts.parties.is_empty() => facts
+                    .parties
+                    .iter()
+                    .map(|party| HouseRule::key(&party.name))
+                    .collect(),
+                _ => reply
+                    .parties
+                    .iter()
+                    .map(|party| HouseRule::key(party))
+                    .collect(),
+            })
+            .unwrap_or_default();
+        // A validated name is the model's, trimmed of a label or completed
+        // from the line that states it, so it is found among the model's
+        // names by either holding the other.
+        let rank = |name: &str| {
+            let key = HouseRule::key(name);
+            model
+                .iter()
+                .position(|given| {
+                    !given.is_empty() && (given.contains(&key) || key.contains(given.as_str()))
+                })
+                .unwrap_or(model.len())
+        };
+        let mut choices = Vec::new();
+        for party in &facts.parties {
+            if !matches!(party.support, Support::Cited | Support::Context)
+                || party.copied
+                || party.signatory
+                || self
+                    .own_names
+                    .iter()
+                    .any(|own| is_own_name(&party.name, own))
+            {
+                continue;
+            }
+            let Some(offered) = party_as_named(&party.name) else {
+                continue;
+            };
+            let keys = party_keys(&party.name);
+            if keys.iter().any(|key| taken.contains(key)) {
+                continue;
+            }
+            taken.extend(keys);
+            choices.push((rank(&party.name), offered));
+        }
+        // Stable: parties the model gave in no recognizable form keep the
+        // document's order, after the rest.
+        choices.sort_by_key(|(rank, _)| *rank);
+        choices
+            .into_iter()
+            .map(|(_, offered)| offered)
+            .take(MAX_PARTY_CHOICES)
+            .collect()
+    }
+
+    /// The parties [`Self::filename`] gives, each exactly as the name writes
+    /// it (see [`named_parties`]): the words a party chosen in review takes
+    /// the place of. `extension` is the source file's.
+    pub fn named_parties(&self, extension: &str) -> Vec<String> {
+        named_parties(&self.styled_proposal(), extension, &self.filename)
+    }
+
+    /// The validated facts as the name `filename` the document is filed
+    /// under gives them: its date (see [`proposal_as_applied`]), and the
+    /// party a reviewer put in place of one the proposed name gave - another
+    /// party the document names, chosen in review, or their own spelling.
+    /// The layout folder and the filing report are read from this, so a
+    /// document filed by party goes in the folder of the party its name
+    /// gives, not the one the reviewer took out of it.
+    ///
+    /// The name is read with the grammar that composed the proposed one: a
+    /// respelled side of a "between" as a lesson is read (see
+    /// [`lesson_from_edit`]), and otherwise the one party after the type it
+    /// kept, whatever the connecting word (see [`approved_party`]). An edit
+    /// to the type of a name that gave a party, keeping its party clause -
+    /// the connecting word and the party - leaves the parties as proposed,
+    /// however the type changed. One that changes the clause as well and
+    /// lengthens the type with words that begin with a connecting word
+    /// reads those words as part of the party: "Notice to Tenants from City
+    /// of Boston" for "Notice from Acme Property" gives "Tenants from City
+    /// of Boston". `extension` is the source file's.
+    pub fn as_filed(&self, extension: &str, filename: &str) -> ValidatedProposal {
+        let styled = self.styled_proposal();
+        let mut filed = proposal_as_applied(&styled, filename);
+        if self.is_synthetic() {
+            return filed;
+        }
+        let proposed = compose_styled_filename(&styled, &self.house_rules, extension, &[]).value;
+        if let Some(edit) = lesson_from_edit(&styled, extension, &proposed, filename)
+            .filter(|edit| edit.kind == RuleKind::Party)
+        {
+            for party in &mut filed.parties {
+                if edit.matches(party) {
+                    party.clone_from(&edit.to);
+                }
+            }
+        } else if let Some(party) = approved_party(&styled, extension, &proposed, filename)
+            && filed
+                .parties
+                .first()
+                .is_none_or(|first| HouseRule::key(first) != HouseRule::key(&party))
+        {
+            // In place of the party the proposed name gave, which is the
+            // first: a name with one party gives the first of them.
+            filed
+                .parties
+                .retain(|other| HouseRule::key(other) != HouseRule::key(&party));
+            match filed.parties.first_mut() {
+                Some(first) => *first = party,
+                None => filed.parties.push(party),
+            }
+        }
+        filed
+    }
+
+    /// Whether the edit `lesson` was read from puts in the name a party the
+    /// reading found in the document that the words it replaced did not
+    /// give: a decision about who this document is with - choosing another
+    /// party in review, or adding one to a name that gave none - and no
+    /// spelling of those words. `lesson.from` is the document's word, after
+    /// any rule that respelled it is traced back.
+    ///
+    /// A party counts in either spelling (see [`party_keys`]) when it or the
+    /// new spelling holds the other as a run of whole words: the party
+    /// anywhere in the new spelling, so a type rewritten as "Requester
+    /// Invoice - Sam Brownell" names Sam Brownell as surely as a party clause
+    /// does, or the new spelling inside the party, so "Beacon Staffing"
+    /// typed for "Beacon Staffing LLC" names it as surely as the choice
+    /// offered does. A party that holds the replaced words, or is held by
+    /// them, is the one being respelled, and never counts. So a respelling
+    /// into words another party's name shares - "Acme" for "Acme
+    /// Corporation" in a document that also names Acme Holdings LLC - is not
+    /// learned either, while another party typed with a suffix the document
+    /// does not give - "Beacon Staffing Inc" - still is.
+    fn names_another_party(&self, lesson: &HouseRule) -> bool {
+        let to = HouseRule::key(&lesson.to);
+        let from = lesson.from_key();
+        let found = self
+            .analysis
+            .facts
+            .iter()
+            .flat_map(|facts| facts.parties.iter().map(|party| party.name.as_str()))
+            .chain(self.analysis.proposal.parties.iter().map(String::as_str));
+        found.map(party_keys).any(|keys| {
+            let respelled = keys
+                .iter()
+                .any(|key| holds_words(&from, key) || holds_words(key, &from));
+            !respelled
+                && keys
+                    .iter()
+                    .any(|key| holds_words(&to, key) || holds_words(key, &to))
+        })
+    }
+}
+
+/// Whether the key `spelling` holds the key `words` as a run of whole
+/// words: "acme corporation" holds "acme", and "acmes" holds nothing.
+fn holds_words(spelling: &str, words: &str) -> bool {
+    !words.is_empty() && format!(" {spelling} ").contains(&format!(" {words} "))
+}
+
+/// The most parties offered beside a proposed name in review: enough for
+/// every side a document names, few enough to stay one short row.
+pub const MAX_PARTY_CHOICES: usize = 4;
+
+/// A party's spelling and the one a composed name gives it, each as house
+/// style compares spellings, so a party is known in either form.
+fn party_keys(party: &str) -> Vec<String> {
+    let mut keys = vec![HouseRule::key(party)];
+    if let Some(named) = party_as_named(party).map(|named| HouseRule::key(&named))
+        && !keys.contains(&named)
+    {
+        keys.push(named);
+    }
+    keys.retain(|key| !key.is_empty());
+    keys
 }
 
 /// How many times the same respelling must be made in review before Intern
@@ -833,6 +1108,11 @@ pub struct Pipeline {
     /// How long no model may be loaded before the queue stops for it.
     model_missing_grace: std::time::Duration,
     active_item: AtomicI64,
+    /// The row the last claim put back to wait without reading it - an
+    /// admission guard that could not check it right now, or no model loaded
+    /// to ask - and so the row the next run claims first and most likely puts
+    /// back again; 0 when the last claim went on to read its document.
+    put_back: AtomicI64,
     /// Set when the active item's model request is canceled - by a person or
     /// by its deadline - before the model itself is told. The request thread
     /// reads it to tell a failure the cancel caused from one worth a retry.
@@ -852,6 +1132,17 @@ pub struct Pipeline {
     /// Intern's own data folder - the queue database's - where the reader's
     /// self-test writes its file.
     data_folder: PathBuf,
+    /// The last few extractions, so a document claimed again with the same
+    /// bytes is not read again (see [`crate::memo`]).
+    memo: ExtractionMemo,
+    /// The release this build is, for telling the documents waiting on a
+    /// person that an earlier release read (see
+    /// [`Pipeline::revalidate_waiting`]). Empty: nothing is validated again.
+    release: String,
+    /// The item whose document is being read for validating it again, 0
+    /// for none: no claim marks it active, so a cancel or a removal looks
+    /// here to stop that reading.
+    revalidating: AtomicI64,
 }
 
 /// Which waiting renames one scheduler pass applies.
@@ -971,6 +1262,7 @@ impl Pipeline {
             model_missing_since: Mutex::new(None),
             model_missing_grace: MODEL_MISSING_GRACE,
             active_item: AtomicI64::new(0),
+            put_back: AtomicI64::new(0),
             active_cancel: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
             model_timeout: std::time::Duration::from_secs(MODEL_TIMEOUT_SECONDS),
@@ -978,6 +1270,9 @@ impl Pipeline {
             run_lock: Mutex::new(()),
             file_ops: Mutex::new(()),
             data_folder,
+            memo: ExtractionMemo::default(),
+            release: String::new(),
+            revalidating: AtomicI64::new(0),
         }
     }
 
@@ -1002,6 +1297,16 @@ impl Pipeline {
         self
     }
 
+    /// Names the release this build is. Each document waiting on a person
+    /// that another release read is then validated once more under this
+    /// one's rules, from the model's stored reply, when that reply is the
+    /// one a fresh reading would get (see [`Self::revalidate_waiting`]).
+    #[must_use]
+    pub fn with_release(mut self, release: impl Into<String>) -> Self {
+        self.release = release.into();
+        self
+    }
+
     #[doc(hidden)]
     pub fn with_model_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.model_timeout = timeout;
@@ -1017,6 +1322,14 @@ impl Pipeline {
     #[doc(hidden)]
     pub fn with_model_missing_grace(mut self, grace: std::time::Duration) -> Self {
         self.model_missing_grace = grace;
+        self
+    }
+
+    /// Keeps at most `entries` extractions, and `bytes` of them, in memory
+    /// (see [`crate::memo`]).
+    #[doc(hidden)]
+    pub fn with_extraction_memo(mut self, entries: usize, bytes: usize) -> Self {
+        self.memo = ExtractionMemo::with_limits(entries, bytes);
         self
     }
 
@@ -1497,7 +1810,18 @@ impl Pipeline {
             .collect())
     }
 
-    pub fn run_until_idle(&self) -> PipelineResult<()> {
+    /// Reads every document waiting, one at a time, and once none is left
+    /// validates again at most one document an earlier release read
+    /// ([`Self::revalidate_waiting`]). `Ok(true)` when it stopped after
+    /// considering such a document, with more perhaps still due: the caller
+    /// runs it again for the next one, and the app's scheduler does so at
+    /// once, after what it does between passes - the idle unload, recovery,
+    /// the provisional re-reads. A sweep run inside one call kept all of
+    /// that waiting for as long as the sweep lasted, each document a fresh
+    /// extraction (about 3 s, up to about 95 s for a long scan), and a model
+    /// loaded for an update's self-test, which none of it uses, stayed loaded
+    /// past its ten idle minutes.
+    pub fn run_until_idle(&self) -> PipelineResult<bool> {
         let _run = self
             .run_lock
             .lock()
@@ -1505,14 +1829,22 @@ impl Pipeline {
         self.apply_pending_ready(ReadyScope::Everything)?;
         while !self.paused.load(Ordering::SeqCst) {
             if !self.run_next_inner()? {
-                break;
+                // With nothing left to read, a document an earlier release
+                // read is validated again, one a call: a document that
+                // arrives in the meantime is read first. A failure here costs
+                // only that, never the drain (see `revalidate_next`).
+                let revalidated = matches!(self.revalidate_next(), Ok(Some(_)));
+                if revalidated {
+                    self.apply_pending_ready(ReadyScope::ApprovalsOnly)?;
+                }
+                return Ok(revalidated);
             }
             // Between documents, not only before the first: an approval made
             // while the queue was working could not be applied then, and this
             // is the next moment the store will let it through.
             self.apply_pending_ready(ReadyScope::ApprovalsOnly)?;
         }
-        Ok(())
+        Ok(false)
     }
 
     pub fn run_next(&self) -> PipelineResult<()> {
@@ -1533,6 +1865,7 @@ impl Pipeline {
             // that the machine works lets them be tried again.
             return self.prove_the_machine();
         };
+        self.put_back.store(0, Ordering::SeqCst);
         // Whether this attempt is a doubted document's one proof attempt,
         // decided as it starts: the machine was shown to work for this kind
         // of failure after the document last failed (`QueueStore::doubt`).
@@ -1546,6 +1879,7 @@ impl Pipeline {
                     QueueStatus::Queued,
                     None,
                 )?;
+                self.put_back.store(item.id, Ordering::SeqCst);
                 self.events.queue_changed();
                 return Ok(false);
             }
@@ -1579,6 +1913,9 @@ impl Pipeline {
                 }
             };
             if current != item.source_hash {
+                // Whatever the reader made of the bytes the item had is not
+                // what it would make of these.
+                self.memo.forget(item.id);
                 match self
                     .store
                     .refresh_extraction_hash(item.id, &item.source_hash, &current)
@@ -1675,10 +2012,25 @@ impl Pipeline {
                 total: progress.total,
             });
         };
-        let source = match self
-            .worker
-            .extract(&request_id, extraction_path, &mut forward_progress)
-        {
+        // The bytes were checked against the item's fingerprint just above
+        // (or are a verified snapshot of them, wherever that copy lies):
+        // what the reader made of exactly these bytes of this document is
+        // what it would make of them again. Only a fresh reading says
+        // anything about the reader.
+        let remembered = self.memo.get(item.id, &item.source_hash, &item.source_path);
+        let fresh = remembered.is_none();
+        let extracted = match remembered {
+            Some(source) => Ok(source),
+            None => {
+                let reading = self.memo.reading(item.id);
+                self.worker
+                    .extract(&request_id, extraction_path, &mut forward_progress)
+                    .inspect(|source| {
+                        reading.keep(&item.source_hash, &item.source_path, source);
+                    })
+            }
+        };
+        let source = match extracted {
             Ok(source) => source,
             Err(error) => {
                 self.active_item.store(0, Ordering::SeqCst);
@@ -1773,18 +2125,21 @@ impl Pipeline {
         // every one: a document of the same kind in doubt over a crash is
         // due its proof attempt. One of another kind is not - a reader that
         // crashes on every PDF still reads text - and this one is no longer
-        // in doubt over a crash.
-        let crash_kind = crash_doubt_kind(&item.source_path);
-        let _ = self.store.end_failure_runs(Some(&crash_kind));
-        let _ = self.store.prove_doubts(&[&crash_kind], Some(item.id));
-        if self
-            .store
-            .doubt_kind(item.id)
-            .ok()
-            .flatten()
-            .is_some_and(|kind| kind.starts_with("crash:"))
-        {
-            let _ = self.store.forget_doubt(item.id);
+        // in doubt over a crash. A reading remembered from earlier says
+        // nothing about the reader now.
+        if fresh {
+            let crash_kind = crash_doubt_kind(&item.source_path);
+            let _ = self.store.end_failure_runs(Some(&crash_kind));
+            let _ = self.store.prove_doubts(&[&crash_kind], Some(item.id));
+            if self
+                .store
+                .doubt_kind(item.id)
+                .ok()
+                .flatten()
+                .is_some_and(|kind| kind.starts_with("crash:"))
+            {
+                let _ = self.store.forget_doubt(item.id);
+            }
         }
         self.ensure_lease(&lease)?;
         if self.paused.load(Ordering::SeqCst) {
@@ -1829,6 +2184,9 @@ impl Pipeline {
             };
             self.store
                 .transition(item.id, QueueStatus::Analyzing, next, code)?;
+            if next == QueueStatus::Queued {
+                self.put_back.store(item.id, Ordering::SeqCst);
+            }
             self.active_item.store(0, Ordering::SeqCst);
             self.events.queue_changed();
             return Ok(keep_draining);
@@ -1893,6 +2251,7 @@ impl Pipeline {
                             QueueStatus::Queued,
                             None,
                         )?;
+                        self.put_back.store(item.id, Ordering::SeqCst);
                         // Unless it never comes back. A restart that failed
                         // leaves the slot empty for as long as the app runs,
                         // and every pass then read the head document again in
@@ -1982,6 +2341,36 @@ impl Pipeline {
             return Ok(true);
         }
         self.ensure_lease(&lease)?;
+        let record = self.record_for(&item, analysis, &extension, &existing)?;
+        let next = queue_status_for(record.status);
+        lease.stop_and_check()?;
+        self.repository.save_initial_and_transition(
+            item.id,
+            &record,
+            next,
+            self.store.session_id(),
+            &self.release,
+        )?;
+        self.admission
+            .processed(&item.source_path, &item.source_hash);
+        self.active_item.store(0, Ordering::SeqCst);
+        self.settle_new_record(&item, &record, next)?;
+        Ok(true)
+    }
+
+    /// The record a reading of `item` is stored as: the name composed from
+    /// the validated facts the way the reviewer has taught Intern to spell
+    /// them and by the other side where the person's own organization is
+    /// named, collision-free where the document is going, and held for a
+    /// person when its text nearly repeats a filing's. Nobody has acted on
+    /// it yet.
+    fn record_for(
+        &self,
+        item: &QueueItem,
+        analysis: DocumentAnalysis,
+        extension: &str,
+        existing: &[String],
+    ) -> PipelineResult<ProposalRecord> {
         // The document's words, respelled the way review has taught Intern
         // to. Applied here, after validation, so the evidence stayed the
         // document's and only the name is the reviewer's.
@@ -1989,20 +2378,16 @@ impl Pipeline {
         // And named by the other side when it names the person's own
         // organization too. Settings that cannot be read name nobody, so the
         // name carries every party, as it did before the setting existed; an
-        // automatic rename below reports the unreadable file.
+        // automatic rename reports the unreadable file
+        // (`settle_new_record`).
         let own_names = self
             .settings
             .load()
             .map(|settings| settings.own_names())
             .unwrap_or_default();
         let (named, _) = counterparty_view(&styled, &own_names);
-        let filename = self.compose_for_target(
-            &item.source_path,
-            &named,
-            &house_rules,
-            &extension,
-            &existing,
-        );
+        let filename =
+            self.compose_for_target(&item.source_path, &named, &house_rules, extension, existing);
         // The exact-bytes check ran before analysis. This one needs the text
         // and the date, so it runs after: a second scan, a re-export, or a
         // copy saved again with new metadata says what a filed document
@@ -2018,7 +2403,7 @@ impl Pipeline {
             reasons.push(NEAR_DUPLICATE.to_owned());
             status = ProposalStatus::NeedsReview;
         }
-        let record = ProposalRecord {
+        Ok(ProposalRecord {
             status,
             filename,
             description: analysis.description.clone(),
@@ -2032,20 +2417,18 @@ impl Pipeline {
             reviewed: false,
             manual: false,
             copy_of: None,
-        };
-        let next = match record.status {
-            ProposalStatus::Ready => QueueStatus::Ready,
-            ProposalStatus::NeedsReview => QueueStatus::NeedsReview,
-        };
-        lease.stop_and_check()?;
-        self.repository.save_initial_and_transition(
-            item.id,
-            &record,
-            next,
-            self.store.session_id(),
-        )?;
-        self.admission
-            .processed(&item.source_path, &item.source_hash);
+        })
+    }
+
+    /// What follows storing a new reading's `record`, now that the row is
+    /// `next`: the window hears of it, and a ready one is filed when
+    /// automatic renaming is on, exactly as for any reading.
+    fn settle_new_record(
+        &self,
+        item: &QueueItem,
+        record: &ProposalRecord,
+        next: QueueStatus,
+    ) -> PipelineResult<()> {
         // The organization's names were read before the name was composed,
         // and a Settings save since then renamed everything that was waiting
         // - which this document was not, yet. Read once more now that it
@@ -2056,7 +2439,7 @@ impl Pipeline {
         if let Ok(current) = &settings {
             let names = current.own_names();
             if names != record.own_names {
-                self.recompose(&self.repository.active_style()?, &item, Some(&names))?;
+                self.recompose(&self.repository.active_style()?, item, Some(&names))?;
             }
         }
         let ready_item = self.store.get(item.id)?.ok_or_else(|| {
@@ -2065,7 +2448,6 @@ impl Pipeline {
                 "queue item disappeared after proposal storage",
             )
         })?;
-        self.active_item.store(0, Ordering::SeqCst);
         self.events.queue_changed();
         if next == QueueStatus::Ready {
             let settings = match settings {
@@ -2073,14 +2455,14 @@ impl Pipeline {
                 Err(error) => {
                     self.repository.mark_needs_review(item.id, &error.code)?;
                     self.events.queue_changed();
-                    return Ok(true);
+                    return Ok(());
                 }
             };
             if settings.automatic_rename && !self.paused.load(Ordering::SeqCst) {
                 let _ = self.apply_if_unchanged(&ready_item, &record.filename, &settings);
             }
         }
-        Ok(true)
+        Ok(())
     }
 
     /// The next document to read, if there is one the store will hand out.
@@ -2386,6 +2768,13 @@ impl Pipeline {
         };
         if HouseRule::key(&lesson.to) == lesson.from_key() {
             self.repository.forget_rule_for(lesson.kind, &lesson.from)?;
+        } else if record.names_another_party(&lesson) {
+            // Another party the document names is no spelling of the words
+            // it took the place of: putting it in the name - one click on
+            // the party choices - decides who this document is with.
+            // Learned, it would put that party in every later name giving
+            // those words, documents that never mention it included.
+            return Ok(());
         } else if lesson.is_meaningful() {
             self.repository.learn(&lesson)?;
         }
@@ -2587,7 +2976,13 @@ impl Pipeline {
             Some(record) => target_folder(
                 settings,
                 &item.source_path,
-                &proposal_as_applied(&record.styled_proposal(), filename),
+                &record.as_filed(
+                    item.source_path
+                        .extension()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or_default(),
+                    filename,
+                ),
             ),
             None => destination_root(settings, &item.source_path),
         };
@@ -3120,6 +3515,29 @@ impl Pipeline {
         self.paused.load(Ordering::SeqCst)
     }
 
+    /// Whether a run now would read a document: the queue is not paused, and
+    /// a document waits that the store would hand it
+    /// ([`QueueStore::next_claimable`]) - other than the one the last claim
+    /// put back unread. The app asks before it loads the model at sign-in and
+    /// before it unloads an idle one.
+    ///
+    /// A document the admission guard cannot check right now - Microsoft
+    /// unreachable, a token expired, a throttled request - is put back as
+    /// queued on every pass, and is the next to claim each time, so counted
+    /// as waiting it kept a loaded model from its idle unload, about 6 GB for
+    /// the accurate one, for as long as Microsoft could not be reached. A
+    /// pass that reads it after all costs one load, as before.
+    pub fn has_document_waiting(&self) -> PipelineResult<bool> {
+        if self.is_paused() {
+            return Ok(false);
+        }
+        let put_back = self.put_back.load(Ordering::SeqCst);
+        Ok(self
+            .store
+            .next_claimable()?
+            .is_some_and(|next| next != put_back))
+    }
+
     /// Why the queue stopped itself, while it is stopped: a code the window
     /// turns into a sentence. `None` while it runs, and for a pause a person
     /// asked for.
@@ -3204,6 +3622,7 @@ impl Pipeline {
     pub fn shutdown(&self) -> PipelineResult<()> {
         self.shutting_down.store(true, Ordering::SeqCst);
         self.paused.store(true, Ordering::SeqCst);
+        self.memo.clear();
         let worker = self.worker.shutdown().map_err(worker_error);
         let model = self.model.shutdown().map_err(|error| {
             PipelineError::new(error.code, "local model process could not be stopped")
@@ -3272,6 +3691,12 @@ impl Pipeline {
                 _ => {}
             }
         }
+        // A document being read only to be validated again under a new
+        // release is no claim's, and is stopped here.
+        self.stop_revalidation(id);
+        // A canceled document is not read again unless a person asks, and
+        // then from the start.
+        self.memo.forget(id);
         // A canceled row can be cleared away with the history, so a file
         // Intern marked gets its own name back now.
         self.unmark_if_marked(id);
@@ -3464,6 +3889,234 @@ impl Pipeline {
         Ok(())
     }
 
+    /// Validates every document waiting on a person that another release
+    /// read once more, under this release's rules, from the model's stored
+    /// reply and with no model call, and says how many records changed. The
+    /// scheduler does the same one document at a time whenever the queue
+    /// has nothing to read (`run_until_idle`); this is for a caller that
+    /// wants it all done now. Nothing happens without
+    /// [`Self::with_release`].
+    ///
+    /// Most releases change how a reply is validated or a name composed,
+    /// and few change what the model is asked; but a rule a release
+    /// improves used to reach only documents read after it, while the
+    /// documents already waiting in review - most of them - kept the
+    /// reading the old rules made. Validating one again costs reading the
+    /// document once more - a fresh extraction, since an update restarts
+    /// Intern and the extraction memo starts empty: about 3 s a document on
+    /// the real sets, up to about 95 s for a long scan - and a tenth of a
+    /// second or so of validation, against 35 to 180 seconds of model.
+    ///
+    /// A document is validated again only when all of these hold, and is
+    /// otherwise left exactly as it is:
+    /// - nobody has acted on it (`untouched`, the test a provisional
+    ///   re-read makes): never approved, filed, kept or taken back, no rename
+    ///   of it ever begun, and it waits for nothing but what its reading
+    ///   said - no file error, no reason a filing attempt added;
+    /// - its reading recorded the request its reply answered
+    ///   (`AnalysisTelemetry::request_sha256`), which readings made before
+    ///   alpha.18 did not;
+    /// - the model boundary finds nothing in the stored reading alone that
+    ///   rules it out - another model file, tier or runtime would read it
+    ///   now ([`AnalyzerBoundary::may_revalidate`]) - which it asks before
+    ///   the document is read, so that what an update changes for every
+    ///   document costs no reading of any;
+    /// - its file still has the bytes it was read from;
+    /// - the model boundary finds the request a fresh reading would send now
+    ///   byte for byte the stored one, to the same model file under the same
+    ///   runtime ([`AnalyzerBoundary::revalidate`]).
+    ///
+    /// The new record replaces the old one only when it says something
+    /// different, in a write transaction that checks the row and the record
+    /// are still exactly what was read, so an approval made meanwhile is
+    /// never overwritten. Its revision moves only when its name or sentence
+    /// does, so the window replaces a draft only of a proposal that changed,
+    /// and keeps what the reviewer typed when only readiness or reasons
+    /// moved; a document that becomes ready is filed when automatic renaming
+    /// is on, exactly as after a reading. Each document is considered once
+    /// per release, whatever came of it.
+    pub fn revalidate_waiting(&self) -> PipelineResult<usize> {
+        let _run = self
+            .run_lock
+            .lock()
+            .map_err(|_| PipelineError::new("STATE_CONFLICT", "pipeline lock is unavailable"))?;
+        let mut changed = 0;
+        while let Some(revalidated) = self.revalidate_next()? {
+            changed += usize::from(revalidated);
+        }
+        Ok(changed)
+    }
+
+    /// Validates the next document due for it ([`Self::revalidate_waiting`])
+    /// while the queue runs and has nothing to read: `Some(true)` when its
+    /// record changed, `Some(false)` when it was left as it was, `None` when
+    /// none is due or none can be told about yet.
+    fn revalidate_next(&self) -> PipelineResult<Option<bool>> {
+        if self.release.is_empty() || self.paused.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        match self.repository.next_to_revalidate(&self.release)? {
+            Some(id) => self.revalidate_item(id),
+            None => Ok(None),
+        }
+    }
+
+    /// [`Self::revalidate_next`] for item `id`. Every way it is left as it
+    /// was marks it considered for this release, except a model boundary
+    /// that cannot tell yet and a shutdown, which leave it due.
+    fn revalidate_item(&self, id: i64) -> PipelineResult<Option<bool>> {
+        let left = || -> PipelineResult<Option<bool>> {
+            self.repository.mark_revalidated(id, &self.release)?;
+            Ok(Some(false))
+        };
+        let Some(item) = self.store.get(id)? else {
+            return Ok(Some(false));
+        };
+        let Some(stored_json) = self.repository.load_proposal_json(id)? else {
+            return left();
+        };
+        let Ok(record) = serde_json::from_str::<ProposalRecord>(&stored_json) else {
+            return left();
+        };
+        if !self.waits_as_read(&item, &record)? {
+            return left();
+        }
+        match self.model.may_revalidate(&record.analysis) {
+            RevalidationOutlook::Possible => {}
+            RevalidationOutlook::Declined => return left(),
+            RevalidationOutlook::NotNow => return Ok(None),
+        }
+        let Ok(evidence) = self.authorize_item(&item, AdmissionStage::Extract) else {
+            return left();
+        };
+        // A file that changed is a new document to read, which is
+        // Re-analyze's to do; the stored reply is about the old one.
+        if evidence.verified_hash().is_none()
+            && self.files.fingerprint(&item.source_path).ok().as_deref()
+                != Some(item.source_hash.as_str())
+        {
+            return left();
+        }
+        let Some(path) = evidence.extraction_path(&item.source_path) else {
+            return left();
+        };
+        let source = match self.memo.get(id, &item.source_hash, &item.source_path) {
+            Some(source) => source,
+            None => {
+                // Read under its own request, which a cancel or a removal of
+                // the item meanwhile stops (`stop_revalidation`); what it
+                // makes of the document is then not kept either.
+                let reading = self.memo.reading(id);
+                self.revalidating.store(id, Ordering::SeqCst);
+                let extracted = self
+                    .worker
+                    .extract(&revalidation_request(id), path, &mut |_| {});
+                self.revalidating.store(0, Ordering::SeqCst);
+                match extracted {
+                    Ok(source) => {
+                        reading.keep(&item.source_hash, &item.source_path, &source);
+                        source
+                    }
+                    // Stopped by shutdown: due again at the next start.
+                    Err(_) if self.shutting_down.load(Ordering::SeqCst) => return Ok(None),
+                    Err(_) => return left(),
+                }
+            }
+        };
+        let extension = item
+            .source_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        let existing = names_beside(
+            item.source_path.parent().unwrap_or_else(|| Path::new(".")),
+            &item.source_path,
+        );
+        let existing_names = existing.iter().map(String::as_str).collect::<Vec<_>>();
+        let analysis =
+            match self
+                .model
+                .revalidate(&source, &extension, &existing_names, &record.analysis)
+            {
+                Revalidation::Revalidated(analysis) => *analysis,
+                Revalidation::Declined => return left(),
+                Revalidation::NotNow => return Ok(None),
+            };
+        // Read and validated on this installation, as a claim's reading is:
+        // once the reading stands, changed or not, the intake hears so -
+        // which also takes back the "verified" its admission check just
+        // noted for a document a provider vouched for.
+        let read_through = || {
+            self.admission
+                .processed(&item.source_path, &item.source_hash);
+        };
+        let mut again = self.record_for(&item, analysis, &extension, &existing)?;
+        if same_reading(&record, &again) {
+            read_through();
+            return left();
+        }
+        // As in `recompose`: the window replaces a reviewer's draft only
+        // when the name or the sentence it was typed over changed, so one
+        // whose readiness or reasons alone moved keeps what they typed.
+        again.revision =
+            if again.filename != record.filename || again.description != record.description {
+                record.revision + 1
+            } else {
+                record.revision
+            };
+        let next = queue_status_for(again.status);
+        match self.repository.store_revalidation(
+            id,
+            item.status,
+            &stored_json,
+            &again,
+            next,
+            &self.release,
+        ) {
+            Ok(()) => {}
+            // Someone acted on it - or a spelling rule renamed it - while
+            // it was read: what it says now is not what was validated.
+            Err(error) if error.code == "STATE_CONFLICT" => return left(),
+            Err(error) => return Err(error),
+        }
+        read_through();
+        self.settle_new_record(&item, &again, next)?;
+        Ok(Some(true))
+    }
+
+    /// Whether `item` waits on a person for nothing but what its reading
+    /// said, so a new reading may take its place: in review or ready by its
+    /// record's own status, with no file error; its record [`untouched`],
+    /// holding the request its reply answered, and no reason but the
+    /// reading's and a near duplicate's; and no rename of it ever begun.
+    fn waits_as_read(&self, item: &QueueItem, record: &ProposalRecord) -> PipelineResult<bool> {
+        let as_read = matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready)
+            && queue_status_for(record.status) == item.status
+            && item.error_code.is_none()
+            && untouched(record)
+            && record.analysis.telemetry.request_sha256.is_some()
+            && record.reasons.iter().all(|reason| {
+                reason == NEAR_DUPLICATE
+                    || record
+                        .analysis
+                        .review_reasons
+                        .iter()
+                        .any(|read| read.as_str() == reason)
+            });
+        Ok(as_read && self.store.listed_receipts(item.id)?.newest.is_none())
+    }
+
+    /// Stops the reading of item `id`'s document for validating it again,
+    /// if one is under way: the item was canceled or removed meanwhile.
+    fn stop_revalidation(&self, id: i64) {
+        if self.revalidating.load(Ordering::SeqCst) == id {
+            // A reading that has just ended is no longer the reader's to
+            // stop; its result is not kept (the memo forgets the item).
+            let _ = self.worker.cancel(&revalidation_request(id));
+        }
+    }
+
     /// Takes an item out of the queue, with its proposal and receipts.
     ///
     /// An item whose files were left unsettled is removed only once the
@@ -3477,6 +4130,8 @@ impl Pipeline {
             self.reject_deferred_reconciliation_mutation(id)?;
         }
         self.repository.remove_item(id)?;
+        self.stop_revalidation(id);
+        self.memo.forget(id);
         self.events.queue_changed();
         Ok(())
     }
@@ -3795,6 +4450,7 @@ impl Pipeline {
             }
         }
         let removed = self.store.clear_terminal()?;
+        self.forget_removed();
         // A claim waits for the intake watcher to see its item gone; with
         // the watcher off, it never will.
         if self
@@ -3813,8 +4469,23 @@ impl Pipeline {
     /// awaiting a human decision stays put.
     pub fn discard_waiting(&self) -> PipelineResult<usize> {
         let removed = self.store.discard_queued()?;
+        self.forget_removed();
         self.events.queue_changed();
         Ok(removed)
+    }
+
+    /// Drops what the extraction memo holds for every document no longer in
+    /// the queue, as [`Self::remove`] does for one: Discard waiting and Clear
+    /// history delete rows without naming them. An item id is never used
+    /// again, so one the queue no longer has is gone for good; what is kept
+    /// for an item the queue could not be asked about stays until it ages
+    /// out.
+    fn forget_removed(&self) {
+        for id in self.memo.items() {
+            if matches!(self.store.get(id), Ok(None)) {
+                self.memo.forget(id);
+            }
+        }
     }
 
     fn reject_deferred_reconciliation_mutation(&self, id: i64) -> PipelineResult<()> {
@@ -4037,6 +4708,13 @@ impl PipelineRepository {
                    fingerprint INTEGER NOT NULL,
                    filed_name TEXT NOT NULL,
                    filed_at INTEGER NOT NULL
+                 );
+                 -- The release whose rules last read or validated a waiting
+                 -- document, or considered validating it and left it: a
+                 -- document is validated again once per release.
+                 CREATE TABLE IF NOT EXISTS revalidations (
+                   queue_item_id INTEGER PRIMARY KEY REFERENCES queue_items(id) ON DELETE CASCADE,
+                   release TEXT NOT NULL
                  );",
             )
             .map_err(database_error)?;
@@ -4063,12 +4741,16 @@ impl PipelineRepository {
         })
     }
 
+    /// Stores a new reading's record and moves the row from analyzing to
+    /// `next`, and records that `release`'s rules made it (nothing, for no
+    /// release).
     fn save_initial_and_transition(
         &self,
         id: i64,
         record: &ProposalRecord,
         next: QueueStatus,
         session_id: &str,
+        release: &str,
     ) -> PipelineResult<()> {
         let json = serde_json::to_string(record)
             .map_err(|_| PipelineError::new("INVALID_DATA", "proposal could not be stored"))?;
@@ -4093,6 +4775,123 @@ impl PipelineRepository {
              ON CONFLICT(queue_item_id) DO UPDATE SET proposal_json = excluded.proposal_json, created_at = excluded.created_at",
             params![id, json],
         ).map_err(database_error)?;
+        if !release.is_empty() {
+            mark_release(&transaction, id, release)?;
+        }
+        transaction.commit().map_err(database_error)
+    }
+
+    /// The stored record of item `id`, exactly as it was written.
+    fn load_proposal_json(&self, id: i64) -> PipelineResult<Option<String>> {
+        self.lock()?
+            .query_row(
+                "SELECT proposal_json FROM proposals WHERE queue_item_id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(database_error)
+    }
+
+    /// The first document waiting on a person that `release` has not read
+    /// or considered validating again - provided the queue has nothing to
+    /// read: nothing being worked on, and nothing queued that a claim would
+    /// take (the condition `QueueStore::claim_next` claims under).
+    fn next_to_revalidate(&self, release: &str) -> PipelineResult<Option<i64>> {
+        self.lock()?
+            .query_row(
+                "SELECT id FROM queue_items
+                 WHERE status IN ('needs_review', 'ready')
+                   AND NOT EXISTS (
+                     SELECT 1 FROM queue_items busy
+                     WHERE busy.status IN ('extracting', 'analyzing', 'applying')
+                   )
+                   AND NOT EXISTS (
+                     SELECT 1 FROM queue_items waiting
+                     WHERE waiting.status = 'queued'
+                       AND NOT EXISTS (
+                         SELECT 1 FROM doubted_documents doubt
+                         WHERE doubt.queue_item_id = waiting.id AND doubt.proven = 0
+                       )
+                   )
+                   AND NOT EXISTS (
+                     SELECT 1 FROM revalidations considered
+                     WHERE considered.queue_item_id = queue_items.id
+                       AND considered.release = ?1
+                   )
+                 ORDER BY id
+                 LIMIT 1",
+                params![release],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(database_error)
+    }
+
+    /// Records that `release` considered item `id` and left it as it is.
+    fn mark_revalidated(&self, id: i64, release: &str) -> PipelineResult<()> {
+        mark_release(&*self.lock()?, id, release)
+    }
+
+    /// Stores the record a validation again made of item `id`, and moves the
+    /// row to `next`, provided the row is still `expected` with no file
+    /// error, no rename of it has begun, and its record is still exactly
+    /// `expected_json`: one transaction, so an approval or an edit landing
+    /// meanwhile is never overwritten. `STATE_CONFLICT` otherwise.
+    fn store_revalidation(
+        &self,
+        id: i64,
+        expected: QueueStatus,
+        expected_json: &str,
+        record: &ProposalRecord,
+        next: QueueStatus,
+        release: &str,
+    ) -> PipelineResult<()> {
+        let json = serde_json::to_string(record)
+            .map_err(|_| PipelineError::new("INVALID_DATA", "proposal could not be stored"))?;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
+        let stored = transaction
+            .query_row(
+                "SELECT proposal_json FROM proposals WHERE queue_item_id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(database_error)?;
+        let renamed = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM operation_receipts WHERE queue_item_id = ?1)",
+                params![id],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(database_error)?;
+        let changed = if stored.as_deref() == Some(expected_json) && !renamed {
+            transaction
+                .execute(
+                    "UPDATE queue_items SET status = ?1, updated_at = unixepoch()
+                     WHERE id = ?2 AND status = ?3 AND error_code IS NULL",
+                    params![queue_status_text(next), id, queue_status_text(expected)],
+                )
+                .map_err(database_error)?
+        } else {
+            0
+        };
+        if changed != 1 {
+            return Err(PipelineError::new(
+                "STATE_CONFLICT",
+                "the document changed while it was validated again",
+            ));
+        }
+        transaction
+            .execute(
+                "UPDATE proposals SET proposal_json = ?1 WHERE queue_item_id = ?2",
+                params![json, id],
+            )
+            .map_err(database_error)?;
+        mark_release(&transaction, id, release)?;
         transaction.commit().map_err(database_error)
     }
 
@@ -4680,11 +5479,38 @@ impl PipelineRepository {
     }
 }
 
-/// Whether a stored reading is provisional and nobody has acted on it: never
-/// approved, and never filed, kept, or taken back. A person's edits arrive
-/// with an approval, and `reviewed` remembers it after a failed filing has
-/// taken the approval back: `approved` alone said such a record was untouched
-/// and let a re-read throw the person's name and description away.
+/// Records on `connection` that `release` read or considered item `id`.
+/// Nothing, for an item that is gone.
+fn mark_release(connection: &Connection, id: i64, release: &str) -> PipelineResult<()> {
+    connection
+        .execute(
+            "INSERT INTO revalidations(queue_item_id, release)
+             SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM queue_items WHERE id = ?1)
+             ON CONFLICT(queue_item_id) DO UPDATE SET release = excluded.release",
+            params![id, release],
+        )
+        .map_err(database_error)?;
+    Ok(())
+}
+
+/// Whether nobody has acted on a stored reading: never approved, and never
+/// filed, kept, or taken back, and no name typed by hand or a copy's. A
+/// person's edits arrive with an approval, and `reviewed` remembers it after
+/// a failed filing has taken the approval back: `approved` alone said such a
+/// record was untouched and let a re-read throw the person's name and
+/// description away.
+fn untouched(record: &ProposalRecord) -> bool {
+    !record.approved
+        && !record.reviewed
+        && !record.is_synthetic()
+        && !record
+            .reasons
+            .iter()
+            .any(|reason| reason == UNDONE || reason == ALREADY_NAMED)
+}
+
+/// Whether a stored reading is provisional and nobody has acted on it
+/// ([`untouched`]).
 fn untouched_provisional(record: &ProposalRecord) -> bool {
     record
         .analysis
@@ -4692,12 +5518,23 @@ fn untouched_provisional(record: &ProposalRecord) -> bool {
         .read_by
         .as_ref()
         .is_some_and(|reading| reading.provisional)
-        && !record.approved
-        && !record.reviewed
-        && !record
-            .reasons
-            .iter()
-            .any(|reason| reason == UNDONE || reason == ALREADY_NAMED)
+        && untouched(record)
+}
+
+/// Whether a reading validated again says what the stored one says: all of
+/// it but the record's revision and the analysis's measurements - the times
+/// of the work done again, and which model read it as the boundary words it
+/// now. Only a record that says something new replaces the old one, and it
+/// moves the revision - which throws away the reviewer's draft - only when
+/// its name or sentence is new too.
+fn same_reading(stored: &ProposalRecord, again: &ProposalRecord) -> bool {
+    let mut again = again.clone();
+    again
+        .analysis
+        .telemetry
+        .clone_from(&stored.analysis.telemetry);
+    again.revision = stored.revision;
+    again == *stored
 }
 
 /// The folder a document is filed into: the destination (or, with none set,
@@ -4810,8 +5647,12 @@ fn filed_document(
             source_hash: source_hash.to_owned(),
             destination: receipt.destination.clone(),
             description: proposal.description.clone(),
-            proposal: proposal_as_applied(
-                &proposal.styled_proposal(),
+            proposal: proposal.as_filed(
+                receipt
+                    .source
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default(),
                 &receipt
                     .destination
                     .file_name()
@@ -5034,6 +5875,20 @@ fn database_error(_: rusqlite::Error) -> PipelineError {
     PipelineError::new("DATABASE_UNAVAILABLE", "pipeline database operation failed")
 }
 
+/// The reader's request id for reading item `id`'s document to validate it
+/// again: no claim's, so no attempt number.
+fn revalidation_request(id: i64) -> String {
+    format!("revalidate-{id}")
+}
+
+/// The row status a reading's proposal status puts its document in.
+fn queue_status_for(status: ProposalStatus) -> QueueStatus {
+    match status {
+        ProposalStatus::Ready => QueueStatus::Ready,
+        ProposalStatus::NeedsReview => QueueStatus::NeedsReview,
+    }
+}
+
 fn queue_status_text(status: QueueStatus) -> &'static str {
     match status {
         QueueStatus::Queued => "queued",
@@ -5207,6 +6062,218 @@ mod date_gate_tests {
         );
         assert_eq!(leading_date("2026-03-0"), None);
         assert_eq!(leading_date(""), None);
+    }
+}
+
+#[cfg(test)]
+mod party_choice_tests {
+    use intern_engine::{
+        Evidence, HouseRule, ModelFacts, ModelProposal, PartyFact, PartyRelation, RuleKind,
+        Support, ValidatedFacts, ValidatedParty, ValidatedProposal, compose_filename,
+    };
+
+    use super::{CopyOf, MAX_PARTY_CHOICES, ProposalRecord};
+
+    fn party(name: &str, support: Support) -> ValidatedParty {
+        ValidatedParty {
+            name: name.into(),
+            support,
+            ..ValidatedParty::default()
+        }
+    }
+
+    /// A letter the model read as sent to `named`, by a reply naming
+    /// `replied` in that order, whose validation found `found` in the
+    /// document, in the order the document names them.
+    fn letter(named: &str, replied: &[&str], found: Vec<ValidatedParty>) -> ProposalRecord {
+        let proposal = ValidatedProposal {
+            document_type: Some("Letter".into()),
+            document_date: Some("2012-06-19".into()),
+            date_role: None,
+            parties: vec![named.into()],
+            party_relation: PartyRelation::To,
+            description: "A letter.".into(),
+            confidence: 0.9,
+            evidence: Evidence::default(),
+        };
+        let filename = compose_filename(&proposal, "pdf", &[]).value;
+        let mut record = ProposalRecord::synthetic(filename, String::new());
+        record.analysis.proposal = proposal;
+        record.analysis.model_proposal = Some(ModelProposal {
+            parties: replied.iter().map(|name| (*name).to_owned()).collect(),
+            facts: Some(Box::new(ModelFacts {
+                parties: replied
+                    .iter()
+                    .map(|name| PartyFact {
+                        name: (*name).into(),
+                        ..PartyFact::default()
+                    })
+                    .collect(),
+                ..ModelFacts::default()
+            })),
+            ..ModelProposal::default()
+        });
+        record.analysis.facts = Some(ValidatedFacts {
+            parties: found,
+            ..ValidatedFacts::default()
+        });
+        record
+    }
+
+    /// The model named the sender and the recipient, validation found both
+    /// in the letter, and the name gives the recipient: the sender is
+    /// offered, as the name would write it. The addressee is not, being
+    /// in the name already.
+    #[test]
+    fn a_party_the_document_names_and_the_name_leaves_out_is_offered() {
+        let record = letter(
+            "U.S. Department of Justice",
+            &["MORGAN, LEWIS & BOCKIUS LLP", "U.S. Department of Justice"],
+            vec![
+                party("U.S. Department of Justice", Support::Cited),
+                party("MORGAN, LEWIS & BOCKIUS LLP", Support::Context),
+            ],
+        );
+        assert_eq!(
+            record.filename,
+            "2012-06-19 Letter to U.S. Department of Justice.pdf"
+        );
+        assert_eq!(record.party_choices(), vec!["Morgan, Lewis & Bockius LLP"]);
+        assert_eq!(
+            record.named_parties("pdf"),
+            vec!["U.S. Department of Justice"]
+        );
+    }
+
+    /// Only a party found in the document is offered, never someone it only
+    /// copies in or who signs for a party, nor the person's own
+    /// organization; the model's order decides, and no more than the
+    /// limit are offered.
+    #[test]
+    fn only_the_documents_own_other_parties_are_offered_in_the_models_order() {
+        let mut record = letter(
+            "Office of Rail and Road",
+            &[
+                "Office of Rail and Road",
+                "Harbor Comet Repairs LLC",
+                "Fabrikam Inc.",
+                "Litware Inc.",
+                "Northwind Traders",
+                "Tailspin Toys",
+                "Contoso Worldwide, Inc.",
+            ],
+            vec![
+                party("Office of Rail and Road", Support::Cited),
+                party("Contoso Worldwide, Inc.", Support::Cited),
+                party("Tailspin Toys", Support::Cited),
+                party("Northwind Traders", Support::Context),
+                party("Litware Inc.", Support::Cited),
+                party("Fabrikam Inc.", Support::Cited),
+                party("Harbor Comet Repairs LLC", Support::Cited),
+            ],
+        );
+        record.own_names = vec!["Contoso Worldwide".into()];
+        assert_eq!(
+            record.party_choices(),
+            vec![
+                "Harbor Comet Repairs LLC",
+                "Fabrikam Inc",
+                "Litware Inc",
+                "Northwind Traders"
+            ]
+        );
+        assert_eq!(record.party_choices().len(), MAX_PARTY_CHOICES);
+
+        let facts = record.analysis.facts.as_mut().unwrap();
+        facts.parties[2].support = Support::Unsupported;
+        facts.parties[3].copied = true;
+        facts.parties[4].signatory = true;
+        assert_eq!(
+            record.party_choices(),
+            vec!["Harbor Comet Repairs LLC", "Fabrikam Inc"]
+        );
+    }
+
+    /// Nothing is offered from a reading with no validated facts, nor for a
+    /// copy's name, which has no reading behind it.
+    #[test]
+    fn a_name_with_no_facts_behind_it_offers_nothing() {
+        let mut record = letter(
+            "U.S. Department of Justice",
+            &["U.S. Department of Justice", "STARS Alliance LLC"],
+            vec![
+                party("U.S. Department of Justice", Support::Cited),
+                party("STARS Alliance LLC", Support::Cited),
+            ],
+        );
+        record.copy_of = Some(CopyOf {
+            original: "2012-06-19 Letter.pdf".into(),
+            folder: "filed".into(),
+        });
+        assert!(record.party_choices().is_empty());
+        record.copy_of = None;
+        record.analysis.facts = None;
+        assert!(record.party_choices().is_empty());
+    }
+
+    /// A party the document names besides the one in the name is another
+    /// party, not another spelling of it - typed as offered or as people
+    /// write it, without its "LLC" - and so is one written into the type of
+    /// a name that gave none; a spelling of the party in the name, or of
+    /// the type, is still a spelling.
+    #[test]
+    fn another_party_of_the_document_is_no_spelling_of_the_named_one() {
+        let record = letter(
+            "U.S. Department of Justice",
+            &["U.S. Department of Justice", "STARS Alliance LLC"],
+            vec![
+                party("U.S. Department of Justice", Support::Cited),
+                party("STARS ALLIANCE LLC", Support::Cited),
+            ],
+        );
+        let party_edit = |to: &str| {
+            record.names_another_party(&HouseRule::new(
+                RuleKind::Party,
+                "U.S. Department of Justice",
+                to,
+            ))
+        };
+        assert!(party_edit("Stars Alliance LLC"));
+        assert!(party_edit("Stars Alliance"));
+        assert!(party_edit("Stars"));
+        assert!(party_edit(
+            "U.S. Department of Justice and Stars Alliance LLC"
+        ));
+        assert!(!party_edit("US Dept of Justice"));
+        assert!(!party_edit("Department of Justice"));
+        assert!(!party_edit("U.S. Department of Justice"));
+        // A suffix the document never gives names no party it names.
+        assert!(!party_edit("Stars Alliance Inc"));
+
+        // The named party shortened to a word another party's name shares
+        // is that party as much as this one: no spelling is learned.
+        let acme = letter(
+            "Acme Corporation",
+            &["Acme Corporation", "Acme Holdings LLC"],
+            vec![
+                party("Acme Corporation", Support::Cited),
+                party("Acme Holdings LLC", Support::Cited),
+            ],
+        );
+        let acme_edit = |to: &str| {
+            acme.names_another_party(&HouseRule::new(RuleKind::Party, "Acme Corporation", to))
+        };
+        assert!(acme_edit("Acme"));
+        assert!(!acme_edit("Acme Corp"));
+
+        let type_edit = |to: &str| {
+            record.names_another_party(&HouseRule::new(RuleKind::DocumentType, "Letter", to))
+        };
+        assert!(type_edit("Letter - Stars Alliance LLC"));
+        assert!(type_edit("STARS Alliance LLC Letter"));
+        assert!(!type_edit("Letter of Inquiry"));
+        // A party's name inside a longer word is no party.
+        assert!(!type_edit("Letter re Stars Alliance LLCs"));
     }
 }
 

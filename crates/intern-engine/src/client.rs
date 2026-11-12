@@ -241,6 +241,43 @@ pub trait Proposer: Send + Sync {
     }
 }
 
+/// A model that is never asked: what an engine stands on that only
+/// validates replies it already has ([`crate::engine::Engine::revalidate`]).
+/// Every request fails as one to a server that is not there would.
+///
+/// It reports the context of the model whose replies are validated again:
+/// a prompt is fitted to that context, so the request the engine would send,
+/// and with it whether a stored reply answers it, depends on it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NoModel {
+    context_tokens: Option<usize>,
+}
+
+impl NoModel {
+    /// Standing in for a model whose context is `tokens`.
+    pub const fn with_context(tokens: usize) -> Self {
+        Self {
+            context_tokens: Some(tokens),
+        }
+    }
+
+    /// Standing in for the local server, at the context [`ModelClient`]
+    /// gives it unless told otherwise.
+    pub const fn local() -> Self {
+        Self::with_context(crate::server::CONTEXT_TOKENS as usize)
+    }
+}
+
+impl Proposer for NoModel {
+    fn propose(&self, _request: &ModelRequest) -> EngineResult<ModelProposal> {
+        Err(request_failed())
+    }
+
+    fn context_tokens(&self) -> Option<usize> {
+        self.context_tokens
+    }
+}
+
 pub struct ModelClient {
     endpoint: Url,
     api_key: String,
@@ -515,22 +552,18 @@ impl ModelClient {
         })
     }
 
-    /// The request body. Only the user turn, and a grammar particular to the
-    /// request, identify it ([`ModelRequest::sha256`]); everything else here
-    /// is transport, and the token-probability fields in particular change
-    /// no generated token.
+    /// The request body: the reply settings every request shares
+    /// ([`reply_settings`]), the turns, and the grammar. The turns, a
+    /// grammar particular to the request and a profile's seed identify it
+    /// ([`ModelRequest::sha256`]); the model's name and `stream` shape no
+    /// token, since a server holds one model, and the token-probability
+    /// fields in particular change no generated token.
     fn completion_request(&self, request: &ModelRequest) -> Value {
-        let mut body = json!({
-            "model": self.model_id,
-            "messages": chat_messages(request),
-            "stream": false,
-            "temperature": 0,
-            "top_k": 1,
-            "max_tokens": MAX_REPLY_TOKENS,
-            "grammar": request.grammar.as_deref().unwrap_or(RESPONSE_GRAMMAR),
-            "cache_prompt": true,
-            "chat_template_kwargs": template_switches()
-        });
+        let mut body = reply_settings();
+        body["model"] = json!(self.model_id);
+        body["messages"] = json!(chat_messages(request));
+        body["stream"] = json!(false);
+        body["grammar"] = json!(request.grammar.as_deref().unwrap_or(RESPONSE_GRAMMAR));
         if let Some(seed) = request.profile.and_then(PromptProfile::seed) {
             body["seed"] = json!(seed);
         }
@@ -559,6 +592,65 @@ fn chat_messages(request: &ModelRequest) -> Vec<Value> {
     }
     messages.push(json!({"role": "user", "content": request.prompt}));
     messages
+}
+
+/// What every evidence request sends, beside its turns and its grammar,
+/// that shapes the reply: greedy sampling, the reply's length limit, the
+/// server's prompt cache (a prefix the cache holds was computed in another
+/// batch than a fresh one), and the chat template's switches. The same on
+/// every request, so not part of [`ModelRequest::sha256`] - a recording
+/// replays under the settings it was made with - but part of what a local
+/// reply's runtime is ([`reply_settings_identity`]). Every request body is
+/// built on them ([`ModelClient::completion_request`]).
+fn reply_settings() -> Value {
+    json!({
+        "temperature": 0,
+        "top_k": 1,
+        "max_tokens": MAX_REPLY_TOKENS,
+        "cache_prompt": true,
+        "chat_template_kwargs": template_switches()
+    })
+}
+
+/// The version of how this client reads a reply into what an analysis
+/// stores of it: the facts [`facts_from_text`] makes of the reply's text -
+/// the shapes it accepts, the ids it maps back or sets aside, the values it
+/// trims, drops or caps (`WireFacts::into_domain`) - and the figures
+/// [`token_confidence`] takes from its token probabilities, over the spans
+/// it picks. Neither the reply nor its probabilities are stored, only what
+/// was read from them, and a stored reply is validated again from that
+/// ([`crate::engine::Engine::revalidate`]); a release that would read the
+/// same reply otherwise must not reuse it. So the version is part of
+/// [`reply_settings_identity`], and through it of the runtime identity a
+/// stored reply is validated again under
+/// ([`crate::tiers::runtime_identity`]).
+///
+/// Bump it by hand with any change to either reading. The test
+/// `the_reading_of_a_reply_is_pinned_to_its_version` pins what this version
+/// reads from a few replies: it fails when a change reads these replies
+/// otherwise, and its message says to bump the version and pin the new
+/// reading. A change those replies do not exercise, it does not see.
+pub const REPLY_READING_VERSION: u32 = 1;
+
+/// The identity of what every request shares beside its turns and grammar
+/// and what is read from every reply: the reply settings
+/// ([`reply_settings`]) and the version of how a reply is read
+/// ([`REPLY_READING_VERSION`]), as the SHA-256 of the settings as JSON, a
+/// zero byte, and the version. A release that changes any setting changes
+/// it, and so does one that bumps the version for a change to how a reply
+/// is read: a reply given under other settings is not the one a request
+/// would get now, and one read otherwise is not what this release would
+/// make of it ([`crate::tiers::runtime_identity`]).
+pub fn reply_settings_identity() -> String {
+    reply_settings_identity_of(&reply_settings(), REPLY_READING_VERSION)
+}
+
+/// [`reply_settings_identity`] of the settings and a reading version.
+fn reply_settings_identity_of(settings: &Value, reading_version: u32) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(format!("{settings}\0{reading_version}").as_bytes())
+    )
 }
 
 /// The chat template's switches, the same on every request.
@@ -632,6 +724,9 @@ pub fn instructions_only_request(model_id: &str, profile: Option<PromptProfile>)
 /// string or a party name, or a bare `null` or `[]`. A compact fact,
 /// `[value, role, id]`, counts by its value alone: its role and id are
 /// answers of their own, not the date or the name.
+///
+/// What it reads is stored in the reply's place, so a change to it must
+/// bump [`REPLY_READING_VERSION`].
 pub(crate) fn token_confidence(tokens: &[TokenLogprob]) -> Option<TokenConfidence> {
     let mut text = Vec::new();
     let mut ranges = Vec::with_capacity(tokens.len());
@@ -883,6 +978,10 @@ pub(crate) fn proposal_from_text(
 /// [`ModelFacts::unknown_evidence`] - never evidence for anything. A role
 /// that is not one of [`PartyRole`]'s is no role, and a date that is not on
 /// the calendar is no date, as in the digest pipeline.
+///
+/// What it reads is stored in the reply's place, so a change to it - or to
+/// [`compact_wire`] or `WireFacts::into_domain` behind it - must bump
+/// [`REPLY_READING_VERSION`].
 pub(crate) fn facts_from_text(
     content: &str,
     handles: &EvidenceHandles,
@@ -1464,6 +1563,10 @@ fn present(value: Option<String>) -> Option<String> {
 }
 
 impl WireFacts {
+    /// The facts this reply gives, as an analysis stores them: ids mapped
+    /// back through `handles`, values trimmed, and what is not on the
+    /// calendar, not a role, blank, or past a cap left out. A change to what
+    /// it keeps must bump [`REPLY_READING_VERSION`].
     fn into_domain(self, handles: &EvidenceHandles) -> Option<ModelProposal> {
         if !self.confidence.is_finite() || !(0.0..=1.0).contains(&self.confidence) {
             return None;
@@ -1537,22 +1640,11 @@ impl WireFacts {
             amount_evidence: self.amount_ids.resolve(handles, 1, &mut unknown),
             unknown_evidence: unknown,
         };
-        Some(ModelProposal {
-            document_type: facts.document_type.clone(),
-            document_date: facts.document_date.clone(),
-            date_role: facts.date_role,
-            parties: facts
-                .parties
-                .iter()
-                .map(|party| party.name.clone())
-                .collect(),
-            party_relation: PartyRelation::None,
-            description: String::new(),
-            confidence: self.confidence,
-            needs_review: self.needs_review,
-            evidence: Evidence::default(),
-            facts: Some(Box::new(facts)),
-        })
+        Some(ModelProposal::from_facts(
+            facts,
+            self.confidence,
+            self.needs_review,
+        ))
     }
 }
 
@@ -1655,6 +1747,37 @@ mod tests {
         let proposal = wire.into_domain().unwrap();
         assert!(proposal.document_date.is_none());
         assert!(proposal.date_role.is_none());
+    }
+
+    /// Every field a request body sends is accounted for: it identifies the
+    /// request (the turns, the grammar, a profile's seed), shapes no token
+    /// (the model's name, `stream`, the token probabilities), or is a reply
+    /// setting every request shares, which the runtime identity covers. A
+    /// field added to the body without saying which fails here.
+    #[test]
+    fn every_field_a_request_sends_is_in_an_identity_or_shapes_no_token() {
+        let client = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m")
+            .unwrap()
+            .with_token_confidence(true);
+        let request = ModelRequest {
+            grammar: Some("root ::= \"{}\"".into()),
+            profile: Some(PromptProfile::Bonsai2),
+            ..ModelRequest::new("p")
+        };
+        let body = client.completion_request(&request);
+        let settings = reply_settings();
+        let settings = settings.as_object().unwrap();
+        for (field, value) in body.as_object().unwrap() {
+            match field.as_str() {
+                "messages" | "grammar" | "seed" => {}
+                "model" | "stream" | "logprobs" | "top_logprobs" => {}
+                setting => assert_eq!(settings.get(setting), Some(value), "{setting}"),
+            }
+        }
+        assert!(settings.keys().all(|setting| body.get(setting).is_some()));
+        assert!(body.get("seed").is_some() && body.get("logprobs").is_some());
+        assert_eq!(reply_settings_identity().len(), 64);
+        assert_eq!(reply_settings_identity(), reply_settings_identity());
     }
 
     #[test]
@@ -2662,5 +2785,126 @@ mod tests {
             assert!(close(confidence.min, 0.4), "{date_id}: {confidence:?}");
             assert!(close(confidence.mean, 0.6), "{date_id}: {confidence:?}");
         }
+    }
+
+    /// What [`REPLY_READING_VERSION`] is for: the reply settings' identity
+    /// is that of the settings and of the version, so another version is
+    /// another identity - and so is the digest of the settings alone, which
+    /// is what it was before the version was part of it.
+    #[test]
+    fn the_reply_settings_identity_moves_with_how_a_reply_is_read() {
+        let settings = reply_settings();
+        let identity = reply_settings_identity();
+        assert_eq!(
+            identity,
+            reply_settings_identity_of(&settings, REPLY_READING_VERSION)
+        );
+        assert_ne!(
+            identity,
+            reply_settings_identity_of(&settings, REPLY_READING_VERSION + 1)
+        );
+        assert_ne!(
+            identity,
+            format!("{:x}", Sha256::digest(settings.to_string().as_bytes()))
+        );
+        let mut longer = settings.clone();
+        longer["max_tokens"] = json!(MAX_REPLY_TOKENS * 2);
+        assert_ne!(
+            identity,
+            reply_settings_identity_of(&longer, REPLY_READING_VERSION)
+        );
+    }
+
+    /// How this version reads a reply, pinned: the facts read from a
+    /// fields reply, a compact one, a hosted model's looser one, one in
+    /// ordinal ids and one that is malformed - ids mapped back, capped or
+    /// set aside, a date off the calendar, a role that is not one of ours,
+    /// a blank name, more parties and key facts than are kept - and the
+    /// token figures read from a digest, a fields and a compact reply.
+    /// A change to how these replies are read changes the digest: bump
+    /// [`REPLY_READING_VERSION`], so that what a release that read replies
+    /// otherwise stored is not validated again as this one's reading, and
+    /// pin the new digest. A change they do not exercise leaves it as it
+    /// is: none cites more than one subject, identifier or amount id, so
+    /// those caps read them the same at any value from one up.
+    #[test]
+    fn the_reading_of_a_reply_is_pinned_to_its_version() {
+        let replies = [
+            (
+                r#"{"type_ids":[1,2,3,1,9],"type":" Invoice ","date_ids":[2],"date":"2025-05-01","date_role":"INVOICE","parties":[{"ids":[1,9,3],"name":"Halvorsen Fixture Works LLC","role":"issuer"},{"ids":[3],"name":"Quillon Ridge Bakery, Inc.","role":"customer"},{"ids":[],"name":"null","role":"tenant"},{"ids":[2],"name":"Third Party","role":"landlord"},{"ids":[1],"name":"Fourth Party","role":"agent"}],"subject_ids":[3],"subject":"display shelving","identifier_ids":[2],"identifier":"INV-10438","key_facts":["one",{"ids":[2],"fact":"two"},"three"],"confidence":0.9,"needs_review":false}"#,
+                ordinal_handles(),
+            ),
+            (
+                r#"{"type":["Invoice","p1.b1"],"date":["2025-05-01","invoice","p1.b3.f1"],"parties":[["Halvorsen Fixture Works LLC","issuer","p1.b1"],["Quillon Ridge Bakery, Inc.","customer","p9.b9"]],"subject":["display shelving","p1.b5"],"amount":"p1.b6.r2"}"#,
+                stable_handles(),
+            ),
+            (
+                "Here are the facts:\n```json\n{\"document_type_ids\":\"[p1.b1]\",\"document_type\":\"Notice\",\"date_evidence\":[\"p1.b5\",\"p7.b7\"],\"document_date\":\"2025-02-30\",\"date_role\":\"notice\",\"parties\":[{\"evidence\":\"p1.b5\",\"name\":\"Imogen Castellanos\",\"role\":\"resident\"},{\"ids\":[],\"name\":\"  \",\"role\":\"tenant\"}],\"confidence\":0.8}\n```",
+                stable_handles(),
+            ),
+            (
+                r#"{"type":["1099",1],"date":["2025-05-01","invoice",2],"parties":[["2024","tenant",3]],"subject":["101","3"],"review":true}"#,
+                ordinal_handles(),
+            ),
+            (
+                r#"{"type_ids":[],"type":null,"date_ids":[],"date":null,"date_role":null,"parties":[],"confidence":7,"needs_review":false}"#,
+                ordinal_handles(),
+            ),
+        ];
+        let streams: [&[(&str, f64)]; 3] = [
+            &[
+                (r#"{"document_type":"Invoice","document_date":""#, 0.01),
+                ("2025-05", 0.8),
+                ("-01", 0.6),
+                (r#"","parties":[""#, 0.02),
+                ("Acme", 0.9),
+                (" Corp", 0.5),
+                (r#""],"confidence":0.9}"#, 0.03),
+            ],
+            &[
+                (
+                    r#"{"type_ids":[1],"type":"Invoice","date_ids":[2],"date":""#,
+                    0.01,
+                ),
+                ("2025-05-01", 0.8),
+                (
+                    r#"","date_role":"invoice","parties":[{"ids":[1],"name":""#,
+                    0.02,
+                ),
+                ("Acme", 0.6),
+                (r#"","role":"issuer"},{"ids":[3],"name":""#, 0.03),
+                ("Contoso", 0.4),
+                (r#"","role":"customer"}],"confidence":0.9}"#, 0.05),
+            ],
+            &[
+                (r#"{"type":["Invoice","p1.b1"],"date":[""#, 0.01),
+                ("2025-05-01", 0.8),
+                (r#"","invoice","p1.b2"],"parties":[[""#, 0.02),
+                ("Acme", 0.6),
+                (r#"","issuer","p1.b1"]]}"#, 0.03),
+            ],
+        ];
+        let mut read = Vec::new();
+        for (reply, handles) in &replies {
+            let proposal = proposal_from_text(reply, Some(handles)).ok();
+            read.push(serde_json::to_string(&proposal).unwrap());
+        }
+        for stream in streams {
+            let figures = token_confidence(&pieces(stream)).map(|figures| {
+                format!("{} {:.4} {:.4}", figures.tokens, figures.min, figures.mean)
+            });
+            read.push(format!("{figures:?}"));
+        }
+        let read = read.join("\n");
+        let digest = format!("{:x}", Sha256::digest(read.as_bytes()));
+        assert_eq!(
+            (REPLY_READING_VERSION, digest.as_str()),
+            (
+                1,
+                "f5819622d1e7386f74974aa0bab4a026b09154e1faa9d8747d945832886e36cb"
+            ),
+            "how a reply is read changed: bump REPLY_READING_VERSION and pin the new \
+             reading's digest\n{read}"
+        );
     }
 }

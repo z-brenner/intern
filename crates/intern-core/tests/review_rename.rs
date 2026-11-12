@@ -720,6 +720,47 @@ fn a_doubted_document_waits_until_the_machine_is_shown_to_work() {
     assert!(store.unproven_doubts().unwrap().is_empty());
 }
 
+/// `next_claimable` names the row `claim_next` would take, and takes none:
+/// none while another row is being worked on, and not a document in doubt
+/// until the machine is shown to work for it.
+#[test]
+fn next_claimable_names_what_the_next_claim_would_take() {
+    let temp = TempDir::new().unwrap();
+    let store = QueueStore::open(database(&temp)).unwrap();
+    assert_eq!(store.next_claimable().unwrap(), None);
+    let doubted = store.enqueue(Path::new("/in/a.pdf"), "a").unwrap();
+    let other = store.enqueue(Path::new("/in/b.pdf"), "b").unwrap();
+    assert_eq!(store.next_claimable().unwrap(), Some(doubted.id));
+    assert_eq!(
+        store.next_claimable().unwrap(),
+        Some(doubted.id),
+        "asking took nothing"
+    );
+    assert_eq!(store.claim_next().unwrap().unwrap().id, doubted.id);
+    assert_eq!(
+        store.next_claimable().unwrap(),
+        None,
+        "one is being worked on"
+    );
+
+    store
+        .doubt(doubted.id, "timeout", ErrorCode::ModelFailed)
+        .unwrap();
+    // Put back in doubt, it goes behind every other document.
+    assert_eq!(store.next_claimable().unwrap(), Some(other.id));
+    assert_eq!(store.claim_next().unwrap().unwrap().id, other.id);
+    store
+        .record_unreadable(other.id, ErrorCode::PasswordProtected, ReviewMark::Never)
+        .unwrap();
+    // Only the document in doubt waits, and nothing has shown the machine
+    // works.
+    assert_eq!(store.next_claimable().unwrap(), None);
+    assert!(store.claim_next().unwrap().is_none());
+    store.prove_doubts(&["timeout"], None).unwrap();
+    assert_eq!(store.next_claimable().unwrap(), Some(doubted.id));
+    assert_eq!(store.claim_next().unwrap().unwrap().id, doubted.id);
+}
+
 /// A run of failures counts documents, each kind on its own, however often
 /// one fails.
 #[test]

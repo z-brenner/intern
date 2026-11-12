@@ -302,7 +302,24 @@ jobs:
           path: ${{ runner.temp }}\intern-assets-cache
           key: runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}
           restore-keys: runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}-partial-
-      - run: npm ci
+      # npm ci has exited at once (about a second, exit 1, nothing printed)
+      # on Windows runners three times: alpha.15's and alpha.17's release runs
+      # and a pull request's CI. A second attempt has always passed. Retry it,
+      # and print npm's own log and versions so the next one says why.
+      - name: Install npm packages
+        shell: pwsh
+        run: |
+          for ($Attempt = 1; $Attempt -le 3; $Attempt++) {
+            npm ci
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "::warning::npm ci exited $LASTEXITCODE on attempt $Attempt"
+            Write-Host "node $(node --version), npm $(npm --version)"
+            $Log = Get-ChildItem (Join-Path (npm config get cache) "_logs") -Filter *.log -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime | Select-Object -Last 1
+            if ($Log) { Get-Content -LiteralPath $Log.FullName -Tail 80 }
+            Start-Sleep -Seconds (10 * $Attempt)
+          }
+          exit 1
       - run: npm run fixtures
       - run: npm run check
       - run: npx playwright install chromium
@@ -429,7 +446,7 @@ jobs:
       - name: Upload Windows installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: intern-v0.1.0-alpha.17-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          name: intern-v0.1.0-alpha.18-windows-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
           path: |
             target/release/bundle/nsis/*.exe

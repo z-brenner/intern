@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "status": "accepted",
-  "release_inputs_sha256": "05fceed5313fef26b52ac3bf2d6061bca27ed3717ad7de80f524716f18f12a8d",
+  "status": "pending",
+  "release_inputs_sha256": "pending",
   "screenshot_path": "docs/qa/latest-implementation.png",
-  "screenshot_sha256": "770c7a6def2044a8b0af60aa3ca5f23f7cc8ca30641b3d76cc4eaa3ec8bba456",
-  "reviewer": "Claude Code, under the maintainer Zachary Brenner's standing instruction for this release, on the capture from Whole-product QA evidence run 43100350279; no person looked at this capture",
-  "reviewed_at": "2026-11-11T23:34:28Z",
-  "notes": "Fresh 1536x1024 capture from Whole-product QA evidence run 43100350279 (attempt 1) at commit 82f0f8da25f23ba301f57c4d7b45e3914d33e9bf, which is main after pull request #77 (the alpha.17 work and release preparation). The accepted alpha.16 record is superseded because its digest no longer describes what ships. Who looked: Claude Code opened the capture from the run's artifact at full size, checked it against the concept the ledger records, verified all six manifest artifact hashes, recomputed the release-input digest on main with scripts/hash-release-inputs.mjs, and accepted it. No person has looked at this capture. The maintainer, Zachary Brenner, instructed in advance that this release be reviewed, merged and approved for release by Claude Code; this record is written under that standing instruction, and says so rather than naming a person who did not look. What was checked: the counts strip and toolbar, the queue table, and the review panel read as three planes. The header states the privacy posture (Private, On this device). Status comes first, with original filename, proposed filename and description contiguous; proposed filenames are date-first, with em-dashes for absent values. Ready, Needs review, Proposing a name and Waiting differ by icon as well as color. The panel opens with 'What to check' and the reason for review, Analysis details is collapsed, and Approve & rename and Keep original stay pinned at the foot with their shortcuts. Filename focus and row selection are visibly distinct. No collisions, clipping, illegible copy or ambiguous focus were seen; the ellipsis in the Check cell is deliberate. What changed in the frame: nothing. The capture is byte-identical to the accepted alpha.16 capture (same SHA-256): this release changes the engine, the model launch, the queue and the review reasons, none of which this frame shows. This is a fresh review of a fresh capture, not alpha.16's acceptance carried forward. The sign-off is accepted only for the digest and screenshot hash above. Any later change to a non-QA release input invalidates it and requires a new capture and review."
+  "screenshot_sha256": "pending",
+  "reviewer": "pending",
+  "reviewed_at": "pending",
+  "notes": "Pending fresh alpha.18 QA capture and review."
 }

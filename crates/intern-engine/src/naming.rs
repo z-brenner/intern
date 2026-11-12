@@ -321,6 +321,15 @@ pub(crate) fn party_segment(party: &str, spelling: Spelling) -> Option<String> {
     spell(party, spelling)
 }
 
+/// One of the document's parties as a composed name writes it - what a
+/// filename cannot hold left out, title-cased when printed in capitals - or
+/// `None` when nothing printable is left of it. What a reviewer is offered
+/// to put in a name, so a party chosen with one click reads as one Intern
+/// named would.
+pub fn party_as_named(party: &str) -> Option<String> {
+    party_segment(party, Spelling::Document)
+}
+
 fn spell(value: &str, spelling: Spelling) -> Option<String> {
     match spelling {
         Spelling::Document => sanitize_segment(value).map(|segment| display_case(&segment)),
@@ -1150,5 +1159,30 @@ mod tests {
             "pdf",
         );
         assert_eq!(value, "2026-01-05 Invoice.pdf");
+    }
+
+    /// A party offered to a reviewer is written as a name Intern composed
+    /// would write it, so choosing it gives the name it would have had: a
+    /// letterhead's capitals title-cased, a trailing stop left off.
+    #[test]
+    fn a_party_offered_for_a_name_reads_as_the_name_writes_it() {
+        for party in ["PHILIP MORRIS USA", "Kane Kessler, P.C.", "Caf\u{e9} Rouge"] {
+            let offered = party_as_named(party).expect("a printable party");
+            let named = name(
+                &proposal(
+                    Some("2026-04-01"),
+                    Some("Invoice"),
+                    &[party],
+                    PartyRelation::From,
+                ),
+                "pdf",
+            );
+            assert_eq!(named, format!("2026-04-01 Invoice from {offered}.pdf"));
+        }
+        assert_eq!(
+            party_as_named("PHILIP MORRIS USA").as_deref(),
+            Some("Philip Morris USA")
+        );
+        assert_eq!(party_as_named("???"), None, "nothing printable is left");
     }
 }

@@ -4,7 +4,7 @@
 //! the worker's every variant and every field goes through the real
 //! protocol line into the engine and back, and must come back unchanged.
 
-use intern_worker::extract::{ExtractedDocument, ExtractedPage, PageSource};
+use intern_worker::extract::{ExtractedDocument, ExtractedPage, ExtractionWarning, PageSource};
 use intern_worker::layout::{
     BlockKind, KeyValue, LayoutBlock, LayoutCell, LayoutLine, LayoutRow, LayoutTable, PageLayout,
     PageRoute, RouteSignals, TextSource,
@@ -176,6 +176,55 @@ fn every_layout_the_worker_writes_reaches_the_engine_whole() {
     // And the engine can build its structured document from all of it.
     let structured = intern_engine::structure::structured(&source);
     assert!(structured.block("p4.b5").is_some());
+}
+
+/// A page the worker found blank goes out with no confidence, and the host
+/// raises no doubt for it. A page OCR read nothing on that is not blank
+/// goes out at 0, and the host raises `LOW_OCR_CONFIDENCE` for it, from the
+/// page alone if the worker's warning were ever missing.
+#[test]
+fn the_host_doubts_a_page_read_as_nothing_only_if_it_is_not_blank() {
+    let warnings_of = |second: Option<f32>, warnings: Vec<ExtractionWarning>| {
+        let page = |page_number: usize, text: &str, ocr_confidence: Option<f32>| ExtractedPage {
+            page_number,
+            text: text.to_owned(),
+            source: PageSource::Ocr,
+            ocr_confidence,
+            vision_escalated: false,
+            layout: None,
+        };
+        let sent = ExtractedDocument {
+            pages: vec![
+                page(1, "FACSIMILE COVER SHEET\nTo: Hanford Dairy", Some(98.6)),
+                page(2, "", second),
+            ],
+            warnings,
+            truncated: false,
+            optional_image: None,
+            timings: None,
+        };
+        let line =
+            serde_json::to_string(&Response::new("contract", Event::Parsed { document: sent }))
+                .unwrap();
+        let response = intern_engine::worker::decode_worker_response(&line).unwrap();
+        let intern_engine::worker::WorkerEvent::Parsed { document } = response.event else {
+            panic!("not a parsed event: {line}");
+        };
+        intern_engine::worker::adapt_document(document)
+            .unwrap()
+            .parser_warnings
+    };
+
+    assert!(warnings_of(None, Vec::new()).is_empty());
+    let doubted = vec![intern_engine::domain::ParserWarning::new(
+        "LOW_OCR_CONFIDENCE",
+        true,
+    )];
+    assert_eq!(
+        warnings_of(Some(0.0), vec![ExtractionWarning::LowOcrConfidence]),
+        doubted
+    );
+    assert_eq!(warnings_of(Some(0.0), Vec::new()), doubted);
 }
 
 /// A page the engine has no layout for - stored before layouts existed, or

@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Runs InternBench live: starts llama-server with the flags the desktop app
 # uses (one slot, CPU only, 8,192-token context, the model's own chat
-# template, no web UI, no projector), waits for it to be healthy, runs
-# `intern-bench run` over bench/generated with a recording, and stops the
-# server however the run ends. See docs/internbench.md.
+# template, no web UI, no projector, the app's thread count, and the flags
+# the app adds for the model's tier, `--no-repack` for either), waits for it
+# to be healthy, runs `intern-bench run` over bench/generated with a
+# recording, and stops the server however the run ends. The one flag of the
+# app's left out is its slot folder (`--slot-save-path`), where it keeps the
+# instructions' state between launches. See docs/internbench.md.
 #
 # Usage:
 #   MODEL=/path/to/model.gguf LLAMA_SERVER=/path/to/llama-server \
@@ -15,7 +18,9 @@
 #   INTERN_RUNTIME_DIR  what the worker reads PDFium, Tesseract and tessdata from
 #   INTERN_WORKER       the parser worker (default: target/release/intern-worker)
 #   INTERN_BENCH        the benchmark (default: built with cargo --release)
-#   THREADS             model threads (default: the app's, half the logical cores, 2..12)
+#   THREADS             model threads (default: the app's, every logical processor,
+#                       at least 2 and at most 8: crates/intern-engine/src/server.rs
+#                       default_threads)
 #   PORT                server port (default: 18090)
 #   CORPUS, GOLD        the corpus and its gold (default: bench/generated, bench/gold.json;
 #                       the default corpus is generated again unless every file in it
@@ -26,10 +31,18 @@
 #                       set it empty to check nothing)
 #   OUT_DIR             where report.json, report.md, recording.json and the
 #                       server log go (default: target/internbench)
-#   LLAMA_SERVER_ARGS   extra llama-server flags appended after the app's own,
-#                       for a trial of a flag the app does not set (laboratory
-#                       use, as scripts/run-internbench-candidate.sh takes it);
-#                       unset, the server starts exactly as the app starts it
+#   TIER_SERVER_FLAGS   the flags the app adds for the model's tier
+#                       (tiers::tier_server_flags in crates/intern-engine/src/tiers.rs),
+#                       after its own (default: --no-repack, which both tiers
+#                       carry); set it empty to launch without them, e.g. to
+#                       measure repacked weights against the app's launch
+#   LLAMA_SERVER_ARGS   extra llama-server flags appended after the app's own
+#                       and the tier's, for a trial of a flag the app does not
+#                       set (laboratory use, as scripts/run-internbench-candidate.sh
+#                       takes it); llama-server (b11946) takes the last of
+#                       `--no-repack` and `--repack`, so `--repack` here also
+#                       measures repacked weights. Unset, the server starts
+#                       with the app's flags
 #   SERVER_MEMORY_FILE  if set, the server's VmHWM and VmRSS lines from
 #                       /proc are written there once the run is over and
 #                       before the server is stopped
@@ -68,11 +81,17 @@ GOLD="${GOLD:-$REPO/bench/gold.json}"
 if [ -z "${MANIFEST+set}" ] && [ "$CORPUS" = "$DEFAULT_CORPUS" ] && [ -f "$REPO/bench/manifest.json" ]; then
   MANIFEST="$REPO/bench/manifest.json"
 fi
+# The app's rule (server.rs default_threads): every logical processor, at
+# least 2 and at most 8, and 4 when the count cannot be read.
 if [ -z "${THREADS:-}" ]; then
-  LOGICAL="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)"
-  THREADS=$(( LOGICAL / 2 ))
+  THREADS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
   [ "$THREADS" -lt 2 ] && THREADS=2
-  [ "$THREADS" -gt 12 ] && THREADS=12
+  [ "$THREADS" -gt 8 ] && THREADS=8
+fi
+# The flags the app adds for the model's tier (tiers::tier_server_flags).
+# Both tiers carry the same ones, so one default serves either model.
+if [ -z "${TIER_SERVER_FLAGS+set}" ]; then
+  TIER_SERVER_FLAGS="--no-repack"
 fi
 
 [ -f "$MODEL" ] || { echo "no model at $MODEL" >&2; exit 1; }
@@ -106,14 +125,17 @@ if [ "$CORPUS" = "$DEFAULT_CORPUS" ] && ! corpus_matches_manifest; then
 fi
 mkdir -p "$OUT_DIR"
 
-# Nothing is appended unless LLAMA_SERVER_ARGS is set, so by default the
-# command line is the app's.
+# The tier's flags follow the app's own, as the app adds them, and nothing
+# more unless LLAMA_SERVER_ARGS is set, so by default the command line is the
+# app's (its slot folder aside).
+read -r -a TIER_FLAGS <<< "$TIER_SERVER_FLAGS"
 read -r -a EXTRA_SERVER_ARGS <<< "${LLAMA_SERVER_ARGS:-}"
 KEY="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 "$LLAMA_SERVER" --host 127.0.0.1 --port "$PORT" --api-key "$KEY" --model "$MODEL" \
   --parallel 1 --ctx-size 8192 --n-gpu-layers 0 \
   --threads "$THREADS" --threads-batch "$THREADS" --jinja --no-webui --no-mmproj \
   --cache-ram 0 -ub 256 --prio -1 --poll 0 \
+  ${TIER_FLAGS[@]+"${TIER_FLAGS[@]}"} \
   ${EXTRA_SERVER_ARGS[@]+"${EXTRA_SERVER_ARGS[@]}"} \
   > "$OUT_DIR/llama-server.log" 2>&1 &
 SERVER=$!
@@ -135,7 +157,7 @@ status=0
 "$INTERN_BENCH" run --corpus "$CORPUS" --gold "$GOLD" ${MANIFEST_ARGUMENTS[@]+"${MANIFEST_ARGUMENTS[@]}"} \
   --worker "$WORKER" --endpoint "http://127.0.0.1:$PORT/v1/chat/completions" --api-key "$KEY" \
   --model-id intern-local --model-path "$MODEL" --server-pid "$SERVER" \
-  --note "llama-server $THREADS threads, 8192 context${LLAMA_SERVER_ARGS:+, $LLAMA_SERVER_ARGS}, $(uname -sm)" \
+  --note "llama-server $THREADS threads, 8192 context${TIER_SERVER_FLAGS:+, $TIER_SERVER_FLAGS}${LLAMA_SERVER_ARGS:+, $LLAMA_SERVER_ARGS}, $(uname -sm)" \
   --record "$OUT_DIR/recording.json" --output "$OUT_DIR/report.json" --markdown "$OUT_DIR/report.md" \
   "$@" || status=$?
 # The server's peak, read while it is still running: the EXIT trap stops it.

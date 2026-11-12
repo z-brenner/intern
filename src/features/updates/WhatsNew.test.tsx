@@ -100,11 +100,13 @@ describe('update summary', () => {
       expect(changesSince(packageInfo.version, release.version)).toEqual(expect.arrayContaining([...release.changes]));
     }
     // Newest first in the file, oldest first in the summary of several.
+    const alpha18 = releaseNotes.find((release) => release.version === '0.1.0-alpha.18')!;
     const alpha17 = releaseNotes.find((release) => release.version === '0.1.0-alpha.17')!;
     const alpha16 = releaseNotes.find((release) => release.version === '0.1.0-alpha.16')!;
+    expect(releaseNotes.indexOf(alpha18)).toBeLessThan(releaseNotes.indexOf(alpha17));
     expect(releaseNotes.indexOf(alpha17)).toBeLessThan(releaseNotes.indexOf(alpha16));
-    expect(changesSince('0.1.0-alpha.16', '0.1.0-alpha.17')).toEqual([...alpha17.changes]);
-    expect(changesSince('0.1.0-alpha.15', '0.1.0-alpha.17')).toEqual([...alpha16.changes, ...alpha17.changes]);
+    expect(changesSince('0.1.0-alpha.17', '0.1.0-alpha.18')).toEqual([...alpha18.changes]);
+    expect(changesSince('0.1.0-alpha.16', '0.1.0-alpha.18')).toEqual([...alpha17.changes, ...alpha18.changes]);
   });
 
   it('includes skipped releases and compares alpha numbers numerically', () => {

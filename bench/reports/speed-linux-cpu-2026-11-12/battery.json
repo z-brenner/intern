@@ -1,0 +1,248 @@
+{
+ "9b-ngram-simple": {
+  "run": 43257823167,
+  "cpu": "AMD EPYC 7763 64-Core Processor",
+  "ggml_cpu_variant": "haswell",
+  "model": "9B",
+  "variant_flags": "--no-repack --spec-type ngram-simple",
+  "baseline_flags": "--no-repack",
+  "rounds": {
+   "baseline-r1": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 92.65,
+    "prefill_s": 911.0,
+    "decode_s": 293.2,
+    "decoded_tokens": 1200,
+    "replies_identical_to_baseline_r1": 13
+   },
+   "baseline-r2": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 92.85,
+    "prefill_s": 916.2,
+    "decode_s": 290.6,
+    "decoded_tokens": 1200,
+    "replies_identical_to_baseline_r1": 13
+   },
+   "variant-r1": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 94.6,
+    "prefill_s": 914.4,
+    "decode_s": 315.2,
+    "decoded_tokens": 1200,
+    "replies_identical_to_baseline_r1": 13,
+    "draft_accepted": 9,
+    "draft_generated": 192
+   },
+   "variant-r2": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 93.58,
+    "prefill_s": 909.7,
+    "decode_s": 306.5,
+    "decoded_tokens": 1200,
+    "replies_identical_to_baseline_r1": 13,
+    "draft_accepted": 9,
+    "draft_generated": 192
+   }
+  }
+ },
+ "9b-ngram-map-k": {
+  "run": 43257823167,
+  "cpu": "AMD EPYC 9V74 80-Core Processor",
+  "ggml_cpu_variant": "haswell",
+  "model": "9B",
+  "variant_flags": "--no-repack --spec-type ngram-map-k",
+  "baseline_flags": "--no-repack",
+  "rounds": {
+   "baseline-r1": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 90.7,
+    "prefill_s": 925.9,
+    "decode_s": 253.1,
+    "decoded_tokens": 1200,
+    "replies_identical_to_baseline_r1": 13
+   },
+   "baseline-r2": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 90.83,
+    "prefill_s": 925.6,
+    "decode_s": 255.1,
+    "decoded_tokens": 1200,
+    "replies_identical_to_baseline_r1": 13
+   },
+   "variant-r1": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 91.19,
+    "prefill_s": 930.8,
+    "decode_s": 254.5,
+    "decoded_tokens": 1200,
+    "replies_identical_to_baseline_r1": 13,
+    "draft_accepted": 2,
+    "draft_generated": 48
+   },
+   "variant-r2": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 91.11,
+    "prefill_s": 929.7,
+    "decode_s": 254.6,
+    "decoded_tokens": 1200,
+    "replies_identical_to_baseline_r1": 13,
+    "draft_accepted": 2,
+    "draft_generated": 48
+   }
+  }
+ },
+ "9b-ngram-mod": {
+  "run": 43257823167,
+  "cpu": "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz",
+  "ggml_cpu_variant": "icelake",
+  "model": "9B",
+  "variant_flags": "--no-repack --spec-type ngram-mod",
+  "baseline_flags": "--no-repack",
+  "rounds": {
+   "baseline-r1": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 74.11,
+    "prefill_s": 577.6,
+    "decode_s": 385.7,
+    "decoded_tokens": 1179,
+    "replies_identical_to_baseline_r1": 13
+   },
+   "baseline-r2": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 73.03,
+    "prefill_s": 574.0,
+    "decode_s": 375.3,
+    "decoded_tokens": 1179,
+    "replies_identical_to_baseline_r1": 13
+   },
+   "variant-r1": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 77.46,
+    "prefill_s": 582.6,
+    "decode_s": 424.3,
+    "decoded_tokens": 1178,
+    "replies_identical_to_baseline_r1": 7,
+    "draft_accepted": 0,
+    "draft_generated": 704
+   },
+   "variant-r2": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 77.49,
+    "prefill_s": 582.6,
+    "decode_s": 424.7,
+    "decoded_tokens": 1178,
+    "replies_identical_to_baseline_r1": 7,
+    "draft_accepted": 0,
+    "draft_generated": 704
+   }
+  }
+ },
+ "4b-no-repack": {
+  "run": 43257828551,
+  "cpu": "AMD EPYC 7763 64-Core Processor",
+  "ggml_cpu_variant": "haswell",
+  "model": "4B",
+  "variant_flags": "--no-repack",
+  "baseline_flags": "",
+  "rounds": {
+   "baseline-r1": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 58.21,
+    "prefill_s": 563.5,
+    "decode_s": 193.1,
+    "decoded_tokens": 1167,
+    "replies_identical_to_baseline_r1": 13
+   },
+   "baseline-r2": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 58.08,
+    "prefill_s": 562.7,
+    "decode_s": 192.2,
+    "decoded_tokens": 1167,
+    "replies_identical_to_baseline_r1": 13
+   },
+   "variant-r1": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 53.23,
+    "prefill_s": 508.6,
+    "decode_s": 183.3,
+    "decoded_tokens": 1169,
+    "replies_identical_to_baseline_r1": 9
+   },
+   "variant-r2": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 52.83,
+    "prefill_s": 507.5,
+    "decode_s": 179.1,
+    "decoded_tokens": 1169,
+    "replies_identical_to_baseline_r1": 9
+   }
+  }
+ },
+ "4b-ngram-simple": {
+  "run": 43257828551,
+  "cpu": "AMD EPYC 9V74 80-Core Processor",
+  "ggml_cpu_variant": "zen4",
+  "model": "4B",
+  "variant_flags": "--spec-type ngram-simple",
+  "baseline_flags": "",
+  "rounds": {
+   "baseline-r1": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 34.06,
+    "prefill_s": 324.0,
+    "decode_s": 118.6,
+    "decoded_tokens": 1168,
+    "replies_identical_to_baseline_r1": 13
+   },
+   "baseline-r2": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 33.89,
+    "prefill_s": 323.2,
+    "decode_s": 117.2,
+    "decoded_tokens": 1168,
+    "replies_identical_to_baseline_r1": 13
+   },
+   "variant-r1": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 34.76,
+    "prefill_s": 330.0,
+    "decode_s": 121.7,
+    "decoded_tokens": 1168,
+    "replies_identical_to_baseline_r1": 13,
+    "draft_accepted": 3,
+    "draft_generated": 144
+   },
+   "variant-r2": {
+    "requests": 13,
+    "errors": 0,
+    "mean_request_s": 34.51,
+    "prefill_s": 324.8,
+    "decode_s": 123.8,
+    "decoded_tokens": 1168,
+    "replies_identical_to_baseline_r1": 13,
+    "draft_accepted": 3,
+    "draft_generated": 144
+   }
+  }
+ }
+}

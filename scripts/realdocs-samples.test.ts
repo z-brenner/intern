@@ -45,6 +45,7 @@ async function samples(): Promise<[string, Document[]][]> {
   const names = (await readdir(SAMPLES)).filter((name) => /^sample.*\.json$/.test(name)).sort();
   expect(names).toContain('sample-heldout4.json');
   expect(names).toContain('sample-heldout5.json');
+  expect(names).toContain('sample-heldout6.json');
   return Promise.all(
     names.map(async (name): Promise<[string, Document[]]> => {
       const sample = JSON.parse(await readFile(`${SAMPLES}/${name}`, 'utf8'));

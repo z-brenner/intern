@@ -18,7 +18,8 @@ use intern_core::{
 use intern_engine::{
     AnalysisTelemetry, DateRole, DigestBudget, DocumentAnalysis, DocumentSource, Evidence,
     ExtractProgress, ModelProposal, ModelReading, ModelTier, PageOrigin, ParserWarning,
-    PartyRelation, ProposalStatus, SourcePage, distill, engine::finish, fingerprint, validate,
+    PartyRelation, ProposalStatus, SourcePage, Support, ValidatedFacts, ValidatedParty, distill,
+    engine::finish, fingerprint, validate,
 };
 use intern_intake::{
     SharePointDeployment,
@@ -1228,6 +1229,308 @@ fn model_not_ready_requeues_without_counting_a_failure() {
     );
 }
 
+/// A document put back because no model was loaded to ask is claimed again
+/// with the same bytes, and used to be read again in full - OCR and all -
+/// on every pass. What the reader made of it the first time is kept in
+/// memory and handed back: one extraction, however many claims.
+#[test]
+fn a_document_put_back_for_want_of_a_model_is_read_only_once() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["scan.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(READABLE))]));
+    let not_ready = || Err(ModelFailure::fatal("MODEL_NOT_READY"));
+    let model = Arc::new(FakeModel::new(vec![
+        not_ready(),
+        not_ready(),
+        Ok(proposal(0.94, false)),
+    ]));
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    );
+    pipeline.enqueue_files(&paths).unwrap();
+
+    for _ in 0..3 {
+        pipeline.run_until_idle().unwrap();
+    }
+
+    assert_eq!(model.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1, "read once");
+    let item = pipeline.list().unwrap().remove(0);
+    assert_eq!(item.status, QueueStatus::Ready);
+    assert_eq!(item.processing_failures, 0);
+}
+
+/// Admits every document on a provider's proof of its bytes, read from a
+/// private snapshot made afresh for every check, as Microsoft's word on an
+/// uploader is: the snapshot's path is new each time, its bytes proven to
+/// be the document's.
+struct FreshSnapshots {
+    snapshots: PrivateSnapshotDirectory,
+    made: AtomicUsize,
+}
+
+impl intern_queue::AdmissionGuard for FreshSnapshots {
+    fn authorize(
+        &self,
+        path: &Path,
+        _stage: intern_queue::AdmissionStage,
+    ) -> Result<intern_queue::AdmissionEvidence, PipelineError> {
+        let mut writer = self
+            .snapshots
+            .create_for_supported_extension("pdf")
+            .unwrap();
+        io::Write::write_all(&mut writer, &fs::read(path).unwrap()).unwrap();
+        self.made.fetch_add(1, Ordering::SeqCst);
+        let name = path.file_name().unwrap().to_string_lossy();
+        Ok(intern_queue::AdmissionEvidence::verified_snapshot(
+            format!("{name}-hash"),
+            writer.finish().unwrap(),
+        ))
+    }
+}
+
+/// A document a provider vouched for is read from a new private snapshot at
+/// every claim, so a memo keyed by the path read never found it again. It
+/// is keyed by the document's own path: put back twice for want of a
+/// model, it is read once, from the first of its three snapshots.
+#[test]
+fn a_document_read_from_a_fresh_snapshot_each_claim_is_read_only_once() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["vouched.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(READABLE))]));
+    let not_ready = || Err(ModelFailure::fatal("MODEL_NOT_READY"));
+    let model = Arc::new(FakeModel::new(vec![
+        not_ready(),
+        not_ready(),
+        Ok(proposal(0.94, false)),
+    ]));
+    let guard = Arc::new(FreshSnapshots {
+        snapshots: PrivateSnapshotDirectory::new(temp.path().join("snapshots")).unwrap(),
+        made: AtomicUsize::new(0),
+    });
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    )
+    .with_admission_guard(guard.clone());
+    pipeline.enqueue_files(&paths).unwrap();
+
+    for _ in 0..3 {
+        pipeline.run_until_idle().unwrap();
+    }
+
+    assert_eq!(model.calls.load(Ordering::SeqCst), 3);
+    assert!(guard.made.load(Ordering::SeqCst) >= 3, "a snapshot a claim");
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1, "read once");
+    assert_eq!(
+        pipeline.list().unwrap().remove(0).status,
+        QueueStatus::Ready
+    );
+}
+
+/// Only the same bytes find what the reader made of them: a file that
+/// changed while it waited is read again, and so is one a person canceled
+/// and then retried - a cancel drops what was kept for it.
+#[test]
+fn a_changed_or_canceled_document_is_read_again_from_the_start() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["edited.pdf", "canceled.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(parsed(
+            "Employment Agreement mentioning Acme Corporation only.",
+        )),
+        Ok(parsed(READABLE)),
+        Ok(parsed(READABLE)),
+        Ok(parsed(READABLE)),
+    ]));
+    let not_ready = || Err(ModelFailure::fatal("MODEL_NOT_READY"));
+    let model = Arc::new(FakeModel::new(vec![
+        not_ready(),
+        Ok(proposal(0.94, false)),
+        not_ready(),
+        Ok(proposal(0.94, false)),
+    ]));
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        model,
+        Arc::clone(&files),
+        AppSettings::default(),
+    );
+    let ids = pipeline
+        .enqueue_files(&paths)
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+    // Signed while it waited: new bytes, new text.
+    files.trust(&paths[0], "edited.pdf-signed");
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(
+        worker.calls.load(Ordering::SeqCst),
+        3,
+        "the new bytes were read"
+    );
+    let edited = item_of(&pipeline, ids[0]);
+    assert_eq!(edited.source_hash, "edited.pdf-signed");
+    assert_eq!(
+        edited.status,
+        QueueStatus::Ready,
+        "read from the signed text"
+    );
+
+    // The second document was read and put back; canceled, then retried,
+    // it is read again rather than handed what was kept for it.
+    assert_eq!(status_of(&pipeline, ids[1]), QueueStatus::Queued);
+    pipeline.cancel(ids[1]).unwrap();
+    pipeline.retry(ids[1]).unwrap();
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 4);
+    assert_eq!(status_of(&pipeline, ids[1]), QueueStatus::Ready);
+}
+
+/// Discard waiting and Clear history take documents out of the queue in
+/// bulk, as Remove does one at a time, and what the memo kept of them goes
+/// with them. It used to stay, holding one of the few places the memo has:
+/// in a memo of two, the next document read pushed out one still waiting
+/// instead, and Re-analyze of that one read it again.
+#[test]
+fn a_document_cleared_away_in_bulk_leaves_nothing_in_the_memo() {
+    for discard in [true, false] {
+        let temp = tempdir().unwrap();
+        let files = Arc::new(FakeFiles::default());
+        let paths = documents(
+            temp.path(),
+            &files,
+            &["waiting.pdf", "cleared.pdf", "next.pdf"],
+        );
+        let worker = Arc::new(FakeWorker::new(
+            (0..4).map(|_| Ok(parsed(READABLE))).collect(),
+        ));
+        let read = || Ok(proposal(0.94, false));
+        let model = Arc::new(FakeModel::new(vec![
+            read(),
+            if discard {
+                Err(ModelFailure::fatal("MODEL_NOT_READY"))
+            } else {
+                read()
+            },
+            read(),
+            read(),
+        ]));
+        let pipeline = pipeline(
+            temp.path(),
+            Arc::clone(&worker),
+            model,
+            files,
+            AppSettings::default(),
+        )
+        .with_extraction_memo(2, 1 << 20);
+        let ids = pipeline
+            .enqueue_files(&paths[..2])
+            .unwrap()
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(status_of(&pipeline, ids[0]), QueueStatus::Ready);
+        if discard {
+            // Read, and put back for want of a model.
+            assert_eq!(status_of(&pipeline, ids[1]), QueueStatus::Queued);
+            assert_eq!(pipeline.discard_waiting().unwrap(), 1);
+        } else {
+            // Read, and kept under its own name: done, and cleared away.
+            pipeline.keep_original(ids[1]).unwrap();
+            assert_eq!(status_of(&pipeline, ids[1]), QueueStatus::Completed);
+            assert_eq!(pipeline.clear_history().unwrap(), 1);
+        }
+        assert!(
+            pipeline
+                .list()
+                .unwrap()
+                .iter()
+                .all(|item| item.id != ids[1])
+        );
+
+        pipeline.enqueue_files(&paths[2..]).unwrap();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(worker.calls.load(Ordering::SeqCst), 3);
+        pipeline.reanalyze(ids[0]).unwrap();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(
+            worker.calls.load(Ordering::SeqCst),
+            3,
+            "the memo still held the waiting document (discard: {discard})"
+        );
+    }
+}
+
+/// Re-analyze of a document whose bytes have not changed reads it again
+/// with the model, not the reader - as long as the memo still holds it. A
+/// memo of one document holds only the last one read.
+#[test]
+fn reanalyze_of_unchanged_bytes_reuses_the_extraction_the_memo_still_holds() {
+    for (entries, extractions) in [(8, 2), (1, 4)] {
+        let temp = tempdir().unwrap();
+        let files = Arc::new(FakeFiles::default());
+        let paths = documents(temp.path(), &files, &["one.pdf", "two.pdf"]);
+        let worker = Arc::new(FakeWorker::new(
+            (0..4).map(|_| Ok(parsed(READABLE))).collect(),
+        ));
+        let model = Arc::new(FakeModel::new(
+            (0..4).map(|_| Ok(proposal(0.94, false))).collect(),
+        ));
+        let pipeline = pipeline(
+            temp.path(),
+            Arc::clone(&worker),
+            Arc::clone(&model),
+            files,
+            AppSettings::default(),
+        )
+        .with_extraction_memo(entries, 1 << 20);
+        let ids = pipeline
+            .enqueue_files(&paths)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(worker.calls.load(Ordering::SeqCst), 2);
+
+        for id in &ids {
+            pipeline.reanalyze(*id).unwrap();
+        }
+        pipeline.run_until_idle().unwrap();
+
+        assert_eq!(
+            model.calls.load(Ordering::SeqCst),
+            4,
+            "read again by the model"
+        );
+        assert_eq!(
+            worker.calls.load(Ordering::SeqCst),
+            extractions,
+            "a memo of {entries}"
+        );
+        for id in ids {
+            assert_eq!(status_of(&pipeline, id), QueueStatus::Ready);
+        }
+    }
+}
+
 /// A local server whose restart failed leaves no model loaded for as long as
 /// the app runs. Every pass used to read the head document again in full and
 /// put it back, with nothing failed, nothing paused and nothing on screen. A
@@ -1412,6 +1715,121 @@ fn pause_starts_no_item_and_cancel_interrupts_the_active_worker_request() {
 
     assert_eq!(worker.cancellations.load(Ordering::SeqCst), 1);
     assert_eq!(pipeline.list().unwrap()[0].status, QueueStatus::Canceled);
+}
+
+/// What the app asks before it loads the model at sign-in, or unloads an
+/// idle one: whether a run now would read a document. Not while the queue
+/// is paused, and not the next document while another is being read.
+#[test]
+fn a_document_waits_only_while_a_run_would_read_it() {
+    let temp = tempdir().unwrap();
+    let first = source(temp.path(), "first.pdf");
+    let second = source(temp.path(), "second.pdf");
+    let worker = Arc::new(FakeWorker::blocking(Ok(parsed("unused"))));
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&first, "first-hash");
+    files.trust(&second, "second-hash");
+    let pipeline = Arc::new(pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::new(FakeModel::new(vec![])),
+        files,
+        AppSettings::default(),
+    ));
+    assert!(!pipeline.has_document_waiting().unwrap());
+
+    pipeline.enqueue_files(&[first, second]).unwrap();
+    assert!(pipeline.has_document_waiting().unwrap());
+    pipeline.pause();
+    assert!(!pipeline.has_document_waiting().unwrap(), "paused");
+    pipeline.resume();
+    assert!(pipeline.has_document_waiting().unwrap());
+
+    let running = Arc::clone(&pipeline);
+    let join = thread::spawn(move || running.run_next());
+    while worker.active.load(Ordering::SeqCst) == 0 {
+        thread::yield_now();
+    }
+    assert!(
+        !pipeline.has_document_waiting().unwrap(),
+        "the second waits for the first"
+    );
+    pipeline.cancel(pipeline.list().unwrap()[0].id).unwrap();
+    join.join().unwrap().unwrap();
+    assert!(pipeline.has_document_waiting().unwrap());
+}
+
+/// A document the last claim put back unread is not one a run would read:
+/// the admission guard could not check it right now - Microsoft unreachable,
+/// say - and the next run claims it first and puts it back again, as it does
+/// one put back for want of a model to ask. Counted as waiting, either kept a
+/// loaded model from its idle unload for as long as that lasted. A claim
+/// that goes on to read its document lets the next one wait again.
+#[test]
+fn a_document_put_back_unread_is_not_waiting() {
+    let temp = tempdir().unwrap();
+    let first = source(temp.path(), "put-back-a.pdf");
+    let second = source(temp.path(), "put-back-b.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(parsed(RETRY_DOCUMENT)),
+        Ok(parsed(RETRY_DOCUMENT)),
+        Ok(parsed(RETRY_DOCUMENT)),
+    ]));
+    // Asked again once after a recovery, as every retryable failure is.
+    let model = Arc::new(FakeModel::new(vec![
+        Err(ModelFailure::retryable("MODEL_NOT_READY")),
+        Err(ModelFailure::retryable("MODEL_NOT_READY")),
+        Ok(proposal(0.94, false)),
+        Ok(proposal(0.94, false)),
+    ]));
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&first, "put-back-a-hash");
+    files.trust(&second, "put-back-b-hash");
+    let guard = Arc::new(RetryableStageGuard::unavailable_at(
+        intern_queue::AdmissionStage::Extract,
+    ));
+    let pipeline = pipeline(
+        temp.path(),
+        worker.clone(),
+        model.clone(),
+        files,
+        AppSettings::default(),
+    )
+    .with_admission_guard(guard.clone());
+    pipeline.enqueue_files(&[first]).unwrap();
+    assert!(pipeline.has_document_waiting().unwrap());
+
+    pipeline.run_until_idle().unwrap();
+    assert!(
+        !pipeline.has_document_waiting().unwrap(),
+        "put back: it could not be checked"
+    );
+    pipeline.enqueue_files(&[second]).unwrap();
+    assert!(
+        !pipeline.has_document_waiting().unwrap(),
+        "the next behind it waits for it"
+    );
+    pipeline.run_until_idle().unwrap();
+    assert!(!pipeline.has_document_waiting().unwrap(), "and again");
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 0);
+
+    guard.allow();
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+    assert!(
+        !pipeline.has_document_waiting().unwrap(),
+        "put back: no model to ask"
+    );
+
+    pipeline.run_next().unwrap();
+    assert_eq!(model.calls.load(Ordering::SeqCst), 3, "read after all");
+    assert!(
+        pipeline.has_document_waiting().unwrap(),
+        "the second waits again"
+    );
+    pipeline.run_until_idle().unwrap();
+    assert!(!pipeline.has_document_waiting().unwrap());
+    assert_eq!(model.calls.load(Ordering::SeqCst), 4);
 }
 
 /// The intake watcher withdraws an item when its claim goes to another
@@ -2752,7 +3170,7 @@ fn cancel_rig(
     Arc<Pipeline>,
     i64,
     i64,
-    thread::JoinHandle<Result<(), PipelineError>>,
+    thread::JoinHandle<Result<bool, PipelineError>>,
 ) {
     let first = source(temp, "canceled.pdf");
     let second = source(temp, "next.pdf");
@@ -3362,24 +3780,59 @@ fn dated_text(written: &str) -> DocumentSource {
 }
 
 fn learning_pipeline(temp: &Path, dates: &[(&str, &str)]) -> (Pipeline, Arc<RecordingFiling>) {
+    learning_pipeline_reading(temp, dates, &[])
+}
+
+/// [`learning_pipeline`], with readings that carry the evidence pipeline's
+/// validated facts naming `parties` - the default pipeline's readings - or,
+/// given none, no facts at all, as the digest pipeline's.
+fn learning_pipeline_reading(
+    temp: &Path,
+    dates: &[(&str, &str)],
+    parties: &[&'static str],
+) -> (Pipeline, Arc<RecordingFiling>) {
+    reading_pipeline(
+        temp,
+        dates
+            .iter()
+            .map(|(_, written)| dated_text(written))
+            .collect(),
+        dates
+            .iter()
+            .map(|(iso, written)| dated_proposal(iso, written))
+            .collect(),
+        parties,
+        DestinationLayout::Flat,
+    )
+}
+
+/// A pipeline that reads `texts` in turn, answers each with the next of
+/// `replies`, and files into `filed` under `temp` in `layout`. Its readings
+/// carry validated facts naming `parties`, or none when there are none.
+fn reading_pipeline(
+    temp: &Path,
+    texts: Vec<DocumentSource>,
+    replies: Vec<ModelProposal>,
+    parties: &[&'static str],
+    layout: DestinationLayout,
+) -> (Pipeline, Arc<RecordingFiling>) {
     let filed = temp.join("filed");
     std::fs::create_dir_all(&filed).unwrap();
-    let worker = Arc::new(FakeWorker::new(
-        dates
-            .iter()
-            .map(|(_, written)| Ok(dated_text(written)))
-            .collect(),
-    ));
-    let model = Arc::new(FakeModel::new(
-        dates
-            .iter()
-            .map(|(iso, written)| Ok(dated_proposal(iso, written)))
-            .collect(),
-    ));
+    let worker = Arc::new(FakeWorker::new(texts.into_iter().map(Ok).collect()));
+    let replies = FakeModel::new(replies.into_iter().map(Ok).collect());
+    let model: Arc<dyn AnalyzerBoundary> = if parties.is_empty() {
+        Arc::new(replies)
+    } else {
+        Arc::new(FactsModel {
+            inner: replies,
+            parties: parties.to_vec(),
+        })
+    };
     let settings = SettingsStore::new(temp.join("settings.json"));
     settings
         .save(&AppSettings {
             destination: filed.to_string_lossy().into_owned(),
+            destination_layout: layout,
             ..AppSettings::default()
         })
         .unwrap();
@@ -3515,6 +3968,408 @@ fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
         pipeline.learned_rules().unwrap()[0].seen,
         2,
         "approving the spelling Intern applied teaches nothing new"
+    );
+}
+
+/// A model whose readings carry the evidence pipeline's validated facts:
+/// `parties` are every party validation found the document to name.
+struct FactsModel {
+    inner: FakeModel,
+    parties: Vec<&'static str>,
+}
+
+impl AnalyzerBoundary for FactsModel {
+    fn analyze(
+        &self,
+        source: &DocumentSource,
+        extension: &str,
+        existing_names: &[&str],
+    ) -> Result<DocumentAnalysis, ModelFailure> {
+        let mut analysis = self.inner.analyze(source, extension, existing_names)?;
+        analysis.facts = Some(ValidatedFacts {
+            parties: self
+                .parties
+                .iter()
+                .map(|name| ValidatedParty {
+                    name: (*name).into(),
+                    support: Support::Cited,
+                    ..ValidatedParty::default()
+                })
+                .collect(),
+            ..ValidatedFacts::default()
+        });
+        Ok(analysis)
+    }
+}
+
+/// An employment agreement signed `written` that also names the agency that
+/// placed the employee: a third party the document names.
+fn placed_agreement(written: &str) -> DocumentSource {
+    parsed(&format!(
+        "Employment Agreement signed {written} by John Smith and Acme Corporation, \
+         placed by Beacon Staffing LLC."
+    ))
+}
+
+/// Every party validation finds in [`placed_agreement`].
+const PLACED_PARTIES: [&str; 3] = ["John Smith", "Acme Corporation", "Beacon Staffing LLC"];
+
+/// Choosing another party the document names - one click on the party
+/// choices in review - decides who that document is with. Made twice, it
+/// used to be learned as a spelling, and every later name giving the first
+/// party would have given the second, documents that never mention it
+/// included. A respelling of the named party is still learned.
+#[test]
+fn choosing_another_party_of_the_document_teaches_no_spelling() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let dates = [
+        ("2024-04-12", "April 12, 2024"),
+        ("2024-05-03", "May 3, 2024"),
+        ("2024-06-07", "June 7, 2024"),
+    ];
+    let (pipeline, _) = reading_pipeline(
+        temp.path(),
+        dates
+            .iter()
+            .map(|(_, written)| placed_agreement(written))
+            .collect(),
+        dates
+            .iter()
+            .map(|(iso, written)| dated_proposal(iso, written))
+            .collect(),
+        &PLACED_PARTIES,
+        DestinationLayout::Flat,
+    );
+    let queued = pipeline
+        .enqueue_files(&[
+            source(&inbox, "a.pdf"),
+            source(&inbox, "b.pdf"),
+            source(&inbox, "c.pdf"),
+        ])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let first = record_of(&pipeline, queued[0]);
+    assert_eq!(
+        first.filename,
+        "2024-04-12 Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+    assert_eq!(first.party_choices(), vec!["Beacon Staffing LLC"]);
+    assert_eq!(
+        first.named_parties("pdf"),
+        vec!["John Smith", "Acme Corporation"]
+    );
+
+    for (index, (date, _)) in dates.iter().take(2).enumerate() {
+        pipeline
+            .approve(
+                queued[index],
+                &format!(
+                    "{date} Employment Agreement between John Smith and Beacon Staffing LLC.pdf"
+                ),
+                "Employment agreement between John Smith and Beacon Staffing LLC.",
+            )
+            .unwrap();
+    }
+    assert!(
+        pipeline.learned_rules().unwrap().is_empty(),
+        "another party is not a spelling"
+    );
+    assert_eq!(
+        record_of(&pipeline, queued[2]).filename,
+        "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+
+    pipeline
+        .approve(
+            queued[2],
+            "2024-06-07 Employment Agreement between John Smith and Acme.pdf",
+            "Employment agreement between John Smith and Acme Corporation.",
+        )
+        .unwrap();
+    let rules = pipeline.learned_rules().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        (rules[0].from.as_str(), rules[0].to.as_str()),
+        ("Acme Corporation", "Acme"),
+        "a respelling of the named party still teaches"
+    );
+}
+
+/// Another party the document names, typed as people write it - without
+/// the "LLC" of the choice offered - is the same decision about who the
+/// document is with as the click. Only the full name was refused, so two
+/// such approvals taught "Acme Corporation" -> "Beacon Staffing", and every
+/// later name giving Acme gave Beacon Staffing instead, ready documents
+/// filed under it without review.
+#[test]
+fn another_party_typed_in_a_short_form_teaches_no_spelling() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let dates = [
+        ("2024-04-12", "April 12, 2024"),
+        ("2024-05-03", "May 3, 2024"),
+        ("2024-06-07", "June 7, 2024"),
+    ];
+    let (pipeline, _) = reading_pipeline(
+        temp.path(),
+        dates
+            .iter()
+            .map(|(_, written)| placed_agreement(written))
+            .collect(),
+        dates
+            .iter()
+            .map(|(iso, written)| dated_proposal(iso, written))
+            .collect(),
+        &PLACED_PARTIES,
+        DestinationLayout::Flat,
+    );
+    let queued = pipeline
+        .enqueue_files(&[
+            source(&inbox, "a.pdf"),
+            source(&inbox, "b.pdf"),
+            source(&inbox, "c.pdf"),
+        ])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(
+        record_of(&pipeline, queued[0]).party_choices(),
+        vec!["Beacon Staffing LLC"]
+    );
+
+    for (index, (date, _)) in dates.iter().take(2).enumerate() {
+        pipeline
+            .approve(
+                queued[index],
+                &format!("{date} Employment Agreement between John Smith and Beacon Staffing.pdf"),
+                "Employment agreement between John Smith and Beacon Staffing.",
+            )
+            .unwrap();
+    }
+    assert!(
+        pipeline.learned_rules().unwrap().is_empty(),
+        "another party, typed short, is not a spelling"
+    );
+    assert_eq!(
+        record_of(&pipeline, queued[2]).filename,
+        "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+}
+
+/// A party put in a name that gave none - one click on the party choices,
+/// which writes it after " - " - is read as a new type, since the name has
+/// no party clause to hold it. Made twice, it used to become a rule, and
+/// every later document of that type was named with that party, ready ones
+/// filed without review. A respelling of the type is still learned.
+#[test]
+fn a_party_put_in_a_name_that_gave_none_teaches_no_type() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let partyless = |iso: &str, written: &str| ModelProposal {
+        parties: Vec::new(),
+        party_relation: PartyRelation::None,
+        evidence: Evidence {
+            parties: Vec::new(),
+            ..dated_proposal(iso, written).evidence
+        },
+        ..dated_proposal(iso, written)
+    };
+    let dates = [
+        ("2024-04-12", "April 12, 2024"),
+        ("2024-05-03", "May 3, 2024"),
+        ("2024-06-07", "June 7, 2024"),
+        ("2024-07-01", "July 1, 2024"),
+    ];
+    let (pipeline, _) = reading_pipeline(
+        temp.path(),
+        dates
+            .iter()
+            .map(|(_, written)| placed_agreement(written))
+            .collect(),
+        vec![
+            partyless(dates[0].0, dates[0].1),
+            partyless(dates[1].0, dates[1].1),
+            partyless(dates[2].0, dates[2].1),
+            dated_proposal(dates[3].0, dates[3].1),
+        ],
+        &PLACED_PARTIES,
+        DestinationLayout::Flat,
+    );
+    let queued = pipeline
+        .enqueue_files(&[
+            source(&inbox, "a.pdf"),
+            source(&inbox, "b.pdf"),
+            source(&inbox, "c.pdf"),
+        ])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let first = record_of(&pipeline, queued[0]);
+    assert_eq!(first.filename, "2024-04-12 Employment Agreement.pdf");
+    assert_eq!(first.party_choices(), PLACED_PARTIES);
+    assert!(first.named_parties("pdf").is_empty());
+
+    for (index, (date, _)) in dates.iter().take(2).enumerate() {
+        pipeline
+            .approve(
+                queued[index],
+                &format!("{date} Employment Agreement - Beacon Staffing LLC.pdf"),
+                "Employment agreement placed by Beacon Staffing LLC.",
+            )
+            .unwrap();
+    }
+    assert!(
+        pipeline.learned_rules().unwrap().is_empty(),
+        "a party is not a type"
+    );
+    let later = pipeline
+        .enqueue_files(&[source(&inbox, "d.pdf")])
+        .unwrap()
+        .pop()
+        .unwrap()
+        .id;
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(
+        record_of(&pipeline, later).filename,
+        "2024-07-01 Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+
+    pipeline
+        .approve(
+            queued[2],
+            "2024-06-07 Employment Contract.pdf",
+            "Employment contract.",
+        )
+        .unwrap();
+    let rules = pipeline.learned_rules().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        (rules[0].from.as_str(), rules[0].to.as_str()),
+        ("Employment Agreement", "Employment Contract"),
+        "a respelling of the type still teaches"
+    );
+}
+
+/// A document filed by party goes in the folder of the party its approved
+/// name gives: another party the document names, chosen in review - with
+/// the connecting word changed too, as it often must be - or the
+/// reviewer's own spelling of the one proposed, or the one proposed where
+/// the reviewer only lengthened the type in front of it, whatever word the
+/// added words begin with. The filing report says the same. It used to go
+/// in the folder of the party the reviewer had just taken out of the name,
+/// and then for a lengthened type in one named after the type's added words
+/// and the party ("Sales Staff with Acme Corporation").
+#[test]
+fn a_party_chosen_in_review_is_the_party_the_document_is_filed_under() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let with_employer = |iso: &str, written: &str| ModelProposal {
+        parties: vec!["Acme Corporation".into()],
+        party_relation: PartyRelation::With,
+        ..dated_proposal(iso, written)
+    };
+    let dates = [
+        ("2024-04-12", "April 12, 2024"),
+        ("2024-05-03", "May 3, 2024"),
+        ("2024-06-07", "June 7, 2024"),
+        ("2024-07-19", "July 19, 2024"),
+        ("2024-08-02", "August 2, 2024"),
+    ];
+    let (pipeline, filing) = reading_pipeline(
+        temp.path(),
+        dates
+            .iter()
+            .map(|(_, written)| placed_agreement(written))
+            .collect(),
+        dates
+            .iter()
+            .map(|(iso, written)| with_employer(iso, written))
+            .collect(),
+        &PLACED_PARTIES,
+        DestinationLayout::Party,
+    );
+    let queued = pipeline
+        .enqueue_files(&[
+            source(&inbox, "a.pdf"),
+            source(&inbox, "b.pdf"),
+            source(&inbox, "c.pdf"),
+            source(&inbox, "d.pdf"),
+            source(&inbox, "e.pdf"),
+        ])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let first = record_of(&pipeline, queued[0]);
+    assert_eq!(
+        first.filename,
+        "2024-04-12 Employment Agreement with Acme Corporation.pdf"
+    );
+    assert_eq!(
+        first.party_choices(),
+        vec!["John Smith", "Beacon Staffing LLC"]
+    );
+
+    let approved = [
+        "2024-04-12 Employment Agreement with Beacon Staffing LLC.pdf",
+        "2024-05-03 Employment Agreement for John Smith.pdf",
+        "2024-06-07 Employment Agreement with ACME.pdf",
+        "2024-07-19 Employment Agreement for Sales Staff with Acme Corporation.pdf",
+        "2024-08-02 Employment Agreement with Benefits with Acme Corporation.pdf",
+    ];
+    for (id, name) in queued.iter().zip(approved) {
+        pipeline.approve(*id, name, "An agreement.").unwrap();
+    }
+    let filed = temp.path().join("filed");
+    let destination = |id: i64| {
+        let item = pipeline
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == id)
+            .unwrap();
+        assert_eq!(item.status, QueueStatus::Completed);
+        item.receipt.unwrap().destination
+    };
+    assert_eq!(
+        destination(queued[0]),
+        filed.join("Beacon Staffing LLC").join(approved[0])
+    );
+    assert_eq!(
+        destination(queued[1]),
+        filed.join("John Smith").join(approved[1])
+    );
+    assert_eq!(destination(queued[2]), filed.join("ACME").join(approved[2]));
+    for lengthened in [3, 4] {
+        assert_eq!(
+            destination(queued[lengthened]),
+            filed.join("Acme Corporation").join(approved[lengthened]),
+            "only the type changed"
+        );
+    }
+    let heard = filing.filed.lock().unwrap();
+    assert_eq!(heard[0].proposal.parties, vec!["Beacon Staffing LLC"]);
+    assert_eq!(heard[1].proposal.parties, vec!["John Smith"]);
+    assert_eq!(heard[2].proposal.parties, vec!["ACME"]);
+    assert_eq!(heard[3].proposal.parties, vec!["Acme Corporation"]);
+    assert_eq!(heard[4].proposal.parties, vec!["Acme Corporation"]);
+    assert_eq!(
+        record_of(&pipeline, queued[0]).analysis.proposal.parties,
+        vec!["Acme Corporation"],
+        "the analysis keeps the document's reading"
     );
 }
 
@@ -3673,18 +4528,29 @@ fn a_spelling_typed_in_capitals_is_proposed_as_typed() {
 
 /// A spelling Intern applied that the reviewer undoes is retracted; one the
 /// reviewer changes to a third form starts over from the document's word.
+/// The same with or without validated facts behind the reading: the
+/// document's own word restored is a party the facts name, and once
+/// counted as another party than the rule's spelling, which left the rule
+/// in force.
 #[test]
 fn respelling_interns_own_spelling_in_review_changes_the_rule_not_the_document() {
+    for facts in [&[][..], &["John Smith", "Acme Corporation"][..]] {
+        respelling_interns_own_spelling(facts);
+    }
+}
+
+fn respelling_interns_own_spelling(facts: &[&'static str]) {
     let temp = tempdir().unwrap();
     let inbox = temp.path().join("inbox");
     std::fs::create_dir_all(&inbox).unwrap();
-    let (pipeline, _) = learning_pipeline(
+    let (pipeline, _) = learning_pipeline_reading(
         temp.path(),
         &[
             ("2024-04-12", "April 12, 2024"),
             ("2024-05-03", "May 3, 2024"),
             ("2024-06-07", "June 7, 2024"),
         ],
+        facts,
     );
     let first = source(&inbox, "a.pdf");
     let second = source(&inbox, "b.pdf");
@@ -3748,7 +4614,10 @@ fn respelling_interns_own_spelling_in_review_changes_the_rule_not_the_document()
             "A sentence about the agreement.",
         )
         .unwrap();
-    assert!(pipeline.learned_rules().unwrap().is_empty());
+    assert!(
+        pipeline.learned_rules().unwrap().is_empty(),
+        "the document's word restored retracts the rule (facts: {facts:?})"
+    );
 }
 
 /// A statement of work the firm signed with a supplier, dated `written`.

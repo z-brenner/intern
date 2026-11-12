@@ -19,11 +19,15 @@
 //! Settings, a model that finished downloading, or memory that came back takes
 //! effect at the next document with nothing restarted.
 
+use std::path::Path;
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::domain::{DocumentAnalysis, ProposalStatus, ReviewReason};
 use crate::manifest::ModelTier;
-use crate::server::ServerOptions;
+use crate::server::{LlamaServer, ServerOptions};
 
 /// What a person asked for in Settings.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -145,7 +149,10 @@ pub const fn min_available_for(tier: ModelTier) -> u64 {
 /// in only when the live server cannot be read, and on Windows, where it is
 /// already short, lowering it to that would have the runner with a browser's
 /// 2 GiB held swap the models before every document (11,570 MiB available
-/// before any load, run 43063958237).
+/// before any load, run 43063958237). The 4B runs with `--no-repack` from
+/// alpha.18, and its high-water mark is 3,260-3,315 MiB; its estimate is
+/// kept for the same reason (its working set right after a document on
+/// Windows, 3,215 MiB, is already more than the 2,086 MiB this credits).
 pub const fn resident_estimate(tier: ModelTier) -> u64 {
     match tier {
         ModelTier::Fast => 4_700 * MIB,
@@ -174,6 +181,8 @@ pub const fn resident_estimate(tier: ModelTier) -> u64 {
 /// touched originals included (`bench/reports/windows-memory-2026-11-09`),
 /// and 5,490-5,491 MiB without (run 43063958237; 5,229-5,491 MiB from load
 /// to a minute idle); what it needs under a squeeze there is not measured.
+/// The 4B's, with `--no-repack` from alpha.18, was 3,215 MiB (run
+/// 43273956181); its figure here is kept as an upper bound.
 pub const fn working_set(tier: ModelTier) -> u64 {
     match tier {
         ModelTier::Fast => 4_700 * MIB,
@@ -198,6 +207,10 @@ pub const fn working_set(tier: ModelTier) -> u64 {
 /// `--no-repack` from alpha.17, and its peak resident set less its file is
 /// about 0.7 GiB (`bench/reports/speed-linux-cpu-2026-11-11`), so on Linux
 /// this now credits it about 2 GiB too much (see [`resident_estimate`]).
+/// The 4B runs with `--no-repack` from alpha.18; its peak resident set less
+/// its file is 646-701 MiB (3,260-3,315 MiB less 2,614,
+/// `bench/reports/speed-linux-cpu-2026-11-12`), so on Linux this credits it
+/// about 1.4 GiB too much (2,086 MiB).
 ///
 /// On Windows it is far short. The available physical memory counts the
 /// standby list, where a mapped file's cached pages wait, but not the pages
@@ -206,7 +219,8 @@ pub const fn working_set(tier: ModelTier) -> u64 {
 /// 16 GiB runner (`bench/reports/windows-memory-2026-11-09`): right after a
 /// document the 9B's working set was 8,107-8,110 MiB with repacked weights
 /// (5,490-5,491 MiB with `--no-repack`, run 43063958237) and the 4B's
-/// 4,513-4,514, against the 2,883 and 2,086 this credits. With 2 GiB held
+/// 4,513-4,514 (3,215 with `--no-repack`, run 43273956181), against the
+/// 2,883 and 2,086 this credits. With 2 GiB held
 /// by another process, the plan's arithmetic on the repacked numbers stands
 /// the loaded 9B down for the 4B before the next document, and the loaded
 /// 4B down for the 9B before the one after.
@@ -236,10 +250,14 @@ pub const fn unload_gives_back(tier: ModelTier, model_file_bytes: u64) -> u64 {
 ///   after a document and +1,453 a minute idle, so the 4B's was the higher
 ///   by 909 and 1,594 MiB. At 1,024 MiB, the margin from alpha.15 to
 ///   alpha.16, a machine with between about 7,763 and 8,333 MiB available
-///   before any load would have the models swap at every pause.
+///   before any load would have the models swap at every pause;
+/// * with both models' `--no-repack` (run 43273956181): -11 MiB with the
+///   9B right after a document, +400 with the 4B right after a document and
+///   +743 a minute idle, so the 4B's was the higher by 411 and 754 MiB.
 ///
 /// The margin is the largest gap measured with room to spare, as 1,024 was
-/// for 917: carried to every machine as the report's bands are, either
+/// for 917; the third run's gaps are well inside it, and it is kept rather
+/// than lowered on one runner's figures: carried to every machine as the report's bands are, either
 /// run's numbers bring the loaded 4B back only where the 9B would stay
 /// (the test `a_loaded_fast_model_makes_way_only_with_room_to_spare`).
 /// In both runs the 4B was probed second, after the 9B, and more memory was
@@ -287,11 +305,20 @@ pub const fn memory_for_plan(available: u64, loaded: Option<(ModelTier, u64)>) -
 /// laptops load; on an Intel Xeon with AMX it was unchanged. Live on
 /// InternBench and the five real sets the names it gave differed from the
 /// repacked run's no more than two repacked runs on different processors
-/// differ from each other. The fast model was not measured with it, so it
-/// keeps the repacked layout.
+/// differ from each other.
+///
+/// The fast model runs with it from alpha.18
+/// (`bench/reports/speed-linux-cpu-2026-11-12`): its peak resident memory
+/// fell from 4,558-4,613 MiB to 3,260-3,315 MiB on every set, and on a 16
+/// GiB Windows runner its working set right after a document from 4,514 MiB
+/// to 3,215 MiB (run 43273956181); time per request fell 8.8% on an AMD EPYC
+/// 7763 with ggml's AVX2 backend and 4% on the same CPU under Windows. Live
+/// on InternBench and the real sets 1-4 it gave as many right names as the
+/// repacked runs: on the 287 documents all three runs completed, 165
+/// against 159 and 165; on real5, 16 of 53 against 13.
 pub const fn tier_server_flags(tier: ModelTier) -> &'static [&'static str] {
     match tier {
-        ModelTier::Fast => &[],
+        ModelTier::Fast => &["--no-repack"],
         ModelTier::Accurate => &["--no-repack"],
     }
 }
@@ -306,6 +333,109 @@ pub fn server_options(tier: ModelTier) -> ServerOptions {
             .collect(),
         ..ServerOptions::default()
     }
+}
+
+/// The identity of everything besides the request and the model file that
+/// shapes the reply `tier`'s local server gives, and of how a reading is
+/// taken from that reply ([`crate::domain::AnalysisTelemetry::runtime_sha256`]):
+/// - the reply settings every request carries - sampler, reply limit,
+///   prompt cache, template switches - and the version of how the client
+///   reads a reply into the facts and token figures a reading stores
+///   ([`crate::client::reply_settings_identity`],
+///   [`crate::client::REPLY_READING_VERSION`]);
+/// - the arguments the server is launched with for the tier
+///   ([`server_options`], [`LlamaServer::arguments_for`]): the context, the
+///   threads, the measured flags - `-ub 128` or `512` in place of 256
+///   changed most replies - and the tier's own (`--no-repack`, which both
+///   tiers carry from alpha.18, so the two tiers have one identity). What
+///   varies from one launch to the next and shapes no reply - the port, the
+///   key, where the model file and the slot folder lie - is left out;
+/// - the llama.cpp build the release ships ([`pinned_runtime_build`]).
+///
+/// A stored reply stands in for a fresh one only where this, the request
+/// and the model file are all the same. `None` when the release pins no
+/// build, and then nothing is validated again.
+pub fn runtime_identity(tier: ModelTier) -> Option<String> {
+    let build = pinned_runtime_build()?;
+    let arguments = LlamaServer::arguments_for(
+        Path::new("model"),
+        None,
+        0,
+        "",
+        &ServerOptions {
+            slot_directory: None,
+            ..server_options(tier)
+        },
+    );
+    Some(runtime_identity_of(
+        &crate::client::reply_settings_identity(),
+        &arguments,
+        build,
+    ))
+}
+
+/// [`runtime_identity`] of its three parts.
+fn runtime_identity_of(reply_settings: &str, arguments: &[String], build: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(reply_settings.as_bytes());
+    for argument in arguments {
+        hasher.update([0_u8]);
+        hasher.update(argument.as_bytes());
+    }
+    hasher.update([0_u8, 1_u8]);
+    hasher.update(build.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// The id of the llama.cpp runtime among the release's pinned downloads.
+const RUNTIME_ASSET_ID: &str = "llama.cpp-upstream";
+
+/// The llama.cpp runtime the Linux package ships: ggml-org's Ubuntu x86-64
+/// archive of the build, as `scripts/fetch-linux-assets.sh` pins it
+/// (`LLAMA_UPSTREAM_RELEASE`, `LLAMA_UPSTREAM_SHA256`) and stages it into
+/// the package. Its version and SHA-256, as [`pinned_runtime_build`] gives
+/// them; the test `the_linux_runtime_build_is_the_one_its_package_stages`
+/// holds it to the script.
+const LINUX_RUNTIME_BUILD: &str =
+    "b11946:9e44e1a59e971f0de3fbf74fa46355ab48fed7bb51c1c16b56a96c355947f8dd";
+
+/// The llama.cpp runtime this release ships for the platform it is built
+/// for: the build's version and the SHA-256 of the archive its server is
+/// installed from there. On Linux that is the Ubuntu archive
+/// `scripts/fetch-linux-assets.sh` stages ([`LINUX_RUNTIME_BUILD`],
+/// `b11946:9e44...`). Elsewhere - Windows, the one other package - it is
+/// the Windows archive the release's pinned downloads name
+/// (`src-tauri/resources/runtime-assets.json`, `b11946:8a70...`); the
+/// release build adds entries of its own to that file before compiling,
+/// and leaves this one as it is. `None` when the file names none.
+pub fn pinned_runtime_build() -> Option<&'static str> {
+    if cfg!(target_os = "linux") {
+        return Some(LINUX_RUNTIME_BUILD);
+    }
+    static BUILD: OnceLock<Option<String>> = OnceLock::new();
+    BUILD
+        .get_or_init(|| {
+            runtime_build_in(include_str!(
+                "../../../src-tauri/resources/runtime-assets.json"
+            ))
+        })
+        .as_deref()
+}
+
+/// The pinned llama.cpp runtime in `assets`, a release's pinned downloads.
+fn runtime_build_in(assets: &str) -> Option<String> {
+    let assets: serde_json::Value =
+        serde_json::from_str(assets.trim_start_matches('\u{feff}')).ok()?;
+    let runtime = assets
+        .get("downloads")?
+        .as_array()?
+        .iter()
+        .find(|download| {
+            download.get("id").and_then(serde_json::Value::as_str) == Some(RUNTIME_ASSET_ID)
+        })?;
+    let version = runtime.get("version")?.as_str()?;
+    let sha256 = runtime.get("sha256")?.as_str()?;
+    (!version.is_empty() && !sha256.is_empty()).then(|| format!("{version}:{sha256}"))
 }
 
 /// The folder, inside the sidecar folder, that holds the llama.cpp runtime
@@ -1006,11 +1136,13 @@ mod tests {
     /// memory what it took on the runner, and the server reports the working
     /// set it reported. Pass 3, with repacked weights
     /// (`bench/reports/windows-memory-2026-11-09`), and the 9B with
-    /// `--no-repack` (`runtime-speed.yml` run 43063958237). Credited that
+    /// `--no-repack` (`runtime-speed.yml` run 43063958237), and both models
+    /// with it (run 43273956181). Credited that
     /// alone, a machine near the floor with the 9B loaded is judged to have
     /// room once the 4B is loaded, and the two swap, document after document
     /// or pause after pause; asked for alpha.16's 1,024 MiB, at every pause
-    /// still with `--no-repack`. Asked for the margin, the 4B stays.
+    /// still with the 9B's `--no-repack`, and no longer once the 4B has it
+    /// too. Asked for the margin, the 4B stays.
     #[test]
     fn a_loaded_fast_model_makes_way_only_with_room_to_spare() {
         // MiB: what the load took from the available memory, and the
@@ -1018,6 +1150,8 @@ mod tests {
         // right after a document, and after a minute idle.
         const PASS_3: [(u64, u64); 3] = [(7_926, 8_107), (3_929, 4_514), (3_347, 4_445)];
         const NO_REPACK: [(u64, u64); 3] = [(5_631, 5_490), (3_746, 4_514), (3_061, 4_514)];
+        // Both models with `--no-repack` (`runtime-speed.yml` run 43273956181).
+        const BOTH_NO_REPACK: [(u64, u64); 3] = [(5_502, 5_491), (2_815, 3_215), (2_472, 3_215)];
         const ALPHA_16_MARGIN: u64 = 1_024 * MIB;
         let first = |memory: u64| plan(Automatic, BOTH, Some(memory)).map(|plan| plan.first);
         // A machine with less than the 9B took has nothing left available.
@@ -1078,6 +1212,16 @@ mod tests {
                     (Some(6_739), Some(8_332), 1_594)
                 ],
                 [(None, None, 0), (Some(7_763), Some(8_332), 570)],
+            ]
+        );
+        assert_eq!(
+            bands(BOTH_NO_REPACK),
+            [
+                [
+                    (Some(7_792), Some(8_202), 411),
+                    (Some(7_449), Some(8_202), 754)
+                ],
+                [(None, None, 0), (None, None, 0)],
             ]
         );
     }
@@ -1189,10 +1333,116 @@ mod tests {
             assert_eq!(options.extra_arguments, tier_server_flags(tier));
         }
         assert_eq!(IDLE_UNLOAD_AFTER.as_secs(), 600);
-        // Measured on the 9B only: the 4B keeps llama.cpp's repacked
-        // weights.
         assert_eq!(tier_server_flags(ModelTier::Accurate), ["--no-repack"]);
-        assert!(tier_server_flags(ModelTier::Fast).is_empty());
+        assert_eq!(tier_server_flags(ModelTier::Fast), ["--no-repack"]);
+    }
+
+    /// A runtime's identity is the same from one launch to the next and
+    /// moves with each thing that shapes a reply: the reply settings, any
+    /// launch argument - another micro-batch, a tier's own flag - and the
+    /// llama.cpp build. The two tiers launch with the same flags since the
+    /// 4B took `--no-repack` too, so they share one runtime; a reading's
+    /// model file (`model_sha256`) and its tier tell them apart. Off Linux
+    /// the build is read from the release's pinned downloads, whatever else
+    /// the release build adds to them, and none is named by a file that
+    /// pins none.
+    #[test]
+    fn a_runtime_identity_moves_with_whatever_shapes_a_reply() {
+        let build = pinned_runtime_build().expect("the release pins a llama.cpp build");
+        let archive = if cfg!(target_os = "linux") {
+            "b11946:9e44e1a5"
+        } else {
+            "b11946:8a702bb0"
+        };
+        assert!(build.starts_with(archive), "{build}");
+        let accurate = runtime_identity(ModelTier::Accurate).unwrap();
+        assert_eq!(runtime_identity(ModelTier::Accurate).unwrap(), accurate);
+        assert_eq!(runtime_identity(ModelTier::Fast).unwrap(), accurate);
+
+        let settings = crate::client::reply_settings_identity();
+        let arguments = LlamaServer::arguments_for(
+            Path::new("model"),
+            None,
+            0,
+            "",
+            &server_options(ModelTier::Accurate),
+        );
+        let base = runtime_identity_of(&settings, &arguments, build);
+        assert_eq!(base, accurate);
+        let micro_batch = arguments
+            .iter()
+            .map(|argument| {
+                if argument == "256" {
+                    "512".to_owned()
+                } else {
+                    argument.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_ne!(micro_batch, arguments);
+        for other in [
+            runtime_identity_of("another sampler", &arguments, build),
+            runtime_identity_of(&settings, &micro_batch, build),
+            runtime_identity_of(&settings, &arguments[..arguments.len() - 1], build),
+            runtime_identity_of(&settings, &arguments, "b12140:1fa7f1c4"),
+        ] {
+            assert_ne!(other, base);
+        }
+
+        let enriched = r#"{"schema_version": 1, "downloads": [
+            {"id": "llama.cpp-upstream", "version": "b11946", "sha256": "8a70"},
+            {"id": "vcpkg", "packages": ["tesseract"]}
+        ]}"#;
+        assert_eq!(runtime_build_in(enriched).as_deref(), Some("b11946:8a70"));
+        assert_eq!(
+            runtime_build_in(&format!("\u{feff}{enriched}")).as_deref(),
+            Some("b11946:8a70")
+        );
+        assert_eq!(
+            runtime_build_in(r#"{"downloads": [{"id": "pdfium"}]}"#),
+            None
+        );
+        assert_eq!(runtime_build_in("not json"), None);
+    }
+
+    /// The build a Linux reading names is the archive the Linux package
+    /// stages, as `scripts/fetch-linux-assets.sh` pins it, and the same
+    /// llama.cpp version as the Windows archive the release's pinned
+    /// downloads name; each platform's runtime identity names its own.
+    #[test]
+    fn the_linux_runtime_build_is_the_one_its_package_stages() {
+        let script = include_str!("../../../scripts/fetch-linux-assets.sh");
+        let pinned = |name: &str| {
+            script
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(name)?.strip_prefix('='))
+                .map(|value| value.trim().trim_matches('"'))
+                .unwrap_or_else(|| panic!("fetch-linux-assets.sh pins no {name}"))
+        };
+        assert_eq!(
+            LINUX_RUNTIME_BUILD,
+            format!(
+                "{}:{}",
+                pinned("LLAMA_UPSTREAM_RELEASE"),
+                pinned("LLAMA_UPSTREAM_SHA256")
+            ),
+            "LINUX_RUNTIME_BUILD names the archive fetch-linux-assets.sh pins: move them together"
+        );
+        let windows = runtime_build_in(include_str!(
+            "../../../src-tauri/resources/runtime-assets.json"
+        ))
+        .expect("the release pins a Windows llama.cpp build");
+        assert_eq!(
+            LINUX_RUNTIME_BUILD.split(':').next(),
+            windows.split(':').next()
+        );
+        assert_ne!(LINUX_RUNTIME_BUILD, windows);
+        let expected = if cfg!(target_os = "linux") {
+            LINUX_RUNTIME_BUILD
+        } else {
+            windows.as_str()
+        };
+        assert_eq!(pinned_runtime_build(), Some(expected));
     }
 
     #[test]

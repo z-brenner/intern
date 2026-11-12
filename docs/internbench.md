@@ -190,8 +190,13 @@ INTERN_RUNTIME_DIR=/path/to/runtime THREADS=4 \
 ```
 
 The script starts `llama-server` with the app's flags: one slot, CPU only,
-8,192-token context, the model's own chat template, no projector. It waits
-until the server is healthy and runs `intern-bench run` with a recording.
+8,192-token context, the model's own chat template, no projector, the app's
+thread count (every logical processor, at least 2 and at most 8) unless
+`THREADS` sets one, and `--no-repack`, which the app launches both models
+with (`tiers::tier_server_flags`; `TIER_SERVER_FLAGS=` launches without it,
+to measure repacked weights). Only the app's slot folder is left out. It
+waits until the server is healthy and runs `intern-bench run` with a
+recording.
 It stops the server however the run ends, and never prints the API key it
 generated. Before the corpus, one short synthetic text document goes through
 the worker and the engine and is discarded, so the first scored document is
@@ -229,37 +234,42 @@ Runners differ, so compare jobs that the summary puts on the same CPU.
 ### Server settings on GitHub runners
 
 `.github/workflows/speed-battery.yml` measures one `llama-server` setting
-against the app's own flags, on one runner, with one model and the recorded
-requests under `bench/reports/speed-linux-cpu-2026-10-29/requests`. It is
-laboratory tooling too: run only by hand (Actions > Server speed battery on
-Linux > Run workflow), it gates nothing and publishes nothing. Each variant
-is a job of its own. A job fetches the pinned upstream build (verified
-against the pin in `scripts/fetch-linux-assets.sh`; a release named by
-`llama_release` runs instead, recorded by digest) and the model (refused
-unless its `model_sha256` matches), then runs
-`scripts/bonsai-eval/replay-server.sh` four times: the app's flags, the
-variant's flags appended, the app's, the variant's, every slot warmed
-first, replies compared with the first baseline's. The job summary tables
-the four runs (time per request, prefill and decode medians, replies
-identical to the first baseline) and gives the variant's mean against the
-baseline's; the replays and server logs are an artifact named
-`speed-<label>-<run id>`, kept 14 days. The number to read is the ratio
-within a job: the fleet hands each job its own CPU.
+against the app's own flags (the tier's own given as `base_args`), on one
+runner, with one model and the recorded requests under
+`bench/reports/speed-linux-cpu-2026-10-29/requests`. It is laboratory
+tooling too: run only by hand (Actions > Server speed battery on Linux > Run
+workflow), it gates nothing and publishes nothing. Each variant is a job of
+its own. A job fetches the pinned upstream build (verified against the pin
+in `scripts/fetch-linux-assets.sh`; a release named by `llama_release` runs
+instead, recorded by digest) and the model (refused unless its
+`model_sha256` matches), then runs `scripts/bonsai-eval/replay-server.sh`
+four times: the baseline (the app's flags and `base_args`), the variant's
+flags appended, the baseline, the variant's, every slot warmed first,
+replies compared with the first baseline's. The job summary tables the four
+runs (time per request, prefill and decode medians, replies identical to
+the first baseline) and gives the variant's mean against the baseline's;
+the replays and server logs are an artifact named `speed-<label>-<run id>`,
+kept 14 days. The number to read is the ratio within a job: the fleet hands
+each job its own CPU.
 
 Inputs: `model_url` and `model_sha256` (as for a candidate above);
 `variants`, a JSON array of `{"label", "args"}`, the flags appended after
 the app's (a repeated flag's last value wins, so `--threads-batch 4`
-replaces the app's); `threads` (default 2, the app's rule on a 4-processor
-runner); `every` (default 2: every second recorded request, 13 of 26);
-`llama_release` (optional); `cold_start`, `cpu_variant`, `battery`,
-`ocr_pages`, `ocr_base` and `live_slots` (below).
+replaces the app's); `base_args` (default empty), flags the baseline and
+every variant carry alike, where `--no-repack`, which the app launches both
+models with, belongs (without it the weights are repacked); `threads`
+(default 2; the app would use 4 on a 4-processor runner); `every` (default
+2: every second recorded request, 13 of 26); `llama_release` (optional);
+`cold_start`, `cpu_variant`, `battery`, `ocr_pages`, `ocr_base` and
+`live_slots` (below).
 
 The battery warms every slot before it times anything, so the first
 document of a server lifetime - what a person waits on after sign-in and
 after every idle unload - is not in its numbers. `cold_start` adds that
-measurement before the battery, on fresh servers with the app's flags, an
-API key and a slot folder (`scripts/bonsai-eval/cold-start.py`): one server
-reads a recorded request unwarmed - one long enough to process the
+measurement before the battery, on fresh servers with the app's flags but
+`--no-repack` (`base_args` does not reach them), an API key and a slot
+folder (`scripts/bonsai-eval/cold-start.py`): one server reads a recorded
+request unwarmed - one long enough to process the
 instructions in one piece, as the app requires before it saves (`0016`) -
 then the app's instructions-only request, and its slot is saved; then, twice over,
 a fresh server reads another request unwarmed, and a fresh server restores
@@ -321,14 +331,18 @@ Inputs:
 * `sets` (default `internbench`): comma-separated from `internbench` (the
   synthetic corpus), `real1` (`sample.json`), `real2`
   (`sample-heldout.json`), `real3` (`sample-heldout2.json`), `real4`
-  (`sample-heldout3.json`), `real5` (`sample-heldout4.json`) and `real6`
-  (`sample-heldout5.json`), the real documents fetched by
+  (`sample-heldout3.json`), `real5` (`sample-heldout4.json`), `real6`
+  (`sample-heldout5.json`) and `real7` (`sample-heldout6.json`), the real
+  documents fetched by
   `scripts/realdocs-eval/fetch.py` from their public sources; a source that
   is down costs its document, not the run.
-* `threads` (default `4`): the server's model threads.
+* `threads` (default `4`): the server's model threads, as many as the
+  app's rule gives these four-processor runners.
 * `extra_server_args` (default empty): flags appended after the app's own,
-  to try a KV-cache or speculative flag. The script takes them as
-  `LLAMA_SERVER_ARGS`; unset, it starts the server exactly as the app does.
+  `--no-repack` included, to try a KV-cache or speculative flag, or
+  `--repack` to measure repacked weights (llama-server takes the last of the
+  two). The script takes them as `LLAMA_SERVER_ARGS`; empty, it starts the
+  server with the app's flags.
 * `llama_release` (default empty, the pinned upstream build the runtime
   stages): a ggml-org llama.cpp release tag such as `b12078`, whose Ubuntu
   x64 `llama-server` runs the candidate instead. No hash of an arbitrary

@@ -43,6 +43,14 @@ on:
           {"label":"tb4","args":"--threads-batch 4"}
         required: true
         type: string
+      base_args:
+        description: >-
+          llama-server flags added to the baseline and every variant alike,
+          after the app's own: a tier's own flags, "--no-repack" for either
+          model as the app launches it (tiers::tier_server_flags)
+        required: false
+        default: ""
+        type: string
       threads:
         description: Model threads for the baseline and every variant
         required: false
@@ -115,6 +123,7 @@ jobs:
         id: plan
         env:
           VARIANTS: ${{ inputs.variants }}
+          BASE_ARGS: ${{ inputs.base_args }}
           MODEL_URL: ${{ inputs.model_url }}
           MODEL_SHA256: ${{ inputs.model_sha256 }}
           THREADS: ${{ inputs.threads }}
@@ -147,6 +156,8 @@ jobs:
               seen.add(variant["label"])
               if not isinstance(variant["args"], str) or re.search(r"[^A-Za-z0-9 ._=,:/-]", variant["args"]):
                   fail(f"args of {variant['label']!r} hold a character flags never need")
+          if re.search(r"[^A-Za-z0-9 ._=,:/-]", os.environ["BASE_ARGS"]):
+              fail("base_args hold a character flags never need")
           if not os.environ["MODEL_URL"].startswith("https://"):
               fail("model_url must be https")
           if not re.fullmatch(r"[0-9a-f]{64}", os.environ["MODEL_SHA256"]):
@@ -272,15 +283,17 @@ jobs:
         env:
           LABEL: ${{ matrix.label }}
           VARIANT_ARGS: ${{ matrix.args }}
+          BASE_ARGS: ${{ inputs.base_args }}
           THREADS: ${{ inputs.threads }}
           EVERY: ${{ inputs.every }}
         run: |
           lscpu | tee "$OUT/lscpu.txt"
           read -r -a variant <<< "$VARIANT_ARGS"
+          read -r -a base <<< "$BASE_ARGS"
           for round in 1 2; do
             for which in baseline variant; do
               dir="$OUT/$which-r$round"
-              if [ "$which" = variant ]; then args=("${variant[@]}"); else args=(); fi
+              if [ "$which" = variant ]; then args=("${base[@]}" "${variant[@]}"); else args=("${base[@]}"); fi
               echo "::group::$which round $round"
               WIRE="$REQUESTS" THREADS="$THREADS" EVERY="$EVERY" PORT=18120 \
                 REFERENCE="$OUT/baseline-r1/replay.json" \

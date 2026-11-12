@@ -17,7 +17,9 @@ use crate::extract::{CancellationToken, ExtractionError, OcrBackend, OcrResult, 
 use super::ctc::{DecodedLine, Dictionary, greedy_decode};
 use super::db::lines_from_map;
 use super::geometry::{Point, Quad, reading_order};
-use super::orientation::{PassReading, mostly_vertical, pass_is_final, search_orientation};
+use super::orientation::{
+    PassReading, mostly_vertical, pass_is_final, plainly_upright, search_orientation,
+};
 use super::reocr::{Reading, best_reading, lines_to_reread};
 use super::skew::estimate_skew;
 use super::tensor::{
@@ -750,7 +752,7 @@ impl PaddleOcr {
             }
             OrientationStrategy::UprightFirst => {
                 let upright = self.read_at(sessions, page, 0, cancel)?;
-                if pass_is_final(&upright) {
+                if pass_is_final(&upright) || plainly_upright(&upright) {
                     return Ok(upright.result);
                 }
                 let suggested = trusted(self.classify(sessions, page, cancel)?);
