@@ -10,9 +10,11 @@ faster (it does not), and whether the fast model should run with
 of `speed-linux-cpu-2026-10-29/requests`), baseline and variant alternated
 over two rounds on one runner, each slot warmed first, the app's flags
 (`--parallel 1 --ctx-size 8192 --cache-ram 0 -ub 256 --prio -1 --poll 0
---no-mmproj`, two threads) on upstream llama.cpp `b11946`. For the 9B the
-baseline carries `--no-repack` too (`base_args`), so each variant is timed
-against the 9B as the app launches it. Raw summaries: `battery.json`.
+--no-mmproj`) on upstream llama.cpp `b11946`, with two threads where the
+app would take four on these four-processor runners (every logical
+processor, at most eight). For the 9B the baseline carries `--no-repack`
+too (`base_args`), so each variant is timed against the 9B's flags as the
+app launches it. Raw summaries: `battery.json`.
 
 ## Prompt-lookup speculative decoding: rejected
 
