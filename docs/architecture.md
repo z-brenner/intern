@@ -76,7 +76,11 @@ keep PDFium's text exactly as it has always been read and get blocks built
 cheaply from it; a page whose columns, tables or grids of labeled values
 PDFium would run together is rebuilt from the geometry of its characters,
 and its text becomes those blocks in order; a page with no usable text, or
-an invisible text layer that is a bad prior OCR, is read by OCR; and a large
+an invisible text layer that is a bad prior OCR, is read by OCR, and so is
+somebody else's OCR layer that would not read well - every line repeated,
+or prose torn into a cell per word - on a page where that matters (a page
+OCR reads anyway, or the first two and the last), when OCR reads it at 75
+or more; and a large
 image on a text page that may hold text of its own is cropped and read too.
 Scanned pages are read side by side by a pool of OCR workers. Office files,
 sheets, email and text get blocks from their own structure.
@@ -194,7 +198,10 @@ documented as intent:
   `one_pdf_backend_parses_every_document_in_a_queue` keeps that fixed.
 The rest of this list is how Tesseract, the fallback, reads a page; PP-OCR
 asks its orientation classifier first and then runs the same confidence
-search ([OCR](ocr.md)).
+search, which a reading at no turn that is plainly upright (not on its side,
+twenty words or more, confidence 50 or more) ends ([OCR](ocr.md)). A page
+OCR read nothing on that is blank to the eye - a duplex back, a separator -
+raises no doubt; one with faint marks on it still does ([OCR](ocr.md)).
 
 * A page is read as it came first, in gray: Tesseract binarizes whatever it is
   given, and gray is a third of the bytes to encode for every pass. A reading
