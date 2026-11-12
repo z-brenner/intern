@@ -580,6 +580,9 @@ pub(crate) struct PipelineIntakeHost {
     app: AppHandle,
     identity: MachineIdentity,
     filed_index: Arc<SharedFiledIndex>,
+    /// Told when a scan finds a file arriving: a document is on its way, and
+    /// the model it will be read by can load while the file settles.
+    expect_document: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl PipelineIntakeHost {
@@ -590,6 +593,7 @@ impl PipelineIntakeHost {
         app: AppHandle,
         identity: MachineIdentity,
         filed_index: Arc<SharedFiledIndex>,
+        expect_document: Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
         Self {
             pipeline,
@@ -598,6 +602,7 @@ impl PipelineIntakeHost {
             app,
             identity,
             filed_index,
+            expect_document,
         }
     }
 
@@ -668,6 +673,12 @@ impl IntakeHost for PipelineIntakeHost {
     }
 
     fn status_changed(&self, status: &IntakeStatus) {
+        // A file is held for `intern_intake::DEFAULT_MIN_QUIET_SECONDS` from
+        // when a scan first sees it before it is handed over: time the model
+        // it will be read by can load in.
+        if status.arriving > 0 {
+            (self.expect_document)();
+        }
         let dto = status_dto(
             true,
             &self.identity,

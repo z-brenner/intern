@@ -942,8 +942,31 @@ back; the next document loads it again without reading the file, since this
 session already checked it. The unload runs at the top of every scheduler pass,
 and is skipped on a pass that is about to read a document
 (`Pipeline::has_document_waiting`): the pass a new document wakes used to
-unload a model idle for ten minutes and load it again at once. The review panel says which model read a document,
-and that a provisional reading will be read again.
+unload a model idle for ten minutes and load it again at once. The review
+panel says which model read a document, and that a provisional reading will
+be read again.
+
+A model is started before its document reaches it when one is on its way
+(`RuntimeModel::start_early`): when a scan of the watched folder first sees a
+file arriving - the watcher then waits at least ten seconds for it to hold
+still - and when a person adds documents, which are copied and extracted
+before they are read. Loading the model and restoring its saved instructions
+then overlap that wait instead of adding to the document's. It is the start
+the document would make, made early: the plan as it stands with the memory
+free then, under the same `lifecycle` lock and generation, self-tested the
+first time a model loads; a hold, a cancel or shutdown in the meantime starts
+nothing, or stops what it loaded, as it would for the document. It never
+stops a model: one already loaded is only kept from going idle, so it cannot
+interrupt a document being read, and a burst of arrivals starts one load. It
+starts nothing while the queue would not read what arrives - the model not
+ready, or the queue paused. A file that turns out not to be a document -
+unsupported, a duplicate, a teammate's upload - costs that one load, which
+goes idle and is unloaded ten minutes later like any other. The gain was not
+measured live. It is at most the load and the restore - the 9B took 3.1 to
+5.1 s from start to healthy with its file in the page cache and 44 to 106 ms
+to restore ([`bench/reports/cold-start-linux-cpu-2026-11-09`](../bench/reports/cold-start-linux-cpu-2026-11-09/README.md)),
+and a cold disk takes far longer - off the first document after the model was
+unloaded or never loaded, and no more than the wait it overlaps.
 
 ### The instructions across a restart
 
@@ -953,10 +976,10 @@ a context checkpoint it takes where the user turn starts - the models are
 hybrids whose recurrent layers cannot be rolled back token by token, so the
 checkpoint is the only way the prefix survives - and every document after the
 first reports 477 cached tokens. The first document of a server lifetime has
-nothing cached and processes the instructions itself: at sign-in, and after
-every ten-minute idle unload. A warm-up request would not help: the app loads
-the model when a document arrives, so a warm-up would race that document for
-the server's one slot and save nothing.
+nothing cached and processes the instructions itself: the server is started
+for a document - when it reaches the model, or when it is first seen on its
+way - and stopped after ten idle minutes. A warm-up request would race that
+document for the server's one slot.
 
 So each server is started with `--slot-save-path`, the `slots` folder in the
 app's local data, and its state is carried across the restart

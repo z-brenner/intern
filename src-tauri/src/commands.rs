@@ -836,6 +836,9 @@ struct RuntimeModel {
     /// loaded ([`RuntimeModel::self_test_for`]), which a cancel ends by
     /// stopping the server under it rather than wait for `lifecycle`.
     self_testing: AtomicBool,
+    /// Set while an early start's thread is under way
+    /// ([`RuntimeModel::start_early`]).
+    starting_early: AtomicBool,
     /// Each tier's model as this session last checked it.
     checks: Mutex<std::collections::BTreeMap<ModelTier, TierCheck>>,
     /// Serializes the stamp's read-modify-write: the setup thread and the
@@ -932,6 +935,7 @@ impl RuntimeModel {
             failed_generation: AtomicU64::new(0),
             held: AtomicBool::new(false),
             self_testing: AtomicBool::new(false),
+            starting_early: AtomicBool::new(false),
             checks: Mutex::new(std::collections::BTreeMap::new()),
             stamp_lock: Mutex::new(()),
             last_tier: Mutex::new(None),
@@ -1520,11 +1524,12 @@ impl RuntimeModel {
     ///
     /// A model the stamp vouches for is not started at all while no
     /// document waits: it is marked tested, the queue opens, and the first
-    /// document loads it. Started at every sign-in, the accurate model was
-    /// read from disk, 5.7 GB, and held until the idle unload ten minutes
-    /// later, on every day with no document in that time. A server that will
-    /// not start is found by that document instead, and set aside then
-    /// ([`RuntimeModel::ensure`]).
+    /// document loads it - or a document seen arriving does
+    /// ([`RuntimeModel::start_early`]). Started at every sign-in, the
+    /// accurate model was read from disk, 5.7 GB, and held until the idle
+    /// unload ten minutes later, on every day with no document in that time.
+    /// A server that will not start is found by that document instead, and
+    /// set aside then ([`RuntimeModel::ensure`]).
     fn start_verified(&self, cancellation: &CancellationToken) -> Result<(), CommandError> {
         let lifecycle = self
             .lifecycle
@@ -1820,15 +1825,9 @@ impl RuntimeModel {
     /// Makes `tier`'s model the one loaded, for a request that read the
     /// generation as `asked`: unloads whatever else is loaded first - never
     /// two models resident at once - and starts `tier`'s, self-testing it
-    /// the first time it is loaded at all.
+    /// the first time it is loaded at all ([`RuntimeModel::load`]).
     ///
-    /// Under `lifecycle`, like every start. A start that fails hands the
-    /// document back as MODEL_NOT_READY, which the queue counts against
-    /// nothing and which, if it goes on, the queue reports as a local model
-    /// that stopped responding; the failure itself is in the server's log.
-    /// A model that fails its first-load self-test is set aside for the
-    /// session ([`ReadFailure::Unusable`]) and the document planned again
-    /// without it.
+    /// Under `lifecycle`, like every start.
     fn ensure(&self, tier: ModelTier, asked: u64) -> Result<(), ReadFailure> {
         let lifecycle = self
             .lifecycle
@@ -1846,6 +1845,25 @@ impl RuntimeModel {
         if ready {
             return Ok(());
         }
+        self.load(&lifecycle, tier, asked)
+    }
+
+    /// Stops whatever is loaded and starts `tier`'s model in its place, for
+    /// a request that read the generation as `asked`, self-testing it unless
+    /// this session or the stamp vouches for it. Callers hold `lifecycle`.
+    ///
+    /// A start that fails hands the document back as MODEL_NOT_READY, which
+    /// the queue counts against nothing and which, if it goes on, the queue
+    /// reports as a local model that stopped responding; the failure itself
+    /// is in the server's log. A model that fails its first-load self-test
+    /// is set aside for the session ([`ReadFailure::Unusable`]) and the
+    /// document planned again without it.
+    fn load(
+        &self,
+        lifecycle: &std::sync::MutexGuard<'_, ()>,
+        tier: ModelTier,
+        asked: u64,
+    ) -> Result<(), ReadFailure> {
         let not_ready = || ReadFailure::Failed(ModelFailure::retryable("MODEL_NOT_READY"));
         // Tested once more without its saved instructions after failing
         // with them, at most once.
@@ -1853,7 +1871,7 @@ impl RuntimeModel {
         loop {
             self.stop_runtime().map_err(|_| not_ready())?;
             let vouched = self.check(tier).self_tested || self.stamped(tier) == Some(true);
-            match self.start(&lifecycle, tier) {
+            match self.start(lifecycle, tier) {
                 Ok(Launch::Started) => {}
                 Ok(Launch::Held) => return Err(ReadFailure::Failed(self.overtaken())),
                 Err(error) => {
@@ -1920,6 +1938,85 @@ impl RuntimeModel {
                     return Err(ReadFailure::Unusable);
                 }
             }
+        }
+    }
+
+    /// Starts, on a thread of its own, the model the next document will be
+    /// read by: one has just been seen arriving in the watched folder, or a
+    /// person has just added some. Loading it - and restoring its saved
+    /// instructions - then overlaps the ten seconds the watcher waits for a
+    /// file to hold still, and the document's extraction, instead of being
+    /// added to the document's wait once the queue reaches it. Returns the
+    /// thread, which nothing needs to wait for, when one was started.
+    ///
+    /// It is the start a document makes, made early ([`RuntimeModel::ensure`]
+    /// through [`RuntimeModel::load`]): under `lifecycle`, for the generation
+    /// as it is now, onto the tier the plan picks with the memory free now,
+    /// self-tested the first time, and set aside if it fails - so a hold, a
+    /// cancel or shutdown in the meantime starts nothing, and one that comes
+    /// during the load stops what it loads as it would a document's. It never
+    /// unloads a model: one already loaded is only kept from going idle (the
+    /// document reads with it, or swaps it as it would have), and while a
+    /// document is being read the slot is never empty. A file that turns out
+    /// not to be a document - unsupported, a duplicate, a teammate's - costs
+    /// one load, which goes idle and is unloaded as any other.
+    ///
+    /// Nothing while the runtime is held, or has no tested model to load,
+    /// and one thread at a time: a burst of arrivals starts one model.
+    fn start_early(self: &Arc<Self>) -> Option<std::thread::JoinHandle<()>> {
+        if self.is_held() || !self.serviceable() || self.starting_early.swap(true, Ordering::SeqCst)
+        {
+            return None;
+        }
+        let asked = self.generation.load(Ordering::SeqCst);
+        let runtime = Arc::clone(self);
+        let started = std::thread::Builder::new()
+            .name("intern-model-early-start".into())
+            .spawn(move || {
+                runtime.start_ahead(asked);
+                runtime.starting_early.store(false, Ordering::SeqCst);
+            });
+        match started {
+            Ok(thread) => Some(thread),
+            Err(_) => {
+                self.starting_early.store(false, Ordering::SeqCst);
+                None
+            }
+        }
+    }
+
+    /// What [`RuntimeModel::start_early`] does on its thread, for an arrival
+    /// seen while the generation was `asked`.
+    ///
+    /// The slot is looked at under `lifecycle`, where it cannot change: with
+    /// nothing loaded no request can be in flight, and nothing is loaded
+    /// again until this lets `lifecycle` go. A model that fails its first
+    /// self-test is set aside and the plan made again once, as a document's
+    /// read does.
+    fn start_ahead(&self, asked: u64) {
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.overtaken_since(asked) {
+            return;
+        }
+        let loaded = self
+            .engine
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some();
+        if loaded {
+            self.touch();
+            return;
+        }
+        let Some(plan) = self.plan() else {
+            return;
+        };
+        if let Err(ReadFailure::Unusable) = self.load(&lifecycle, plan.first, asked)
+            && let Some(plan) = self.plan()
+        {
+            let _ = self.load(&lifecycle, plan.first, asked);
         }
     }
 
@@ -2458,6 +2555,16 @@ impl SetupManager {
         );
         self.model_ready.store(ready, Ordering::SeqCst);
         ready
+    }
+
+    /// A document is on its way to the queue - seen arriving in the watched
+    /// folder, or added by a person: starts the model it will be read by
+    /// ([`RuntimeModel::start_early`]), when the queue would read it, so not
+    /// before the model is ready and not while the queue is paused.
+    fn expect_document(&self, pipeline: &Pipeline) {
+        if self.model_ready.load(Ordering::SeqCst) && !pipeline.is_paused() {
+            let _ = self.runtime.start_early();
+        }
     }
 
     fn wake_scheduler(&self) {
@@ -3820,6 +3927,7 @@ impl AppState {
                         std::time::SystemTime::now(),
                     );
                     let config = intake_config(folder, settings, &self.data_dir, first_look);
+                    let (setup, pipeline) = (Arc::clone(&self.setup), Arc::clone(&self.pipeline));
                     let host = Arc::new(PipelineIntakeHost::new(
                         Arc::clone(&self.pipeline),
                         self.scheduler.sender.clone(),
@@ -3827,6 +3935,7 @@ impl AppState {
                         self.app.clone(),
                         identity.clone(),
                         Arc::clone(&self.filed_index),
+                        Arc::new(move || setup.expect_document(&pipeline)),
                     ));
                     watcher = Some(IntakeWatcher::start(config, identity, host));
                 }
@@ -4716,6 +4825,8 @@ fn enqueue_arrival(pipeline: &Pipeline, path: &Path) -> Result<Arrival, String> 
 /// here. Blocking - every file is read twice and written once.
 fn copy_and_wake(state: &AppState, inputs: &[PathBuf]) -> Result<AddReportDto, CommandError> {
     let folders = state.input_folders()?;
+    // The model loads while the documents are copied and extracted.
+    state.setup.expect_document(&state.pipeline);
     let report = copy_with_queue(
         &state.pipeline,
         inputs,
@@ -4854,6 +4965,7 @@ pub async fn intake_queue_existing(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let folders = state.input_folders()?;
+        state.setup.expect_document(&state.pipeline);
         let report = queue_existing(
             &folders.input,
             &|path| excluded_by_watcher(state.live_intake_handle().as_ref(), path),
@@ -11450,6 +11562,230 @@ mod runtime_tests {
         setup.tick(&pipeline, &AppSettings::default());
         assert!(!runtime.running(), "paused, nothing will read it");
         assert_eq!(rig.launches(), 1);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// What a launch with nothing waiting leaves: both models installed, the
+    /// accurate one vouched for by the stamp, nothing loaded.
+    fn launched_idle(install: &Install, rig: &Arc<Rig>, world: &World) -> Arc<RuntimeModel> {
+        install.install_accurate();
+        verified(&install.runtime(&Rig::new(), "1.0.0"));
+        let runtime = install.runtime_in(rig, "1.0.0", world);
+        queue_waits(&runtime, false);
+        verified(&runtime);
+        assert_eq!(rig.launches(), 0);
+        runtime
+    }
+
+    /// Waits for an early start, which a test needs to see finished.
+    fn start_early(runtime: &Arc<RuntimeModel>) {
+        runtime
+            .start_early()
+            .expect("an early start")
+            .join()
+            .unwrap();
+    }
+
+    /// A document seen arriving starts the model the plan picks for it, as
+    /// its own read would - here the accurate one, which the stamp vouches
+    /// for, so with no self-test - and the document then reads with it:
+    /// one load in all, however many arrivals. A file that turns out not to
+    /// be a document costs that one load, which goes idle and is unloaded.
+    #[test]
+    fn a_document_seen_arriving_starts_the_model_it_will_be_read_by() {
+        let install = Install::new("early-start");
+        let rig = Rig::new();
+        let world = World::new();
+        let runtime = launched_idle(&install, &rig, &world);
+
+        start_early(&runtime);
+        assert_eq!(launched(&rig), [ModelTier::Accurate]);
+        assert_eq!(rig.proposals.load(Ordering::SeqCst), 0, "no self-test");
+        start_early(&runtime);
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!(reading.tier, ModelTier::Accurate);
+        assert_eq!(launched(&rig), [ModelTier::Accurate]);
+        assert_eq!(rig.proposals.load(Ordering::SeqCst), 1, "the document");
+        assert_eq!(rig.hash_count(), 0);
+
+        world.advance(IDLE_UNLOAD_AFTER);
+        assert!(runtime.unload_if_idle(|| false));
+        start_early(&runtime);
+        assert_eq!(rig.launches(), 2);
+        world.advance(IDLE_UNLOAD_AFTER);
+        assert!(runtime.unload_if_idle(|| false), "nothing came");
+        assert_eq!(rig.launches(), 2);
+    }
+
+    /// The plan an early start loads by is a document's: with too little
+    /// memory free for the accurate model, the quick one, self-tested the
+    /// first time it loads, and the document read by it with nothing more
+    /// loaded or tested.
+    #[test]
+    fn an_early_start_loads_the_quick_model_when_it_is_the_one_planned() {
+        let install = Install::new("early-start-fast");
+        let rig = Rig::new();
+        let world = World::new();
+        let runtime = launched_idle(&install, &rig, &world);
+        world.memory(Some(MIN_AVAILABLE_FOR_ACCURATE - 1));
+        // Loaded, it holds nothing the machine does not count as available
+        // already: the document's plan sees the memory the early start saw.
+        rig.server_holds(ModelTier::Fast, Some(0));
+
+        start_early(&runtime);
+        assert_eq!(launched(&rig), [ModelTier::Fast]);
+        assert_eq!(rig.proposals.load(Ordering::SeqCst), 1, "its self-test");
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
+        assert_eq!(launched(&rig), [ModelTier::Fast]);
+        assert_eq!(rig.proposals.load(Ordering::SeqCst), 2);
+    }
+
+    /// An early start never stops a model: one already loaded - here the
+    /// quick one, reading a document, while the plan now wants the accurate
+    /// one - is left reading, and only kept from going idle.
+    #[test]
+    fn an_early_start_keeps_a_loaded_model_and_interrupts_nothing() {
+        let install = Install::new("early-start-loaded");
+        install.install_accurate();
+        let rig = Rig::new();
+        let world = World::new();
+        world.prefer(ModelPreference::Fast);
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        verified(&runtime);
+        assert_eq!(launched(&rig), [ModelTier::Fast]);
+
+        rig.reply(Reply::HangUntilStopped);
+        let analyzing = Arc::clone(&runtime);
+        let request = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
+        rig.wait_in_flight();
+        world.prefer(ModelPreference::Accurate);
+        start_early(&runtime);
+        assert_eq!(launched(&rig), [ModelTier::Fast]);
+        assert!(!request.is_finished(), "the document is still being read");
+        rig.reply(Reply::Calibration);
+        runtime.cancel().unwrap();
+        assert_eq!(
+            request.join().unwrap().unwrap_err(),
+            ModelFailure::fatal("MODEL_CANCELED")
+        );
+
+        // Kept from going idle while the document arrives.
+        world.advance(IDLE_UNLOAD_AFTER - Duration::from_secs(1));
+        start_early(&runtime);
+        world.advance(Duration::from_secs(1));
+        assert!(!runtime.unload_if_idle(|| false));
+        assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1);
+    }
+
+    /// An early start obeys what a document's start obeys: nothing while the
+    /// model is held; a hold that comes during its load stops what it
+    /// loaded; a cancel since the arrival was seen starts nothing; and a
+    /// cancel during its first self-test ends it at once, blaming nothing on
+    /// the model and leaving nothing untested running.
+    #[test]
+    fn an_early_start_respects_hold_cancel_and_generation() {
+        let install = Install::new("early-start-held");
+        let rig = Rig::new();
+        let world = World::new();
+        let runtime = launched_idle(&install, &rig, &world);
+
+        runtime.hold().unwrap();
+        assert!(runtime.start_early().is_none());
+        runtime.release();
+
+        let gate = Arc::new(Gate::default());
+        *rig.launch_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let early = runtime.start_early().expect("an early start");
+        gate.wait_reached();
+        runtime.hold().unwrap();
+        *rig.launch_gate.lock().unwrap() = None;
+        gate.open();
+        early.join().unwrap();
+        assert_eq!(rig.launches(), 1);
+        assert_eq!(
+            rig.alive.load(Ordering::SeqCst),
+            0,
+            "what it loaded stopped"
+        );
+        assert!(!runtime.running());
+        runtime.release();
+
+        let asked = runtime.generation.load(Ordering::SeqCst);
+        runtime.cancel().unwrap();
+        runtime.start_ahead(asked);
+        assert_eq!(rig.launches(), 1, "canceled since it was seen");
+
+        // The quick model asked for, never yet self-tested, and its server
+        // not answering the self-test.
+        world.prefer(ModelPreference::Fast);
+        rig.reply(Reply::HangUntilStopped);
+        let early = runtime.start_early().expect("an early start");
+        rig.wait_in_flight();
+        runtime.cancel().unwrap();
+        early.join().unwrap();
+        assert_eq!(runtime.tier_failure(ModelTier::Fast), None);
+        assert_eq!(rig.alive.load(Ordering::SeqCst), 0, "nothing left untested");
+        assert_eq!(launched(&rig), [ModelTier::Accurate, ModelTier::Fast]);
+    }
+
+    /// A document that reaches the model while an early start is loading it
+    /// waits for that load and reads with it: one model, loaded once.
+    #[test]
+    fn a_document_during_an_early_start_reads_with_what_it_loads() {
+        let install = Install::new("early-start-race");
+        let rig = Rig::new();
+        let world = World::new();
+        let runtime = launched_idle(&install, &rig, &world);
+
+        let gate = Arc::new(Gate::default());
+        *rig.launch_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let early = runtime.start_early().expect("an early start");
+        gate.wait_reached();
+        *rig.launch_gate.lock().unwrap() = None;
+        let analyzing = Arc::clone(&runtime);
+        let document = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
+        std::thread::sleep(Duration::from_millis(50));
+        gate.open();
+        early.join().unwrap();
+        let reading = read_by(&document.join().unwrap().unwrap());
+        assert_eq!(reading.tier, ModelTier::Accurate);
+        assert_eq!(rig.launches(), 1);
+        assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1);
+    }
+
+    /// Setup starts a model early only when the queue would read what is
+    /// arriving: not before the model is ready, and not while the queue is
+    /// paused.
+    #[test]
+    fn a_document_is_expected_only_by_a_queue_that_would_read_it() {
+        let install = Install::new("early-start-setup");
+        install.install_accurate();
+        verified(&install.runtime(&Rig::new(), "1.0.0"));
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        queue_waits(&runtime, false);
+        let (setup, _states) = manager(&runtime, ModelSource::Local);
+        settle(&setup);
+        let data = folder("early-start-setup");
+        let (pipeline, _) = queue(&data);
+
+        pipeline.pause();
+        setup.expect_document(&pipeline);
+        pipeline.resume();
+        setup.hold_local_model();
+        setup.expect_document(&pipeline);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(rig.launches(), 0);
+
+        setup.set_state(SetupStatus::Ready, 0, None);
+        setup.expect_document(&pipeline);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while rig.launches() == 0 {
+            assert!(Instant::now() < deadline, "the model never loaded");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(launched(&rig), [ModelTier::Accurate]);
         let _ = std::fs::remove_dir_all(&data);
     }
 
