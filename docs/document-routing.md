@@ -259,8 +259,17 @@ be read as a region is read again on any page, at
 no extra cost: OCR read that page either way, and now reads it once. A layer
 that reads as plain text is kept. The fresh reading replaces the layer only
 if it is confident (mean ≥ 75): these layers' words show no more OCR errors
-than a fresh reading does, so having fewer of them proves nothing. A layer
-kept reads as it did before (`route_page_at`, `reread_is_better`).
+than a fresh reading does, so having fewer of them proves nothing
+(`route_page_at`, `reread_is_better`). A layer kept reads as it did before.
+One whose scan would have been read as a region has the fresh reading
+merged in as that region's was, and is only as sure as it, so an unsure
+reading (60-74) still raises `LOW_OCR_CONFIDENCE` and sends the document to
+review. The reading is of the whole page now, not of the region cut from
+it; on 23 of the 26 development pages read again this way the two scored
+the same to the last digit. One that would have been rebuilt into a layout
+is that layout, with no page image or warning it did not have. And a page
+that cannot be rendered to be read again - a sheet over the render cap - is
+read as its text routes it, its characters read for that route.
 
 Measured with PP-OCR (ONNX Runtime 1.30.0 and the pinned models, PDFium
 chromium/7881) on every development document - real1-6, InternBench's 77

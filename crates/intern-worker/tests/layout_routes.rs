@@ -841,6 +841,10 @@ fn a_prior_ocr_layer_off_the_key_pages_or_read_unsurely_is_kept() {
         PageRoute::Layout
     );
     assert_eq!(unsure.pages[0].text, middle.text);
+    // Nor does it bring a page image or a warning: no OCR read the layer
+    // before, and a reading that does not replace it says nothing of it.
+    assert!(unsure.optional_image.is_none());
+    assert!(unsure.warnings.is_empty());
 
     // Drawn visibly, the same text is the document's own, and is read as it
     // always was.
@@ -854,26 +858,81 @@ fn a_prior_ocr_layer_off_the_key_pages_or_read_unsurely_is_kept() {
     );
 }
 
-/// A sparse layer - a short letter's few lines - covers too little of the
-/// scan under it for the scan to count as text the layer already holds, so
-/// the scan would be read as an image region and its lines merged into the
-/// layer's, every line twice. Read again instead, the page is read once,
-/// with the same one OCR pass.
+/// A layer that would be read again but whose page cannot be rendered for
+/// it - a sheet too large to render, here an A1 drawing at 300 DPI - is
+/// read as its text routes it, its characters read for that route: the
+/// same layout it would have had if it were never to be read again.
 #[test]
-fn a_sparse_prior_ocr_layer_is_read_once_not_merged_with_its_own_scan() {
-    let text =
-        "Dear Ms. Okafor:\r\nThank you for your letter of March 4, 2019.\r\nYours sincerely,";
-    let runs = vec![
-        run(54, 120, "Dear Ms. Okafor:", 9),
-        run(54, 140, "Thank you for your letter of March 4, 2019.", 9),
-        run(54, 170, "Yours sincerely,", 9),
-    ];
-    let mut layer = native_page(0, text, runs);
+fn a_prior_ocr_layer_that_cannot_be_rendered_reads_as_its_text_routes_it() {
+    let mut sheet = doubled_prior_ocr(0);
+    (sheet.width_pixels, sheet.height_pixels) = (7016, 9933);
+    // Its characters come only when the page asks for them, and it is
+    // never rendered.
+    let pdf = RunsOnRequest::new(vec![sheet]);
+
+    let document = read_with(&pdf, &NoOcr);
+
+    assert_eq!(*pdf.asked.lock().unwrap(), [0]);
+    let page = &document.pages[0];
+    assert_eq!(page.source, PageSource::Native);
+    assert_eq!(page.layout.as_ref().unwrap().route, PageRoute::Layout);
+    let middle = read(
+        &StandInPdf::new((0..5).map(doubled_prior_ocr).collect()),
+        &ScanReading(97.0),
+    );
+    assert_eq!(page.text, middle.pages[2].text);
+}
+
+/// The lines of a short letter.
+const LETTER: [&str; 5] = [
+    "Dear Ms. Okafor:",
+    "Thank you for your letter of March 4, 2019, about the drainage easement.",
+    "The county surveyor will walk the east boundary with your contractor",
+    "on the morning of March 18. Please call the office if that does not suit.",
+    "Yours sincerely,",
+];
+
+/// A sparse layer - [`LETTER`]'s few lines - over the scan it was read
+/// from. It has text enough not to be a stamp on a scan, but covers too
+/// little of the scan for the scan to count as text the layer holds.
+fn sparse_prior_ocr() -> PdfPageInspection {
+    let runs = LETTER
+        .iter()
+        .enumerate()
+        .map(|(row, line)| run(54, 120 + row as u32 * 14, line, 9))
+        .collect();
+    let mut layer = native_page(0, &LETTER.join("\r\n"), runs);
     layer.image_coverage = 1.0;
     let native = layer.native.as_mut().unwrap();
     native.images = vec![[0, 0, 6120, 7920]];
-    native.text_objects = 3;
-    native.invisible_text_objects = 3;
+    native.text_objects = 5;
+    native.invisible_text_objects = 5;
+    layer
+}
+
+/// PP-OCR's reading of the scan under [`sparse_prior_ocr`], at a
+/// confidence.
+struct LetterReading(f32);
+
+impl OcrBackend for LetterReading {
+    fn recognize(
+        &self,
+        page: &RenderedPage,
+        _cancel: &CancellationToken,
+    ) -> Result<OcrResult, ExtractionError> {
+        // The whole page, not a region cut from it.
+        assert_eq!(page.image.width(), 255);
+        Ok(OcrResult::new(LETTER.join("\n"), self.0))
+    }
+}
+
+/// The sparse layer's scan would be read as an image region and its lines
+/// merged into the layer's, every line twice. Read again instead, the page
+/// is read once, with the same one OCR pass.
+#[test]
+fn a_sparse_prior_ocr_layer_is_read_once_not_merged_with_its_own_scan() {
+    let layer = sparse_prior_ocr();
+    assert!(!intern_worker::extract::page_needs_ocr(&layer));
     let signals = intern_worker::layout::measure_signals(
         layer.native.as_ref().unwrap(),
         &layer.native_text,
@@ -884,24 +943,9 @@ fn a_sparse_prior_ocr_layer_is_read_once_not_merged_with_its_own_scan() {
         PageRoute::OcrRegions,
         "{signals:?}"
     );
-    struct LetterReading;
-    impl OcrBackend for LetterReading {
-        fn recognize(
-            &self,
-            page: &RenderedPage,
-            _cancel: &CancellationToken,
-        ) -> Result<OcrResult, ExtractionError> {
-            // The whole page, not a region cut from it.
-            assert_eq!(page.image.width(), 255);
-            Ok(OcrResult::new(
-                "Dear Ms. Okafor:\nThank you for your letter of March 4, 2019.\nYours sincerely,",
-                98.0,
-            ))
-        }
-    }
     let pdf = StandInPdf::new(vec![layer]);
 
-    let document = read(&pdf, &LetterReading);
+    let document = read(&pdf, &LetterReading(98.0));
 
     let page = &document.pages[0];
     assert_eq!(page.source, PageSource::Ocr);
@@ -912,6 +956,43 @@ fn a_sparse_prior_ocr_layer_is_read_once_not_merged_with_its_own_scan() {
         page.text
     );
     assert_eq!(pdf.renders.load(Ordering::SeqCst), 1);
+    assert!(document.warnings.is_empty());
+}
+
+/// A sparse layer whose reading is not confident stays as it read when its
+/// scan was read as a region: the reading merged in, the page no surer than
+/// that reading, and the document saying so - an unsure reading of a page
+/// still sends it to be looked at. A reading of noise adds nothing, as a
+/// region's never did, and neither brings a page image the region never had.
+#[test]
+fn a_sparse_prior_ocr_layer_read_unsurely_reads_as_its_region_did() {
+    let unsure = read(
+        &StandInPdf::new(vec![sparse_prior_ocr()]),
+        &LetterReading(68.0),
+    );
+
+    let page = &unsure.pages[0];
+    assert_eq!(page.source, PageSource::Native);
+    assert_eq!(page.layout.as_ref().unwrap().route, PageRoute::OcrRegions);
+    assert_eq!(
+        page.text.matches("March 4, 2019").count(),
+        2,
+        "the layer and the reading merged in: {}",
+        page.text
+    );
+    assert_eq!(page.ocr_confidence, Some(68.0));
+    assert_eq!(unsure.warnings, vec![ExtractionWarning::LowOcrConfidence]);
+    assert!(unsure.optional_image.is_none());
+
+    let noise = read(
+        &StandInPdf::new(vec![sparse_prior_ocr()]),
+        &LetterReading(31.0),
+    );
+    assert_eq!(noise.pages[0].source, PageSource::Native);
+    assert_eq!(noise.pages[0].text, sparse_prior_ocr().native_text);
+    assert_eq!(noise.pages[0].ocr_confidence, None);
+    assert!(noise.warnings.is_empty());
+    assert!(noise.optional_image.is_none());
 }
 
 /// A page of native text with a pasted image across its lower half, which

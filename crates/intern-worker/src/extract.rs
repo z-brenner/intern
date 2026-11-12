@@ -15,6 +15,8 @@ use image::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::layout::router::text_route;
+use crate::layout::router::thresholds::GARBAGE_LAYER;
 use crate::layout::{NativePage, PageLayout, PageRoute, RouteSignals, measure_signals};
 use crate::limits::{
     MAX_DOCUMENT_CHARS, MAX_DOCUMENT_LAYOUT_PARTS, MAX_EXTRACTION_DURATION, MAX_PAGE_CHARS,
@@ -1003,6 +1005,10 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
         }
     }
 
+    // The page is read as its text, so it takes the route its text does -
+    // a page that wanted OCR and could not have it included - and its
+    // characters are read for that route, not the one it wanted.
+    let route = native_route(route, &signals);
     // Counted with the pages read as their text before it, a page past the
     // document's characters is cut on the way out whatever the scans among
     // them read, so it is not read for its geometry: no layout is built
@@ -1018,7 +1024,6 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
         |timings| &mut timings.analysis_micros,
         || read_runs(&mut inspection, route, pdf, path, cancel),
     )?;
-    let route = native_route(route, &signals);
     let stop = || halted(cancel, started, limits);
     let page = cancel.timed(
         |timings| &mut timings.analysis_micros,
@@ -1090,12 +1095,10 @@ fn display_width(inspection: &PdfPageInspection) -> f64 {
 fn native_route(route: PageRoute, signals: &RouteSignals) -> PageRoute {
     match route {
         PageRoute::Fast | PageRoute::Layout => route,
-        PageRoute::Ocr | PageRoute::OcrRegions => {
-            crate::layout::router::text_route(&RouteSignals {
-                image_region: 0,
-                ..*signals
-            })
-        }
+        PageRoute::Ocr | PageRoute::OcrRegions => text_route(&RouteSignals {
+            image_region: 0,
+            ..*signals
+        }),
     }
 }
 
@@ -1228,10 +1231,10 @@ impl NativeRead {
 /// [`crate::layout::router::route_page_at`]) shows no more errors than a
 /// fresh reading may, so only a confident reading replaces it.
 fn reread_is_better(reading: &OcrResult, signals: &RouteSignals) -> bool {
-    use crate::layout::router::{garbage_score, thresholds::GARBAGE_LAYER};
     !reading.text.trim().is_empty()
         && (reading.mean_confidence >= CONFIDENT_READING
-            || (signals.garbage >= GARBAGE_LAYER && garbage_score(&reading.text) < signals.garbage))
+            || (signals.garbage >= GARBAGE_LAYER
+                && crate::layout::router::garbage_score(&reading.text) < signals.garbage))
 }
 
 /// Puts the pages back in order and makes every decision that depends on
@@ -1329,9 +1332,8 @@ fn assemble(
                             page_vision,
                         )
                     }
-                    fresh => {
-                        // The layer stays, read the way its text routes it,
-                        // as it would have been had it not been read again.
+                    fresh if signals.garbage >= GARBAGE_LAYER => {
+                        // The layer stays, read the way its text routes it.
                         // But a reading that came back unsure says the page
                         // is hard to read either way: the image it was
                         // rendered with goes with the layer's text, as it
@@ -1343,6 +1345,54 @@ fn assemble(
                             native_page(page_number, inspection, signals, route, stop, &mut unheld)
                                 .finish(&mut budget),
                             vision.or(reread_vision),
+                        )
+                    }
+                    fresh if text_route(&signals) == PageRoute::OcrRegions => {
+                        // A layer read again only because its scan would
+                        // have been read as a region stays as it would have
+                        // read: with OCR's reading of the page merged in as
+                        // that region's, and as sure as that reading - so an
+                        // unsure one still raises its warning below.
+                        runs(&mut inspection, PageRoute::OcrRegions)?;
+                        let merged = fresh.and_then(|(reading, size, _)| {
+                            let scale = display_width(&inspection) / f64::from(size.0.max(1));
+                            crate::layout::regions_page(
+                                page_number,
+                                &inspection,
+                                signals,
+                                &[(reading, [0, 0, size.0, size.1])],
+                                scale,
+                                stop,
+                            )
+                        });
+                        let page = merged
+                            .map(|page| counted(page, &mut budget))
+                            .unwrap_or_else(|| {
+                                let route = native_route(PageRoute::OcrRegions, &signals);
+                                native_page(
+                                    page_number,
+                                    inspection,
+                                    signals,
+                                    route,
+                                    stop,
+                                    &mut unheld,
+                                )
+                                .finish(&mut budget)
+                            });
+                        (page, vision)
+                    }
+                    _ => {
+                        // A layer read again only because its words would
+                        // be rebuilt into a layout stays as that layout,
+                        // with no more image than it would have had: it was
+                        // never read by OCR before, and an unsure reading
+                        // says nothing about its words.
+                        let route = native_route(PageRoute::Ocr, &signals);
+                        runs(&mut inspection, route)?;
+                        (
+                            native_page(page_number, inspection, signals, route, stop, &mut unheld)
+                                .finish(&mut budget),
+                            vision,
                         )
                     }
                 }
