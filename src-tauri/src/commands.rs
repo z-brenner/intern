@@ -2485,6 +2485,10 @@ struct SetupManager {
     model_ready: Arc<AtomicBool>,
     local_ready: AtomicBool,
     hosted_active: AtomicBool,
+    /// A document was seen on its way before the model was ready, and the
+    /// model it will be read by is started once it is
+    /// ([`SetupManager::expect_document`]).
+    document_expected: AtomicBool,
     /// The tiers shown as failed because the runtime set them aside, rather
     /// than because a download failed. Settings' Try again clears the
     /// runtime's verdict, and only a tier marked here is shown ready again
@@ -2557,6 +2561,7 @@ impl SetupManager {
             model_ready: Arc::new(AtomicBool::new(installed)),
             local_ready: AtomicBool::new(installed),
             hosted_active: AtomicBool::new(false),
+            document_expected: AtomicBool::new(false),
             overlaid: Mutex::new(std::collections::HashSet::new()),
         });
         // A model the runtime sets aside outside any setup operation - one
@@ -2601,9 +2606,26 @@ impl SetupManager {
     /// A document is on its way to the queue - seen arriving in the watched
     /// folder, or added by a person: starts the model it will be read by
     /// ([`RuntimeModel::start_early`]), when the queue would read it, so not
-    /// before the model is ready and not while the queue is paused.
+    /// while the queue is paused.
+    ///
+    /// Before the model is ready the expectation is kept, and the model
+    /// started once setup says it is ([`SetupManager::set_state`]). At
+    /// launch the watcher's first scan comes before setup has read the
+    /// stamp, and a document that came while Intern was not running is
+    /// reported then and not again: dropped, it waited for the load after
+    /// all. Kept until the model is ready, it costs at most the one load
+    /// an arrival may cost.
     fn expect_document(&self, pipeline: &Pipeline) {
-        if self.model_ready.load(Ordering::SeqCst) && !pipeline.is_paused() {
+        if pipeline.is_paused() {
+            return;
+        }
+        if !self.model_ready.load(Ordering::SeqCst) {
+            self.document_expected.store(true, Ordering::SeqCst);
+        }
+        // Asked again after the expectation is kept: either this sees the
+        // model ready, or `set_state` sees the expectation.
+        if self.model_ready.load(Ordering::SeqCst) {
+            self.document_expected.store(false, Ordering::SeqCst);
             let _ = self.runtime.start_early();
         }
     }
@@ -3259,6 +3281,9 @@ impl SetupManager {
         let local_ready = state == SetupStatus::Ready && self.runtime.serviceable();
         self.local_ready.store(local_ready, Ordering::SeqCst);
         let ready = self.refresh_ready();
+        if ready && self.document_expected.swap(false, Ordering::SeqCst) {
+            let _ = self.runtime.start_early();
+        }
         let mut emitted = false;
         if let Ok(mut current) = self.state.lock() {
             let status_changed = current.state != state;
@@ -11934,8 +11959,11 @@ mod runtime_tests {
     }
 
     /// Setup starts a model early only when the queue would read what is
-    /// arriving: not before the model is ready, and not while the queue is
-    /// paused.
+    /// arriving: not while the queue is paused, and not before the model is
+    /// ready - but a document seen before then is kept, and its model started
+    /// once setup is ready: at launch the watcher reports a document that
+    /// came while Intern was not running before setup has read the stamp,
+    /// and does not report it again.
     #[test]
     fn a_document_is_expected_only_by_a_queue_that_would_read_it() {
         let install = Install::new("early-start-setup");
@@ -11948,23 +11976,42 @@ mod runtime_tests {
         settle(&setup);
         let data = folder("early-start-setup");
         let (pipeline, _) = queue(&data);
+        let loaded = || {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while rig.launches() == 0 {
+                assert!(Instant::now() < deadline, "the model never loaded");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
 
         pipeline.pause();
         setup.expect_document(&pipeline);
+        setup.hold_local_model();
+        setup.expect_document(&pipeline);
         pipeline.resume();
+        setup.set_state(SetupStatus::Ready, 0, None);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(rig.launches(), 0, "paused, nothing was expected");
+
         setup.hold_local_model();
         setup.expect_document(&pipeline);
         std::thread::sleep(Duration::from_millis(50));
-        assert_eq!(rig.launches(), 0);
-
+        assert_eq!(rig.launches(), 0, "not before the model is ready");
         setup.set_state(SetupStatus::Ready, 0, None);
-        setup.expect_document(&pipeline);
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while rig.launches() == 0 {
-            assert!(Instant::now() < deadline, "the model never loaded");
+        loaded();
+        assert_eq!(launched(&rig), [ModelTier::Accurate]);
+
+        // Spent: with the model stopped, the next time setup is ready starts
+        // nothing.
+        while runtime.starting_early.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert_eq!(launched(&rig), [ModelTier::Accurate]);
+        runtime.hold().unwrap();
+        runtime.release();
+        setup.set_state(SetupStatus::Ready, 0, None);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(rig.launches(), 1);
+        assert!(!runtime.running());
         let _ = std::fs::remove_dir_all(&data);
     }
 

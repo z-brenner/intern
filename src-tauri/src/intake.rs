@@ -675,12 +675,13 @@ impl IntakeHost for PipelineIntakeHost {
 
     fn status_changed(&self, status: &IntakeStatus) {
         // A file is held for `intern_intake::DEFAULT_MIN_QUIET_SECONDS` from
-        // when a scan first sees it before it is handed over: time the model
-        // it will be read by can load in - where what arrives is this
-        // machine's to read. In the shared Inbox most arrivals are
+        // when a scan first sees it before it is handed over - one that came
+        // while Intern was not running, until the scan after the first: time
+        // the model it will be read by can load in - where what arrives is
+        // this machine's to read. In the shared Inbox most arrivals are
         // teammates' uploads, told apart only once they settle; signalled,
         // each would load the model on every laptop watching the folder.
-        if status.arriving > 0
+        if (status.arriving > 0 || status.arrived_unwatched > 0)
             && self
                 .app
                 .state::<Arc<crate::microsoft_intake::MicrosoftIntake>>()

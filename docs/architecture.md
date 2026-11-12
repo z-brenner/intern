@@ -962,7 +962,15 @@ this machine's only once Microsoft says its account uploaded it, which is not
 asked until the file has settled, and most arrivals are teammates' uploads it
 never reads: signalled, each would load the model on every laptop watching the
 folder. This machine's own uploads there load it when they are claimed, as
-before. Loading the model and restoring its saved instructions
+before. A document that came while Intern was not running is not arriving -
+the first scan sees it with everything already there, and it is claimed at
+the next scan, twenty seconds on - but the watcher reports it as coming
+(`IntakeStatus::arrived_unwatched`) when it was not there at the first look
+and no other machine put it there or claimed it, and since that first scan
+comes before setup has read the stamp, an expectation seen before the model is
+ready is kept and acted on once it is (`SetupManager::expect_document`).
+Until alpha.17 the sign-in load covered that document; without this it waited
+for the load. Loading the model and restoring its saved instructions
 then overlap that wait instead of adding to the document's. It is the start
 the document would make, made early: the plan as it stands with the memory
 free then, under the same `lifecycle` lock and generation, self-tested the
