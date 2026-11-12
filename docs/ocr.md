@@ -49,7 +49,11 @@ write to. ONNX Runtime's telemetry is turned off.
    The detector's boxes give it away - most of the text runs down the
    page - and the search turns it a quarter. Without the classifier the
    page is read upright first and turned only when that reading is
-   unconvincing.
+   unconvincing. A reading at no turn that is plainly the right way up -
+   not on its side, twenty words or more, at a confidence of 50 or more,
+   which no page read the wrong way up reaches (below) - ends the search
+   too: a faded fax or carbon reads like that upright, and a wrong turn,
+   which reads as gibberish, cannot beat it.
 2. **Detection.** The page is shrunk so its longer side is 960 pixels and
    the detector marks every text line on it. Each line becomes the smallest
    rectangle, at any angle, around its blob, grown back to the ink the
@@ -286,6 +290,22 @@ the passes the search would spend:
 
 Both strategies read both documents exactly as well. The classifier is
 6.8 MB, and it ships.
+
+A poor scan read the right way up - a faded invoice photographed on a
+counter, a fax - comes back at 50-74, under the bar, and the search used to
+read it at the three other turns as well; none of those passes could win,
+since a wrong turn reads as gibberish under 50 and the more confident
+reading is kept. A reading at no turn that is plainly upright now ends the
+search (`paddle::orientation::plainly_upright`: not on its side, 20 words
+or more, confidence 50 or more). Over every development document - real1-6,
+InternBench and the generated fixtures, 448 files - it saves 30 of 616
+recognition passes, on 10 documents: eight single-page images go from four
+passes to one (2.2-10.3 s to 0.7-2.6 s each on a 4-core machine), and the
+66- and 35-page scans real4-letter-06 and real4-letter-13 save three each
+(68.3 s to 63.9 s and 58.9 s to 50.8 s, mean of two alternating runs).
+Every one of the 448 reads byte-for-byte as before. The pages still
+searched, on 11 documents (the fixtures' rotated scan and image files among
+them), are not plainly upright.
 
 ### Skew
 
