@@ -1805,26 +1805,41 @@ impl Pipeline {
             .collect())
     }
 
-    pub fn run_until_idle(&self) -> PipelineResult<()> {
+    /// Reads every document waiting, one at a time, and once none is left
+    /// validates again at most one document an earlier release read
+    /// ([`Self::revalidate_waiting`]). `Ok(true)` when it stopped after
+    /// considering such a document, with more perhaps still due: the caller
+    /// runs it again for the next one, and the app's scheduler does so at
+    /// once, after what it does between passes - the idle unload, recovery,
+    /// the provisional re-reads. A sweep run inside one call kept all of
+    /// that waiting for as long as the sweep lasted, each document a fresh
+    /// extraction (about 3 s, up to about 95 s for a long scan), and a model
+    /// loaded for an update's self-test, which none of it uses, stayed loaded
+    /// past its ten idle minutes.
+    pub fn run_until_idle(&self) -> PipelineResult<bool> {
         let _run = self
             .run_lock
             .lock()
             .map_err(|_| PipelineError::new("STATE_CONFLICT", "pipeline lock is unavailable"))?;
         self.apply_pending_ready(ReadyScope::Everything)?;
         while !self.paused.load(Ordering::SeqCst) {
-            // With nothing left to read, a document an earlier release read
-            // is validated again, one at a time: a document that arrives in
-            // the meantime is read first. A failure here costs only that,
-            // never the drain (see `revalidate_next`).
-            if !self.run_next_inner()? && !matches!(self.revalidate_next(), Ok(Some(_))) {
-                break;
+            if !self.run_next_inner()? {
+                // With nothing left to read, a document an earlier release
+                // read is validated again, one a call: a document that
+                // arrives in the meantime is read first. A failure here costs
+                // only that, never the drain (see `revalidate_next`).
+                let revalidated = matches!(self.revalidate_next(), Ok(Some(_)));
+                if revalidated {
+                    self.apply_pending_ready(ReadyScope::ApprovalsOnly)?;
+                }
+                return Ok(revalidated);
             }
             // Between documents, not only before the first: an approval made
             // while the queue was working could not be applied then, and this
             // is the next moment the store will let it through.
             self.apply_pending_ready(ReadyScope::ApprovalsOnly)?;
         }
-        Ok(())
+        Ok(false)
     }
 
     pub fn run_next(&self) -> PipelineResult<()> {

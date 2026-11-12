@@ -960,7 +960,16 @@ last pass put back unread does not count - one the admission guard cannot
 check right now, while Microsoft is out of reach, is put back on every pass
 and is the next to claim each time, and counted, it kept the model loaded for
 as long as that lasted; should a pass read it after all, it costs one load,
-as before. The review
+as before. A pass validates again at most one document an earlier release
+read ([a new release and the documents already
+waiting](#a-new-release-and-the-documents-already-waiting)), and the scheduler
+then begins the next pass at once, so the unload, recovery and the
+provisional re-reads run between those documents too
+(`Pipeline::run_until_idle`). Run within one pass, the sweep after an update -
+each document a fresh extraction, about 3 s and up to about 95 s for a long
+scan, with no model in it - kept the model the update's self-test had loaded
+resident until the last document was done: past its ten idle minutes for a
+sweep of more than about two hundred documents at 3 s each. The review
 panel says which model read a document, and that a provisional reading will
 be read again.
 
@@ -989,12 +998,21 @@ the document would make, made early: the plan as it stands with the memory
 free then, under the same `lifecycle` lock and generation, self-tested the
 first time a model loads; a hold, a cancel or shutdown in the meantime starts
 nothing, or stops what it loaded, as it would for the document. A document
-that reaches the model meanwhile waits for the load and for that self-test:
-an engine is read with only once it has passed, so the document is read by
-the model that passed or, when it fails, planned again onto the other, never
-sent beside the probe to a model not yet shown to read right. It never
-stops a model: one already loaded is only kept from going idle, so it cannot
-interrupt a document being read, and a burst of arrivals starts one load. It
+that reaches the model meanwhile is planned only once the load is over
+(`RuntimeModel::plan_between_launches`). The server's model is in memory by
+the time it answers, before its engine is in the slot where the plan credits
+it. Planned during the load on a 16 GiB Windows runner with a browser's 2 GiB
+held - 11,461 MiB available before it, less the 9B's working set, 5,229 MiB
+or more with `--no-repack`, about 6,200, under the 8,192 the 9B needs - a
+document went to the 4B, which unloaded the 9B the early start had just
+loaded. Any launch is waited for so, a cancel's restart too, and a stored
+reading is validated again only once it is over. The document waits for that
+self-test as well: an engine is read with only once it has passed, so the
+document is read by the model that passed or, when it fails, planned again
+onto the other, never sent beside the probe to a model not yet shown to read
+right. It never stops a model: one already loaded is only kept from going
+idle, so it cannot interrupt a document being read, and a burst of arrivals
+starts one load. It
 starts nothing while the queue would not read what arrives - the model not
 ready, or the queue paused. A file that turns out not to be a document -
 unsupported, or a duplicate - costs that one load, which goes idle and is
