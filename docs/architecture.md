@@ -955,7 +955,11 @@ then overlap that wait instead of adding to the document's. It is the start
 the document would make, made early: the plan as it stands with the memory
 free then, under the same `lifecycle` lock and generation, self-tested the
 first time a model loads; a hold, a cancel or shutdown in the meantime starts
-nothing, or stops what it loaded, as it would for the document. It never
+nothing, or stops what it loaded, as it would for the document. A document
+that reaches the model meanwhile waits for the load and for that self-test:
+an engine is read with only once it has passed, so the document is read by
+the model that passed or, when it fails, planned again onto the other, never
+sent beside the probe to a model not yet shown to read right. It never
 stops a model: one already loaded is only kept from going idle, so it cannot
 interrupt a document being read, and a burst of arrivals starts one load. It
 starts nothing while the queue would not read what arrives - the model not

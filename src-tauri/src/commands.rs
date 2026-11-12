@@ -742,12 +742,18 @@ enum Launch {
     Held,
 }
 
-/// The engine in the slot, the tier it runs, and the generation it was
-/// started in.
+/// The engine in the slot, the tier it runs, the generation it was started
+/// in, and whether it may read a document yet.
 struct RunningEngine {
     engine: Engine,
     tier: ModelTier,
     generation: u64,
+    /// The model has passed its self-test on this server, or did not need
+    /// one: this session or the stamp vouched for it. A model loaded for the
+    /// first time sits in the slot through its self-test, under `lifecycle`,
+    /// and a document reads only with one that has passed
+    /// ([`RuntimeModel::read`]).
+    tested: bool,
     after_read: Option<AfterRead>,
 }
 
@@ -1431,7 +1437,8 @@ impl RuntimeModel {
         }
     }
 
-    /// Launches `tier`'s model into the empty slots.
+    /// Launches `tier`'s model into the empty slots: `tested` when no
+    /// self-test is to follow before a document may read with it.
     ///
     /// Callers hold `lifecycle`, and the guard is asked for to say so. The
     /// slots are checked before anything is launched, so no start can load a
@@ -1442,6 +1449,7 @@ impl RuntimeModel {
         &self,
         _lifecycle: &std::sync::MutexGuard<'_, ()>,
         tier: ModelTier,
+        tested: bool,
     ) -> Result<Launch, CommandError> {
         if self.is_held() {
             return Ok(Launch::Held);
@@ -1489,6 +1497,7 @@ impl RuntimeModel {
             engine: launched.engine,
             tier,
             generation: self.generation.load(Ordering::SeqCst),
+            tested,
             after_read: launched.after_read,
         });
         *self
@@ -1580,7 +1589,7 @@ impl RuntimeModel {
                 self.update_check(tier, |check| check.self_tested = true);
                 return Ok(());
             }
-            match self.start(&lifecycle, tier) {
+            match self.start(&lifecycle, tier, stamped) {
                 Ok(Launch::Held) => return Ok(()),
                 Ok(Launch::Started) => {}
                 Err(error) => {
@@ -1649,9 +1658,18 @@ impl RuntimeModel {
     }
 
     /// Records that `tier`, as `before` says its file was, passed the
-    /// self-test.
+    /// self-test, and lets documents read with the server it passed on.
     fn passed_self_test(&self, tier: ModelTier, before: Option<&VerifiedFile>) {
         self.update_check(tier, |check| check.self_tested = true);
+        if let Some(running) = self
+            .engine
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+            .filter(|running| running.tier == tier)
+        {
+            running.tested = true;
+        }
         if let Some(before) = before {
             self.stamp_tier(tier, before, true);
         }
@@ -1841,7 +1859,9 @@ impl RuntimeModel {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
-            .is_some_and(|running| running.tier == tier && running.generation == asked);
+            .is_some_and(|running| {
+                running.tier == tier && running.generation == asked && running.tested
+            });
         if ready {
             return Ok(());
         }
@@ -1871,7 +1891,7 @@ impl RuntimeModel {
         loop {
             self.stop_runtime().map_err(|_| not_ready())?;
             let vouched = self.check(tier).self_tested || self.stamped(tier) == Some(true);
-            match self.start(lifecycle, tier) {
+            match self.start(lifecycle, tier, vouched) {
                 Ok(Launch::Started) => {}
                 Ok(Launch::Held) => return Err(ReadFailure::Failed(self.overtaken())),
                 Err(error) => {
@@ -1954,7 +1974,10 @@ impl RuntimeModel {
     /// as it is now, onto the tier the plan picks with the memory free now,
     /// self-tested the first time, and set aside if it fails - so a hold, a
     /// cancel or shutdown in the meantime starts nothing, and one that comes
-    /// during the load stops what it loads as it would a document's. It never
+    /// during the load stops what it loads as it would a document's. A
+    /// document that reaches the model meanwhile waits for the load and its
+    /// self-test, and is read only by a model that passed it - this one, or,
+    /// when it fails, the one planned without it. It never
     /// unloads a model: one already loaded is only kept from going idle (the
     /// document reads with it, or swaps it as it would have), and while a
     /// document is being read the slot is never empty. A file that turns out
@@ -2066,10 +2089,20 @@ impl RuntimeModel {
                 // something were wrong with the document. The slot is held
                 // for reading for the whole request, which is what keeps idle
                 // unload away from a model in use.
-                if let Some(running) = slot
-                    .as_ref()
-                    .filter(|running| running.generation == asked && running.tier == tier)
-                {
+                //
+                // And only one that has passed its self-test. A model loaded
+                // for the first time sits in the slot through its self-test,
+                // under `lifecycle`; that was a document's own load until an
+                // early start ([`RuntimeModel::start_early`]) could be under
+                // way as the document arrived. Read beside the probe, the
+                // document was read by a model not yet shown to read right,
+                // its reading could return before the verdict, and a failed
+                // probe stopped the server under it rather than have it
+                // planned onto the other model. It waits for `lifecycle`
+                // below instead.
+                if let Some(running) = slot.as_ref().filter(|running| {
+                    running.generation == asked && running.tier == tier && running.tested
+                }) {
                     let result = running
                         .engine
                         .analyze(source, extension, existing_names)
@@ -2118,7 +2151,13 @@ impl RuntimeModel {
             // Nothing under way, and not this tier: unloaded while idle, the
             // other tier loaded, or never started. A tier this session has
             // verified is started now; one it has not - setup has yet to
-            // check it - is the queue's to put back until setup has.
+            // check it - is the queue's to put back until setup has. One set
+            // aside while this waited - it failed the self-test an early
+            // start ran - leaves the document to be planned again without
+            // it, as its own load's failure would.
+            if !started && self.tier_failure(tier).is_some() {
+                return Err(ReadFailure::Unusable);
+            }
             if started || !self.plannable(tier) {
                 return Err(ReadFailure::Failed(ModelFailure::retryable(
                     "MODEL_NOT_READY",
@@ -2302,7 +2341,7 @@ impl AnalyzerBoundary for RuntimeModel {
         let tier = self.restart_tier();
         self.stop_runtime()
             .map_err(|_| ModelFailure::fatal("MODEL_RECOVERY_FAILED"))?;
-        self.start(&lifecycle, tier)
+        self.start(&lifecycle, tier, self.check(tier).self_tested)
             .map(|_| ())
             .map_err(|_| ModelFailure::fatal("MODEL_RECOVERY_FAILED"))
     }
@@ -2334,7 +2373,7 @@ impl AnalyzerBoundary for RuntimeModel {
         if !self.stop_runtime()? {
             return Ok(());
         }
-        self.start(&lifecycle, tier)
+        self.start(&lifecycle, tier, self.check(tier).self_tested)
             .map(|_| ())
             .map_err(|error| ModelFailure::fatal(error.code))
     }
@@ -8987,6 +9026,9 @@ mod runtime_tests {
         stop_gate: Mutex<Option<Arc<Gate>>>,
         /// When set, a launch waits here until the test opens it.
         launch_gate: Mutex<Option<Arc<Gate>>>,
+        /// When set, every request waits here, counted and before it is
+        /// answered, until the test opens it.
+        reply_gate: Mutex<Option<Arc<Gate>>>,
         /// A tier whose server will not start, as a missing CPU feature or a
         /// quarantined runtime file makes it.
         refuse_launch: Mutex<Option<ModelTier>>,
@@ -9022,6 +9064,7 @@ mod runtime_tests {
                 in_flight: (Mutex::new(false), Condvar::new()),
                 stop_gate: Mutex::new(None),
                 launch_gate: Mutex::new(None),
+                reply_gate: Mutex::new(None),
                 refuse_launch: Mutex::new(None),
                 refused: AtomicUsize::new(0),
                 server_memory: Mutex::new(std::collections::BTreeMap::new()),
@@ -9145,6 +9188,10 @@ mod runtime_tests {
     impl Proposer for FakeProposer {
         fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal> {
             self.rig.proposals.fetch_add(1, Ordering::SeqCst);
+            let gate = self.rig.reply_gate.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                gate.pass();
+            }
             let accurate = *self.rig.accurate_reply.lock().unwrap();
             let reply = match (self.tier, accurate) {
                 _ if self.restored && self.rig.damaged_state.load(Ordering::SeqCst) => Reply::Wrong,
@@ -11751,6 +11798,79 @@ mod runtime_tests {
         let reading = read_by(&document.join().unwrap().unwrap());
         assert_eq!(reading.tier, ModelTier::Accurate);
         assert_eq!(rig.launches(), 1);
+        assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1);
+    }
+
+    /// A document that reaches a model while an early start is still running
+    /// its first self-test waits for the verdict: it is not read beside the
+    /// probe, and a model that passes reads it with nothing more loaded.
+    #[test]
+    fn a_document_waits_for_the_self_test_an_early_start_runs() {
+        let install = Install::new("early-start-probe");
+        let rig = Rig::new();
+        let world = World::new();
+        let runtime = launched_idle(&install, &rig, &world);
+        // The quick model, digest-checked and never yet self-tested.
+        world.prefer(ModelPreference::Fast);
+        let gate = Arc::new(Gate::default());
+        *rig.reply_gate.lock().unwrap() = Some(Arc::clone(&gate));
+
+        let early = runtime.start_early().expect("an early start");
+        gate.wait_reached();
+        let analyzing = Arc::clone(&runtime);
+        let document = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            rig.proposals.load(Ordering::SeqCst),
+            1,
+            "only the self-test asked the model under test"
+        );
+        assert!(!document.is_finished());
+
+        gate.open();
+        early.join().unwrap();
+        let reading = read_by(&document.join().unwrap().unwrap());
+        assert_eq!(reading.tier, ModelTier::Fast);
+        assert_eq!(launched(&rig), [ModelTier::Fast]);
+        assert_eq!(rig.proposals.load(Ordering::SeqCst), 2);
+    }
+
+    /// The same model failing that self-test: the document never reads with
+    /// it, and is planned again onto the model that can read - not handed
+    /// back, and not failed with a server stopped under it.
+    #[test]
+    fn a_document_is_planned_again_when_an_early_start_self_test_fails() {
+        let install = Install::new("early-start-probe-fails");
+        let rig = Rig::new();
+        let world = World::new();
+        let runtime = launched_idle(&install, &rig, &world);
+        world.prefer(ModelPreference::Fast);
+        let gate = Arc::new(Gate::default());
+        *rig.reply_gate.lock().unwrap() = Some(Arc::clone(&gate));
+
+        let early = runtime.start_early().expect("an early start");
+        gate.wait_reached();
+        let analyzing = Arc::clone(&runtime);
+        let document = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(rig.proposals.load(Ordering::SeqCst), 1);
+
+        rig.reply(Reply::Wrong);
+        *rig.accurate_reply.lock().unwrap() = Some(Reply::Calibration);
+        gate.open();
+        early.join().unwrap();
+        let reading = read_by(&document.join().unwrap().unwrap());
+        assert_eq!(reading.tier, ModelTier::Accurate);
+        assert_eq!(
+            runtime.tier_failure(ModelTier::Fast).as_deref(),
+            Some("MODEL_SELF_TEST_FAILED")
+        );
+        assert_eq!(launched(&rig), [ModelTier::Fast, ModelTier::Accurate]);
+        assert_eq!(
+            rig.proposals.load(Ordering::SeqCst),
+            2,
+            "the failed self-test and the document"
+        );
         assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1);
     }
 
