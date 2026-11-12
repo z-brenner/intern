@@ -207,6 +207,10 @@ pub const fn working_set(tier: ModelTier) -> u64 {
 /// `--no-repack` from alpha.17, and its peak resident set less its file is
 /// about 0.7 GiB (`bench/reports/speed-linux-cpu-2026-11-11`), so on Linux
 /// this now credits it about 2 GiB too much (see [`resident_estimate`]).
+/// The 4B runs with `--no-repack` from alpha.18; its peak resident set less
+/// its file is 646-701 MiB (3,260-3,315 MiB less 2,614,
+/// `bench/reports/speed-linux-cpu-2026-11-12`), so on Linux this credits it
+/// about 1.4 GiB too much (2,086 MiB).
 ///
 /// On Windows it is far short. The available physical memory counts the
 /// standby list, where a mapped file's cached pages wait, but not the pages
@@ -309,8 +313,9 @@ pub const fn memory_for_plan(available: u64, loaded: Option<(ModelTier, u64)>) -
 /// GiB Windows runner its working set right after a document from 4,514 MiB
 /// to 3,215 MiB (run 43273956181); time per request fell 8.8% on an AMD EPYC
 /// 7763 with ggml's AVX2 backend and 4% on the same CPU under Windows. Live
-/// on InternBench and the real sets 1-5 it gave as many right names as the
-/// repacked runs, 165 of 291 against 159 and 165.
+/// on InternBench and the real sets 1-4 it gave as many right names as the
+/// repacked runs: on the 287 documents all three runs completed, 165
+/// against 159 and 165; on real5, 16 of 53 against 13.
 pub const fn tier_server_flags(tier: ModelTier) -> &'static [&'static str] {
     match tier {
         ModelTier::Fast => &["--no-repack"],
@@ -341,10 +346,10 @@ pub fn server_options(tier: ModelTier) -> ServerOptions {
 /// - the arguments the server is launched with for the tier
 ///   ([`server_options`], [`LlamaServer::arguments_for`]): the context, the
 ///   threads, the measured flags - `-ub 128` or `512` in place of 256
-///   changed most replies - and the tier's own, such as the accurate model's
-///   `--no-repack`. What varies from one launch to the next and shapes no
-///   reply - the port, the key, where the model file and the slot folder
-///   lie - is left out;
+///   changed most replies - and the tier's own (`--no-repack`, which both
+///   tiers carry from alpha.18, so the two tiers have one identity). What
+///   varies from one launch to the next and shapes no reply - the port, the
+///   key, where the model file and the slot folder lie - is left out;
 /// - the llama.cpp build the release ships ([`pinned_runtime_build`]).
 ///
 /// A stored reply stands in for a fresh one only where this, the request
