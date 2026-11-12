@@ -6,7 +6,7 @@ import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
 import { StatusCell } from './StatusCell';
 import { isUnreadable, itemActions, keptOriginal, withoutReviewPrefix } from '../features/review/actions';
-import { itemFlaggedFields, itemReasonCodes, nameParts, partyEnding, withParty } from '../features/queue/check';
+import { itemFlaggedFields, itemReasonCodes, nameParts, partyGiven, withParty } from '../features/queue/check';
 import type { ReasonField } from '../lib/reasons';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
@@ -230,11 +230,24 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // one: a click puts one in place of the party the name gives - which
   // used to mean retyping fifteen to forty characters - and the caret stays
   // in the name, where Enter files it. The one the name now gives is
-  // pressed.
+  // pressed. The new name goes in as typing would, through the browser's
+  // own editing command, so one Ctrl+Z in the name gives back what the
+  // click replaced. A value set from code empties the field's undo
+  // history, and a party the reviewer had corrected by hand, once a chip
+  // replaced it, could only be typed again. Where the command is missing
+  // or refused (jsdom has none), the value is set from code.
   const partyChoices = item.partyChoices ?? [];
   const partyOffer = { proposed: proposedStem, nameParties: item.nameParties ?? [], choices: partyChoices };
-  const chooseParty = (party: string) => { editStem(withParty(stem, party, partyOffer)); filenameRef.current?.focus(); };
-  const partyInName = partyChoices.length > 0 ? partyEnding(stem, [...partyOffer.nameParties, ...partyChoices]) : undefined;
+  const chooseParty = (party: string) => {
+    const next = withParty(stem, party, partyOffer);
+    const field = filenameRef.current;
+    field?.focus();
+    if (next === stem) return;
+    field?.select();
+    const typed = field !== null && document.activeElement === field && typeof document.execCommand === 'function' && document.execCommand('insertText', false, next);
+    if (!typed) editStem(next);
+  };
+  const partyInName = partyChoices.length > 0 ? partyGiven(stem, partyOffer) : undefined;
   // Enter files the name, as it does in any one-line field; the IME's Enter
   // that ends a composition is left to the IME. A held Enter repeats, and
   // after the first press the caret is in the next item's name: only the

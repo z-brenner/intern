@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkCell, checkText, itemFlaggedFields, itemReasonCodes, nameParts, withParty } from './check';
+import { checkCell, checkText, itemFlaggedFields, itemReasonCodes, nameParts, partyGiven, withParty } from './check';
 import { reasonCodes, shortReason } from '../../lib/reasons';
 import type { QueueItem } from '../../types';
 
@@ -129,5 +129,31 @@ describe('another party put in a name', () => {
     // A name rewritten past the proposed type keeps every word typed.
     expect(withParty('2007-04-24 Petition for Review for City of Victorvile', 'California Energy Commission', application))
       .toBe('2007-04-24 Petition for Review for City of Victorvile - California Energy Commission');
+  });
+
+  it('keeps words typed after the party it replaces', () => {
+    const letter = offer('2012-06-19 Request Letter to U.S. Department of Justice', ['U.S. Department of Justice'], ['Morgan, Lewis & Bockius LLP', 'STARS Alliance LLC']);
+    const once = withParty('2012-06-19 Request Letter to U.S. Department of Justice re Merger', 'Morgan, Lewis & Bockius LLP', letter);
+    expect(once).toBe('2012-06-19 Request Letter to Morgan, Lewis & Bockius LLP re Merger');
+    // After a party an earlier click put in, and with the connecting word changed.
+    expect(withParty(once, 'STARS Alliance LLC', letter)).toBe('2012-06-19 Request Letter to STARS Alliance LLC re Merger');
+    expect(withParty('2012-06-19 Request Letter from U.S. Department of Justice re Merger', 'STARS Alliance LLC', letter))
+      .toBe('2012-06-19 Request Letter from STARS Alliance LLC re Merger');
+    // After the second side of a "between".
+    const notice = offer('2008-01-24 Notice of Voluntary Dismissal between PA Advisors, LLC and WPP Group PLC', ['PA Advisors, LLC', 'WPP Group PLC'], ['Google Inc']);
+    expect(withParty('2008-01-24 Notice of Voluntary Dismissal between PA Advisors, LLC and WPP Group PLC (signed)', 'Google Inc', notice))
+      .toBe('2008-01-24 Notice of Voluntary Dismissal between PA Advisors, LLC and Google Inc (signed)');
+    // A party typed over by hand says nowhere where it ends: it goes, and what follows it.
+    expect(withParty('2012-06-19 Request Letter to US Dept of Justice re Merger', 'STARS Alliance LLC', letter))
+      .toBe('2012-06-19 Request Letter to STARS Alliance LLC');
+  });
+
+  it('reads the party a name gives as withParty does, words typed after it or not', () => {
+    const letter = offer('2012-06-19 Request Letter to U.S. Department of Justice', ['U.S. Department of Justice'], ['Morgan, Lewis & Bockius LLP']);
+    expect(partyGiven('2012-06-19 Request Letter to Morgan, Lewis & Bockius LLP (2)', letter)).toBe('Morgan, Lewis & Bockius LLP');
+    expect(partyGiven('2012-06-19 Request Letter to Morgan, Lewis & Bockius LLP re Merger', letter)).toBe('Morgan, Lewis & Bockius LLP');
+    expect(partyGiven('2012-06-19 Request Letter to U.S. Department of Justice re Merger', letter)).toBe('U.S. Department of Justice');
+    expect(partyGiven('2012-06-19 Request Letter to US Dept of Justice re Merger', letter)).toBeUndefined();
+    expect(partyGiven('2012-06-19 Petition to Morgan, Lewis & Bockius LLP re Merger', letter)).toBeUndefined();
   });
 });
