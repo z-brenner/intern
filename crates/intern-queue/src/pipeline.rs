@@ -834,6 +834,20 @@ impl ProposalRecord {
     pub fn named_parties(&self, extension: &str) -> Vec<String> {
         named_parties(&self.styled_proposal(), extension, &self.filename)
     }
+
+    /// Whether `to` is another party the document names than `from`: a
+    /// decision about who this document is with, made by choosing a party
+    /// in review, and no spelling of `from`.
+    fn names_another_party(&self, from: &str, to: &str) -> bool {
+        let to = HouseRule::key(to);
+        let from = HouseRule::key(from);
+        self.analysis.facts.as_ref().is_some_and(|facts| {
+            facts.parties.iter().any(|party| {
+                let keys = party_keys(&party.name);
+                keys.contains(&to) && !keys.contains(&from)
+            })
+        })
+    }
 }
 
 /// The most parties offered beside a proposed name in review: enough for
@@ -2493,6 +2507,14 @@ impl Pipeline {
         ) else {
             return Ok(());
         };
+        // Another party the document names is not another spelling of the
+        // one the name gave: putting it in the name - one click on the
+        // party choices - decides who this document is with. Learned, it
+        // would put that party in every later name that gives the first,
+        // documents that never mention it included.
+        if lesson.kind == RuleKind::Party && record.names_another_party(&lesson.from, &lesson.to) {
+            return Ok(());
+        }
         let lesson = match record.house_rules.iter().find(|applied| {
             applied.kind == lesson.kind && HouseRule::key(&applied.to) == lesson.from_key()
         }) {
@@ -5474,6 +5496,26 @@ mod party_choice_tests {
         record.copy_of = None;
         record.analysis.facts = None;
         assert!(record.party_choices().is_empty());
+    }
+
+    /// A party the document names besides the one in the name is another
+    /// party, not another spelling of it; a spelling of the party in the
+    /// name is still a spelling.
+    #[test]
+    fn another_party_of_the_document_is_no_spelling_of_the_named_one() {
+        let record = letter(
+            "U.S. Department of Justice",
+            &["U.S. Department of Justice", "STARS Alliance LLC"],
+            vec![
+                party("U.S. Department of Justice", Support::Cited),
+                party("STARS ALLIANCE LLC", Support::Cited),
+            ],
+        );
+        assert!(record.names_another_party("U.S. Department of Justice", "Stars Alliance LLC"));
+        assert!(!record.names_another_party("U.S. Department of Justice", "US Dept of Justice"));
+        assert!(
+            !record.names_another_party("U.S. Department of Justice", "U.S. Department of Justice")
+        );
     }
 }
 

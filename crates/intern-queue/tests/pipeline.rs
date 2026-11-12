@@ -18,7 +18,8 @@ use intern_core::{
 use intern_engine::{
     AnalysisTelemetry, DateRole, DigestBudget, DocumentAnalysis, DocumentSource, Evidence,
     ExtractProgress, ModelProposal, ModelReading, ModelTier, PageOrigin, ParserWarning,
-    PartyRelation, ProposalStatus, SourcePage, distill, engine::finish, fingerprint, validate,
+    PartyRelation, ProposalStatus, SourcePage, Support, ValidatedFacts, ValidatedParty, distill,
+    engine::finish, fingerprint, validate,
 };
 use intern_intake::{
     SharePointDeployment,
@@ -3515,6 +3516,147 @@ fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
         pipeline.learned_rules().unwrap()[0].seen,
         2,
         "approving the spelling Intern applied teaches nothing new"
+    );
+}
+
+/// A model whose readings carry the evidence pipeline's validated facts:
+/// `parties` are every party validation found the document to name.
+struct FactsModel {
+    inner: FakeModel,
+    parties: Vec<&'static str>,
+}
+
+impl AnalyzerBoundary for FactsModel {
+    fn analyze(
+        &self,
+        source: &DocumentSource,
+        extension: &str,
+        existing_names: &[&str],
+    ) -> Result<DocumentAnalysis, ModelFailure> {
+        let mut analysis = self.inner.analyze(source, extension, existing_names)?;
+        analysis.facts = Some(ValidatedFacts {
+            parties: self
+                .parties
+                .iter()
+                .map(|name| ValidatedParty {
+                    name: (*name).into(),
+                    support: Support::Cited,
+                    ..ValidatedParty::default()
+                })
+                .collect(),
+            ..ValidatedFacts::default()
+        });
+        Ok(analysis)
+    }
+}
+
+/// Choosing another party the document names - one click on the party
+/// choices in review - decides who that document is with. Made twice, it
+/// used to be learned as a spelling, and every later name giving the first
+/// party would have given the second, documents that never mention it
+/// included. A respelling of the named party is still learned.
+#[test]
+fn choosing_another_party_of_the_document_teaches_no_spelling() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let filed = temp.path().join("filed");
+    std::fs::create_dir_all(&filed).unwrap();
+    let dates = [
+        ("2024-04-12", "April 12, 2024"),
+        ("2024-05-03", "May 3, 2024"),
+        ("2024-06-07", "June 7, 2024"),
+    ];
+    let worker = Arc::new(FakeWorker::new(
+        dates
+            .iter()
+            .map(|(_, written)| {
+                Ok(parsed(&format!(
+                    "Employment Agreement signed {written} by John Smith and Acme Corporation, \
+                     placed by Beacon Staffing LLC."
+                )))
+            })
+            .collect(),
+    ));
+    let model = Arc::new(FactsModel {
+        inner: FakeModel::new(
+            dates
+                .iter()
+                .map(|(iso, written)| Ok(dated_proposal(iso, written)))
+                .collect(),
+        ),
+        parties: vec!["John Smith", "Acme Corporation", "Beacon Staffing LLC"],
+    });
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            destination: filed.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        model,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap();
+    let queued = pipeline
+        .enqueue_files(&[
+            source(&inbox, "a.pdf"),
+            source(&inbox, "b.pdf"),
+            source(&inbox, "c.pdf"),
+        ])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let first = record_of(&pipeline, queued[0]);
+    assert_eq!(
+        first.filename,
+        "2024-04-12 Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+    assert_eq!(first.party_choices(), vec!["Beacon Staffing LLC"]);
+    assert_eq!(
+        first.named_parties("pdf"),
+        vec!["John Smith", "Acme Corporation"]
+    );
+
+    for (index, (date, _)) in dates.iter().take(2).enumerate() {
+        pipeline
+            .approve(
+                queued[index],
+                &format!(
+                    "{date} Employment Agreement between John Smith and Beacon Staffing LLC.pdf"
+                ),
+                "Employment agreement between John Smith and Beacon Staffing LLC.",
+            )
+            .unwrap();
+    }
+    assert!(
+        pipeline.learned_rules().unwrap().is_empty(),
+        "another party is not a spelling"
+    );
+    assert_eq!(
+        record_of(&pipeline, queued[2]).filename,
+        "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+
+    pipeline
+        .approve(
+            queued[2],
+            "2024-06-07 Employment Agreement between John Smith and Acme.pdf",
+            "Employment agreement between John Smith and Acme Corporation.",
+        )
+        .unwrap();
+    let rules = pipeline.learned_rules().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        (rules[0].from.as_str(), rules[0].to.as_str()),
+        ("Acme Corporation", "Acme"),
+        "a respelling of the named party still teaches"
     );
 }
 
