@@ -385,12 +385,28 @@ fn runtime_identity_of(reply_settings: &str, arguments: &[String], build: &str) 
 /// The id of the llama.cpp runtime among the release's pinned downloads.
 const RUNTIME_ASSET_ID: &str = "llama.cpp-upstream";
 
-/// The llama.cpp runtime this release ships, as its pinned downloads name it
-/// (`src-tauri/resources/runtime-assets.json`): the build's version and the
-/// SHA-256 of the archive its server is installed from, `b11946:8a70...`.
-/// The release build adds entries of its own to that file before compiling,
+/// The llama.cpp runtime the Linux package ships: ggml-org's Ubuntu x86-64
+/// archive of the build, as `scripts/fetch-linux-assets.sh` pins it
+/// (`LLAMA_UPSTREAM_RELEASE`, `LLAMA_UPSTREAM_SHA256`) and stages it into
+/// the package. Its version and SHA-256, as [`pinned_runtime_build`] gives
+/// them; the test `the_linux_runtime_build_is_the_one_its_package_stages`
+/// holds it to the script.
+const LINUX_RUNTIME_BUILD: &str =
+    "b11946:9e44e1a59e971f0de3fbf74fa46355ab48fed7bb51c1c16b56a96c355947f8dd";
+
+/// The llama.cpp runtime this release ships for the platform it is built
+/// for: the build's version and the SHA-256 of the archive its server is
+/// installed from there. On Linux that is the Ubuntu archive
+/// `scripts/fetch-linux-assets.sh` stages ([`LINUX_RUNTIME_BUILD`],
+/// `b11946:9e44...`). Elsewhere - Windows, the one other package - it is
+/// the Windows archive the release's pinned downloads name
+/// (`src-tauri/resources/runtime-assets.json`, `b11946:8a70...`); the
+/// release build adds entries of its own to that file before compiling,
 /// and leaves this one as it is. `None` when the file names none.
 pub fn pinned_runtime_build() -> Option<&'static str> {
+    if cfg!(target_os = "linux") {
+        return Some(LINUX_RUNTIME_BUILD);
+    }
     static BUILD: OnceLock<Option<String>> = OnceLock::new();
     BUILD
         .get_or_init(|| {
@@ -1321,14 +1337,19 @@ mod tests {
     /// launch argument - another micro-batch, a tier's own flag - and the
     /// llama.cpp build. The two tiers launch with the same flags since the
     /// 4B took `--no-repack` too, so they share one runtime; a reading's
-    /// model file (`model_sha256`) and its tier tell them apart. The
-    /// build is read from the release's pinned downloads, whatever else the
-    /// release build adds to them, and none is named by a file that pins
-    /// none.
+    /// model file (`model_sha256`) and its tier tell them apart. Off Linux
+    /// the build is read from the release's pinned downloads, whatever else
+    /// the release build adds to them, and none is named by a file that
+    /// pins none.
     #[test]
     fn a_runtime_identity_moves_with_whatever_shapes_a_reply() {
         let build = pinned_runtime_build().expect("the release pins a llama.cpp build");
-        assert!(build.starts_with("b11946:8a702bb0"), "{build}");
+        let archive = if cfg!(target_os = "linux") {
+            "b11946:9e44e1a5"
+        } else {
+            "b11946:8a702bb0"
+        };
+        assert!(build.starts_with(archive), "{build}");
         let accurate = runtime_identity(ModelTier::Accurate).unwrap();
         assert_eq!(runtime_identity(ModelTier::Accurate).unwrap(), accurate);
         assert_eq!(runtime_identity(ModelTier::Fast).unwrap(), accurate);
@@ -1377,6 +1398,46 @@ mod tests {
             None
         );
         assert_eq!(runtime_build_in("not json"), None);
+    }
+
+    /// The build a Linux reading names is the archive the Linux package
+    /// stages, as `scripts/fetch-linux-assets.sh` pins it, and the same
+    /// llama.cpp version as the Windows archive the release's pinned
+    /// downloads name; each platform's runtime identity names its own.
+    #[test]
+    fn the_linux_runtime_build_is_the_one_its_package_stages() {
+        let script = include_str!("../../../scripts/fetch-linux-assets.sh");
+        let pinned = |name: &str| {
+            script
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(name)?.strip_prefix('='))
+                .map(|value| value.trim().trim_matches('"'))
+                .unwrap_or_else(|| panic!("fetch-linux-assets.sh pins no {name}"))
+        };
+        assert_eq!(
+            LINUX_RUNTIME_BUILD,
+            format!(
+                "{}:{}",
+                pinned("LLAMA_UPSTREAM_RELEASE"),
+                pinned("LLAMA_UPSTREAM_SHA256")
+            ),
+            "LINUX_RUNTIME_BUILD names the archive fetch-linux-assets.sh pins: move them together"
+        );
+        let windows = runtime_build_in(include_str!(
+            "../../../src-tauri/resources/runtime-assets.json"
+        ))
+        .expect("the release pins a Windows llama.cpp build");
+        assert_eq!(
+            LINUX_RUNTIME_BUILD.split(':').next(),
+            windows.split(':').next()
+        );
+        assert_ne!(LINUX_RUNTIME_BUILD, windows);
+        let expected = if cfg!(target_os = "linux") {
+            LINUX_RUNTIME_BUILD
+        } else {
+            windows.as_str()
+        };
+        assert_eq!(pinned_runtime_build(), Some(expected));
     }
 
     #[test]

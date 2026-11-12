@@ -1582,12 +1582,13 @@ pins for the model file that answered (`model_sha256`), and the identity of
 the runtime that ran it (`runtime_sha256`, `tiers::runtime_identity`): the
 reply settings every request carries - greedy sampling, the reply limit, the
 prompt cache, the template's thinking switch - the server's launch arguments
-for the tier, the llama.cpp build the release pins in `runtime-assets.json`,
-and the version of how the client reads a reply (see below). The same request
-to the same file can be answered differently under another reply limit,
-micro-batch or build. After an update each waiting document is validated again
-from its stored reply, with no model call, when all three still hold
-(`Pipeline::revalidate_waiting`).
+for the tier, the llama.cpp build the release pins for the platform (the
+Windows archive in `runtime-assets.json`, the Linux one in
+`scripts/fetch-linux-assets.sh`), and the version of how the client reads a
+reply (see below). The same request to the same file can be answered
+differently under another reply limit, micro-batch or build. After an update
+each waiting document is validated again from its stored reply, with no model
+call, when all three still hold (`Pipeline::revalidate_waiting`).
 
 The queue does it when it has nothing to read, one document at a time, so a
 document that arrives meanwhile is read first, and considers each document
