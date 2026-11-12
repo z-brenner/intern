@@ -835,20 +835,37 @@ impl ProposalRecord {
         named_parties(&self.styled_proposal(), extension, &self.filename)
     }
 
-    /// Whether `to` is another party the document names than `from`: a
-    /// decision about who this document is with, made by choosing a party
-    /// in review, and no spelling of `from`. `from` is the document's word,
-    /// after any rule that respelled it is traced back.
-    fn names_another_party(&self, from: &str, to: &str) -> bool {
-        let to = HouseRule::key(to);
-        let from = HouseRule::key(from);
-        self.analysis.facts.as_ref().is_some_and(|facts| {
-            facts.parties.iter().any(|party| {
-                let keys = party_keys(&party.name);
-                keys.contains(&to) && !keys.contains(&from)
-            })
+    /// Whether the edit `lesson` was read from puts in the name a party the
+    /// reading found in the document that the words it replaced did not
+    /// give: a decision about who this document is with - choosing another
+    /// party in review, or adding one to a name that gave none - and no
+    /// spelling of those words. `lesson.from` is the document's word, after
+    /// any rule that respelled it is traced back.
+    ///
+    /// A party counts in either spelling (see [`party_keys`]), as a run of
+    /// whole words anywhere in the new spelling, so a type rewritten as
+    /// "Requester Invoice - Sam Brownell" names Sam Brownell as surely as a
+    /// party clause does.
+    fn names_another_party(&self, lesson: &HouseRule) -> bool {
+        let to = HouseRule::key(&lesson.to);
+        let from = lesson.from_key();
+        let found = self
+            .analysis
+            .facts
+            .iter()
+            .flat_map(|facts| facts.parties.iter().map(|party| party.name.as_str()))
+            .chain(self.analysis.proposal.parties.iter().map(String::as_str));
+        found.map(party_keys).any(|keys| {
+            keys.iter().any(|key| holds_words(&to, key))
+                && !keys.iter().any(|key| holds_words(&from, key))
         })
     }
+}
+
+/// Whether the key `spelling` holds the key `words` as a run of whole
+/// words: "acme corporation" holds "acme", and "acmes" holds nothing.
+fn holds_words(spelling: &str, words: &str) -> bool {
+    !words.is_empty() && format!(" {spelling} ").contains(&format!(" {words} "))
 }
 
 /// The most parties offered beside a proposed name in review: enough for
@@ -2516,14 +2533,12 @@ impl Pipeline {
         };
         if HouseRule::key(&lesson.to) == lesson.from_key() {
             self.repository.forget_rule_for(lesson.kind, &lesson.from)?;
-        } else if lesson.kind == RuleKind::Party
-            && record.names_another_party(&lesson.from, &lesson.to)
-        {
-            // Another party the document names is no spelling of the one
-            // the name gave: putting it in the name - one click on the
-            // party choices - decides who this document is with. Learned,
-            // it would put that party in every later name giving the
-            // first, documents that never mention it included.
+        } else if record.names_another_party(&lesson) {
+            // Another party the document names is no spelling of the words
+            // it took the place of: putting it in the name - one click on
+            // the party choices - decides who this document is with.
+            // Learned, it would put that party in every later name giving
+            // those words, documents that never mention it included.
             return Ok(());
         } else if lesson.is_meaningful() {
             self.repository.learn(&lesson)?;
@@ -5352,8 +5367,8 @@ mod date_gate_tests {
 #[cfg(test)]
 mod party_choice_tests {
     use intern_engine::{
-        Evidence, ModelFacts, ModelProposal, PartyFact, PartyRelation, Support, ValidatedFacts,
-        ValidatedParty, ValidatedProposal, compose_filename,
+        Evidence, HouseRule, ModelFacts, ModelProposal, PartyFact, PartyRelation, RuleKind,
+        Support, ValidatedFacts, ValidatedParty, ValidatedProposal, compose_filename,
     };
 
     use super::{CopyOf, MAX_PARTY_CHOICES, ProposalRecord};
@@ -5501,8 +5516,9 @@ mod party_choice_tests {
     }
 
     /// A party the document names besides the one in the name is another
-    /// party, not another spelling of it; a spelling of the party in the
-    /// name is still a spelling.
+    /// party, not another spelling of it, and so is one written into the
+    /// type of a name that gave none; a spelling of the party in the name,
+    /// or of the type, is still a spelling.
     #[test]
     fn another_party_of_the_document_is_no_spelling_of_the_named_one() {
         let record = letter(
@@ -5513,11 +5529,28 @@ mod party_choice_tests {
                 party("STARS ALLIANCE LLC", Support::Cited),
             ],
         );
-        assert!(record.names_another_party("U.S. Department of Justice", "Stars Alliance LLC"));
-        assert!(!record.names_another_party("U.S. Department of Justice", "US Dept of Justice"));
-        assert!(
-            !record.names_another_party("U.S. Department of Justice", "U.S. Department of Justice")
-        );
+        let party_edit = |to: &str| {
+            record.names_another_party(&HouseRule::new(
+                RuleKind::Party,
+                "U.S. Department of Justice",
+                to,
+            ))
+        };
+        assert!(party_edit("Stars Alliance LLC"));
+        assert!(party_edit(
+            "U.S. Department of Justice and Stars Alliance LLC"
+        ));
+        assert!(!party_edit("US Dept of Justice"));
+        assert!(!party_edit("U.S. Department of Justice"));
+
+        let type_edit = |to: &str| {
+            record.names_another_party(&HouseRule::new(RuleKind::DocumentType, "Letter", to))
+        };
+        assert!(type_edit("Letter - Stars Alliance LLC"));
+        assert!(type_edit("STARS Alliance LLC Letter"));
+        assert!(!type_edit("Letter of Inquiry"));
+        // A party's name inside a longer word is no party.
+        assert!(!type_edit("Letter re Stars Alliance LLCs"));
     }
 }
 

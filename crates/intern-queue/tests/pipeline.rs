@@ -3683,6 +3683,103 @@ fn choosing_another_party_of_the_document_teaches_no_spelling() {
     );
 }
 
+/// A party put in a name that gave none - one click on the party choices,
+/// which writes it after " - " - is read as a new type, since the name has
+/// no party clause to hold it. Made twice, it used to become a rule, and
+/// every later document of that type was named with that party, ready ones
+/// filed without review. A respelling of the type is still learned.
+#[test]
+fn a_party_put_in_a_name_that_gave_none_teaches_no_type() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let partyless = |iso: &str, written: &str| ModelProposal {
+        parties: Vec::new(),
+        party_relation: PartyRelation::None,
+        evidence: Evidence {
+            parties: Vec::new(),
+            ..dated_proposal(iso, written).evidence
+        },
+        ..dated_proposal(iso, written)
+    };
+    let dates = [
+        ("2024-04-12", "April 12, 2024"),
+        ("2024-05-03", "May 3, 2024"),
+        ("2024-06-07", "June 7, 2024"),
+        ("2024-07-01", "July 1, 2024"),
+    ];
+    let (pipeline, _) = reading_pipeline(
+        temp.path(),
+        dates
+            .iter()
+            .map(|(_, written)| placed_agreement(written))
+            .collect(),
+        vec![
+            partyless(dates[0].0, dates[0].1),
+            partyless(dates[1].0, dates[1].1),
+            partyless(dates[2].0, dates[2].1),
+            dated_proposal(dates[3].0, dates[3].1),
+        ],
+        &PLACED_PARTIES,
+        DestinationLayout::Flat,
+    );
+    let queued = pipeline
+        .enqueue_files(&[
+            source(&inbox, "a.pdf"),
+            source(&inbox, "b.pdf"),
+            source(&inbox, "c.pdf"),
+        ])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let first = record_of(&pipeline, queued[0]);
+    assert_eq!(first.filename, "2024-04-12 Employment Agreement.pdf");
+    assert_eq!(first.party_choices(), PLACED_PARTIES);
+    assert!(first.named_parties("pdf").is_empty());
+
+    for (index, (date, _)) in dates.iter().take(2).enumerate() {
+        pipeline
+            .approve(
+                queued[index],
+                &format!("{date} Employment Agreement - Beacon Staffing LLC.pdf"),
+                "Employment agreement placed by Beacon Staffing LLC.",
+            )
+            .unwrap();
+    }
+    assert!(
+        pipeline.learned_rules().unwrap().is_empty(),
+        "a party is not a type"
+    );
+    let later = pipeline
+        .enqueue_files(&[source(&inbox, "d.pdf")])
+        .unwrap()
+        .pop()
+        .unwrap()
+        .id;
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(
+        record_of(&pipeline, later).filename,
+        "2024-07-01 Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+
+    pipeline
+        .approve(
+            queued[2],
+            "2024-06-07 Employment Contract.pdf",
+            "Employment contract.",
+        )
+        .unwrap();
+    let rules = pipeline.learned_rules().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        (rules[0].from.as_str(), rules[0].to.as_str()),
+        ("Employment Agreement", "Employment Contract"),
+        "a respelling of the type still teaches"
+    );
+}
+
 /// The reviewer's name is the reviewer's. A second identical respelling makes
 /// the spelling Intern's own and every waiting document is recomposed under
 /// it - but not the one being approved, whose name a person has just typed:
