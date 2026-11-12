@@ -15,7 +15,9 @@ use image::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::layout::{NativePage, PageLayout, PageRoute, RouteSignals, measure_signals, route_page};
+use crate::layout::router::text_route;
+use crate::layout::router::thresholds::GARBAGE_LAYER;
+use crate::layout::{NativePage, PageLayout, PageRoute, RouteSignals, measure_signals};
 use crate::limits::{
     MAX_DOCUMENT_CHARS, MAX_DOCUMENT_LAYOUT_PARTS, MAX_EXTRACTION_DURATION, MAX_PAGE_CHARS,
     MAX_PAGE_LAYOUT_PARTS, MAX_VISION_LONG_EDGE, MIN_OCR_DPI, RENDER_DPI, ResourceLimits,
@@ -281,6 +283,14 @@ pub struct OcrResult {
     /// it does not, and then `text` is all there is.
     #[serde(default)]
     pub lines: Vec<OcrLine>,
+    /// The page has nothing on it to read: OCR read nothing, and the page
+    /// carries no marks either ([`page_is_blank`]) - the back of a sheet a
+    /// scanner kept, a separator. OCR is in no doubt about such a page. A
+    /// page OCR read nothing on that does carry marks - too faint or too
+    /// rough for it to find a line on - is not blank but unread. The worker
+    /// decides this from the page it rendered; no engine says it.
+    #[serde(default)]
+    pub blank: bool,
 }
 
 /// One line of an OCR reading: what it says, where it sits, and how sure
@@ -303,6 +313,7 @@ impl OcrResult {
             mean_confidence,
             rotation_degrees: 0,
             lines: Vec::new(),
+            blank: false,
         }
     }
 
@@ -314,6 +325,20 @@ impl OcrResult {
     pub fn with_lines(mut self, lines: Vec<OcrLine>) -> Self {
         self.lines = lines;
         self
+    }
+
+    /// Whether the page has nothing on it to read (see
+    /// [`OcrResult::blank`]).
+    pub fn with_blank(mut self, blank: bool) -> Self {
+        self.blank = blank;
+        self
+    }
+
+    /// Whether this reading leaves its page in doubt: read, but under
+    /// [`CONFIDENT_READING`]. A blank page is in no doubt - there is nothing
+    /// on it to misread - though it reads at confidence 0.
+    pub fn is_unsure(&self) -> bool {
+        !self.blank && self.mean_confidence < CONFIDENT_READING
     }
 }
 
@@ -668,8 +693,9 @@ enum PagePlan {
         /// Tenths of a point per rendered pixel.
         scale: f64,
     },
-    /// A text layer that is a bad prior OCR, read again. The fresh reading
-    /// replaces it only if it is better.
+    /// A text layer that is somebody else's OCR, read again: it reads badly,
+    /// or would not read well as it is. The fresh reading replaces it only
+    /// if it is better.
     Reread {
         inspection: PdfPageInspection,
         signals: RouteSignals,
@@ -712,7 +738,7 @@ fn ends_the_document(error: &ExtractionError) -> bool {
 
 /// Reads a PDF.
 ///
-/// Every page is routed ([`crate::layout::route_page`]) on what inspection
+/// Every page is routed ([`crate::layout::router::route_page_at`]) on what inspection
 /// measured. Pages read from their text are finished in the loop. Pages
 /// that need OCR are rendered one at a time - PDFium is not thread-safe, and
 /// the backend that inspected the document is the one that renders it -
@@ -769,6 +795,7 @@ where
             cancel.report_progress("reading", page_index, Some(page_count));
             match plan_page(
                 inspection,
+                page_count,
                 pdf,
                 path,
                 limits,
@@ -848,6 +875,7 @@ fn halted(cancel: &CancellationToken, started: Instant, limits: &ResourceLimits)
 #[allow(clippy::too_many_arguments)]
 fn plan_page<O: OcrBackend + Sync + ?Sized>(
     mut inspection: PdfPageInspection,
+    page_count: usize,
     pdf: &dyn PdfBackend,
     path: &Path,
     limits: &ResourceLimits,
@@ -872,7 +900,8 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
         |timings| &mut timings.analysis_micros,
         || (page_needs_ocr(&inspection), signals_of(&inspection)),
     );
-    let route = route_page(&signals, needs_ocr);
+    let key_page = crate::layout::router::is_key_page(page_index, page_count);
+    let route = crate::layout::router::route_page_at(&signals, needs_ocr, key_page);
 
     if needs_ocr {
         // This page has no text worth keeping, so it has to be rendered to be
@@ -999,6 +1028,10 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
         }
     }
 
+    // The page is read as its text, so it takes the route its text does -
+    // a page that wanted OCR and could not have it included - and its
+    // characters are read for that route, not the one it wanted.
+    let route = native_route(route, &signals);
     // Counted with the pages read as their text before it, a page past the
     // document's characters is cut on the way out whatever the scans among
     // them read, so it is not read for its geometry: no layout is built
@@ -1014,7 +1047,6 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
         |timings| &mut timings.analysis_micros,
         || read_runs(&mut inspection, route, pdf, path, cancel),
     )?;
-    let route = native_route(route, &signals);
     let stop = || halted(cancel, started, limits);
     let page = cancel.timed(
         |timings| &mut timings.analysis_micros,
@@ -1086,14 +1118,10 @@ fn display_width(inspection: &PdfPageInspection) -> f64 {
 fn native_route(route: PageRoute, signals: &RouteSignals) -> PageRoute {
     match route {
         PageRoute::Fast | PageRoute::Layout => route,
-        PageRoute::Ocr | PageRoute::OcrRegions => route_page(
-            &RouteSignals {
-                image_region: 0,
-                garbage: 0,
-                ..*signals
-            },
-            false,
-        ),
+        PageRoute::Ocr | PageRoute::OcrRegions => text_route(&RouteSignals {
+            image_region: 0,
+            ..*signals
+        }),
     }
 }
 
@@ -1219,13 +1247,17 @@ impl NativeRead {
     }
 }
 
-/// Whether a fresh OCR reading of a page whose text layer looked like bad
-/// OCR is better than that layer: confident, or with fewer of the errors
-/// that sent the page to be read again.
+/// Whether a fresh OCR reading of a page whose text layer is somebody
+/// else's OCR is better than that layer: confident, or, for a layer read
+/// again for its OCR errors, with fewer of them. A layer read again only
+/// because it would not read well as it is (see
+/// [`crate::layout::router::route_page_at`]) shows no more errors than a
+/// fresh reading may, so only a confident reading replaces it.
 fn reread_is_better(reading: &OcrResult, signals: &RouteSignals) -> bool {
     !reading.text.trim().is_empty()
         && (reading.mean_confidence >= CONFIDENT_READING
-            || crate::layout::router::garbage_score(&reading.text) < signals.garbage)
+            || (signals.garbage >= GARBAGE_LAYER
+                && crate::layout::router::garbage_score(&reading.text) < signals.garbage))
 }
 
 /// Puts the pages back in order and makes every decision that depends on
@@ -1294,7 +1326,7 @@ fn assemble(
                 )
             }
             PagePlan::Reread {
-                inspection,
+                mut inspection,
                 signals,
                 vision,
             } => {
@@ -1323,17 +1355,67 @@ fn assemble(
                             page_vision,
                         )
                     }
-                    fresh => {
-                        // The layer stays, but a reading that came back
-                        // unsure says the page is hard to read either way:
-                        // the image it was rendered with goes with the
-                        // layer's text, as it would with a scan's.
+                    fresh if signals.garbage >= GARBAGE_LAYER => {
+                        // The layer stays, read the way its text routes it.
+                        // But a reading that came back unsure says the page
+                        // is hard to read either way: the image it was
+                        // rendered with goes with the layer's text, as it
+                        // would with a scan's.
                         let reread_vision = fresh.and_then(|(_, _, page_vision)| page_vision);
                         let route = native_route(PageRoute::Ocr, &signals);
+                        runs(&mut inspection, route)?;
                         (
                             native_page(page_number, inspection, signals, route, stop, &mut unheld)
                                 .finish(&mut budget),
                             vision.or(reread_vision),
+                        )
+                    }
+                    fresh if text_route(&signals) == PageRoute::OcrRegions => {
+                        // A layer read again only because its scan would
+                        // have been read as a region stays as it would have
+                        // read: with OCR's reading of the page merged in as
+                        // that region's, and as sure as that reading - so an
+                        // unsure one still raises its warning below.
+                        runs(&mut inspection, PageRoute::OcrRegions)?;
+                        let merged = fresh.and_then(|(reading, size, _)| {
+                            let scale = display_width(&inspection) / f64::from(size.0.max(1));
+                            crate::layout::regions_page(
+                                page_number,
+                                &inspection,
+                                signals,
+                                &[(reading, [0, 0, size.0, size.1])],
+                                scale,
+                                stop,
+                            )
+                        });
+                        let page = merged
+                            .map(|page| counted(page, &mut budget))
+                            .unwrap_or_else(|| {
+                                let route = native_route(PageRoute::OcrRegions, &signals);
+                                native_page(
+                                    page_number,
+                                    inspection,
+                                    signals,
+                                    route,
+                                    stop,
+                                    &mut unheld,
+                                )
+                                .finish(&mut budget)
+                            });
+                        (page, vision)
+                    }
+                    _ => {
+                        // A layer read again only because its words would
+                        // be rebuilt into a layout stays as that layout,
+                        // with no more image than it would have had: it was
+                        // never read by OCR before, and an unsure reading
+                        // says nothing about its words.
+                        let route = native_route(PageRoute::Ocr, &signals);
+                        runs(&mut inspection, route)?;
+                        (
+                            native_page(page_number, inspection, signals, route, stop, &mut unheld)
+                                .finish(&mut budget),
+                            vision,
                         )
                     }
                 }
@@ -1746,6 +1828,11 @@ fn read_job<O: OcrBackend + ?Sized>(
         }
         readings.push(reading);
     }
+    if job.whole_page
+        && let (Some(Ok(reading)), Some(piece)) = (readings.first_mut(), job.pieces.first())
+    {
+        mark_blank(reading, &piece.image);
+    }
     let vision = match (job.whole_page, readings.first()) {
         (true, Some(Ok(reading))) if reading.mean_confidence < CONFIDENT_READING => {
             let rotation = reading.rotation_degrees;
@@ -1763,6 +1850,50 @@ fn read_job<O: OcrBackend + ?Sized>(
         readings,
         sizes,
         vision,
+    }
+}
+
+/// How far from a page's paper, in levels of gray, a pixel has to be to be
+/// a mark on it. Under it is the grain of a flat page as it renders; a
+/// faded carbon's strokes, blurred, are still 10-50 levels from the paper.
+pub const MARK_LEVELS: u8 = 6;
+
+/// One pixel in this many may be a mark on a page that is still blank: a
+/// speck, a few millimetres of dust at 300 DPI, not a word.
+pub const BLANK_PAGE_PIXELS: u64 = 10_000;
+
+/// Whether a rendered page carries nothing at all: all but one pixel in
+/// [`BLANK_PAGE_PIXELS`] lies within [`MARK_LEVELS`] of its paper, the
+/// commonest gray on it.
+///
+/// OCR reads nothing on a blank page and reports confidence 0, which is
+/// also what it reports for a page it could not find a line on: a faded
+/// carbon or a fax of a fax that a person can still read. Only the first
+/// is in no doubt, so a page OCR read nothing on is blank only if it looks
+/// it: the back of a sheet saved flat, a separator. A page whose paper has
+/// grain, shadow or bleed-through is not, and stays as unsure as before.
+pub fn page_is_blank(image: &DynamicImage) -> bool {
+    let gray = image.to_luma8();
+    let mut shades = [0_u64; 256];
+    for shade in gray.as_raw() {
+        shades[usize::from(*shade)] += 1;
+    }
+    let pixels = shades.iter().sum::<u64>();
+    let paper = (0..=u8::MAX)
+        .max_by_key(|shade| shades[usize::from(*shade)])
+        .unwrap_or(u8::MAX);
+    let marks = (0..=u8::MAX)
+        .filter(|shade| shade.abs_diff(paper) >= MARK_LEVELS)
+        .map(|shade| shades[usize::from(shade)])
+        .sum::<u64>();
+    marks.saturating_mul(BLANK_PAGE_PIXELS) <= pixels
+}
+
+/// Marks a reading of a whole page as blank if OCR read nothing on it and
+/// the page carries nothing ([`page_is_blank`]).
+fn mark_blank(reading: &mut OcrResult, page: &DynamicImage) {
+    if reading.text.trim().is_empty() && page_is_blank(page) {
+        reading.blank = true;
     }
 }
 
@@ -2227,8 +2358,9 @@ pub fn extract_image(
     let page_count = 1 + frames.directories.len();
     let rendered = RenderedPage::new(0, image);
     cancel.report_progress("ocr", 0, Some(page_count));
-    let result = recognize_timed(ocr, &rendered, cancel)?;
-    let mut low_confidence = result.mean_confidence < CONFIDENT_READING;
+    let mut result = recognize_timed(ocr, &rendered, cancel)?;
+    mark_blank(&mut result, &rendered.image);
+    let mut low_confidence = result.is_unsure();
     let optional_image = Some(cancel.timed(
         |timings| &mut timings.vision_micros,
         || page_image(0, &rendered.image, result.rotation_degrees),
@@ -2269,8 +2401,9 @@ pub fn extract_image(
             break;
         };
         let rendered = RenderedPage::new(index + 1, image);
-        let result = recognize_timed(ocr, &rendered, cancel)?;
-        low_confidence |= result.mean_confidence < CONFIDENT_READING;
+        let mut result = recognize_timed(ocr, &rendered, cancel)?;
+        mark_blank(&mut result, &rendered.image);
+        low_confidence |= result.is_unsure();
         let size = rendered.image.dimensions();
         drop(rendered);
         let page = cancel.timed(

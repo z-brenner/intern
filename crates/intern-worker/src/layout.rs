@@ -616,7 +616,9 @@ pub fn ocr_page(
         page_number,
         text,
         source: PageSource::Ocr,
-        ocr_confidence: Some(reading.mean_confidence),
+        // A blank page has no OCR'd text, so no confidence: it is in no
+        // doubt, and raises no warning.
+        ocr_confidence: (!reading.blank).then_some(reading.mean_confidence),
         vision_escalated: false,
         layout: (!dense).then_some(layout),
     }
