@@ -4024,6 +4024,70 @@ fn choosing_another_party_of_the_document_teaches_no_spelling() {
     );
 }
 
+/// Another party the document names, typed as people write it - without
+/// the "LLC" of the choice offered - is the same decision about who the
+/// document is with as the click. Only the full name was refused, so two
+/// such approvals taught "Acme Corporation" -> "Beacon Staffing", and every
+/// later name giving Acme gave Beacon Staffing instead, ready documents
+/// filed under it without review.
+#[test]
+fn another_party_typed_in_a_short_form_teaches_no_spelling() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let dates = [
+        ("2024-04-12", "April 12, 2024"),
+        ("2024-05-03", "May 3, 2024"),
+        ("2024-06-07", "June 7, 2024"),
+    ];
+    let (pipeline, _) = reading_pipeline(
+        temp.path(),
+        dates
+            .iter()
+            .map(|(_, written)| placed_agreement(written))
+            .collect(),
+        dates
+            .iter()
+            .map(|(iso, written)| dated_proposal(iso, written))
+            .collect(),
+        &PLACED_PARTIES,
+        DestinationLayout::Flat,
+    );
+    let queued = pipeline
+        .enqueue_files(&[
+            source(&inbox, "a.pdf"),
+            source(&inbox, "b.pdf"),
+            source(&inbox, "c.pdf"),
+        ])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(
+        record_of(&pipeline, queued[0]).party_choices(),
+        vec!["Beacon Staffing LLC"]
+    );
+
+    for (index, (date, _)) in dates.iter().take(2).enumerate() {
+        pipeline
+            .approve(
+                queued[index],
+                &format!("{date} Employment Agreement between John Smith and Beacon Staffing.pdf"),
+                "Employment agreement between John Smith and Beacon Staffing.",
+            )
+            .unwrap();
+    }
+    assert!(
+        pipeline.learned_rules().unwrap().is_empty(),
+        "another party, typed short, is not a spelling"
+    );
+    assert_eq!(
+        record_of(&pipeline, queued[2]).filename,
+        "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+}
+
 /// A party put in a name that gave none - one click on the party choices,
 /// which writes it after " - " - is read as a new type, since the name has
 /// no party clause to hold it. Made twice, it used to become a rule, and
