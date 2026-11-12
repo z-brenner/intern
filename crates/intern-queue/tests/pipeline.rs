@@ -3363,24 +3363,59 @@ fn dated_text(written: &str) -> DocumentSource {
 }
 
 fn learning_pipeline(temp: &Path, dates: &[(&str, &str)]) -> (Pipeline, Arc<RecordingFiling>) {
+    learning_pipeline_reading(temp, dates, &[])
+}
+
+/// [`learning_pipeline`], with readings that carry the evidence pipeline's
+/// validated facts naming `parties` - the default pipeline's readings - or,
+/// given none, no facts at all, as the digest pipeline's.
+fn learning_pipeline_reading(
+    temp: &Path,
+    dates: &[(&str, &str)],
+    parties: &[&'static str],
+) -> (Pipeline, Arc<RecordingFiling>) {
+    reading_pipeline(
+        temp,
+        dates
+            .iter()
+            .map(|(_, written)| dated_text(written))
+            .collect(),
+        dates
+            .iter()
+            .map(|(iso, written)| dated_proposal(iso, written))
+            .collect(),
+        parties,
+        DestinationLayout::Flat,
+    )
+}
+
+/// A pipeline that reads `texts` in turn, answers each with the next of
+/// `replies`, and files into `filed` under `temp` in `layout`. Its readings
+/// carry validated facts naming `parties`, or none when there are none.
+fn reading_pipeline(
+    temp: &Path,
+    texts: Vec<DocumentSource>,
+    replies: Vec<ModelProposal>,
+    parties: &[&'static str],
+    layout: DestinationLayout,
+) -> (Pipeline, Arc<RecordingFiling>) {
     let filed = temp.join("filed");
     std::fs::create_dir_all(&filed).unwrap();
-    let worker = Arc::new(FakeWorker::new(
-        dates
-            .iter()
-            .map(|(_, written)| Ok(dated_text(written)))
-            .collect(),
-    ));
-    let model = Arc::new(FakeModel::new(
-        dates
-            .iter()
-            .map(|(iso, written)| Ok(dated_proposal(iso, written)))
-            .collect(),
-    ));
+    let worker = Arc::new(FakeWorker::new(texts.into_iter().map(Ok).collect()));
+    let replies = FakeModel::new(replies.into_iter().map(Ok).collect());
+    let model: Arc<dyn AnalyzerBoundary> = if parties.is_empty() {
+        Arc::new(replies)
+    } else {
+        Arc::new(FactsModel {
+            inner: replies,
+            parties: parties.to_vec(),
+        })
+    };
     let settings = SettingsStore::new(temp.join("settings.json"));
     settings
         .save(&AppSettings {
             destination: filed.to_string_lossy().into_owned(),
+            destination_layout: layout,
             ..AppSettings::default()
         })
         .unwrap();
@@ -3550,6 +3585,18 @@ impl AnalyzerBoundary for FactsModel {
     }
 }
 
+/// An employment agreement signed `written` that also names the agency that
+/// placed the employee: a third party the document names.
+fn placed_agreement(written: &str) -> DocumentSource {
+    parsed(&format!(
+        "Employment Agreement signed {written} by John Smith and Acme Corporation, \
+         placed by Beacon Staffing LLC."
+    ))
+}
+
+/// Every party validation finds in [`placed_agreement`].
+const PLACED_PARTIES: [&str; 3] = ["John Smith", "Acme Corporation", "Beacon Staffing LLC"];
+
 /// Choosing another party the document names - one click on the party
 /// choices in review - decides who that document is with. Made twice, it
 /// used to be learned as a spelling, and every later name giving the first
@@ -3560,48 +3607,24 @@ fn choosing_another_party_of_the_document_teaches_no_spelling() {
     let temp = tempdir().unwrap();
     let inbox = temp.path().join("inbox");
     std::fs::create_dir_all(&inbox).unwrap();
-    let filed = temp.path().join("filed");
-    std::fs::create_dir_all(&filed).unwrap();
     let dates = [
         ("2024-04-12", "April 12, 2024"),
         ("2024-05-03", "May 3, 2024"),
         ("2024-06-07", "June 7, 2024"),
     ];
-    let worker = Arc::new(FakeWorker::new(
+    let (pipeline, _) = reading_pipeline(
+        temp.path(),
         dates
             .iter()
-            .map(|(_, written)| {
-                Ok(parsed(&format!(
-                    "Employment Agreement signed {written} by John Smith and Acme Corporation, \
-                     placed by Beacon Staffing LLC."
-                )))
-            })
+            .map(|(_, written)| placed_agreement(written))
             .collect(),
-    ));
-    let model = Arc::new(FactsModel {
-        inner: FakeModel::new(
-            dates
-                .iter()
-                .map(|(iso, written)| Ok(dated_proposal(iso, written)))
-                .collect(),
-        ),
-        parties: vec!["John Smith", "Acme Corporation", "Beacon Staffing LLC"],
-    });
-    let settings = SettingsStore::new(temp.path().join("settings.json"));
-    settings
-        .save(&AppSettings {
-            destination: filed.to_string_lossy().into_owned(),
-            ..AppSettings::default()
-        })
-        .unwrap();
-    let pipeline = Pipeline::with_local_files(
-        temp.path().join("queue.sqlite3"),
-        worker,
-        model,
-        Arc::new(RecordingEvents::default()),
-        settings,
-    )
-    .unwrap();
+        dates
+            .iter()
+            .map(|(iso, written)| dated_proposal(iso, written))
+            .collect(),
+        &PLACED_PARTIES,
+        DestinationLayout::Flat,
+    );
     let queued = pipeline
         .enqueue_files(&[
             source(&inbox, "a.pdf"),
@@ -3815,18 +3838,29 @@ fn a_spelling_typed_in_capitals_is_proposed_as_typed() {
 
 /// A spelling Intern applied that the reviewer undoes is retracted; one the
 /// reviewer changes to a third form starts over from the document's word.
+/// The same with or without validated facts behind the reading: the
+/// document's own word restored is a party the facts name, and once
+/// counted as another party than the rule's spelling, which left the rule
+/// in force.
 #[test]
 fn respelling_interns_own_spelling_in_review_changes_the_rule_not_the_document() {
+    for facts in [&[][..], &["John Smith", "Acme Corporation"][..]] {
+        respelling_interns_own_spelling(facts);
+    }
+}
+
+fn respelling_interns_own_spelling(facts: &[&'static str]) {
     let temp = tempdir().unwrap();
     let inbox = temp.path().join("inbox");
     std::fs::create_dir_all(&inbox).unwrap();
-    let (pipeline, _) = learning_pipeline(
+    let (pipeline, _) = learning_pipeline_reading(
         temp.path(),
         &[
             ("2024-04-12", "April 12, 2024"),
             ("2024-05-03", "May 3, 2024"),
             ("2024-06-07", "June 7, 2024"),
         ],
+        facts,
     );
     let first = source(&inbox, "a.pdf");
     let second = source(&inbox, "b.pdf");
@@ -3890,7 +3924,10 @@ fn respelling_interns_own_spelling_in_review_changes_the_rule_not_the_document()
             "A sentence about the agreement.",
         )
         .unwrap();
-    assert!(pipeline.learned_rules().unwrap().is_empty());
+    assert!(
+        pipeline.learned_rules().unwrap().is_empty(),
+        "the document's word restored retracts the rule (facts: {facts:?})"
+    );
 }
 
 /// A statement of work the firm signed with a supplier, dated `written`.

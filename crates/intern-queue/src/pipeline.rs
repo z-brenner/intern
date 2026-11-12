@@ -837,7 +837,8 @@ impl ProposalRecord {
 
     /// Whether `to` is another party the document names than `from`: a
     /// decision about who this document is with, made by choosing a party
-    /// in review, and no spelling of `from`.
+    /// in review, and no spelling of `from`. `from` is the document's word,
+    /// after any rule that respelled it is traced back.
     fn names_another_party(&self, from: &str, to: &str) -> bool {
         let to = HouseRule::key(to);
         let from = HouseRule::key(from);
@@ -2507,14 +2508,6 @@ impl Pipeline {
         ) else {
             return Ok(());
         };
-        // Another party the document names is not another spelling of the
-        // one the name gave: putting it in the name - one click on the
-        // party choices - decides who this document is with. Learned, it
-        // would put that party in every later name that gives the first,
-        // documents that never mention it included.
-        if lesson.kind == RuleKind::Party && record.names_another_party(&lesson.from, &lesson.to) {
-            return Ok(());
-        }
         let lesson = match record.house_rules.iter().find(|applied| {
             applied.kind == lesson.kind && HouseRule::key(&applied.to) == lesson.from_key()
         }) {
@@ -2523,6 +2516,15 @@ impl Pipeline {
         };
         if HouseRule::key(&lesson.to) == lesson.from_key() {
             self.repository.forget_rule_for(lesson.kind, &lesson.from)?;
+        } else if lesson.kind == RuleKind::Party
+            && record.names_another_party(&lesson.from, &lesson.to)
+        {
+            // Another party the document names is no spelling of the one
+            // the name gave: putting it in the name - one click on the
+            // party choices - decides who this document is with. Learned,
+            // it would put that party in every later name giving the
+            // first, documents that never mention it included.
+            return Ok(());
         } else if lesson.is_meaningful() {
             self.repository.learn(&lesson)?;
         }
