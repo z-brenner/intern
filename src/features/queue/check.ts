@@ -109,31 +109,79 @@ export function nameParts(name: string, flagged: readonly ReasonField[]): NamePa
   return parts;
 }
 
+/** What a party chosen in review is put in a name with. */
+export interface PartyOffer {
+  /** The stem Intern proposed, before any edit: the name `nameParties` were read from. */
+  proposed: string;
+  /**
+   * The parties the proposed name gives, as it writes them - read by the
+   * backend with the grammar that composed it, so a type holding "for" is
+   * never taken for a party - and none when it gives none.
+   */
+  nameParties: readonly string[];
+  /** The parties offered, one of which an earlier click may have put in the name. */
+  choices: readonly string[];
+}
+
+/** A name's own collision suffix, " (2)": no part of what a reviewer names, and given again by the rename if still needed. */
+const COLLISION = / \(\d+\)$/;
+/** The connecting word a single party follows, as Intern composes it (PartyRelation, and "-" for none), at the start of what follows a type. */
+const SINGLE_RELATION = /^ (with|from|for|to|-) /;
+/** The same word at the end of the words before a party. */
+const RELATION_BEFORE_PARTY = / (with|from|for|to|-) $/;
+
 /**
- * A name's stem with `party` in place of the party it ends with: the
- * reviewer's one-click fix for a name that gives the wrong party.
+ * A name's stem with `party` in place of the party it gives: the reviewer's
+ * one-click fix for a name that gives the wrong party.
  *
- * `known` are parties the stem may end with, as the name writes them: the
- * proposed name's own (the backend reads them with the grammar that composed
- * it, so a type holding "for" is never taken for a party) and the choices
- * offered, one of which an earlier click put there. The longest the stem ends
- * with is replaced, so of "between A and B" only the second side, B, and
- * "between" keeps both its sides. A name ending in none of them - its party
- * typed over by hand - has the run after its connecting word replaced, the
- * one the Check line marks; a name with no party at all gets one after
- * " - ", as Intern names a party it gives no relation to.
+ * The party replaced is the longest of the known ones the stem ends with:
+ * the proposed name's own, or a choice an earlier click put there - so of
+ * "between A and B" only B, and "between" keeps both its sides. Otherwise
+ * the proposed name says where its party starts: after its type and the
+ * connecting word that follows it, which the reviewer may have changed ("to"
+ * for "from"), or - in a name that gave none - after its whole type, where
+ * the party is added after " - ", as Intern names a party it gives no
+ * relation to. A name rewritten past what the proposed one says keeps every
+ * word the reviewer typed, with the party added after " - ". No type word is
+ * taken for a party. A collision suffix is left off: the rename gives the
+ * new name its own if it still needs one.
  */
-export function withParty(stem: string, party: string, known: readonly string[]): string {
-  const ending = partyEnding(stem, [...known, party]);
-  if (ending) return `${stem.slice(0, stem.length - ending.length)}${party}`;
-  const date = LEADING_DATE.exec(stem)?.[0] ?? '';
-  const relation = date ? RELATION.exec(stem.slice(date.length)) : null;
-  if (relation) return `${stem.slice(0, date.length + relation.index + relation[0].length)}${party}`;
-  const kept = stem.trimEnd();
+export function withParty(stem: string, party: string, offer: PartyOffer): string {
+  const body = withoutCollision(stem);
+  const ending = partyEnding(body, [...offer.nameParties, ...offer.choices, party]);
+  if (ending) return `${body.slice(0, body.length - ending.length)}${party}`;
+  const date = LEADING_DATE.exec(body)?.[0] ?? '';
+  const rest = body.slice(date.length).trimStart();
+  const dated = (words: string) => (date ? `${date} ${words}` : words);
+  const proposed = undated(withoutCollision(offer.proposed));
+  const given = partyEnding(proposed, offer.nameParties);
+  // The words before the proposed party - "Letter to ", "Notice between A
+  // and " - or, with none, the whole name.
+  const lead = given ? proposed.slice(0, proposed.length - given.length) : offer.nameParties.length ? '' : proposed;
+  const single = given ? RELATION_BEFORE_PARTY.exec(lead) : null;
+  const type = given ? (single ? lead.slice(0, single.index) : '') : lead;
+  if (type) {
+    if (rest === type) return dated(`${type} - ${party}`);
+    const relation = rest.startsWith(type) ? SINGLE_RELATION.exec(rest.slice(type.length)) : null;
+    if (relation) return dated(`${type}${relation[0]}${party}`);
+  } else if (given && rest.startsWith(lead)) {
+    return dated(`${lead}${party}`);
+  }
+  const kept = body.trimEnd();
   return kept ? `${kept} - ${party}` : party;
 }
 
-/** The longest of `known` a name's stem ends with, as its last words: the party it now gives, of those. */
+/** A stem without its leading date. */
+function undated(stem: string): string {
+  return stem.slice(LEADING_DATE.exec(stem)?.[0].length ?? 0).trimStart();
+}
+
+function withoutCollision(stem: string): string {
+  return stem.trimEnd().replace(COLLISION, '').trimEnd();
+}
+
+/** The longest of `known` a name's stem ends with, as its last words, collision suffix aside: the party it now gives, of those. */
 export function partyEnding(stem: string, known: readonly string[]): string | undefined {
-  return [...known].filter(Boolean).sort((a, b) => b.length - a.length).find((run) => stem.endsWith(` ${run}`));
+  const body = withoutCollision(stem);
+  return [...known].filter(Boolean).sort((a, b) => b.length - a.length).find((run) => body.endsWith(` ${run}`));
 }

@@ -227,14 +227,14 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   const fileDate = !dated ? item.fileModifiedDate : undefined;
   const chooseDate = putDate;
   // The other parties the document names, when the name gives the wrong
-  // one: a click puts one in place of the party the name ends with - which
+  // one: a click puts one in place of the party the name gives - which
   // used to mean retyping fifteen to forty characters - and the caret stays
   // in the name, where Enter files it. The one the name now gives is
   // pressed.
   const partyChoices = item.partyChoices ?? [];
-  const knownParties = [...(item.nameParties ?? []), ...partyChoices];
-  const chooseParty = (party: string) => { editStem(withParty(stem, party, knownParties)); filenameRef.current?.focus(); };
-  const partyInName = partyChoices.length > 0 ? partyEnding(stem, knownParties) : undefined;
+  const partyOffer = { proposed: proposedStem, nameParties: item.nameParties ?? [], choices: partyChoices };
+  const chooseParty = (party: string) => { editStem(withParty(stem, party, partyOffer)); filenameRef.current?.focus(); };
+  const partyInName = partyChoices.length > 0 ? partyEnding(stem, [...partyOffer.nameParties, ...partyChoices]) : undefined;
   // Enter files the name, as it does in any one-line field; the IME's Enter
   // that ends a composition is left to the IME. A held Enter repeats, and
   // after the first press the caret is in the next item's name: only the

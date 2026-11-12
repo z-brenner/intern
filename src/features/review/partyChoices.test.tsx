@@ -92,6 +92,26 @@ describe('other parties the document names', () => {
     expect(screen.getByLabelText('Filename')).toHaveValue('Application for Certification for California Energy Commission');
   });
 
+  it('adds a party after the whole type of a name that gave none, and leaves a collision suffix off', async () => {
+    const notice: QueueItem = {
+      ...letter,
+      id: 'notice',
+      originalFilename: 'Scan 0205.pdf',
+      // The party was left out for length, and the type holds "with".
+      proposedFilename: '2022-03-17 Notice in Accordance with Section 57C of the Railways Act 1993 (2).pdf',
+      partyChoices: ['Department for Transport'],
+      nameParties: undefined,
+    };
+    render(<App bridge={createInMemoryBridge({ items: [notice] })} />);
+    await selectRow(await screen.findByRole('row', { name: /Scan 0205.pdf/i }));
+
+    fireEvent.click(within(choicesGroup()).getByRole('button', { name: 'Department for Transport' }));
+    const filename = screen.getByLabelText('Filename');
+    expect(filename).toHaveValue('2022-03-17 Notice in Accordance with Section 57C of the Railways Act 1993 - Department for Transport');
+    expect(filename).toHaveFocus();
+    expect(within(choicesGroup()).getByRole('button', { name: 'Department for Transport' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('shows nothing when the document names no other party', async () => {
     const { partyChoices: _choices, nameParties: _named, ...plain } = letter;
     render(<App bridge={createInMemoryBridge({ items: [plain] })} />);
