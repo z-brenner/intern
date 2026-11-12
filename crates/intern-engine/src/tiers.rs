@@ -331,11 +331,13 @@ pub fn server_options(tier: ModelTier) -> ServerOptions {
 }
 
 /// The identity of everything besides the request and the model file that
-/// shapes the reply `tier`'s local server gives
-/// ([`crate::domain::AnalysisTelemetry::runtime_sha256`]):
+/// shapes the reply `tier`'s local server gives, and of how a reading is
+/// taken from that reply ([`crate::domain::AnalysisTelemetry::runtime_sha256`]):
 /// - the reply settings every request carries - sampler, reply limit,
-///   prompt cache, template switches
-///   ([`crate::client::reply_settings_identity`]);
+///   prompt cache, template switches - and the version of how the client
+///   reads a reply into the facts and token figures a reading stores
+///   ([`crate::client::reply_settings_identity`],
+///   [`crate::client::REPLY_READING_VERSION`]);
 /// - the arguments the server is launched with for the tier
 ///   ([`server_options`], [`LlamaServer::arguments_for`]): the context, the
 ///   threads, the measured flags - `-ub 128` or `512` in place of 256

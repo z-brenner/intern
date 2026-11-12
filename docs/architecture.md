@@ -1582,11 +1582,12 @@ pins for the model file that answered (`model_sha256`), and the identity of
 the runtime that ran it (`runtime_sha256`, `tiers::runtime_identity`): the
 reply settings every request carries - greedy sampling, the reply limit, the
 prompt cache, the template's thinking switch - the server's launch arguments
-for the tier, and the llama.cpp build the release pins in
-`runtime-assets.json`. The same request to the same file can be answered
-differently under another reply limit, micro-batch or build. After an update
-each waiting document is validated again from its stored reply, with no model
-call, when all three still hold (`Pipeline::revalidate_waiting`).
+for the tier, the llama.cpp build the release pins in `runtime-assets.json`,
+and the version of how the client reads a reply (see below). The same request
+to the same file can be answered differently under another reply limit,
+micro-batch or build. After an update each waiting document is validated again
+from its stored reply, with no model call, when all three still hold
+(`Pipeline::revalidate_waiting`).
 
 The queue does it when it has nothing to read, one document at a time, so a
 document that arrives meanwhile is read first, and considers each document
@@ -1607,18 +1608,21 @@ that tier's engine would build for the text must then be byte for byte the
 stored one (`Engine::revalidate`, which prepares the document exactly as
 `analyze` does), and in the cascade a quick reading the accurate model would
 read again is declined, since no reply of the accurate model's is stored for
-it. The stored reply - rebuilt from its facts as the model gave it, since
-validation completed the stored copy - then goes through the same validation
-and composition as a fresh one, in about a tenth of a second. A new record
-replaces the old only when it says something different, in a transaction that
-checks the row and the record are still exactly what was read, with its
-revision moved so the window drops its draft; a document that becomes ready
-is filed when automatic renaming is on, as after any reading. Readings stored
-before alpha.18 recorded none of the three identities and are left alone.
-Replayed over every development recording (989 readings of both models), a
-reading validated again under the same rules is identical to itself, and
-under the 0.8 gate in place of none it is identical to a fresh replay under
-0.8 in all 989, including the 269 whose readiness the gate moved.
+it. The stored reply - rebuilt from its facts and token figures as the release
+that read it took them off the wire, since validation completed the stored
+copy and the reply itself is not kept (`client::REPLY_READING_VERSION` is part
+of the runtime identity, and moves with any change to how a reply is read) -
+then goes through the same validation and composition as a fresh one, in
+about a tenth of a second. A new record replaces the old only when it says
+something different, in a transaction that checks the row and the record are
+still exactly what was read, with its revision moved so the window drops its
+draft; a document that becomes ready is filed when automatic renaming is on,
+as after any reading. Readings stored before alpha.18 recorded none of the
+three identities and are left alone. Replayed over every development recording
+(989 readings of both models), a reading validated again under the same rules
+is identical to itself, and under the 0.8 gate in place of none it is identical
+to a fresh replay under 0.8 in all 989, including the 269 whose readiness the
+gate moved.
 
 ## Measuring it
 
