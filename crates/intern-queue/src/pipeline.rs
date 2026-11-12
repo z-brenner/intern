@@ -963,12 +963,29 @@ impl ProposalRecord {
     /// Invoice - Sam Brownell" names Sam Brownell as surely as a party clause
     /// does, or the new spelling inside the party, so "Beacon Staffing"
     /// typed for "Beacon Staffing LLC" names it as surely as the choice
-    /// offered does. A party that holds the replaced words, or is held by
-    /// them, is the one being respelled, and never counts. So a respelling
-    /// into words another party's name shares - "Acme" for "Acme
-    /// Corporation" in a document that also names Acme Holdings LLC - is not
-    /// learned either, while another party typed with a suffix the document
-    /// does not give - "Beacon Staffing Inc" - still is.
+    /// offered does. So a respelling into words another party's name
+    /// shares - "Acme" for "Acme Corporation" in a document that also names
+    /// Acme Holdings LLC - is not learned either, while another party typed
+    /// with a suffix the document does not give - "Beacon Staffing Inc" -
+    /// still is.
+    ///
+    /// The party being respelled never counts: the one the replaced words
+    /// are, and one whose name holds them or that they hold, as the
+    /// reading's other spelling of that party - "Acme Corporation Inc"
+    /// beside a name's "Acme Corporation" - would. Such a one counts after
+    /// all when the new spelling crosses over to it: holds the replaced
+    /// words, when the party holds them, or is a run of them, when they hold
+    /// the party. A parent and its subsidiary, an estate and the person, a
+    /// city's department and the city are each two parties, one name holding
+    /// the other's, so choosing the other of such a pair, as offered or
+    /// typed short, teaches nothing in either direction; "Acme" for "Acme
+    /// Corporation" beside its parent "Acme Corporation Holdings LLC" does
+    /// not cross over to the parent, and is learned. The price falls on a
+    /// party the reading spells one way in the name and another, a suffix
+    /// longer or shorter, in its facts: a new spelling over to the facts'
+    /// one - "Beacon Staffing" for a name's "Beacon Staffing LLC" when the
+    /// facts give "Beacon Staffing", or the reverse - is not learned either,
+    /// which costs the reviewer only that edit made again.
     fn names_another_party(&self, lesson: &HouseRule) -> bool {
         let to = HouseRule::key(&lesson.to);
         let from = lesson.from_key();
@@ -979,9 +996,11 @@ impl ProposalRecord {
             .flat_map(|facts| facts.parties.iter().map(|party| party.name.as_str()))
             .chain(self.analysis.proposal.parties.iter().map(String::as_str));
         found.map(party_keys).any(|keys| {
-            let respelled = keys
-                .iter()
-                .any(|key| holds_words(&from, key) || holds_words(key, &from));
+            let respelled = keys.iter().any(|key| {
+                *key == from
+                    || (holds_words(&from, key) && !holds_words(&from, &to))
+                    || (holds_words(key, &from) && !holds_words(&to, &from))
+            });
             !respelled
                 && keys
                     .iter()
@@ -6274,6 +6293,68 @@ mod party_choice_tests {
         assert!(!type_edit("Letter of Inquiry"));
         // A party's name inside a longer word is no party.
         assert!(!type_edit("Letter re Stars Alliance LLCs"));
+    }
+
+    /// A party whose name holds the named party's - a parent beside its
+    /// subsidiary, an estate beside the person, a city's department beside
+    /// the city - is a party of its own, and so is the named party's
+    /// subsidiary, person or city when the name gives the longer one:
+    /// choosing the other, as offered or typed short, is no spelling either
+    /// way. A respelling of the named party that does not cross over to the
+    /// other is still a spelling.
+    #[test]
+    fn a_party_whose_name_holds_the_named_ones_or_is_held_by_it_is_another_party() {
+        let edit = |named: &str, other: &str, to: &str| {
+            letter(
+                named,
+                &[named, other],
+                vec![party(named, Support::Cited), party(other, Support::Cited)],
+            )
+            .names_another_party(&HouseRule::new(RuleKind::Party, named, to))
+        };
+        let parent = "Acme Corporation Holdings LLC";
+        let estate = "Estate of John Smith";
+        let department = "City of Boston Law Department";
+
+        // The longer party chosen for the shorter, as offered or typed short.
+        assert!(edit("Acme Corporation", parent, parent));
+        assert!(edit(
+            "Acme Corporation",
+            parent,
+            "Acme Corporation Holdings"
+        ));
+        assert!(edit("John Smith", estate, estate));
+        assert!(edit("City of Boston", department, department));
+        // The shorter party chosen for the longer.
+        assert!(edit(parent, "Acme Corporation", "Acme Corporation"));
+        assert!(edit(estate, "John Smith", "John Smith"));
+        assert!(edit(department, "City of Boston", "City of Boston"));
+
+        // Respellings of the named party, which cross over to neither.
+        assert!(!edit("Acme Corporation", parent, "Acme Corp"));
+        assert!(!edit("Acme Corporation", parent, "Acme"));
+        assert!(!edit("John Smith", estate, "J. Smith"));
+        assert!(!edit(parent, "Acme Corporation", "Acme Corp Holdings"));
+        assert!(!edit(department, "City of Boston", "Boston Law Department"));
+
+        // The reading's other spelling of the named party, in its facts, is
+        // that party: a respelling that does not cross over to it is still
+        // a spelling, and one over to it is the price, not learned.
+        let spelled = |named: &str, facts: &str, to: &str| {
+            letter(named, &[facts], vec![party(facts, Support::Cited)])
+                .names_another_party(&HouseRule::new(RuleKind::Party, named, to))
+        };
+        assert!(!spelled("Acme Corporation", "Acme Corporation Inc", "Acme"));
+        assert!(spelled(
+            "Beacon Staffing LLC",
+            "Beacon Staffing",
+            "Beacon Staffing"
+        ));
+        assert!(spelled(
+            "Beacon Staffing",
+            "Beacon Staffing LLC",
+            "Beacon Staffing LLC"
+        ));
     }
 }
 
