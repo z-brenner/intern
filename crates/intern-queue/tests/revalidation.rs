@@ -409,9 +409,9 @@ fn reasons(pipeline: &Pipeline, id: i64) -> Vec<String> {
 /// A document read under one release waits in review or ready; the next
 /// release adds a review gate. Launched, it reads what has arrived first,
 /// then validates the waiting document again from its stored reply: the
-/// gate sends it to review, its revision moves so the window shows the new
-/// record, and no model is asked. Each document is validated once per
-/// release, and never by the release that read it.
+/// gate sends it to review under the same name, and no model is asked. Each
+/// document is validated once per release, and never by the release that
+/// read it.
 #[test]
 fn a_waiting_reading_is_validated_again_under_a_new_release_without_the_model() {
     let rig = Rig::new(None, false);
@@ -447,7 +447,7 @@ fn a_waiting_reading_is_validated_again_under_a_new_release_without_the_model() 
     let again = item(&next, waiting);
     assert_eq!(again.status, QueueStatus::NeedsReview);
     let again = again.proposal.unwrap();
-    assert_eq!(again.revision, 2);
+    assert_eq!(again.revision, read.revision, "only its readiness moved");
     assert_eq!(again.filename, read.filename);
     assert!(
         again
@@ -467,6 +467,58 @@ fn a_waiting_reading_is_validated_again_under_a_new_release_without_the_model() 
     assert_eq!(next.revalidate_waiting().unwrap(), 0);
     next.run_until_idle().unwrap();
     assert_eq!(rig.runtime.revalidations.load(Ordering::SeqCst), 1);
+}
+
+/// The window keeps a reviewer's draft of a name and its sentence for as
+/// long as the proposal's revision stays, as for a Settings recompose. A
+/// document validated again whose readiness and reasons alone changed keeps
+/// its revision, so what the reviewer typed into it survives; one whose name
+/// or sentence the new release composes differently moves it, and the
+/// window shows the new proposal.
+#[test]
+fn only_a_new_name_or_sentence_moves_the_revision_of_a_reading_validated_again() {
+    let rig = Rig::new(None, false);
+    let first = rig.release("0.1.0-alpha.18");
+    let ids = ["gated.pdf", "renamed.pdf", "redescribed.pdf"].map(|name| rig.add(&first, name));
+    let [_, renamed, redescribed] = ids;
+    first.run_until_idle().unwrap();
+    let read = ids.map(|id| item(&first, id).proposal.unwrap());
+    drop(first);
+    // As an earlier release composed them.
+    rig.edit_stored(renamed, |record| {
+        record["filename"] = Value::from("2024-04-12 Agreement.pdf");
+    });
+    rig.edit_stored(redescribed, |record| {
+        record["description"] = Value::from("An agreement.");
+    });
+
+    *rig.runtime.gate.lock().unwrap() = Some(STRICTER);
+    let next = rig.release("0.1.0-alpha.19");
+    assert_eq!(next.revalidate_waiting().unwrap(), 3);
+
+    let again = ids.map(|id| item(&next, id));
+    for (validated, before) in again.iter().zip(&read) {
+        assert_eq!(validated.status, QueueStatus::NeedsReview);
+        let record = validated.proposal.as_ref().unwrap();
+        assert!(
+            record
+                .reasons
+                .iter()
+                .any(|reason| reason == "LOW_CONFIDENCE"),
+            "{:?}",
+            record.reasons
+        );
+        assert_eq!(record.filename, before.filename);
+        assert_eq!(record.description, before.description);
+    }
+    let revisions = again.map(|validated| validated.proposal.unwrap().revision);
+    assert_eq!(
+        revisions,
+        [read[0].revision, read[1].revision + 1, read[2].revision + 1],
+        "only a new name or sentence moves it"
+    );
+    assert_eq!(read.map(|record| record.revision), [1, 1, 1]);
+    assert_eq!(rig.runtime.readings.load(Ordering::SeqCst), 3, "no model");
 }
 
 /// A stored reply stands in for a fresh reading only for the same request

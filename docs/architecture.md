@@ -1565,8 +1565,9 @@ just before extraction, and the document's own path, so a file that changed
 never finds one. It is the document's path, not the one read: a document
 admitted on Microsoft's proof is read from a private snapshot made afresh for
 every claim, whose bytes are proven to be the ones the hash names. Canceling
-or removing a document drops its entry, and what a reading of it still under
-way would have kept; shutdown drops them all, and nothing is written to disk.
+or removing a document - one at a time, or with Discard waiting or Clear
+history - drops its entry, and what a reading of it still under way would have
+kept; shutdown drops them all, and nothing is written to disk.
 A remembered extraction proves nothing about the reader now, so it clears no
 doubt over a reader crash.
 
@@ -1611,10 +1612,11 @@ it. The stored reply - rebuilt from its facts as the model gave it, since
 validation completed the stored copy - then goes through the same validation
 and composition as a fresh one, in about a tenth of a second. A new record
 replaces the old only when it says something different, in a transaction that
-checks the row and the record are still exactly what was read, with its
-revision moved so the window drops its draft; a document that becomes ready
-is filed when automatic renaming is on, as after any reading. Readings stored
-before alpha.18 recorded none of the three identities and are left alone.
+checks the row and the record are still exactly what was read. Its revision
+moves only when its name or sentence changed, so a reviewer's draft survives a
+change of readiness or reasons alone; a document that becomes ready is filed
+when automatic renaming is on, as after any reading. Readings stored before
+alpha.18 recorded none of the three identities and are left alone.
 Replayed over every development recording (989 readings of both models), a
 reading validated again under the same rules is identical to itself, and
 under the 0.8 gate in place of none it is identical to a fresh replay under

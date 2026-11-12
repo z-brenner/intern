@@ -952,10 +952,18 @@ impl ProposalRecord {
     /// spelling of those words. `lesson.from` is the document's word, after
     /// any rule that respelled it is traced back.
     ///
-    /// A party counts in either spelling (see [`party_keys`]), as a run of
-    /// whole words anywhere in the new spelling, so a type rewritten as
-    /// "Requester Invoice - Sam Brownell" names Sam Brownell as surely as a
-    /// party clause does.
+    /// A party counts in either spelling (see [`party_keys`]) when it or the
+    /// new spelling holds the other as a run of whole words: the party
+    /// anywhere in the new spelling, so a type rewritten as "Requester
+    /// Invoice - Sam Brownell" names Sam Brownell as surely as a party clause
+    /// does, or the new spelling inside the party, so "Beacon Staffing"
+    /// typed for "Beacon Staffing LLC" names it as surely as the choice
+    /// offered does. A party that holds the replaced words, or is held by
+    /// them, is the one being respelled, and never counts. So a respelling
+    /// into words another party's name shares - "Acme" for "Acme
+    /// Corporation" in a document that also names Acme Holdings LLC - is not
+    /// learned either, while another party typed with a suffix the document
+    /// does not give - "Beacon Staffing Inc" - still is.
     fn names_another_party(&self, lesson: &HouseRule) -> bool {
         let to = HouseRule::key(&lesson.to);
         let from = lesson.from_key();
@@ -966,8 +974,13 @@ impl ProposalRecord {
             .flat_map(|facts| facts.parties.iter().map(|party| party.name.as_str()))
             .chain(self.analysis.proposal.parties.iter().map(String::as_str));
         found.map(party_keys).any(|keys| {
-            keys.iter().any(|key| holds_words(&to, key))
-                && !keys.iter().any(|key| holds_words(&from, key))
+            let respelled = keys
+                .iter()
+                .any(|key| holds_words(&from, key) || holds_words(key, &from));
+            !respelled
+                && keys
+                    .iter()
+                    .any(|key| holds_words(&to, key) || holds_words(key, &to))
         })
     }
 }
@@ -3896,10 +3909,12 @@ impl Pipeline {
     /// The new record replaces the old one only when it says something
     /// different, in a write transaction that checks the row and the record
     /// are still exactly what was read, so an approval made meanwhile is
-    /// never overwritten. Its revision moves, so the window replaces any
-    /// draft it holds of the old name, and a document that becomes ready is
-    /// filed when automatic renaming is on, exactly as after a reading. Each
-    /// document is considered once per release, whatever came of it.
+    /// never overwritten. Its revision moves only when its name or sentence
+    /// does, so the window replaces a draft only of a proposal that changed,
+    /// and keeps what the reviewer typed when only readiness or reasons
+    /// moved; a document that becomes ready is filed when automatic renaming
+    /// is on, exactly as after a reading. Each document is considered once
+    /// per release, whatever came of it.
     pub fn revalidate_waiting(&self) -> PipelineResult<usize> {
         let _run = self
             .run_lock
@@ -4021,7 +4036,15 @@ impl Pipeline {
             read_through();
             return left();
         }
-        again.revision = record.revision + 1;
+        // As in `recompose`: the window replaces a reviewer's draft only
+        // when the name or the sentence it was typed over changed, so one
+        // whose readiness or reasons alone moved keeps what they typed.
+        again.revision =
+            if again.filename != record.filename || again.description != record.description {
+                record.revision + 1
+            } else {
+                record.revision
+            };
         let next = queue_status_for(again.status);
         match self.repository.store_revalidation(
             id,
@@ -4407,6 +4430,7 @@ impl Pipeline {
             }
         }
         let removed = self.store.clear_terminal()?;
+        self.forget_removed();
         // A claim waits for the intake watcher to see its item gone; with
         // the watcher off, it never will.
         if self
@@ -4425,8 +4449,23 @@ impl Pipeline {
     /// awaiting a human decision stays put.
     pub fn discard_waiting(&self) -> PipelineResult<usize> {
         let removed = self.store.discard_queued()?;
+        self.forget_removed();
         self.events.queue_changed();
         Ok(removed)
+    }
+
+    /// Drops what the extraction memo holds for every document no longer in
+    /// the queue, as [`Self::remove`] does for one: Discard waiting and Clear
+    /// history delete rows without naming them. An item id is never used
+    /// again, so one the queue no longer has is gone for good; what is kept
+    /// for an item the queue could not be asked about stays until it ages
+    /// out.
+    fn forget_removed(&self) {
+        for id in self.memo.items() {
+            if matches!(self.store.get(id), Ok(None)) {
+                self.memo.forget(id);
+            }
+        }
     }
 
     fn reject_deferred_reconciliation_mutation(&self, id: i64) -> PipelineResult<()> {
@@ -5465,8 +5504,9 @@ fn untouched_provisional(record: &ProposalRecord) -> bool {
 /// Whether a reading validated again says what the stored one says: all of
 /// it but the record's revision and the analysis's measurements - the times
 /// of the work done again, and which model read it as the boundary words it
-/// now. Only a record that says something new replaces the old one and
-/// moves its revision, which throws away the reviewer's draft.
+/// now. Only a record that says something new replaces the old one, and it
+/// moves the revision - which throws away the reviewer's draft - only when
+/// its name or sentence is new too.
 fn same_reading(stored: &ProposalRecord, again: &ProposalRecord) -> bool {
     let mut again = again.clone();
     again
@@ -6157,9 +6197,10 @@ mod party_choice_tests {
     }
 
     /// A party the document names besides the one in the name is another
-    /// party, not another spelling of it, and so is one written into the
-    /// type of a name that gave none; a spelling of the party in the name,
-    /// or of the type, is still a spelling.
+    /// party, not another spelling of it - typed as offered or as people
+    /// write it, without its "LLC" - and so is one written into the type of
+    /// a name that gave none; a spelling of the party in the name, or of
+    /// the type, is still a spelling.
     #[test]
     fn another_party_of_the_document_is_no_spelling_of_the_named_one() {
         let record = letter(
@@ -6178,11 +6219,32 @@ mod party_choice_tests {
             ))
         };
         assert!(party_edit("Stars Alliance LLC"));
+        assert!(party_edit("Stars Alliance"));
+        assert!(party_edit("Stars"));
         assert!(party_edit(
             "U.S. Department of Justice and Stars Alliance LLC"
         ));
         assert!(!party_edit("US Dept of Justice"));
+        assert!(!party_edit("Department of Justice"));
         assert!(!party_edit("U.S. Department of Justice"));
+        // A suffix the document never gives names no party it names.
+        assert!(!party_edit("Stars Alliance Inc"));
+
+        // The named party shortened to a word another party's name shares
+        // is that party as much as this one: no spelling is learned.
+        let acme = letter(
+            "Acme Corporation",
+            &["Acme Corporation", "Acme Holdings LLC"],
+            vec![
+                party("Acme Corporation", Support::Cited),
+                party("Acme Holdings LLC", Support::Cited),
+            ],
+        );
+        let acme_edit = |to: &str| {
+            acme.names_another_party(&HouseRule::new(RuleKind::Party, "Acme Corporation", to))
+        };
+        assert!(acme_edit("Acme"));
+        assert!(!acme_edit("Acme Corp"));
 
         let type_edit = |to: &str| {
             record.names_another_party(&HouseRule::new(RuleKind::DocumentType, "Letter", to))
