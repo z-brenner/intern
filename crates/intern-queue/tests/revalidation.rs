@@ -469,6 +469,46 @@ fn a_waiting_reading_is_validated_again_under_a_new_release_without_the_model() 
     assert_eq!(rig.runtime.revalidations.load(Ordering::SeqCst), 1);
 }
 
+/// A drain validates one waiting document again and says more may be due,
+/// so whoever runs it - the app's scheduler, which unloads an idle model
+/// between passes - acts between each document and the next; a document
+/// that arrives meanwhile is read before the next one. A drain that went on
+/// through every waiting document kept the scheduler from its next pass for
+/// as long as their extractions took.
+#[test]
+fn a_drain_validates_one_waiting_document_again_and_says_more_may_be_due() {
+    let rig = Rig::new(None, false);
+    let first = rig.release("0.1.0-alpha.18");
+    let [one, two] = ["one.pdf", "two.pdf"].map(|name| rig.add(&first, name));
+    assert!(
+        !first.run_until_idle().unwrap(),
+        "none due where they were read"
+    );
+    drop(first);
+
+    *rig.runtime.gate.lock().unwrap() = Some(STRICTER);
+    let next = rig.release("0.1.0-alpha.19");
+    assert!(next.run_until_idle().unwrap(), "more may be due");
+    assert_eq!(rig.worker.revalidation_reads(), 1, "one a drain");
+    let arrived = rig.add(&next, "arrived.pdf");
+    assert!(next.run_until_idle().unwrap());
+    assert!(!next.run_until_idle().unwrap(), "none left");
+
+    assert_eq!(
+        rig.worker.requests(),
+        vec![
+            format!("queue-{one}-1"),
+            format!("queue-{two}-1"),
+            format!("revalidate-{one}"),
+            format!("queue-{arrived}-1"),
+            format!("revalidate-{two}"),
+        ]
+    );
+    for id in [one, two] {
+        assert_eq!(item(&next, id).status, QueueStatus::NeedsReview);
+    }
+}
+
 /// A stored reply stands in for a fresh reading only for the same request
 /// to the same model file. A document the reader now reads differently, one
 /// read before readings recorded their request, and - after another update

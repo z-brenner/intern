@@ -3430,7 +3430,8 @@ impl SetupManager {
     }
 
     /// What the scheduler does for the local model between passes over the
-    /// queue, at least every `RECOVER_INTERVAL` and at every wake.
+    /// queue, at least every `RECOVER_INTERVAL`, at every wake, and between
+    /// the documents an update validates again ([`schedule`]).
     ///
     /// Unloads a model nothing has asked anything for a while, unless this
     /// pass is about to read a document with it; resumes, while
@@ -3815,10 +3816,67 @@ struct PipelineScheduler {
     pipeline: Arc<Pipeline>,
 }
 
+/// The scheduler's loop, on its own thread until it is told to shut down.
+///
+/// Each pass runs `tick` - what the local model needs doing between passes
+/// ([`SetupManager::tick`]) - then recovery when it is due, then, once the
+/// model is ready, drains the queue. A drain that stopped after validating a
+/// document again with more perhaps due ([`Pipeline::run_until_idle`]) has
+/// the next pass begin at once rather than wait for a wake, so `tick` - the
+/// idle unload among it - runs between those documents too. `failed` hears
+/// what a recovery or a drain could not do.
+fn schedule(
+    receiver: std::sync::mpsc::Receiver<SchedulerMessage>,
+    pipeline: &Pipeline,
+    model_ready: &AtomicBool,
+    tick: &dyn Fn(&Pipeline),
+    failed: &dyn Fn(&PipelineError),
+) {
+    use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
+    let mut clock = RecoverClock::new(Instant::now());
+    let mut more_due = false;
+    loop {
+        let message = if more_due {
+            // A shutdown or a wake already sent is taken; none is waited
+            // for.
+            match receiver.try_recv() {
+                Ok(message) => Ok(message),
+                Err(TryRecvError::Empty) => Ok(SchedulerMessage::Wake),
+                Err(TryRecvError::Disconnected) => Err(RecvTimeoutError::Disconnected),
+            }
+        } else {
+            // Wait no longer than the next recovery is due, so it runs on
+            // time even when nothing wakes the scheduler.
+            receiver.recv_timeout(clock.wait(Instant::now()))
+        };
+        let timed_out = match message {
+            Ok(SchedulerMessage::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
+            Ok(SchedulerMessage::Wake) => false,
+            Err(RecvTimeoutError::Timeout) => true,
+        };
+        tick(pipeline);
+        let (recover, drain) = clock.pass(
+            timed_out,
+            model_ready.load(Ordering::SeqCst),
+            Instant::now(),
+        );
+        if recover && let Err(error) = pipeline.recover() {
+            failed(&error);
+        }
+        more_due = false;
+        if drain {
+            match pipeline.run_until_idle() {
+                Ok(more) => more_due = more,
+                Err(error) => failed(&error),
+            }
+        }
+    }
+}
+
 impl PipelineScheduler {
     /// `tick` runs at the top of every pass, before the queue drains: what
     /// the local model needs doing between documents
-    /// ([`SetupManager::tick`]).
+    /// ([`SetupManager::tick`]); see [`schedule`].
     fn start(
         pipeline: Arc<Pipeline>,
         model_ready: Arc<AtomicBool>,
@@ -3830,35 +3888,18 @@ impl PipelineScheduler {
         let join = std::thread::Builder::new()
             .name("intern-pipeline-scheduler".into())
             .spawn(move || {
-                let mut clock = RecoverClock::new(Instant::now());
-                loop {
-                    // Wait no longer than the next recovery is due, so it
-                    // runs on time even when nothing wakes the scheduler.
-                    let timed_out = match receiver.recv_timeout(clock.wait(Instant::now())) {
-                        Ok(SchedulerMessage::Shutdown) => return,
-                        Ok(SchedulerMessage::Wake) => false,
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => true,
-                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
-                    };
-                    tick(&scheduled_pipeline);
-                    let (recover, drain) = clock.pass(
-                        timed_out,
-                        model_ready.load(Ordering::SeqCst),
-                        Instant::now(),
-                    );
-                    if recover && let Err(error) = scheduled_pipeline.recover() {
+                schedule(
+                    receiver,
+                    &scheduled_pipeline,
+                    &model_ready,
+                    &*tick,
+                    &|error: &PipelineError| {
                         let _ = app.emit(
                             "queue://changed",
                             serde_json::json!({ "error": error.code }),
                         );
-                    }
-                    if drain && let Err(error) = scheduled_pipeline.run_until_idle() {
-                        let _ = app.emit(
-                            "queue://changed",
-                            serde_json::json!({ "error": error.code }),
-                        );
-                    }
-                }
+                    },
+                );
             })
             .map_err(|_| CommandError {
                 code: "STATE_CONFLICT".into(),
@@ -12445,6 +12486,154 @@ mod runtime_tests {
             pipeline.list().unwrap()[0].status,
             super::QueueStatus::Queued
         );
+        assert_eq!(rig.launches(), 1);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// Reads every file as the calibration notice and remembers each
+    /// request; reading one to validate it again takes `takes` by the
+    /// world's clock, as a long scan's OCR does.
+    struct NoticeReader {
+        world: World,
+        takes: Duration,
+        requests: Mutex<Vec<String>>,
+    }
+
+    impl NoticeReader {
+        fn revalidations(&self) -> usize {
+            self.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|request| request.starts_with("revalidate-"))
+                .count()
+        }
+    }
+
+    impl intern_queue::WorkerBoundary for NoticeReader {
+        fn extract(
+            &self,
+            request_id: &str,
+            _path: &Path,
+            _progress: &mut dyn FnMut(intern_engine::ExtractProgress),
+        ) -> Result<DocumentSource, intern_queue::WorkerFailure> {
+            self.requests.lock().unwrap().push(request_id.to_owned());
+            if request_id.starts_with("revalidate-") {
+                self.world.advance(self.takes);
+            }
+            Ok(probe())
+        }
+
+        fn cancel(&self, _request_id: &str) -> Result<(), intern_queue::WorkerFailure> {
+            Ok(())
+        }
+
+        fn restart(&self) -> Result<(), intern_queue::WorkerFailure> {
+            Ok(())
+        }
+    }
+
+    struct Quiet;
+
+    impl intern_queue::PipelineEventSink for Quiet {
+        fn queue_changed(&self) {}
+
+        fn progress(&self, _progress: intern_queue::PipelineProgress) {}
+    }
+
+    /// After an update the queue validates the documents waiting on a person
+    /// again, each a fresh extraction that no model takes part in, while the
+    /// model the update's self-test loaded stays loaded. One a pass, the
+    /// scheduler's next pass begun at once, so its idle unload runs between
+    /// them: with each extraction taking six minutes, as a long scan's can,
+    /// the model goes once it has been idle ten, with a document still due.
+    /// Validated within one pass, they kept it loaded until the last was
+    /// done.
+    #[test]
+    fn the_idle_unload_runs_between_documents_validated_again() {
+        let install = Install::new("revalidate-idle");
+        let rig = Rig::new();
+        let world = World::new();
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        verified(&runtime);
+        let data = folder("revalidate-idle");
+        let inbox = data.join("Inbox");
+        std::fs::create_dir_all(&inbox).unwrap();
+        let settings = || intern_queue::SettingsStore::new(data.join("settings.json"));
+        settings()
+            .save(&AppSettings {
+                destination: data.join("Filed").to_string_lossy().into_owned(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        let reader = Arc::new(NoticeReader {
+            world: world.clone(),
+            takes: IDLE_UNLOAD_AFTER * 3 / 5,
+            requests: Mutex::new(Vec::new()),
+        });
+        let release = |version: &str| {
+            intern_queue::Pipeline::with_local_files(
+                data.join("queue.sqlite3"),
+                reader.clone(),
+                runtime.clone(),
+                Arc::new(Quiet),
+                settings(),
+            )
+            .unwrap()
+            .with_release(version)
+        };
+        let first = release("1.0.0");
+        let documents = ["one.pdf", "two.pdf", "three.pdf"]
+            .map(|name| write(&inbox, name, format!("%PDF-1.7 {name}").as_bytes()));
+        first.enqueue_files(&documents).unwrap();
+        assert!(!first.run_until_idle().unwrap());
+        assert!(
+            first
+                .list()
+                .unwrap()
+                .iter()
+                .all(|item| item.status == super::QueueStatus::NeedsReview)
+        );
+        drop(first);
+
+        let next = release("1.0.1");
+        let ticks = Mutex::new(Vec::new());
+        let tick = |pipeline: &intern_queue::Pipeline| {
+            let unloaded =
+                runtime.unload_if_idle(|| pipeline.has_document_waiting().unwrap_or(false));
+            ticks
+                .lock()
+                .unwrap()
+                .push((reader.revalidations(), unloaded));
+        };
+        let ready = AtomicBool::new(true);
+        let (sender, receiver) = channel();
+        sender.send(super::SchedulerMessage::Wake).unwrap();
+        std::thread::scope(|scope| {
+            // Owned here, so a failed assertion drops it and the scheduler,
+            // disconnected, ends rather than keep the scope waiting.
+            let sender = sender;
+            let (pipeline, ready, tick) = (&next, &ready, &tick);
+            let scheduler = scope.spawn(move || {
+                super::schedule(receiver, pipeline, ready, tick, &|error| {
+                    panic!("{}", error.code)
+                });
+            });
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while reader.revalidations() < documents.len() {
+                assert!(Instant::now() < deadline, "not all validated again");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            sender.send(super::SchedulerMessage::Shutdown).unwrap();
+            scheduler.join().unwrap();
+        });
+
+        let ticks = ticks.into_inner().unwrap();
+        assert!(
+            ticks.contains(&(2, true)),
+            "unloaded with a document still due: {ticks:?}"
+        );
+        assert!(!runtime.running());
         assert_eq!(rig.launches(), 1);
         let _ = std::fs::remove_dir_all(&data);
     }

@@ -960,7 +960,16 @@ last pass put back unread does not count - one the admission guard cannot
 check right now, while Microsoft is out of reach, is put back on every pass
 and is the next to claim each time, and counted, it kept the model loaded for
 as long as that lasted; should a pass read it after all, it costs one load,
-as before. The review
+as before. A pass validates again at most one document an earlier release
+read ([a new release and the documents already
+waiting](#a-new-release-and-the-documents-already-waiting)), and the scheduler
+then begins the next pass at once, so the unload, recovery and the
+provisional re-reads run between those documents too
+(`Pipeline::run_until_idle`). Run within one pass, the sweep after an update -
+each document a fresh extraction, about 3 s and up to about 95 s for a long
+scan, with no model in it - kept the model the update's self-test had loaded
+resident until the last document was done: past its ten idle minutes for a
+sweep of more than about two hundred documents at 3 s each. The review
 panel says which model read a document, and that a provisional reading will
 be read again.
 

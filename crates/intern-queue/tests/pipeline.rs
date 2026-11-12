@@ -3094,7 +3094,7 @@ fn cancel_rig(
     Arc<Pipeline>,
     i64,
     i64,
-    thread::JoinHandle<Result<(), PipelineError>>,
+    thread::JoinHandle<Result<bool, PipelineError>>,
 ) {
     let first = source(temp, "canceled.pdf");
     let second = source(temp, "next.pdf");
