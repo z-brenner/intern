@@ -3,7 +3,9 @@ name: Candidate model benchmark on Linux
 # Candidate local models (GGUF files), each run live through InternBench on
 # an Ubuntu runner: the parser worker and the Linux runtime built and staged
 # the way CI builds them, llama-server started with the app's own flags by
-# scripts/run-internbench.sh, and every candidate x set pair a job of its own,
+# scripts/run-internbench.sh (the `--no-repack` both models launch with
+# included; the default threads are as many as the app's rule gives these
+# four-processor runners), and every candidate x set pair a job of its own,
 # in parallel. Each job's report, recording and logs are uploaded, and its
 # headline (filename score, unsafe ready, time per document, the server's
 # peak memory, the runner's CPU and the CPU backend llama-server picked) goes
@@ -35,14 +37,18 @@ on:
         default: internbench
         type: string
       threads:
-        description: Model threads for llama-server
+        description: >-
+          Model threads for llama-server; 4 is what the app's rule (every
+          logical processor, 2 to 8) gives these four-processor runners
         required: false
         default: "4"
         type: string
       extra_server_args:
         description: >-
-          Extra llama-server flags appended after the app's own, e.g. a
-          KV-cache or speculative flag to try (LLAMA_SERVER_ARGS)
+          Extra llama-server flags appended after the app's own, --no-repack
+          included, e.g. a KV-cache or speculative flag to try, or --repack to
+          measure repacked weights: llama-server takes the last of the two
+          (LLAMA_SERVER_ARGS)
         required: false
         default: ""
         type: string

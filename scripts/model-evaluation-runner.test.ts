@@ -106,8 +106,9 @@ it('the runner scores with the pipeline the release gate accepts, unless told ot
 // (tiers::tier_server_flags in crates/intern-engine/src/tiers.rs). Every
 // script that starts a model the way the app does must pass that tier's
 // flags, no more and no fewer, or the QA and release scores, the
-// recordings of record and the memory probe describe a server the app
-// never runs.
+// recordings of record, the memory probe and the live InternBench runs
+// (scripts/run-internbench.sh, which candidate-bench.yml drives) describe a
+// server the app never runs.
 it('starts each model with its own flags wherever the app launch is copied', async () => {
   const tiers = await readFile('crates/intern-engine/src/tiers.rs', 'utf8');
   const quoted = (text: string) => [...text.matchAll(/"([^"]+)"/g)].map((match) => `"${match[1]}"`).join(', ');
@@ -124,4 +125,53 @@ it('starts each model with its own flags wherever the app launch is copied', asy
     expect(script, `${path} carries both tiers' flags`).toContain(map);
     expect(script, `${path} passes the tier's flags`).toMatch(/\$\w+ \+= \$TierFlags\[\$Tier\]/);
   }
+
+  // run-internbench.sh is not told which tier its model is: by default it
+  // passes the flags both tiers carry, after the app's own and before any
+  // trial flags. That is the app's launch only while the tiers agree.
+  const words = (row: string) => [...row.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  const common = words(rows.accurate).filter((flag) => words(rows.fast).includes(flag));
+  expect(words(rows.fast), 'both tiers launch with the same flags, as run-internbench.sh assumes').toEqual(
+    words(rows.accurate),
+  );
+  const bench = await readFile('scripts/run-internbench.sh', 'utf8');
+  const fallback = /\nif \[ -z "\$\{TIER_SERVER_FLAGS\+set\}" \]; then\n {2}TIER_SERVER_FLAGS="([^"$`\\]*)"\nfi\n/.exec(bench);
+  expect(fallback, 'run-internbench.sh defaults TIER_SERVER_FLAGS').not.toBeNull();
+  expect(fallback![1].split(' ').filter(Boolean), 'run-internbench.sh defaults to the flags both tiers carry').toEqual(
+    common,
+  );
+  expect(bench).toContain('\nread -r -a TIER_FLAGS <<< "$TIER_SERVER_FLAGS"\n');
+  const launch = /\n"\$LLAMA_SERVER" --host (?:[^\n]*\\\n)*[^\n]*/.exec(bench)?.[0] ?? '';
+  const tierFlags = launch.indexOf(' ${TIER_FLAGS[@]+"${TIER_FLAGS[@]}"} ');
+  const trialFlags = launch.indexOf(' ${EXTRA_SERVER_ARGS[@]+"${EXTRA_SERVER_ARGS[@]}"} ');
+  expect(tierFlags, "run-internbench.sh passes the tiers' flags to llama-server").toBeGreaterThan(
+    launch.indexOf(' --poll 0 '),
+  );
+  expect(trialFlags, 'and LLAMA_SERVER_ARGS after them').toBeGreaterThan(tierFlags);
+});
+
+// The app's thread rule (server.rs default_threads): every logical
+// processor, clamped, with a fallback when the count cannot be read.
+// run-internbench.sh says its default is the app's.
+it("runs InternBench live on the app's thread count unless told otherwise", async () => {
+  const [server, bench] = await Promise.all([
+    readFile('crates/intern-engine/src/server.rs', 'utf8'),
+    readFile('scripts/run-internbench.sh', 'utf8'),
+  ]);
+  const rule =
+    /pub fn default_threads\(\) -> usize \{\s*std::thread::available_parallelism\(\)\s*\.map\(\|value\| value\.get\(\)\)\s*\.unwrap_or\((\d+)\)\s*\.clamp\((\d+), (\d+)\)\s*\}/.exec(
+      server,
+    );
+  expect(rule, 'server.rs default_threads is every logical processor, clamped').not.toBeNull();
+  const [, unread, least, most] = rule!;
+  expect(bench).toContain(
+    [
+      'if [ -z "${THREADS:-}" ]; then',
+      `  THREADS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo ${unread})"`,
+      `  [ "$THREADS" -lt ${least} ] && THREADS=${least}`,
+      `  [ "$THREADS" -gt ${most} ] && THREADS=${most}`,
+      'fi',
+    ].join('\n'),
+  );
+  expect(bench).toContain('--threads "$THREADS" --threads-batch "$THREADS"');
 });
