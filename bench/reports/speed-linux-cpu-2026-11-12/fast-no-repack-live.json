@@ -1,0 +1,128 @@
+{
+ "runs": {
+  "repacked": "candidate-bench.yml 43273805585",
+  "no-repack": "candidate-bench.yml 43273798577"
+ },
+ "sets": {
+  "internbench": {
+   "repacked": {
+    "cpu": "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz",
+    "server_peak_rss_kb": 4667668,
+    "wall_seconds": 3652.0,
+    "names_right": [
+     65,
+     77
+    ]
+   },
+   "no-repack": {
+    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "server_peak_rss_kb": 3338368,
+    "wall_seconds": 3663.0,
+    "names_right": [
+     66,
+     77
+    ]
+   }
+  },
+  "real1": {
+   "repacked": {
+    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "server_peak_rss_kb": 4724244,
+    "wall_seconds": 3241.0,
+    "names_right": [
+     30,
+     56
+    ]
+   },
+   "no-repack": {
+    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "server_peak_rss_kb": 3395516,
+    "wall_seconds": 2988.0,
+    "names_right": [
+     31,
+     56
+    ]
+   }
+  },
+  "real2": {
+   "repacked": {
+    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "server_peak_rss_kb": 4668668,
+    "wall_seconds": 2939.0,
+    "names_right": [
+     26,
+     60
+    ]
+   },
+   "no-repack": {
+    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "server_peak_rss_kb": 3343656,
+    "wall_seconds": 2433.0,
+    "names_right": [
+     25,
+     56
+    ]
+   }
+  },
+  "real3": {
+   "repacked": {
+    "cpu": "AMD EPYC 9V74 80-Core Processor",
+    "server_peak_rss_kb": 4673712,
+    "wall_seconds": 1680.0,
+    "names_right": [
+     18,
+     53
+    ]
+   },
+   "no-repack": {
+    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "server_peak_rss_kb": 3344480,
+    "wall_seconds": 2345.0,
+    "names_right": [
+     20,
+     54
+    ]
+   }
+  },
+  "real4": {
+   "repacked": {
+    "cpu": "AMD EPYC 9V45 96-Core Processor",
+    "server_peak_rss_kb": 4713780,
+    "wall_seconds": 1167.0,
+    "names_right": [
+     20,
+     49
+    ]
+   },
+   "no-repack": {
+    "cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+    "server_peak_rss_kb": 3384868,
+    "wall_seconds": 2021.0,
+    "names_right": [
+     23,
+     49
+    ]
+   }
+  },
+  "real5": {
+   "repacked": {
+    "cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+    "server_peak_rss_kb": 4673440,
+    "wall_seconds": 2180.0,
+    "names_right": [
+     13,
+     53
+    ]
+   },
+   "no-repack": {
+    "cpu": "AMD EPYC 9V45 96-Core Processor",
+    "server_peak_rss_kb": 3343512,
+    "wall_seconds": 1111.0,
+    "names_right": [
+     16,
+     53
+    ]
+   }
+  }
+ }
+}

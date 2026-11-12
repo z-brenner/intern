@@ -145,7 +145,10 @@ pub const fn min_available_for(tier: ModelTier) -> u64 {
 /// in only when the live server cannot be read, and on Windows, where it is
 /// already short, lowering it to that would have the runner with a browser's
 /// 2 GiB held swap the models before every document (11,570 MiB available
-/// before any load, run 43063958237).
+/// before any load, run 43063958237). The 4B runs with `--no-repack` from
+/// alpha.18, and its high-water mark is 3,260-3,315 MiB; its estimate is
+/// kept for the same reason (its working set right after a document on
+/// Windows, 3,215 MiB, is already more than the 2,086 MiB this credits).
 pub const fn resident_estimate(tier: ModelTier) -> u64 {
     match tier {
         ModelTier::Fast => 4_700 * MIB,
@@ -174,6 +177,8 @@ pub const fn resident_estimate(tier: ModelTier) -> u64 {
 /// touched originals included (`bench/reports/windows-memory-2026-11-09`),
 /// and 5,490-5,491 MiB without (run 43063958237; 5,229-5,491 MiB from load
 /// to a minute idle); what it needs under a squeeze there is not measured.
+/// The 4B's, with `--no-repack` from alpha.18, was 3,215 MiB (run
+/// 43273956181); its figure here is kept as an upper bound.
 pub const fn working_set(tier: ModelTier) -> u64 {
     match tier {
         ModelTier::Fast => 4_700 * MIB,
@@ -206,7 +211,8 @@ pub const fn working_set(tier: ModelTier) -> u64 {
 /// 16 GiB runner (`bench/reports/windows-memory-2026-11-09`): right after a
 /// document the 9B's working set was 8,107-8,110 MiB with repacked weights
 /// (5,490-5,491 MiB with `--no-repack`, run 43063958237) and the 4B's
-/// 4,513-4,514, against the 2,883 and 2,086 this credits. With 2 GiB held
+/// 4,513-4,514 (3,215 with `--no-repack`, run 43273956181), against the
+/// 2,883 and 2,086 this credits. With 2 GiB held
 /// by another process, the plan's arithmetic on the repacked numbers stands
 /// the loaded 9B down for the 4B before the next document, and the loaded
 /// 4B down for the 9B before the one after.
@@ -236,10 +242,14 @@ pub const fn unload_gives_back(tier: ModelTier, model_file_bytes: u64) -> u64 {
 ///   after a document and +1,453 a minute idle, so the 4B's was the higher
 ///   by 909 and 1,594 MiB. At 1,024 MiB, the margin from alpha.15 to
 ///   alpha.16, a machine with between about 7,763 and 8,333 MiB available
-///   before any load would have the models swap at every pause.
+///   before any load would have the models swap at every pause;
+/// * with both models' `--no-repack` (run 43273956181): -11 MiB with the
+///   9B right after a document, +400 with the 4B right after a document and
+///   +743 a minute idle, so the 4B's was the higher by 411 and 754 MiB.
 ///
 /// The margin is the largest gap measured with room to spare, as 1,024 was
-/// for 917: carried to every machine as the report's bands are, either
+/// for 917; the third run's gaps are well inside it, and it is kept rather
+/// than lowered on one runner's figures: carried to every machine as the report's bands are, either
 /// run's numbers bring the loaded 4B back only where the 9B would stay
 /// (the test `a_loaded_fast_model_makes_way_only_with_room_to_spare`).
 /// In both runs the 4B was probed second, after the 9B, and more memory was
@@ -289,10 +299,14 @@ pub const fn memory_for_plan(available: u64, loaded: Option<(ModelTier, u64)>) -
 /// repacked run's no more than two repacked runs on different processors
 /// differ from each other.
 ///
-/// The fast model runs with it from alpha.18. On an AMD EPYC 7763 (AVX2)
-/// the 4B took 8.6% less time per recorded request (58.2 s to 53.2 s,
-/// `speed-battery.yml` run 43257828551), 4 of 13 replies changing as they
-/// do between processors.
+/// The fast model runs with it from alpha.18
+/// (`bench/reports/speed-linux-cpu-2026-11-12`): its peak resident memory
+/// fell from 4,558-4,613 MiB to 3,260-3,315 MiB on every set, and on a 16
+/// GiB Windows runner its working set right after a document from 4,514 MiB
+/// to 3,215 MiB (run 43273956181); time per request fell 8.8% on an AMD EPYC
+/// 7763 with ggml's AVX2 backend and 4% on the same CPU under Windows. Live
+/// on InternBench and the real sets 1-5 it gave as many right names as the
+/// repacked runs, 165 of 291 against 159 and 165.
 pub const fn tier_server_flags(tier: ModelTier) -> &'static [&'static str] {
     match tier {
         ModelTier::Fast => &["--no-repack"],
@@ -1010,11 +1024,13 @@ mod tests {
     /// memory what it took on the runner, and the server reports the working
     /// set it reported. Pass 3, with repacked weights
     /// (`bench/reports/windows-memory-2026-11-09`), and the 9B with
-    /// `--no-repack` (`runtime-speed.yml` run 43063958237). Credited that
+    /// `--no-repack` (`runtime-speed.yml` run 43063958237), and both models
+    /// with it (run 43273956181). Credited that
     /// alone, a machine near the floor with the 9B loaded is judged to have
     /// room once the 4B is loaded, and the two swap, document after document
     /// or pause after pause; asked for alpha.16's 1,024 MiB, at every pause
-    /// still with `--no-repack`. Asked for the margin, the 4B stays.
+    /// still with the 9B's `--no-repack`, and no longer once the 4B has it
+    /// too. Asked for the margin, the 4B stays.
     #[test]
     fn a_loaded_fast_model_makes_way_only_with_room_to_spare() {
         // MiB: what the load took from the available memory, and the
@@ -1022,6 +1038,8 @@ mod tests {
         // right after a document, and after a minute idle.
         const PASS_3: [(u64, u64); 3] = [(7_926, 8_107), (3_929, 4_514), (3_347, 4_445)];
         const NO_REPACK: [(u64, u64); 3] = [(5_631, 5_490), (3_746, 4_514), (3_061, 4_514)];
+        // Both models with `--no-repack` (`runtime-speed.yml` run 43273956181).
+        const BOTH_NO_REPACK: [(u64, u64); 3] = [(5_502, 5_491), (2_815, 3_215), (2_472, 3_215)];
         const ALPHA_16_MARGIN: u64 = 1_024 * MIB;
         let first = |memory: u64| plan(Automatic, BOTH, Some(memory)).map(|plan| plan.first);
         // A machine with less than the 9B took has nothing left available.
@@ -1082,6 +1100,16 @@ mod tests {
                     (Some(6_739), Some(8_332), 1_594)
                 ],
                 [(None, None, 0), (Some(7_763), Some(8_332), 570)],
+            ]
+        );
+        assert_eq!(
+            bands(BOTH_NO_REPACK),
+            [
+                [
+                    (Some(7_792), Some(8_202), 411),
+                    (Some(7_449), Some(8_202), 754)
+                ],
+                [(None, None, 0), (None, None, 0)],
             ]
         );
     }

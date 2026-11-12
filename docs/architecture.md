@@ -726,7 +726,7 @@ named as it was keeps whatever the reviewer had typed.
 | Runtime | llama.cpp `b11946` (ggml-org), CPU only, in `llama-upstream/` of the sidecar folder; both models run on it |
 | Context | 8,192 tokens |
 | Threads | every logical processor, at most 8, for generation and for prompt processing alike |
-| Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below); `--slot-save-path` ([the instructions across a restart](#the-instructions-across-a-restart)); and for the accurate model `--no-repack` (below) |
+| Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below); `--slot-save-path` ([the instructions across a restart](#the-instructions-across-a-restart)); and for both models `--no-repack` (below) |
 | Vision | none. No projector is pinned, downloaded, or loaded, and the request type has no field for an image |
 
 The model is text-first. Essentially every business document has usable text,
@@ -754,8 +754,9 @@ load, neutral on AVX-512. `--prio -1 --poll 0`: low thread priority and no
 spinning between operations, which cost nothing measurable. The server is given
 180 seconds to become healthy; a cold disk took up to 117.
 
-The accurate model alone also runs with `--no-repack`
-(`tiers::tier_server_flags`,
+Both models also run with `--no-repack` (`tiers::tier_server_flags`), the
+9B from alpha.17 and the 4B from alpha.18
+([`bench/reports/speed-linux-cpu-2026-11-12`](../bench/reports/speed-linux-cpu-2026-11-12/README.md),
 [`bench/reports/speed-linux-cpu-2026-11-11`](../bench/reports/speed-linux-cpu-2026-11-11/README.md)):
 llama.cpp otherwise keeps a second, interleaved copy of every Q4_K weight
 matrix for its older x86 GEMM. Without it the 9B's peak resident memory fell
@@ -772,7 +773,11 @@ token embeddings, where it read 2,726 MiB of the file and the copy before -
 was not measured under a memory limit, so the floors are kept. Where the
 available memory counts the weights as reclaimable (Linux), the bar for
 reading two OCR pages at once counts the whole file now, an upper bound
-(8 GiB, [OCR](ocr.md)).
+(8 GiB, [OCR](ocr.md)). The 4B's peak resident memory fell from
+4,558-4,613 MiB to 3,260-3,315 MiB with it, and its working set right after a
+document on Windows from 4,514 MiB to 3,215 MiB (run 43273956181); a request
+took 8.8% less time on the AVX2 path on Linux and 4% less on Windows on the
+same CPU, and live it gave as many right names as the repacked runs.
 
 ### Two models, one at a time
 
@@ -846,9 +851,9 @@ only the free, zero and standby lists, and the weights the server has touched
 stay in its working set until it exits or the system trims them. When the
 server cannot be read, an estimate stands in: the resident high-water mark
 less the model file (`tiers::unload_gives_back`), measured with repacked
-weights. On Linux it is about right for the 4B. For the 9B, which runs with
-`--no-repack`, it is about 2 GiB high: its peak resident set less its file is
-about 0.7 GiB, against the 2,883 MiB credited. It is kept for Windows (see
+weights. Both models now run with `--no-repack`, and on Linux it is high for
+both: the 9B's peak resident set less its file is about 0.7 GiB, against the
+2,883 MiB credited, and the 4B's about 0.7 GiB against 2,086. It is kept for Windows (see
 `tiers::resident_estimate`). On Windows that estimate is far short. On a
 16 GiB runner the 9B's working set right after a document was 8,110 MiB with
 repacked weights (5,491 MiB without) where the estimate credits 2,883 MiB. By
@@ -864,7 +869,8 @@ That figure is not quite alike for the two models: with 2 GiB held it came out
 higher with the 4B loaded than with the 9B right after a document - with
 repacked weights by 404 MiB with the 4B also right after a document and 917 MiB
 with it a minute idle, with the 9B's `--no-repack` by 909 and 1,594 MiB
-(`runtime-speed.yml` run 43063958237). By the same arithmetic a machine near
+(`runtime-speed.yml` run 43063958237), and with both models' by 411 and 754
+MiB (run 43273956181). By the same arithmetic a machine near
 the floor with nothing loaded would still swap them, before every document or
 at every pause. A loaded 4B is therefore asked for
 2,048 MiB more than the floor before it makes way for the 9B
