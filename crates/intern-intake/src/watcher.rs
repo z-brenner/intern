@@ -725,6 +725,8 @@ impl Scanner<'_> {
         ) {
             if self.stability.is_arriving(&facts.path) {
                 self.status.arriving += 1;
+            } else if self.arrived_unwatched(&key) {
+                self.status.arrived_unwatched += 1;
             }
             return;
         }
@@ -767,6 +769,21 @@ impl Scanner<'_> {
             }
             None => self.consider_admission(&doc, &key, facts),
         }
+    }
+
+    /// Whether a file seen when watching began, and not yet settled, turned
+    /// up while the folder was not watched and is this machine's to take once
+    /// it settles - what [`Self::consider_unclaimed`] decides for it then,
+    /// short of asking the host: not in the backlog, claimed by no machine,
+    /// and with no other machine's origin marker.
+    fn arrived_unwatched(&self, key: &str) -> bool {
+        !self.backlog.contains(key)
+            && !self.owned.contains_key(key)
+            && self.store.read(key).is_none()
+            && self
+                .store
+                .read_origin(key)
+                .is_none_or(|origin| origin.machine_id == self.identity.id)
     }
 
     /// Whether this machine holds the claim on `key`: one this run owns, or

@@ -1029,6 +1029,11 @@ pub struct Pipeline {
     /// How long no model may be loaded before the queue stops for it.
     model_missing_grace: std::time::Duration,
     active_item: AtomicI64,
+    /// The row the last claim put back to wait without reading it - an
+    /// admission guard that could not check it right now, or no model loaded
+    /// to ask - and so the row the next run claims first and most likely puts
+    /// back again; 0 when the last claim went on to read its document.
+    put_back: AtomicI64,
     /// Set when the active item's model request is canceled - by a person or
     /// by its deadline - before the model itself is told. The request thread
     /// reads it to tell a failure the cancel caused from one worth a retry.
@@ -1167,6 +1172,7 @@ impl Pipeline {
             model_missing_since: Mutex::new(None),
             model_missing_grace: MODEL_MISSING_GRACE,
             active_item: AtomicI64::new(0),
+            put_back: AtomicI64::new(0),
             active_cancel: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
             model_timeout: std::time::Duration::from_secs(MODEL_TIMEOUT_SECONDS),
@@ -1729,6 +1735,7 @@ impl Pipeline {
             // that the machine works lets them be tried again.
             return self.prove_the_machine();
         };
+        self.put_back.store(0, Ordering::SeqCst);
         // Whether this attempt is a doubted document's one proof attempt,
         // decided as it starts: the machine was shown to work for this kind
         // of failure after the document last failed (`QueueStore::doubt`).
@@ -1742,6 +1749,7 @@ impl Pipeline {
                     QueueStatus::Queued,
                     None,
                 )?;
+                self.put_back.store(item.id, Ordering::SeqCst);
                 self.events.queue_changed();
                 return Ok(false);
             }
@@ -2025,6 +2033,9 @@ impl Pipeline {
             };
             self.store
                 .transition(item.id, QueueStatus::Analyzing, next, code)?;
+            if next == QueueStatus::Queued {
+                self.put_back.store(item.id, Ordering::SeqCst);
+            }
             self.active_item.store(0, Ordering::SeqCst);
             self.events.queue_changed();
             return Ok(keep_draining);
@@ -2089,6 +2100,7 @@ impl Pipeline {
                             QueueStatus::Queued,
                             None,
                         )?;
+                        self.put_back.store(item.id, Ordering::SeqCst);
                         // Unless it never comes back. A restart that failed
                         // leaves the slot empty for as long as the app runs,
                         // and every pass then read the head document again in
@@ -3327,6 +3339,29 @@ impl Pipeline {
     }
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::SeqCst)
+    }
+
+    /// Whether a run now would read a document: the queue is not paused, and
+    /// a document waits that the store would hand it
+    /// ([`QueueStore::next_claimable`]) - other than the one the last claim
+    /// put back unread. The app asks before it loads the model at sign-in and
+    /// before it unloads an idle one.
+    ///
+    /// A document the admission guard cannot check right now - Microsoft
+    /// unreachable, a token expired, a throttled request - is put back as
+    /// queued on every pass, and is the next to claim each time, so counted
+    /// as waiting it kept a loaded model from its idle unload, about 6 GB for
+    /// the accurate one, for as long as Microsoft could not be reached. A
+    /// pass that reads it after all costs one load, as before.
+    pub fn has_document_waiting(&self) -> PipelineResult<bool> {
+        if self.is_paused() {
+            return Ok(false);
+        }
+        let put_back = self.put_back.load(Ordering::SeqCst);
+        Ok(self
+            .store
+            .next_claimable()?
+            .is_some_and(|next| next != put_back))
     }
 
     /// Why the queue stopped itself, while it is stopped: a code the window

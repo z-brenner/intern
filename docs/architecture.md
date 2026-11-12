@@ -945,8 +945,58 @@ generation discipline as every other start and stop, so two models are never
 resident together and a cancel or a hosted model chosen mid-swap behaves as it
 does mid-request. A model unused for ten minutes is unloaded, giving its memory
 back; the next document loads it again without reading the file, since this
-session already checked it. The review panel says which model read a document,
-and that a provisional reading will be read again.
+session already checked it. The unload runs at the top of every scheduler pass,
+and is skipped on a pass that is about to read a document
+(`Pipeline::has_document_waiting`): the pass a new document wakes used to
+unload a model idle for ten minutes and load it again at once. A document the
+last pass put back unread does not count - one the admission guard cannot
+check right now, while Microsoft is out of reach, is put back on every pass
+and is the next to claim each time, and counted, it kept the model loaded for
+as long as that lasted; should a pass read it after all, it costs one load,
+as before. The review
+panel says which model read a document, and that a provisional reading will
+be read again.
+
+A model is started before its document reaches it when one is on its way
+(`RuntimeModel::start_early`): when a scan of the watched folder first sees a
+file arriving - the watcher then waits at least ten seconds for it to hold
+still - and when a person adds documents, which are copied and extracted
+before they are read. A watched folder signals arrivals only when what arrives
+there is this machine's own: a private folder on its own disk, or "my folder"
+(`MicrosoftIntake::admits_arrivals_as_own`). In the shared Inbox a document is
+this machine's only once Microsoft says its account uploaded it, which is not
+asked until the file has settled, and most arrivals are teammates' uploads it
+never reads: signalled, each would load the model on every laptop watching the
+folder. This machine's own uploads there load it when they are claimed, as
+before. A document that came while Intern was not running is not arriving -
+the first scan sees it with everything already there, and it is claimed at
+the next scan, twenty seconds on - but the watcher reports it as coming
+(`IntakeStatus::arrived_unwatched`) when it was not there at the first look
+and no other machine put it there or claimed it, and since that first scan
+comes before setup has read the stamp, an expectation seen before the model is
+ready is kept and acted on once it is (`SetupManager::expect_document`).
+Until alpha.17 the sign-in load covered that document; without this it waited
+for the load. Loading the model and restoring its saved instructions
+then overlap that wait instead of adding to the document's. It is the start
+the document would make, made early: the plan as it stands with the memory
+free then, under the same `lifecycle` lock and generation, self-tested the
+first time a model loads; a hold, a cancel or shutdown in the meantime starts
+nothing, or stops what it loaded, as it would for the document. A document
+that reaches the model meanwhile waits for the load and for that self-test:
+an engine is read with only once it has passed, so the document is read by
+the model that passed or, when it fails, planned again onto the other, never
+sent beside the probe to a model not yet shown to read right. It never
+stops a model: one already loaded is only kept from going idle, so it cannot
+interrupt a document being read, and a burst of arrivals starts one load. It
+starts nothing while the queue would not read what arrives - the model not
+ready, or the queue paused. A file that turns out not to be a document -
+unsupported, or a duplicate - costs that one load, which goes idle and is
+unloaded ten minutes later like any other. The gain was not
+measured live. It is at most the load and the restore - the 9B took 3.1 to
+5.1 s from start to healthy with its file in the page cache and 44 to 106 ms
+to restore ([`bench/reports/cold-start-linux-cpu-2026-11-09`](../bench/reports/cold-start-linux-cpu-2026-11-09/README.md)),
+and a cold disk takes far longer - off the first document after the model was
+unloaded or never loaded, and no more than the wait it overlaps.
 
 ### The instructions across a restart
 
@@ -956,10 +1006,10 @@ a context checkpoint it takes where the user turn starts - the models are
 hybrids whose recurrent layers cannot be rolled back token by token, so the
 checkpoint is the only way the prefix survives - and every document after the
 first reports 477 cached tokens. The first document of a server lifetime has
-nothing cached and processes the instructions itself: at sign-in, and after
-every ten-minute idle unload. A warm-up request would not help: the app loads
-the model when a document arrives, so a warm-up would race that document for
-the server's one slot and save nothing.
+nothing cached and processes the instructions itself: the server is started
+for a document - when it reaches the model, or when it is first seen on its
+way - and stopped after ten idle minutes. A warm-up request would race that
+document for the server's one slot.
 
 So each server is started with `--slot-save-path`, the `slots` folder in the
 app's local data, and its state is carried across the restart
@@ -1213,20 +1263,45 @@ Launch never reads a model file. Tauri's setup hook asks only whether each is
 there at the size the manifest pins; the digest is checked behind the window,
 on the setup thread, and used to be read twice in the hook, a white window for
 five seconds or more on an office laptop. A model that has passed its digest
-and the semantic self-test is stamped in `models/.verified.json` with its size
-and modification time, the digest it was checked against, the size and date
-of the llama-server binary it runs on, and the version of Intern that checked
-it. The stamp has an entry for each tier's file, and an entry records whether
-that model has passed the self-test or only its digest - the accurate model is
-digest-checked when its download ends and self-tested the first time a
-document loads it. While all of that still matches, the next launch starts the
-server with neither check; when any of it changes, the model is hashed and
-self-tested once and stamped again, and a failed self-test removes its entry.
-Both models run on the one llama-server, so a new build of it sends both
-through the checks again, and so does every update of Intern; a changed model
-file sends only itself. A stamp of an earlier schema - the single-model
-build's, or one that recorded a single server binary for every file - vouches
-for nothing.
+is stamped in `models/.verified.json` (schema 4) with its size and
+modification time and the digest it was checked against, and once it has
+passed the semantic self-test, with the version of Intern that tested it and
+the size and date of the llama-server binary it ran on. The stamp has an entry
+for each tier's file - the accurate model is digest-checked when its download
+ends and self-tested the first time a document loads it. The digest stands
+for as long as the file and the pin do: a new size, date or pin sends that
+file through the digest and the self-test again, and leaves the other tier's
+entry as it is. The self-test stands only for the build and the server binary
+it ran under. An update of Intern changes no byte of a model, but it can
+change the request and the flags the server is started with, and with them
+the code the server runs on this processor; a new llama-server is new code.
+Either sends the model the next document needs through the self-test once,
+before a document depends on it - one that fails is set aside and the other
+reads - and through no digest: until alpha.17 the first launch after every
+update read both models end to end again, 8.4 GB, to find the digests it
+already had. A failed self-test removes its entry, so that file is read in
+full next time. The stamps alpha.13 to alpha.17 wrote (schema 3) are read for
+their digests alone; one of an earlier schema - the single-model build's, or
+one that recorded a single server binary for every file - vouches for nothing.
+A launch that finds both checks standing for the model the next document
+would be read by, and no document waiting, starts nothing: the model is
+marked tested, the queue opens, and the first document loads it. Until
+alpha.17 every sign-in loaded it - the accurate model's 5.7 GB, read from a
+disk that had just booted - and held it until the ten-minute idle unload,
+documents or not. A document waiting at launch, left from the last session,
+has the model started as before. Waiting means what the next run would read
+(`Pipeline::has_document_waiting`): nothing while the queue is paused, not a
+document in doubt that waits for the machine to be shown to work, and not
+one behind a rename left applying. A server that will not start is found by
+the first document instead of at launch. With the other model installed it is
+set aside there, as it would be at launch, and the document read by the other
+model. With one model there is none to read instead: the document is handed
+back to wait, as when no model is loaded, and the queue stops for it once
+that has gone on for four minutes (`MODEL_MISSING_GRACE`), as for a model that
+stopped responding. Either way its stamp entry is dropped, so the next launch
+checks that model in full and setup says why it will not start. The stamp
+records the server binary's size and date, not the libraries beside it, so a
+runtime library quarantined since the last launch is found this way too.
 Within a session the digest is read at most once: restarts - a cancel, a
 recovery, a swap, a reload after idle - start a file that still looks exactly
 as it did when it was checked, and refuse one that does not. The

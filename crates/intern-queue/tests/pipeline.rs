@@ -1415,6 +1415,121 @@ fn pause_starts_no_item_and_cancel_interrupts_the_active_worker_request() {
     assert_eq!(pipeline.list().unwrap()[0].status, QueueStatus::Canceled);
 }
 
+/// What the app asks before it loads the model at sign-in, or unloads an
+/// idle one: whether a run now would read a document. Not while the queue
+/// is paused, and not the next document while another is being read.
+#[test]
+fn a_document_waits_only_while_a_run_would_read_it() {
+    let temp = tempdir().unwrap();
+    let first = source(temp.path(), "first.pdf");
+    let second = source(temp.path(), "second.pdf");
+    let worker = Arc::new(FakeWorker::blocking(Ok(parsed("unused"))));
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&first, "first-hash");
+    files.trust(&second, "second-hash");
+    let pipeline = Arc::new(pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::new(FakeModel::new(vec![])),
+        files,
+        AppSettings::default(),
+    ));
+    assert!(!pipeline.has_document_waiting().unwrap());
+
+    pipeline.enqueue_files(&[first, second]).unwrap();
+    assert!(pipeline.has_document_waiting().unwrap());
+    pipeline.pause();
+    assert!(!pipeline.has_document_waiting().unwrap(), "paused");
+    pipeline.resume();
+    assert!(pipeline.has_document_waiting().unwrap());
+
+    let running = Arc::clone(&pipeline);
+    let join = thread::spawn(move || running.run_next());
+    while worker.active.load(Ordering::SeqCst) == 0 {
+        thread::yield_now();
+    }
+    assert!(
+        !pipeline.has_document_waiting().unwrap(),
+        "the second waits for the first"
+    );
+    pipeline.cancel(pipeline.list().unwrap()[0].id).unwrap();
+    join.join().unwrap().unwrap();
+    assert!(pipeline.has_document_waiting().unwrap());
+}
+
+/// A document the last claim put back unread is not one a run would read:
+/// the admission guard could not check it right now - Microsoft unreachable,
+/// say - and the next run claims it first and puts it back again, as it does
+/// one put back for want of a model to ask. Counted as waiting, either kept a
+/// loaded model from its idle unload for as long as that lasted. A claim
+/// that goes on to read its document lets the next one wait again.
+#[test]
+fn a_document_put_back_unread_is_not_waiting() {
+    let temp = tempdir().unwrap();
+    let first = source(temp.path(), "put-back-a.pdf");
+    let second = source(temp.path(), "put-back-b.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(parsed(RETRY_DOCUMENT)),
+        Ok(parsed(RETRY_DOCUMENT)),
+        Ok(parsed(RETRY_DOCUMENT)),
+    ]));
+    // Asked again once after a recovery, as every retryable failure is.
+    let model = Arc::new(FakeModel::new(vec![
+        Err(ModelFailure::retryable("MODEL_NOT_READY")),
+        Err(ModelFailure::retryable("MODEL_NOT_READY")),
+        Ok(proposal(0.94, false)),
+        Ok(proposal(0.94, false)),
+    ]));
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&first, "put-back-a-hash");
+    files.trust(&second, "put-back-b-hash");
+    let guard = Arc::new(RetryableStageGuard::unavailable_at(
+        intern_queue::AdmissionStage::Extract,
+    ));
+    let pipeline = pipeline(
+        temp.path(),
+        worker.clone(),
+        model.clone(),
+        files,
+        AppSettings::default(),
+    )
+    .with_admission_guard(guard.clone());
+    pipeline.enqueue_files(&[first]).unwrap();
+    assert!(pipeline.has_document_waiting().unwrap());
+
+    pipeline.run_until_idle().unwrap();
+    assert!(
+        !pipeline.has_document_waiting().unwrap(),
+        "put back: it could not be checked"
+    );
+    pipeline.enqueue_files(&[second]).unwrap();
+    assert!(
+        !pipeline.has_document_waiting().unwrap(),
+        "the next behind it waits for it"
+    );
+    pipeline.run_until_idle().unwrap();
+    assert!(!pipeline.has_document_waiting().unwrap(), "and again");
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 0);
+
+    guard.allow();
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+    assert!(
+        !pipeline.has_document_waiting().unwrap(),
+        "put back: no model to ask"
+    );
+
+    pipeline.run_next().unwrap();
+    assert_eq!(model.calls.load(Ordering::SeqCst), 3, "read after all");
+    assert!(
+        pipeline.has_document_waiting().unwrap(),
+        "the second waits again"
+    );
+    pipeline.run_until_idle().unwrap();
+    assert!(!pipeline.has_document_waiting().unwrap());
+    assert_eq!(model.calls.load(Ordering::SeqCst), 4);
+}
+
 /// The intake watcher withdraws an item when its claim goes to another
 /// computer, and a person cancels one to leave the document alone. Both leave
 /// a canceled row and they mean opposite things, so the watcher's is marked
