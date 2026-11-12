@@ -1207,20 +1207,26 @@ Launch never reads a model file. Tauri's setup hook asks only whether each is
 there at the size the manifest pins; the digest is checked behind the window,
 on the setup thread, and used to be read twice in the hook, a white window for
 five seconds or more on an office laptop. A model that has passed its digest
-and the semantic self-test is stamped in `models/.verified.json` with its size
-and modification time, the digest it was checked against, the size and date
-of the llama-server binary it runs on, and the version of Intern that checked
-it. The stamp has an entry for each tier's file, and an entry records whether
-that model has passed the self-test or only its digest - the accurate model is
-digest-checked when its download ends and self-tested the first time a
-document loads it. While all of that still matches, the next launch starts the
-server with neither check; when any of it changes, the model is hashed and
-self-tested once and stamped again, and a failed self-test removes its entry.
-Both models run on the one llama-server, so a new build of it sends both
-through the checks again, and so does every update of Intern; a changed model
-file sends only itself. A stamp of an earlier schema - the single-model
-build's, or one that recorded a single server binary for every file - vouches
-for nothing.
+is stamped in `models/.verified.json` (schema 4) with its size and
+modification time and the digest it was checked against, and once it has
+passed the semantic self-test, with the version of Intern that tested it and
+the size and date of the llama-server binary it ran on. The stamp has an entry
+for each tier's file - the accurate model is digest-checked when its download
+ends and self-tested the first time a document loads it. The digest stands
+for as long as the file and the pin do: a new size, date or pin sends that
+file through the digest and the self-test again, and leaves the other tier's
+entry as it is. The self-test stands only for the build and the server binary
+it ran under. An update of Intern changes no byte of a model, but it can
+change the request and the flags the server is started with, and with them
+the code the server runs on this processor; a new llama-server is new code.
+Either sends the model the next document needs through the self-test once,
+before a document depends on it - one that fails is set aside and the other
+reads - and through no digest: until alpha.17 the first launch after every
+update read both models end to end again, 8.4 GB, to find the digests it
+already had. A failed self-test removes its entry, so that file is read in
+full next time. The stamps alpha.15 to alpha.17 wrote (schema 3) are read for
+their digests alone; one of an earlier schema - the single-model build's, or
+one that recorded a single server binary for every file - vouches for nothing.
 Within a session the digest is read at most once: restarts - a cancel, a
 recovery, a swap, a reload after idle - start a file that still looks exactly
 as it did when it was checked, and refuse one that does not. The

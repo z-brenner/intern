@@ -636,25 +636,37 @@ struct VerifiedFile {
 /// Where a model that passed its digest - and, it says, its self-test -
 /// says so, beside the models themselves.
 const VERIFICATION_STAMP: &str = ".verified.json";
-/// 3 records, with each tier's file, the server binary that file was
-/// checked on - one runtime serves both tiers now, as two did when it was
-/// written, and the shape holds either way. A stamp of 2 recorded one server
-/// binary for every file, and one of 1 named the one model earlier builds
-/// pinned; neither vouches for anything now.
-const VERIFICATION_STAMP_SCHEMA: u32 = 3;
+/// 4 records each file's digest apart from its self-test, and the build of
+/// Intern with the self-test alone. A stamp of 3 named one build for the
+/// whole stamp, and an update vouched for nothing: the first launch after
+/// every update read both models end to end again, 8.4 GB, to find the same
+/// digests. Its entries are read as digests that have not passed this
+/// build's self-test ([`DIGEST_ONLY_STAMP_SCHEMA`]). A stamp of 2 recorded
+/// one server binary for every file, and one of 1 named the one model
+/// earlier builds pinned; neither vouches for anything now.
+const VERIFICATION_STAMP_SCHEMA: u32 = 4;
+/// The schema of the stamps alpha.15 to alpha.17 wrote, whose entries say
+/// only that a file passed its digest against the pin they record.
+const DIGEST_ONLY_STAMP_SCHEMA: u32 = 3;
 
 /// What a launch needs to know to trust the installed models without reading
-/// them again: each file as it was when its digest passed, whether it has
-/// passed the self-test too, the server binary it runs on, and the build that
-/// did the checking. A changed build vouches for nothing; a changed file, or
-/// a changed server binary ([`llama_server_in`]), vouches for nothing about
-/// that file. Either sends it through the full check again; a changed file
-/// leaves the other tier's entry as it is.
+/// them again: each file as it was when its digest passed, and whether - on
+/// which server binary, under which build - it has passed the self-test too.
+///
+/// The digest says the file is the model the manifest pins, which only the
+/// file and the pin can change: a new size, date or pin sends that file
+/// through the digest and the self-test again, and leaves the other tier's
+/// entry as it is. The self-test says more: that this build's request, sent
+/// to this server binary ([`llama_server_in`]) with the flags this build
+/// starts it with, is read right on this machine. A new build can change the
+/// request and the flags - and with them the code the server runs on this
+/// processor - and a new server binary is new code, so either sends the model
+/// through the self-test again before a document depends on it, but not
+/// through its digest: neither changes a byte of the file.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VerificationStamp {
     schema_version: u32,
-    app_version: String,
     files: Vec<StampedFile>,
 }
 
@@ -668,26 +680,36 @@ struct StampedFile {
     /// new pin is a different model, whatever the file's size and date.
     sha256: String,
     /// The size and date of the llama-server the file's tier runs on, as it
-    /// was when the file was checked: the binary the self-test exercised.
+    /// was when the entry was written: the binary its self-test exercised.
     server_len: u64,
     server_modified_nanos: u64,
-    /// The model has passed the semantic self-test, not only its digest. A
-    /// model downloaded in the background is digest-checked at once and
-    /// self-tested the first time it is loaded.
+    /// The build of Intern whose semantic self-test the model passed on that
+    /// server binary; `None` while only its digest has. A model downloaded in
+    /// the background is digest-checked at once and self-tested the first
+    /// time it is loaded.
     #[serde(default)]
-    self_tested: bool,
+    self_tested_by: Option<String>,
 }
 
 impl StampedFile {
-    /// Whether this records the same file, as it is, under the same pin,
-    /// on the same server binary.
-    fn same_file(&self, other: &Self) -> bool {
+    /// Whether this records the same file, as it is, under the same pin:
+    /// whether its digest still stands.
+    fn same_digest(&self, other: &Self) -> bool {
         self.name == other.name
             && self.len == other.len
             && self.modified_nanos == other.modified_nanos
             && self.sha256 == other.sha256
-            && self.server_len == other.server_len
-            && self.server_modified_nanos == other.server_modified_nanos
+    }
+
+    /// Whether this records a self-test that stands for `current`, an entry
+    /// as this build would write it for the file as it is now: the same file
+    /// on the same server binary, self-tested by the same build.
+    fn vouches_self_test(&self, current: &Self) -> bool {
+        self.same_digest(current)
+            && self.server_len == current.server_len
+            && self.server_modified_nanos == current.server_modified_nanos
+            && self.self_tested_by.is_some()
+            && self.self_tested_by == current.self_tested_by
     }
 }
 
@@ -1229,27 +1251,36 @@ impl RuntimeModel {
     }
 
     /// A stamp with no files, as this build would write it.
-    fn stamp_header(&self) -> VerificationStamp {
+    fn stamp_header() -> VerificationStamp {
         VerificationStamp {
             schema_version: VERIFICATION_STAMP_SCHEMA,
-            app_version: self.app_version.clone(),
             files: Vec::new(),
         }
     }
 
-    /// The stored stamp, when this build wrote it. Any other stamp vouches
-    /// for nothing.
+    /// The stored stamp, as this build reads it: one of this schema as it
+    /// is, whichever build wrote it, and one of [`DIGEST_ONLY_STAMP_SCHEMA`]
+    /// for its digests alone. Any other stamp vouches for nothing.
     fn stored_stamp(&self) -> Option<VerificationStamp> {
         let bytes = std::fs::read(self.stamp_path()).ok()?;
-        let stored: VerificationStamp = serde_json::from_slice(&bytes).ok()?;
-        (stored.schema_version == VERIFICATION_STAMP_SCHEMA
-            && stored.app_version == self.app_version)
-            .then_some(stored)
+        let mut stored: VerificationStamp = serde_json::from_slice(&bytes).ok()?;
+        match stored.schema_version {
+            VERIFICATION_STAMP_SCHEMA => {}
+            DIGEST_ONLY_STAMP_SCHEMA => {
+                for file in &mut stored.files {
+                    file.self_tested_by = None;
+                }
+                stored.schema_version = VERIFICATION_STAMP_SCHEMA;
+            }
+            _ => return None,
+        }
+        Some(stored)
     }
 
     /// The stamp entry `tier`'s file would earn as `state` describes it, on
-    /// the server binary as that is now: `None` when that binary cannot be
-    /// read, which vouches for nothing.
+    /// the server binary as that is now, with a self-test passed under this
+    /// build or not: `None` when that binary cannot be read, which vouches
+    /// for nothing.
     fn stamp_entry(
         &self,
         tier: ModelTier,
@@ -1270,20 +1301,21 @@ impl RuntimeModel {
             sha256: file.sha256.clone(),
             server_len: server.len(),
             server_modified_nanos: modified_nanos(&server)?,
-            self_tested,
+            self_tested_by: self_tested.then(|| self.app_version.clone()),
         })
     }
 
     /// What the stamp says of `tier`'s file as it is now: `None` when it
-    /// vouches for nothing, otherwise whether the self-test passed as well
-    /// as the digest.
+    /// vouches for nothing, otherwise whether the self-test passed - under
+    /// this build, on the server binary as it is now - as well as the
+    /// digest.
     fn stamped(&self, tier: ModelTier) -> Option<bool> {
-        let entry = self.stamp_entry(tier, &self.file_state(tier)?, false)?;
+        let entry = self.stamp_entry(tier, &self.file_state(tier)?, true)?;
         self.stored_stamp()?
             .files
             .iter()
-            .find(|stamped| stamped.same_file(&entry))
-            .map(|stamped| stamped.self_tested)
+            .find(|stamped| stamped.same_digest(&entry))
+            .map(|stamped| stamped.vouches_self_test(&entry))
     }
 
     /// Records `tier`'s file in the stamp, as `state` says it was when it
@@ -1301,7 +1333,7 @@ impl RuntimeModel {
         let Some(entry) = self.stamp_entry(tier, state, self_tested) else {
             return;
         };
-        let mut stamp = self.stamp_header();
+        let mut stamp = Self::stamp_header();
         stamp.files = self.current_entries(Some(&entry.name));
         stamp.files.push(entry);
         self.write_stamp(&stamp);
@@ -1320,15 +1352,16 @@ impl RuntimeModel {
         if kept.is_empty() {
             let _ = std::fs::remove_file(self.stamp_path());
         } else {
-            let mut stamp = self.stamp_header();
+            let mut stamp = Self::stamp_header();
             stamp.files = kept;
             self.write_stamp(&stamp);
         }
     }
 
-    /// The stored stamp's entries that still describe a file this manifest
-    /// pins, as it is on disk now and on its tier's server binary as that
-    /// is now, other than `except`.
+    /// The stored stamp's entries whose digest still stands for a file this
+    /// manifest pins, as it is on disk now, other than `except`. Each keeps
+    /// what it says of a self-test, which [`StampedFile::vouches_self_test`]
+    /// weighs when it is read.
     fn current_entries(&self, except: Option<&String>) -> Vec<StampedFile> {
         let Some(stored) = self.stored_stamp() else {
             return Vec::new();
@@ -1341,7 +1374,7 @@ impl RuntimeModel {
                 ModelTier::ALL.into_iter().any(|tier| {
                     self.file_state(tier)
                         .and_then(|state| self.stamp_entry(tier, &state, false))
-                        .is_some_and(|entry| entry.same_file(stamped))
+                        .is_some_and(|entry| entry.same_digest(stamped))
                 })
             })
             .collect()
@@ -9297,9 +9330,11 @@ mod runtime_tests {
     fn stamp_vouches_self_test(install: &Install) -> bool {
         std::fs::read(install.stamp()).is_ok_and(|bytes| {
             let stamp: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-            stamp["files"].as_array().unwrap().iter().any(|file| {
-                file["name"] == "model.gguf" && file["selfTested"] == serde_json::json!(true)
-            })
+            stamp["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|file| file["name"] == "model.gguf" && file["selfTestedBy"].is_string())
         })
     }
 
@@ -9381,7 +9416,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn changed_metadata_forces_one_hash_and_self_test() {
+    fn a_changed_file_or_pin_forces_one_hash_and_self_test() {
         let install = Install::new("stamp-changed");
         verified(&install.runtime(&Rig::new(), "1.0.0"));
         let original = std::fs::read(install.stamp()).unwrap();
@@ -9395,6 +9430,12 @@ mod runtime_tests {
                 std::fs::read(install.stamp()).unwrap(),
             )
         };
+        let edit_stamp = |field: &str, value: serde_json::Value| {
+            let mut stamp: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(install.stamp()).unwrap()).unwrap();
+            stamp["files"][0][field] = value;
+            std::fs::write(install.stamp(), serde_json::to_vec(&stamp).unwrap()).unwrap();
+        };
 
         // A file with a new date, as a replaced one has.
         install.touch_model(3_600);
@@ -9403,33 +9444,119 @@ mod runtime_tests {
         assert_ne!(rewritten, original, "the stamp records the new date");
         assert_eq!(relaunch("1.0.0").0, 0, "and is trusted again after");
 
-        // A new build of Intern.
-        let (hashes, self_tests, _) = relaunch("1.1.0");
-        assert_eq!((hashes, self_tests), (1, 1));
-        assert_eq!(relaunch("1.1.0").0, 0);
-
-        // A new server binary, which is what the self-test exercised.
-        std::fs::write(install.server(), b"a newer server binary").unwrap();
-        let (hashes, self_tests, _) = relaunch("1.1.0");
-        assert_eq!((hashes, self_tests), (1, 1));
-
         // A stamp for a file of another size.
-        let mut stamp: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(install.stamp()).unwrap()).unwrap();
-        stamp["files"][0]["len"] = serde_json::json!(MODEL_BYTES.len() + 1);
-        std::fs::write(install.stamp(), serde_json::to_vec(&stamp).unwrap()).unwrap();
-        let (hashes, self_tests, _) = relaunch("1.1.0");
+        edit_stamp("len", serde_json::json!(MODEL_BYTES.len() + 1));
+        assert_eq!(relaunch("1.0.0").0, 1);
+
+        // A file checked against another pin: a different model, whatever
+        // its size and date.
+        edit_stamp("sha256", serde_json::json!("0".repeat(64)));
+        let (hashes, self_tests, _) = relaunch("1.0.0");
         assert_eq!((hashes, self_tests), (1, 1));
+        let (hashes, self_tests, _) = relaunch("1.0.0");
+        assert_eq!((hashes, self_tests), (0, 0), "trusted again after");
 
         // Within one launch the digest is not read twice for an unchanged
         // file: a second verified start trusts this session's own check.
         let rig = Rig::new();
-        let runtime = install.runtime(&rig, "2.0.0");
+        let runtime = install.runtime(&rig, "1.0.0");
+        std::fs::remove_file(install.stamp()).unwrap();
         verified(&runtime);
         std::fs::remove_file(install.stamp()).unwrap();
         verified(&runtime);
         assert_eq!(rig.hash_count(), 1);
         assert_eq!(rig.proposals.load(Ordering::SeqCst), 2);
+    }
+
+    /// An update of Intern changes nothing in the model file, so its digest
+    /// stands; it can change the request and how the server is started, so
+    /// the model the next document needs is self-tested again before one
+    /// does. A new server binary is the same: new code, the same file.
+    #[test]
+    fn a_new_build_or_server_binary_self_tests_again_without_reading_the_file() {
+        let install = Install::new("stamp-update");
+        verified(&install.runtime(&Rig::new(), "1.0.0"));
+
+        let relaunch = |app_version: &str| {
+            let rig = Rig::new();
+            let runtime = install.runtime(&rig, app_version);
+            let before = runtime.stamped(ModelTier::Fast);
+            verified(&runtime);
+            (
+                before,
+                rig.hash_count(),
+                rig.proposals.load(Ordering::SeqCst),
+            )
+        };
+
+        // A new build of Intern.
+        assert_eq!(relaunch("1.1.0"), (Some(false), 0, 1));
+        assert_eq!(relaunch("1.1.0"), (Some(true), 0, 0));
+        assert!(stamp_vouches_self_test(&install));
+
+        // A new server binary, which is what the self-test exercised.
+        std::fs::write(install.server(), b"a newer server binary").unwrap();
+        assert_eq!(relaunch("1.1.0"), (Some(false), 0, 1));
+        assert_eq!(relaunch("1.1.0"), (Some(true), 0, 0));
+
+        // Going back to the earlier build tests it again too: the stamp
+        // keeps the last build's self-test, not every build's.
+        assert_eq!(relaunch("1.0.0"), (Some(false), 0, 1));
+    }
+
+    /// The stamps alpha.15 to alpha.17 wrote (schema 3) name the build once
+    /// for the whole stamp. The first launch of this build trusts their
+    /// digests - the pin each records, the size and date of each file - and
+    /// self-tests the model it starts; it rewrites the stamp in this
+    /// schema. An entry whose pin or file has changed is read again.
+    #[test]
+    fn a_schema_3_stamp_vouches_for_its_digests_alone() {
+        let install = Install::new("schema-3-stamp");
+        install.install_accurate();
+        let world = World::new();
+        world.prefer(ModelPreference::Fast);
+        verified(&install.runtime_in(&Rig::new(), "1.0.0", &world));
+        let as_alpha_17 = |sha256: Option<&str>| {
+            let mut stamp: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(install.stamp()).unwrap()).unwrap();
+            stamp["schemaVersion"] = serde_json::json!(3);
+            stamp["appVersion"] = serde_json::json!("0.1.0-alpha.17");
+            for file in stamp["files"].as_array_mut().unwrap() {
+                let file = file.as_object_mut().unwrap();
+                let tested = file.remove("selfTestedBy").unwrap();
+                file.insert("selfTested".into(), serde_json::json!(tested.is_string()));
+                if let Some(sha256) = sha256 {
+                    file.insert("sha256".into(), serde_json::json!(sha256));
+                }
+            }
+            std::fs::write(install.stamp(), serde_json::to_vec(&stamp).unwrap()).unwrap();
+        };
+
+        as_alpha_17(None);
+        let rig = Rig::new();
+        let runtime = install.runtime_in(&rig, "1.1.0", &world);
+        assert_eq!(runtime.stamped(ModelTier::Fast), Some(false));
+        assert_eq!(runtime.stamped(ModelTier::Accurate), Some(false));
+        verified(&runtime);
+        assert_eq!(rig.hash_count(), 0, "neither file read again");
+        assert_eq!(rig.proposals.load(Ordering::SeqCst), 1, "one self-test");
+        let rewritten: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(install.stamp()).unwrap()).unwrap();
+        assert_eq!(rewritten["schemaVersion"], 4);
+        assert_eq!(rewritten.get("appVersion"), None, "{rewritten}");
+        assert_eq!(
+            rewritten["files"].as_array().unwrap().len(),
+            2,
+            "{rewritten}"
+        );
+        assert_eq!(runtime.stamped(ModelTier::Fast), Some(true));
+        assert_eq!(runtime.stamped(ModelTier::Accurate), Some(false));
+
+        // Checked against another pin, both files are read again.
+        as_alpha_17(Some(&"0".repeat(64)));
+        let rig = Rig::new();
+        verified(&install.runtime_in(&rig, "1.1.0", &world));
+        assert_eq!(rig.hash_count(), 2);
     }
 
     #[test]
@@ -11368,7 +11495,7 @@ mod runtime_tests {
         stamp["files"][0]
             .as_object_mut()
             .unwrap()
-            .remove("selfTested");
+            .remove("selfTestedBy");
         stamp["files"]
             .as_array_mut()
             .unwrap()
@@ -11385,7 +11512,7 @@ mod runtime_tests {
         );
         let rewritten: serde_json::Value =
             serde_json::from_slice(&std::fs::read(install.stamp()).unwrap()).unwrap();
-        assert_eq!(rewritten["schemaVersion"], 3);
+        assert_eq!(rewritten["schemaVersion"], 4);
         assert_eq!(
             rewritten["files"].as_array().unwrap().len(),
             1,
@@ -11419,7 +11546,7 @@ mod runtime_tests {
         );
         let rewritten: serde_json::Value =
             serde_json::from_slice(&std::fs::read(install.stamp()).unwrap()).unwrap();
-        assert_eq!(rewritten["schemaVersion"], 3);
+        assert_eq!(rewritten["schemaVersion"], 4);
         assert_eq!(rewritten.get("serverLen"), None, "{rewritten}");
         assert_eq!(
             rewritten["files"][0]["serverLen"],
@@ -11428,12 +11555,13 @@ mod runtime_tests {
         );
     }
 
-    /// Each tier's entry in the stamp records the server binary it was
-    /// checked on. Both run on upstream, so a new upstream build sends both
-    /// models through their checks again; a llama-server an older install
-    /// left at the root, which nothing runs on, sends neither.
+    /// Each tier's entry in the stamp records the server binary its
+    /// self-test ran on. Both run on upstream, so a new upstream build sends
+    /// both models through their self-tests again, and neither through its
+    /// digest; a llama-server an older install left at the root, which
+    /// nothing runs on, sends neither.
     #[test]
-    fn a_new_server_binary_vouches_for_nothing_about_either_tier() {
+    fn a_new_server_binary_sends_both_tiers_through_the_self_test_again() {
         let install = Install::new("stamp-runtimes");
         install.install_accurate();
         let launch = |preference: ModelPreference| {
@@ -11455,10 +11583,10 @@ mod runtime_tests {
         assert_eq!(launch(ModelPreference::Accurate), (0, 1));
         assert_eq!(stamped(), (Some(true), Some(true)));
 
-        // A new upstream build: both digests again, then each self-test.
+        // A new upstream build: no digest again, then each self-test.
         std::fs::write(install.server(), b"a newer upstream build").unwrap();
-        assert_eq!(stamped(), (None, None));
-        assert_eq!(launch(ModelPreference::Accurate), (2, 1));
+        assert_eq!(stamped(), (Some(false), Some(false)));
+        assert_eq!(launch(ModelPreference::Accurate), (0, 1));
         assert_eq!(launch(ModelPreference::Fast), (0, 1));
         assert_eq!(stamped(), (Some(true), Some(true)));
 
