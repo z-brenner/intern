@@ -24,6 +24,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::admission::{AdmissionEvidence, AdmissionGuard, AdmissionStage, LocalAdmission};
+use crate::memo::ExtractionMemo;
 use crate::paths::display_path;
 use crate::settings::{AppSettings, DestinationLayout, SettingsStore, normalize_own_names};
 
@@ -852,6 +853,9 @@ pub struct Pipeline {
     /// Intern's own data folder - the queue database's - where the reader's
     /// self-test writes its file.
     data_folder: PathBuf,
+    /// The last few extractions, so a document claimed again with the same
+    /// bytes is not read again (see [`crate::memo`]).
+    memo: ExtractionMemo,
 }
 
 /// Which waiting renames one scheduler pass applies.
@@ -978,6 +982,7 @@ impl Pipeline {
             run_lock: Mutex::new(()),
             file_ops: Mutex::new(()),
             data_folder,
+            memo: ExtractionMemo::default(),
         }
     }
 
@@ -1017,6 +1022,14 @@ impl Pipeline {
     #[doc(hidden)]
     pub fn with_model_missing_grace(mut self, grace: std::time::Duration) -> Self {
         self.model_missing_grace = grace;
+        self
+    }
+
+    /// Keeps at most `entries` extractions, and `bytes` of them, in memory
+    /// (see [`crate::memo`]).
+    #[doc(hidden)]
+    pub fn with_extraction_memo(mut self, entries: usize, bytes: usize) -> Self {
+        self.memo = ExtractionMemo::with_limits(entries, bytes);
         self
     }
 
@@ -1579,6 +1592,9 @@ impl Pipeline {
                 }
             };
             if current != item.source_hash {
+                // Whatever the reader made of the bytes the item had is not
+                // what it would make of these.
+                self.memo.forget(item.id);
                 match self
                     .store
                     .refresh_extraction_hash(item.id, &item.source_hash, &current)
@@ -1675,10 +1691,23 @@ impl Pipeline {
                 total: progress.total,
             });
         };
-        let source = match self
-            .worker
-            .extract(&request_id, extraction_path, &mut forward_progress)
-        {
+        // The bytes were checked against the item's fingerprint just above
+        // (or are the verified snapshot of them): what the reader made of
+        // exactly these, read from exactly here, is what it would make of
+        // them again. Only a fresh reading says anything about the reader.
+        let remembered = self.memo.get(item.id, &item.source_hash, extraction_path);
+        let fresh = remembered.is_none();
+        let extracted = match remembered {
+            Some(source) => Ok(source),
+            None => self
+                .worker
+                .extract(&request_id, extraction_path, &mut forward_progress)
+                .inspect(|source| {
+                    self.memo
+                        .keep(item.id, &item.source_hash, extraction_path, source);
+                }),
+        };
+        let source = match extracted {
             Ok(source) => source,
             Err(error) => {
                 self.active_item.store(0, Ordering::SeqCst);
@@ -1773,18 +1802,21 @@ impl Pipeline {
         // every one: a document of the same kind in doubt over a crash is
         // due its proof attempt. One of another kind is not - a reader that
         // crashes on every PDF still reads text - and this one is no longer
-        // in doubt over a crash.
-        let crash_kind = crash_doubt_kind(&item.source_path);
-        let _ = self.store.end_failure_runs(Some(&crash_kind));
-        let _ = self.store.prove_doubts(&[&crash_kind], Some(item.id));
-        if self
-            .store
-            .doubt_kind(item.id)
-            .ok()
-            .flatten()
-            .is_some_and(|kind| kind.starts_with("crash:"))
-        {
-            let _ = self.store.forget_doubt(item.id);
+        // in doubt over a crash. A reading remembered from earlier says
+        // nothing about the reader now.
+        if fresh {
+            let crash_kind = crash_doubt_kind(&item.source_path);
+            let _ = self.store.end_failure_runs(Some(&crash_kind));
+            let _ = self.store.prove_doubts(&[&crash_kind], Some(item.id));
+            if self
+                .store
+                .doubt_kind(item.id)
+                .ok()
+                .flatten()
+                .is_some_and(|kind| kind.starts_with("crash:"))
+            {
+                let _ = self.store.forget_doubt(item.id);
+            }
         }
         self.ensure_lease(&lease)?;
         if self.paused.load(Ordering::SeqCst) {
@@ -3204,6 +3236,7 @@ impl Pipeline {
     pub fn shutdown(&self) -> PipelineResult<()> {
         self.shutting_down.store(true, Ordering::SeqCst);
         self.paused.store(true, Ordering::SeqCst);
+        self.memo.clear();
         let worker = self.worker.shutdown().map_err(worker_error);
         let model = self.model.shutdown().map_err(|error| {
             PipelineError::new(error.code, "local model process could not be stopped")
@@ -3272,6 +3305,9 @@ impl Pipeline {
                 _ => {}
             }
         }
+        // A canceled document is not read again unless a person asks, and
+        // then from the start.
+        self.memo.forget(id);
         // A canceled row can be cleared away with the history, so a file
         // Intern marked gets its own name back now.
         self.unmark_if_marked(id);
@@ -3477,6 +3513,7 @@ impl Pipeline {
             self.reject_deferred_reconciliation_mutation(id)?;
         }
         self.repository.remove_item(id)?;
+        self.memo.forget(id);
         self.events.queue_changed();
         Ok(())
     }

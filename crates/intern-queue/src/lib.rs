@@ -9,6 +9,7 @@
 
 pub mod admission;
 pub use admission::{AdmissionEvidence, AdmissionGuard, AdmissionStage};
+pub mod memo;
 pub mod paths;
 pub mod pipeline;
 pub mod settings;
