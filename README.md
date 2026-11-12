@@ -65,7 +65,7 @@ extraction nor OCR can read goes to review rather than being guessed at.
 
 ## Install and first run
 
-Windows 10 or 11, x86-64. Download `Intern_0.1.0-alpha.17_x64-setup.exe` from the
+Windows 10 or 11, x86-64. Download `Intern_0.1.0-alpha.18_x64-setup.exe` from the
 [latest release](https://github.com/z-brenner/intern/releases/latest) and run it;
 earlier versions are on the [releases page](https://github.com/z-brenner/intern/releases).
 It installs per-user, so it does not ask for administrator rights, and
@@ -86,7 +86,7 @@ carries a keyless Sigstore build-provenance attestation naming the repository,
 workflow, and commit that produced those exact bytes:
 
 ```sh
-gh attestation verify Intern_0.1.0-alpha.17_x64-setup.exe --repo z-brenner/intern \
+gh attestation verify Intern_0.1.0-alpha.18_x64-setup.exe --repo z-brenner/intern \
   --signer-workflow z-brenner/intern/.github/workflows/release.yml
 ```
 
@@ -241,7 +241,7 @@ themselves. Install a package from a CI run's `intern-linux-…` artifact, or
 build one, with apt:
 
 ```sh
-sudo apt install ./Intern_0.1.0-alpha.17_amd64.deb
+sudo apt install ./Intern_0.1.0-alpha.18_amd64.deb
 ```
 
 apt brings what it depends on (WebKitGTK, AppIndicator, `tesseract-ocr`,
@@ -571,7 +571,7 @@ from a release that put a build there deletes it (the installer hooks,
 Tauri produces a per-user NSIS installer. To smoke-test a clean installer:
 
 ```powershell
-./scripts/smoke-installer.ps1 -InstallerPath target/release/bundle/nsis/Intern_0.1.0-alpha.17_x64-setup.exe
+./scripts/smoke-installer.ps1 -InstallerPath target/release/bundle/nsis/Intern_0.1.0-alpha.18_x64-setup.exe
 ```
 
 The smoke test also starts the installed server with `--version` from its own
