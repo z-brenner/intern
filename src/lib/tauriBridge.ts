@@ -90,6 +90,10 @@ interface QueueItemDto {
   keptOriginal?: boolean;
   parked?: boolean;
   omittedParties?: string[];
+  // In review: the other parties the document names, and the words of the
+  // name a chosen one replaces. An older backend omits both.
+  partyChoices?: string[];
+  nameParties?: string[];
   // Which local model read the document. The backend leaves it out for a
   // hosted model and for a reading stored before it was recorded.
   readBy?: Partial<ModelReading> | null;
@@ -643,6 +647,8 @@ function normalizeItem(item: QueueItemDto): QueueItem {
     ...(item.nearDuplicateOf === undefined ? {} : { nearDuplicateOf: item.nearDuplicateOf }),
     ...(item.fileModifiedDate === undefined ? {} : { fileModifiedDate: item.fileModifiedDate }),
     ...(item.omittedParties?.length ? { omittedParties: [...item.omittedParties] } : {}),
+    ...(item.partyChoices?.length ? { partyChoices: [...item.partyChoices] } : {}),
+    ...(item.partyChoices?.length && item.nameParties?.length ? { nameParties: [...item.nameParties] } : {}),
     ...(reading ? { readBy: reading } : {}),
     ...(typeof item.copyOf === 'string' ? { copyOf: item.copyOf } : {}),
   };

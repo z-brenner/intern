@@ -78,6 +78,20 @@ export interface QueueItem {
    * spells them. The evidence still shows them.
    */
   omittedParties?: string[];
+  /**
+   * In review, the other parties the document names, for a reviewer to put
+   * in the name with one click when it gives the wrong one: each found in
+   * the document, none already in the name, at most four, in the order the
+   * model gave them and written as a name writes a party.
+   */
+  partyChoices?: string[];
+  /**
+   * The parties the proposed name gives, exactly as it writes them - one, or
+   * the two sides of a "between" - which a chosen party takes the place of.
+   * Sent with `partyChoices`, and absent when the name is not known to end
+   * with its parties.
+   */
+  nameParties?: string[];
   /** Which local model read the document. Absent for a hosted model and for older readings. */
   readBy?: ModelReading;
   /**

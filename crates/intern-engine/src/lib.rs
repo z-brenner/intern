@@ -64,9 +64,12 @@ pub use domain::*;
 pub use engine::{Engine, Pipeline, PreparedDigest, PreparedEvidence, estimated_prompt_tokens};
 pub use error::{EngineError, EngineErrorCode, EngineResult};
 pub use hosted::{HostedClient, HostedModelConfig, HostedProvider};
-pub use house_style::{HouseRule, HouseStyle, RuleKind, compose_styled_filename, lesson_from_edit};
+pub use house_style::{
+    HouseRule, HouseStyle, RuleKind, approved_party, compose_styled_filename, lesson_from_edit,
+    named_parties,
+};
 pub use manifest::{ModelFile, ModelManifest, ModelRole, ModelTier, TierModel};
-pub use naming::{compose_filename, sanitize_folder_name};
+pub use naming::{compose_filename, party_as_named, sanitize_folder_name};
 pub use own_names::{counterparty_view, is_own_name};
 pub use profile::PromptProfile;
 pub use server::{LlamaServer, ServerOptions};

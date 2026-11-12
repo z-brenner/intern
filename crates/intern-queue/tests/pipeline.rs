@@ -18,7 +18,8 @@ use intern_core::{
 use intern_engine::{
     AnalysisTelemetry, DateRole, DigestBudget, DocumentAnalysis, DocumentSource, Evidence,
     ExtractProgress, ModelProposal, ModelReading, ModelTier, PageOrigin, ParserWarning,
-    PartyRelation, ProposalStatus, SourcePage, distill, engine::finish, fingerprint, validate,
+    PartyRelation, ProposalStatus, SourcePage, Support, ValidatedFacts, ValidatedParty, distill,
+    engine::finish, fingerprint, validate,
 };
 use intern_intake::{
     SharePointDeployment,
@@ -3362,24 +3363,59 @@ fn dated_text(written: &str) -> DocumentSource {
 }
 
 fn learning_pipeline(temp: &Path, dates: &[(&str, &str)]) -> (Pipeline, Arc<RecordingFiling>) {
+    learning_pipeline_reading(temp, dates, &[])
+}
+
+/// [`learning_pipeline`], with readings that carry the evidence pipeline's
+/// validated facts naming `parties` - the default pipeline's readings - or,
+/// given none, no facts at all, as the digest pipeline's.
+fn learning_pipeline_reading(
+    temp: &Path,
+    dates: &[(&str, &str)],
+    parties: &[&'static str],
+) -> (Pipeline, Arc<RecordingFiling>) {
+    reading_pipeline(
+        temp,
+        dates
+            .iter()
+            .map(|(_, written)| dated_text(written))
+            .collect(),
+        dates
+            .iter()
+            .map(|(iso, written)| dated_proposal(iso, written))
+            .collect(),
+        parties,
+        DestinationLayout::Flat,
+    )
+}
+
+/// A pipeline that reads `texts` in turn, answers each with the next of
+/// `replies`, and files into `filed` under `temp` in `layout`. Its readings
+/// carry validated facts naming `parties`, or none when there are none.
+fn reading_pipeline(
+    temp: &Path,
+    texts: Vec<DocumentSource>,
+    replies: Vec<ModelProposal>,
+    parties: &[&'static str],
+    layout: DestinationLayout,
+) -> (Pipeline, Arc<RecordingFiling>) {
     let filed = temp.join("filed");
     std::fs::create_dir_all(&filed).unwrap();
-    let worker = Arc::new(FakeWorker::new(
-        dates
-            .iter()
-            .map(|(_, written)| Ok(dated_text(written)))
-            .collect(),
-    ));
-    let model = Arc::new(FakeModel::new(
-        dates
-            .iter()
-            .map(|(iso, written)| Ok(dated_proposal(iso, written)))
-            .collect(),
-    ));
+    let worker = Arc::new(FakeWorker::new(texts.into_iter().map(Ok).collect()));
+    let replies = FakeModel::new(replies.into_iter().map(Ok).collect());
+    let model: Arc<dyn AnalyzerBoundary> = if parties.is_empty() {
+        Arc::new(replies)
+    } else {
+        Arc::new(FactsModel {
+            inner: replies,
+            parties: parties.to_vec(),
+        })
+    };
     let settings = SettingsStore::new(temp.join("settings.json"));
     settings
         .save(&AppSettings {
             destination: filed.to_string_lossy().into_owned(),
+            destination_layout: layout,
             ..AppSettings::default()
         })
         .unwrap();
@@ -3515,6 +3551,326 @@ fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
         pipeline.learned_rules().unwrap()[0].seen,
         2,
         "approving the spelling Intern applied teaches nothing new"
+    );
+}
+
+/// A model whose readings carry the evidence pipeline's validated facts:
+/// `parties` are every party validation found the document to name.
+struct FactsModel {
+    inner: FakeModel,
+    parties: Vec<&'static str>,
+}
+
+impl AnalyzerBoundary for FactsModel {
+    fn analyze(
+        &self,
+        source: &DocumentSource,
+        extension: &str,
+        existing_names: &[&str],
+    ) -> Result<DocumentAnalysis, ModelFailure> {
+        let mut analysis = self.inner.analyze(source, extension, existing_names)?;
+        analysis.facts = Some(ValidatedFacts {
+            parties: self
+                .parties
+                .iter()
+                .map(|name| ValidatedParty {
+                    name: (*name).into(),
+                    support: Support::Cited,
+                    ..ValidatedParty::default()
+                })
+                .collect(),
+            ..ValidatedFacts::default()
+        });
+        Ok(analysis)
+    }
+}
+
+/// An employment agreement signed `written` that also names the agency that
+/// placed the employee: a third party the document names.
+fn placed_agreement(written: &str) -> DocumentSource {
+    parsed(&format!(
+        "Employment Agreement signed {written} by John Smith and Acme Corporation, \
+         placed by Beacon Staffing LLC."
+    ))
+}
+
+/// Every party validation finds in [`placed_agreement`].
+const PLACED_PARTIES: [&str; 3] = ["John Smith", "Acme Corporation", "Beacon Staffing LLC"];
+
+/// Choosing another party the document names - one click on the party
+/// choices in review - decides who that document is with. Made twice, it
+/// used to be learned as a spelling, and every later name giving the first
+/// party would have given the second, documents that never mention it
+/// included. A respelling of the named party is still learned.
+#[test]
+fn choosing_another_party_of_the_document_teaches_no_spelling() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let dates = [
+        ("2024-04-12", "April 12, 2024"),
+        ("2024-05-03", "May 3, 2024"),
+        ("2024-06-07", "June 7, 2024"),
+    ];
+    let (pipeline, _) = reading_pipeline(
+        temp.path(),
+        dates
+            .iter()
+            .map(|(_, written)| placed_agreement(written))
+            .collect(),
+        dates
+            .iter()
+            .map(|(iso, written)| dated_proposal(iso, written))
+            .collect(),
+        &PLACED_PARTIES,
+        DestinationLayout::Flat,
+    );
+    let queued = pipeline
+        .enqueue_files(&[
+            source(&inbox, "a.pdf"),
+            source(&inbox, "b.pdf"),
+            source(&inbox, "c.pdf"),
+        ])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let first = record_of(&pipeline, queued[0]);
+    assert_eq!(
+        first.filename,
+        "2024-04-12 Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+    assert_eq!(first.party_choices(), vec!["Beacon Staffing LLC"]);
+    assert_eq!(
+        first.named_parties("pdf"),
+        vec!["John Smith", "Acme Corporation"]
+    );
+
+    for (index, (date, _)) in dates.iter().take(2).enumerate() {
+        pipeline
+            .approve(
+                queued[index],
+                &format!(
+                    "{date} Employment Agreement between John Smith and Beacon Staffing LLC.pdf"
+                ),
+                "Employment agreement between John Smith and Beacon Staffing LLC.",
+            )
+            .unwrap();
+    }
+    assert!(
+        pipeline.learned_rules().unwrap().is_empty(),
+        "another party is not a spelling"
+    );
+    assert_eq!(
+        record_of(&pipeline, queued[2]).filename,
+        "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+
+    pipeline
+        .approve(
+            queued[2],
+            "2024-06-07 Employment Agreement between John Smith and Acme.pdf",
+            "Employment agreement between John Smith and Acme Corporation.",
+        )
+        .unwrap();
+    let rules = pipeline.learned_rules().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        (rules[0].from.as_str(), rules[0].to.as_str()),
+        ("Acme Corporation", "Acme"),
+        "a respelling of the named party still teaches"
+    );
+}
+
+/// A party put in a name that gave none - one click on the party choices,
+/// which writes it after " - " - is read as a new type, since the name has
+/// no party clause to hold it. Made twice, it used to become a rule, and
+/// every later document of that type was named with that party, ready ones
+/// filed without review. A respelling of the type is still learned.
+#[test]
+fn a_party_put_in_a_name_that_gave_none_teaches_no_type() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let partyless = |iso: &str, written: &str| ModelProposal {
+        parties: Vec::new(),
+        party_relation: PartyRelation::None,
+        evidence: Evidence {
+            parties: Vec::new(),
+            ..dated_proposal(iso, written).evidence
+        },
+        ..dated_proposal(iso, written)
+    };
+    let dates = [
+        ("2024-04-12", "April 12, 2024"),
+        ("2024-05-03", "May 3, 2024"),
+        ("2024-06-07", "June 7, 2024"),
+        ("2024-07-01", "July 1, 2024"),
+    ];
+    let (pipeline, _) = reading_pipeline(
+        temp.path(),
+        dates
+            .iter()
+            .map(|(_, written)| placed_agreement(written))
+            .collect(),
+        vec![
+            partyless(dates[0].0, dates[0].1),
+            partyless(dates[1].0, dates[1].1),
+            partyless(dates[2].0, dates[2].1),
+            dated_proposal(dates[3].0, dates[3].1),
+        ],
+        &PLACED_PARTIES,
+        DestinationLayout::Flat,
+    );
+    let queued = pipeline
+        .enqueue_files(&[
+            source(&inbox, "a.pdf"),
+            source(&inbox, "b.pdf"),
+            source(&inbox, "c.pdf"),
+        ])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let first = record_of(&pipeline, queued[0]);
+    assert_eq!(first.filename, "2024-04-12 Employment Agreement.pdf");
+    assert_eq!(first.party_choices(), PLACED_PARTIES);
+    assert!(first.named_parties("pdf").is_empty());
+
+    for (index, (date, _)) in dates.iter().take(2).enumerate() {
+        pipeline
+            .approve(
+                queued[index],
+                &format!("{date} Employment Agreement - Beacon Staffing LLC.pdf"),
+                "Employment agreement placed by Beacon Staffing LLC.",
+            )
+            .unwrap();
+    }
+    assert!(
+        pipeline.learned_rules().unwrap().is_empty(),
+        "a party is not a type"
+    );
+    let later = pipeline
+        .enqueue_files(&[source(&inbox, "d.pdf")])
+        .unwrap()
+        .pop()
+        .unwrap()
+        .id;
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(
+        record_of(&pipeline, later).filename,
+        "2024-07-01 Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+
+    pipeline
+        .approve(
+            queued[2],
+            "2024-06-07 Employment Contract.pdf",
+            "Employment contract.",
+        )
+        .unwrap();
+    let rules = pipeline.learned_rules().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        (rules[0].from.as_str(), rules[0].to.as_str()),
+        ("Employment Agreement", "Employment Contract"),
+        "a respelling of the type still teaches"
+    );
+}
+
+/// A document filed by party goes in the folder of the party its approved
+/// name gives: another party the document names, chosen in review - with
+/// the connecting word changed too, as it often must be - or the
+/// reviewer's own spelling of the one proposed. The filing report says the
+/// same. It used to go in the folder of the party the reviewer had just
+/// taken out of the name.
+#[test]
+fn a_party_chosen_in_review_is_the_party_the_document_is_filed_under() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let with_employer = |iso: &str, written: &str| ModelProposal {
+        parties: vec!["Acme Corporation".into()],
+        party_relation: PartyRelation::With,
+        ..dated_proposal(iso, written)
+    };
+    let dates = [
+        ("2024-04-12", "April 12, 2024"),
+        ("2024-05-03", "May 3, 2024"),
+        ("2024-06-07", "June 7, 2024"),
+    ];
+    let (pipeline, filing) = reading_pipeline(
+        temp.path(),
+        dates
+            .iter()
+            .map(|(_, written)| placed_agreement(written))
+            .collect(),
+        dates
+            .iter()
+            .map(|(iso, written)| with_employer(iso, written))
+            .collect(),
+        &PLACED_PARTIES,
+        DestinationLayout::Party,
+    );
+    let queued = pipeline
+        .enqueue_files(&[
+            source(&inbox, "a.pdf"),
+            source(&inbox, "b.pdf"),
+            source(&inbox, "c.pdf"),
+        ])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let first = record_of(&pipeline, queued[0]);
+    assert_eq!(
+        first.filename,
+        "2024-04-12 Employment Agreement with Acme Corporation.pdf"
+    );
+    assert_eq!(
+        first.party_choices(),
+        vec!["John Smith", "Beacon Staffing LLC"]
+    );
+
+    let approved = [
+        "2024-04-12 Employment Agreement with Beacon Staffing LLC.pdf",
+        "2024-05-03 Employment Agreement for John Smith.pdf",
+        "2024-06-07 Employment Agreement with ACME.pdf",
+    ];
+    for (id, name) in queued.iter().zip(approved) {
+        pipeline.approve(*id, name, "An agreement.").unwrap();
+    }
+    let filed = temp.path().join("filed");
+    let destination = |id: i64| {
+        let item = pipeline
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == id)
+            .unwrap();
+        assert_eq!(item.status, QueueStatus::Completed);
+        item.receipt.unwrap().destination
+    };
+    assert_eq!(
+        destination(queued[0]),
+        filed.join("Beacon Staffing LLC").join(approved[0])
+    );
+    assert_eq!(
+        destination(queued[1]),
+        filed.join("John Smith").join(approved[1])
+    );
+    assert_eq!(destination(queued[2]), filed.join("ACME").join(approved[2]));
+    let heard = filing.filed.lock().unwrap();
+    assert_eq!(heard[0].proposal.parties, vec!["Beacon Staffing LLC"]);
+    assert_eq!(heard[1].proposal.parties, vec!["John Smith"]);
+    assert_eq!(heard[2].proposal.parties, vec!["ACME"]);
+    assert_eq!(
+        record_of(&pipeline, queued[0]).analysis.proposal.parties,
+        vec!["Acme Corporation"],
+        "the analysis keeps the document's reading"
     );
 }
 
@@ -3673,18 +4029,29 @@ fn a_spelling_typed_in_capitals_is_proposed_as_typed() {
 
 /// A spelling Intern applied that the reviewer undoes is retracted; one the
 /// reviewer changes to a third form starts over from the document's word.
+/// The same with or without validated facts behind the reading: the
+/// document's own word restored is a party the facts name, and once
+/// counted as another party than the rule's spelling, which left the rule
+/// in force.
 #[test]
 fn respelling_interns_own_spelling_in_review_changes_the_rule_not_the_document() {
+    for facts in [&[][..], &["John Smith", "Acme Corporation"][..]] {
+        respelling_interns_own_spelling(facts);
+    }
+}
+
+fn respelling_interns_own_spelling(facts: &[&'static str]) {
     let temp = tempdir().unwrap();
     let inbox = temp.path().join("inbox");
     std::fs::create_dir_all(&inbox).unwrap();
-    let (pipeline, _) = learning_pipeline(
+    let (pipeline, _) = learning_pipeline_reading(
         temp.path(),
         &[
             ("2024-04-12", "April 12, 2024"),
             ("2024-05-03", "May 3, 2024"),
             ("2024-06-07", "June 7, 2024"),
         ],
+        facts,
     );
     let first = source(&inbox, "a.pdf");
     let second = source(&inbox, "b.pdf");
@@ -3748,7 +4115,10 @@ fn respelling_interns_own_spelling_in_review_changes_the_rule_not_the_document()
             "A sentence about the agreement.",
         )
         .unwrap();
-    assert!(pipeline.learned_rules().unwrap().is_empty());
+    assert!(
+        pipeline.learned_rules().unwrap().is_empty(),
+        "the document's word restored retracts the rule (facts: {facts:?})"
+    );
 }
 
 /// A statement of work the firm signed with a supplier, dated `written`.

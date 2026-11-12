@@ -14,10 +14,11 @@ use intern_core::{
 };
 use intern_engine::{
     DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
-    RuleKind, ValidatedProposal, compose_styled_filename, counterparty_view,
+    RuleKind, Support, ValidatedProposal, approved_party, compose_styled_filename,
+    counterparty_view,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
-    lesson_from_edit, sanitize_folder_name,
+    is_own_name, lesson_from_edit, named_parties, party_as_named, sanitize_folder_name,
     setup::{semantic_probes, validate_semantic_probe},
 };
 use rusqlite::{Connection, OptionalExtension, params};
@@ -736,6 +737,201 @@ impl ProposalRecord {
             .0;
         counterparty_view(&styled, &self.own_names)
     }
+
+    /// The other parties the document names, offered to a reviewer to put
+    /// in the name with one click when it gives the wrong one: the fix used
+    /// to be retyping fifteen to forty characters. Each is a party
+    /// validation found the document to state, and none is a party the name
+    /// gives already, the person's own organization, someone the document
+    /// only copies in, or someone who signs for a party - none of those is a
+    /// filename's party. They come in the order the model gave them, which
+    /// puts the side it read as the document's first, written as a composed
+    /// name writes a party, and at most [`MAX_PARTY_CHOICES`] of them.
+    ///
+    /// Read from the stored analysis alone, with no model call. Empty for a
+    /// name with nothing behind it to offer from: a copy's, one typed for an
+    /// unreadable document, and a reading with no validated facts (the
+    /// digest pipeline's, or one stored before the facts were kept).
+    pub fn party_choices(&self) -> Vec<String> {
+        let Some(facts) = self
+            .analysis
+            .facts
+            .as_ref()
+            .filter(|_| !self.is_synthetic())
+        else {
+            return Vec::new();
+        };
+        let (named, _) = self.name_view();
+        let mut taken = named
+            .parties
+            .iter()
+            .chain(&self.analysis.proposal.parties)
+            .flat_map(|party| party_keys(party))
+            .collect::<Vec<_>>();
+        let model: Vec<String> = self
+            .analysis
+            .model_proposal
+            .as_ref()
+            .map(|reply| match reply.facts.as_deref() {
+                Some(facts) if !facts.parties.is_empty() => facts
+                    .parties
+                    .iter()
+                    .map(|party| HouseRule::key(&party.name))
+                    .collect(),
+                _ => reply
+                    .parties
+                    .iter()
+                    .map(|party| HouseRule::key(party))
+                    .collect(),
+            })
+            .unwrap_or_default();
+        // A validated name is the model's, trimmed of a label or completed
+        // from the line that states it, so it is found among the model's
+        // names by either holding the other.
+        let rank = |name: &str| {
+            let key = HouseRule::key(name);
+            model
+                .iter()
+                .position(|given| {
+                    !given.is_empty() && (given.contains(&key) || key.contains(given.as_str()))
+                })
+                .unwrap_or(model.len())
+        };
+        let mut choices = Vec::new();
+        for party in &facts.parties {
+            if !matches!(party.support, Support::Cited | Support::Context)
+                || party.copied
+                || party.signatory
+                || self
+                    .own_names
+                    .iter()
+                    .any(|own| is_own_name(&party.name, own))
+            {
+                continue;
+            }
+            let Some(offered) = party_as_named(&party.name) else {
+                continue;
+            };
+            let keys = party_keys(&party.name);
+            if keys.iter().any(|key| taken.contains(key)) {
+                continue;
+            }
+            taken.extend(keys);
+            choices.push((rank(&party.name), offered));
+        }
+        // Stable: parties the model gave in no recognizable form keep the
+        // document's order, after the rest.
+        choices.sort_by_key(|(rank, _)| *rank);
+        choices
+            .into_iter()
+            .map(|(_, offered)| offered)
+            .take(MAX_PARTY_CHOICES)
+            .collect()
+    }
+
+    /// The parties [`Self::filename`] gives, each exactly as the name writes
+    /// it (see [`named_parties`]): the words a party chosen in review takes
+    /// the place of. `extension` is the source file's.
+    pub fn named_parties(&self, extension: &str) -> Vec<String> {
+        named_parties(&self.styled_proposal(), extension, &self.filename)
+    }
+
+    /// The validated facts as the name `filename` the document is filed
+    /// under gives them: its date (see [`proposal_as_applied`]), and the
+    /// party a reviewer put in place of one the proposed name gave - another
+    /// party the document names, chosen in review, or their own spelling.
+    /// The layout folder and the filing report are read from this, so a
+    /// document filed by party goes in the folder of the party its name
+    /// gives, not the one the reviewer took out of it.
+    ///
+    /// The name is read with the grammar that composed the proposed one: a
+    /// respelled side of a "between" as a lesson is read (see
+    /// [`lesson_from_edit`]), and otherwise the one party after the type it
+    /// kept, whatever the connecting word (see [`approved_party`]). An edit
+    /// to the type leaves the parties as proposed. `extension` is the
+    /// source file's.
+    pub fn as_filed(&self, extension: &str, filename: &str) -> ValidatedProposal {
+        let styled = self.styled_proposal();
+        let mut filed = proposal_as_applied(&styled, filename);
+        if self.is_synthetic() {
+            return filed;
+        }
+        let proposed = compose_styled_filename(&styled, &self.house_rules, extension, &[]).value;
+        if let Some(edit) = lesson_from_edit(&styled, extension, &proposed, filename)
+            .filter(|edit| edit.kind == RuleKind::Party)
+        {
+            for party in &mut filed.parties {
+                if edit.matches(party) {
+                    party.clone_from(&edit.to);
+                }
+            }
+        } else if let Some(party) = approved_party(&styled, extension, &proposed, filename)
+            && filed
+                .parties
+                .first()
+                .is_none_or(|first| HouseRule::key(first) != HouseRule::key(&party))
+        {
+            // In place of the party the proposed name gave, which is the
+            // first: a name with one party gives the first of them.
+            filed
+                .parties
+                .retain(|other| HouseRule::key(other) != HouseRule::key(&party));
+            match filed.parties.first_mut() {
+                Some(first) => *first = party,
+                None => filed.parties.push(party),
+            }
+        }
+        filed
+    }
+
+    /// Whether the edit `lesson` was read from puts in the name a party the
+    /// reading found in the document that the words it replaced did not
+    /// give: a decision about who this document is with - choosing another
+    /// party in review, or adding one to a name that gave none - and no
+    /// spelling of those words. `lesson.from` is the document's word, after
+    /// any rule that respelled it is traced back.
+    ///
+    /// A party counts in either spelling (see [`party_keys`]), as a run of
+    /// whole words anywhere in the new spelling, so a type rewritten as
+    /// "Requester Invoice - Sam Brownell" names Sam Brownell as surely as a
+    /// party clause does.
+    fn names_another_party(&self, lesson: &HouseRule) -> bool {
+        let to = HouseRule::key(&lesson.to);
+        let from = lesson.from_key();
+        let found = self
+            .analysis
+            .facts
+            .iter()
+            .flat_map(|facts| facts.parties.iter().map(|party| party.name.as_str()))
+            .chain(self.analysis.proposal.parties.iter().map(String::as_str));
+        found.map(party_keys).any(|keys| {
+            keys.iter().any(|key| holds_words(&to, key))
+                && !keys.iter().any(|key| holds_words(&from, key))
+        })
+    }
+}
+
+/// Whether the key `spelling` holds the key `words` as a run of whole
+/// words: "acme corporation" holds "acme", and "acmes" holds nothing.
+fn holds_words(spelling: &str, words: &str) -> bool {
+    !words.is_empty() && format!(" {spelling} ").contains(&format!(" {words} "))
+}
+
+/// The most parties offered beside a proposed name in review: enough for
+/// every side a document names, few enough to stay one short row.
+pub const MAX_PARTY_CHOICES: usize = 4;
+
+/// A party's spelling and the one a composed name gives it, each as house
+/// style compares spellings, so a party is known in either form.
+fn party_keys(party: &str) -> Vec<String> {
+    let mut keys = vec![HouseRule::key(party)];
+    if let Some(named) = party_as_named(party).map(|named| HouseRule::key(&named))
+        && !keys.contains(&named)
+    {
+        keys.push(named);
+    }
+    keys.retain(|key| !key.is_empty());
+    keys
 }
 
 /// How many times the same respelling must be made in review before Intern
@@ -2386,6 +2582,13 @@ impl Pipeline {
         };
         if HouseRule::key(&lesson.to) == lesson.from_key() {
             self.repository.forget_rule_for(lesson.kind, &lesson.from)?;
+        } else if record.names_another_party(&lesson) {
+            // Another party the document names is no spelling of the words
+            // it took the place of: putting it in the name - one click on
+            // the party choices - decides who this document is with.
+            // Learned, it would put that party in every later name giving
+            // those words, documents that never mention it included.
+            return Ok(());
         } else if lesson.is_meaningful() {
             self.repository.learn(&lesson)?;
         }
@@ -2587,7 +2790,13 @@ impl Pipeline {
             Some(record) => target_folder(
                 settings,
                 &item.source_path,
-                &proposal_as_applied(&record.styled_proposal(), filename),
+                &record.as_filed(
+                    item.source_path
+                        .extension()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or_default(),
+                    filename,
+                ),
             ),
             None => destination_root(settings, &item.source_path),
         };
@@ -4810,8 +5019,12 @@ fn filed_document(
             source_hash: source_hash.to_owned(),
             destination: receipt.destination.clone(),
             description: proposal.description.clone(),
-            proposal: proposal_as_applied(
-                &proposal.styled_proposal(),
+            proposal: proposal.as_filed(
+                receipt
+                    .source
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default(),
                 &receipt
                     .destination
                     .file_name()
@@ -5207,6 +5420,196 @@ mod date_gate_tests {
         );
         assert_eq!(leading_date("2026-03-0"), None);
         assert_eq!(leading_date(""), None);
+    }
+}
+
+#[cfg(test)]
+mod party_choice_tests {
+    use intern_engine::{
+        Evidence, HouseRule, ModelFacts, ModelProposal, PartyFact, PartyRelation, RuleKind,
+        Support, ValidatedFacts, ValidatedParty, ValidatedProposal, compose_filename,
+    };
+
+    use super::{CopyOf, MAX_PARTY_CHOICES, ProposalRecord};
+
+    fn party(name: &str, support: Support) -> ValidatedParty {
+        ValidatedParty {
+            name: name.into(),
+            support,
+            ..ValidatedParty::default()
+        }
+    }
+
+    /// A letter the model read as sent to `named`, by a reply naming
+    /// `replied` in that order, whose validation found `found` in the
+    /// document, in the order the document names them.
+    fn letter(named: &str, replied: &[&str], found: Vec<ValidatedParty>) -> ProposalRecord {
+        let proposal = ValidatedProposal {
+            document_type: Some("Letter".into()),
+            document_date: Some("2012-06-19".into()),
+            date_role: None,
+            parties: vec![named.into()],
+            party_relation: PartyRelation::To,
+            description: "A letter.".into(),
+            confidence: 0.9,
+            evidence: Evidence::default(),
+        };
+        let filename = compose_filename(&proposal, "pdf", &[]).value;
+        let mut record = ProposalRecord::synthetic(filename, String::new());
+        record.analysis.proposal = proposal;
+        record.analysis.model_proposal = Some(ModelProposal {
+            parties: replied.iter().map(|name| (*name).to_owned()).collect(),
+            facts: Some(Box::new(ModelFacts {
+                parties: replied
+                    .iter()
+                    .map(|name| PartyFact {
+                        name: (*name).into(),
+                        ..PartyFact::default()
+                    })
+                    .collect(),
+                ..ModelFacts::default()
+            })),
+            ..ModelProposal::default()
+        });
+        record.analysis.facts = Some(ValidatedFacts {
+            parties: found,
+            ..ValidatedFacts::default()
+        });
+        record
+    }
+
+    /// The model named the sender and the recipient, validation found both
+    /// in the letter, and the name gives the recipient: the sender is
+    /// offered, as the name would write it. The addressee is not, being
+    /// in the name already.
+    #[test]
+    fn a_party_the_document_names_and_the_name_leaves_out_is_offered() {
+        let record = letter(
+            "U.S. Department of Justice",
+            &["MORGAN, LEWIS & BOCKIUS LLP", "U.S. Department of Justice"],
+            vec![
+                party("U.S. Department of Justice", Support::Cited),
+                party("MORGAN, LEWIS & BOCKIUS LLP", Support::Context),
+            ],
+        );
+        assert_eq!(
+            record.filename,
+            "2012-06-19 Letter to U.S. Department of Justice.pdf"
+        );
+        assert_eq!(record.party_choices(), vec!["Morgan, Lewis & Bockius LLP"]);
+        assert_eq!(
+            record.named_parties("pdf"),
+            vec!["U.S. Department of Justice"]
+        );
+    }
+
+    /// Only a party found in the document is offered, never someone it only
+    /// copies in or who signs for a party, nor the person's own
+    /// organization; the model's order decides, and no more than the
+    /// limit are offered.
+    #[test]
+    fn only_the_documents_own_other_parties_are_offered_in_the_models_order() {
+        let mut record = letter(
+            "Office of Rail and Road",
+            &[
+                "Office of Rail and Road",
+                "Harbor Comet Repairs LLC",
+                "Fabrikam Inc.",
+                "Litware Inc.",
+                "Northwind Traders",
+                "Tailspin Toys",
+                "Contoso Worldwide, Inc.",
+            ],
+            vec![
+                party("Office of Rail and Road", Support::Cited),
+                party("Contoso Worldwide, Inc.", Support::Cited),
+                party("Tailspin Toys", Support::Cited),
+                party("Northwind Traders", Support::Context),
+                party("Litware Inc.", Support::Cited),
+                party("Fabrikam Inc.", Support::Cited),
+                party("Harbor Comet Repairs LLC", Support::Cited),
+            ],
+        );
+        record.own_names = vec!["Contoso Worldwide".into()];
+        assert_eq!(
+            record.party_choices(),
+            vec![
+                "Harbor Comet Repairs LLC",
+                "Fabrikam Inc",
+                "Litware Inc",
+                "Northwind Traders"
+            ]
+        );
+        assert_eq!(record.party_choices().len(), MAX_PARTY_CHOICES);
+
+        let facts = record.analysis.facts.as_mut().unwrap();
+        facts.parties[2].support = Support::Unsupported;
+        facts.parties[3].copied = true;
+        facts.parties[4].signatory = true;
+        assert_eq!(
+            record.party_choices(),
+            vec!["Harbor Comet Repairs LLC", "Fabrikam Inc"]
+        );
+    }
+
+    /// Nothing is offered from a reading with no validated facts, nor for a
+    /// copy's name, which has no reading behind it.
+    #[test]
+    fn a_name_with_no_facts_behind_it_offers_nothing() {
+        let mut record = letter(
+            "U.S. Department of Justice",
+            &["U.S. Department of Justice", "STARS Alliance LLC"],
+            vec![
+                party("U.S. Department of Justice", Support::Cited),
+                party("STARS Alliance LLC", Support::Cited),
+            ],
+        );
+        record.copy_of = Some(CopyOf {
+            original: "2012-06-19 Letter.pdf".into(),
+            folder: "filed".into(),
+        });
+        assert!(record.party_choices().is_empty());
+        record.copy_of = None;
+        record.analysis.facts = None;
+        assert!(record.party_choices().is_empty());
+    }
+
+    /// A party the document names besides the one in the name is another
+    /// party, not another spelling of it, and so is one written into the
+    /// type of a name that gave none; a spelling of the party in the name,
+    /// or of the type, is still a spelling.
+    #[test]
+    fn another_party_of_the_document_is_no_spelling_of_the_named_one() {
+        let record = letter(
+            "U.S. Department of Justice",
+            &["U.S. Department of Justice", "STARS Alliance LLC"],
+            vec![
+                party("U.S. Department of Justice", Support::Cited),
+                party("STARS ALLIANCE LLC", Support::Cited),
+            ],
+        );
+        let party_edit = |to: &str| {
+            record.names_another_party(&HouseRule::new(
+                RuleKind::Party,
+                "U.S. Department of Justice",
+                to,
+            ))
+        };
+        assert!(party_edit("Stars Alliance LLC"));
+        assert!(party_edit(
+            "U.S. Department of Justice and Stars Alliance LLC"
+        ));
+        assert!(!party_edit("US Dept of Justice"));
+        assert!(!party_edit("U.S. Department of Justice"));
+
+        let type_edit = |to: &str| {
+            record.names_another_party(&HouseRule::new(RuleKind::DocumentType, "Letter", to))
+        };
+        assert!(type_edit("Letter - Stars Alliance LLC"));
+        assert!(type_edit("STARS Alliance LLC Letter"));
+        assert!(!type_edit("Letter of Inquiry"));
+        // A party's name inside a longer word is no party.
+        assert!(!type_edit("Letter re Stars Alliance LLCs"));
     }
 }
 

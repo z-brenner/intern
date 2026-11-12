@@ -35,7 +35,8 @@ use intern_intake::{
 };
 use intern_queue::{
     AnalyzerBoundary, AppSettings, FilingSink, FilingSinks, LoadedSettings, ModelFailure, Pipeline,
-    PipelineError, PipelineEventSink, PipelineItem, PipelineProgress, SettingsStore,
+    PipelineError, PipelineEventSink, PipelineItem, PipelineProgress, ProposalRecord,
+    SettingsStore,
     paths::{
         SUPPORTED_EXTENSIONS, canonical_file, canonical_folder, canonical_model_file,
         collect_supported_files, display_path, parse_item_id,
@@ -149,6 +150,20 @@ pub struct QueueItemDto {
     /// inspector can say why a party in the evidence is not in the name.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     omitted_parties: Vec<String>,
+    /// For an item in review, the other parties the document names, for the
+    /// reviewer to put in the name with one click when it gives the wrong
+    /// one: each found in the document by validation, none already in the
+    /// name, at most four, in the model's order and written as a name
+    /// writes a party (`ProposalRecord::party_choices`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    party_choices: Vec<String>,
+    /// The parties the proposed name gives, exactly as it writes them - one,
+    /// or the two sides of a "between" - so the window puts a chosen party
+    /// in place of those words and no others. Sent only with
+    /// `party_choices`, and empty when the name is not known to end with
+    /// its parties (cut short for length).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    name_parties: Vec<String>,
     /// Which local model read the document - and, when it was the fast one
     /// standing in for the accurate one, that it will be read again - for
     /// the inspector to say in a line. Absent for a hosted model and for a
@@ -6214,6 +6229,24 @@ pub fn queue_discard_waiting(state: State<'_, AppState>) -> Result<usize, Comman
 fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
     let waiting = waiting_in_doubt(&item);
     let proposal = item.proposal.as_ref();
+    // Offered only where a person is deciding the name: a ready name
+    // passed every check, and a settled one is no longer anyone's to change.
+    let party_choices = proposal
+        .filter(|_| item.status == QueueStatus::NeedsReview)
+        .map(ProposalRecord::party_choices)
+        .unwrap_or_default();
+    // The words a choice takes the place of, only where there is a choice.
+    let name_parties = proposal
+        .filter(|_| !party_choices.is_empty())
+        .map(|record| {
+            record.named_parties(
+                item.source_path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .unwrap_or_default(),
+            )
+        })
+        .unwrap_or_default();
     let evidence = proposal.map(|record| EvidenceDto {
         date: record.analysis.proposal.evidence.date.clone(),
         r#type: record.analysis.proposal.evidence.document_type.clone(),
@@ -6315,6 +6348,8 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
         omitted_parties: proposal
             .map(|record| record.name_view().1)
             .unwrap_or_default(),
+        party_choices,
+        name_parties,
         read_by: proposal.and_then(|record| record.analysis.telemetry.read_by.clone()),
         copy_of: proposal
             .and_then(|record| record.copy_of.as_ref())
@@ -12467,6 +12502,91 @@ mod approval_dto_tests {
         assert_eq!(json["evidence"]["date"], "Invoice Date: May 1, 2025");
         assert_eq!(json["evidence"]["type"], "INVOICE");
         assert_eq!(json["evidence"]["parties"], "Halvorsen Fixture Works LLC");
+    }
+
+    /// An invoice named from its issuer whose reading found its customer in
+    /// the document too, stored as the queue stores it.
+    fn invoice_naming_its_customer(status: QueueStatus) -> PipelineItem {
+        let proposal: ProposalRecord = serde_json::from_value(serde_json::json!({
+            "analysis": {
+                "filename": "2025-05-01 Invoice from Halvorsen Fixture Works LLC.pdf",
+                "description": "Invoice from Halvorsen Fixture Works LLC for display shelving.",
+                "status": "needs_review",
+                "reviewReasons": ["party_unsupported"],
+                "proposal": {
+                    "document_type": "Invoice", "document_date": "2025-05-01",
+                    "date_role": "invoice", "parties": ["Halvorsen Fixture Works LLC"],
+                    "party_relation": "from",
+                    "description": "Invoice from Halvorsen Fixture Works LLC for display shelving.",
+                    "confidence": 0.9,
+                    "evidence": { "date": null, "document_type": null, "parties": [] }
+                },
+                "telemetry": {
+                    "sourceCharacters": 0, "digestCharacters": 0, "compressionRatio": 0.0,
+                    "distillMicros": 0, "inferenceMillis": 0
+                },
+                "modelProposal": {
+                    "document_type": "Invoice", "document_date": "2025-05-01",
+                    "date_role": "invoice",
+                    "parties": ["QUILLON RIDGE BAKERY, INC.", "Halvorsen Fixture Works LLC"],
+                    "party_relation": "for", "description": "", "confidence": 0.9,
+                    "needs_review": false,
+                    "evidence": { "date": null, "document_type": null, "parties": [] }
+                },
+                "facts": {
+                    "parties": [
+                        {"name": "Halvorsen Fixture Works LLC", "support": "cited", "evidence": ["p1.b1"]},
+                        {"name": "QUILLON RIDGE BAKERY, INC.", "support": "context", "evidence": ["p1.b6"]},
+                        {"name": "Odalys Brandt", "support": "cited", "signatory": true, "evidence": ["p1.b9"]}
+                    ]
+                }
+            },
+            "status": "needs_review",
+            "filename": "2025-05-01 Invoice from Halvorsen Fixture Works LLC.pdf",
+            "description": "Invoice from Halvorsen Fixture Works LLC for display shelving.",
+            "reasons": ["PARTY_UNSUPPORTED"],
+            "revision": 1,
+            "approved": false
+        }))
+        .unwrap();
+        PipelineItem {
+            proposal: Some(proposal),
+            ..super::document_path_tests::item(status, None)
+        }
+    }
+
+    /// In review, the other party the document names is offered as the name
+    /// writes a party, with the words of the name it would take the place
+    /// of; the one who signs for the issuer is no party of their own. A
+    /// ready name passed every check, and offers nothing.
+    #[test]
+    fn a_review_item_offers_the_other_parties_the_document_names() {
+        let dto = queue_item_dto(invoice_naming_its_customer(QueueStatus::NeedsReview)).unwrap();
+        assert_eq!(dto.party_choices, vec!["Quillon Ridge Bakery, Inc"]);
+        assert_eq!(dto.name_parties, vec!["Halvorsen Fixture Works LLC"]);
+        let json = serde_json::to_value(dto).unwrap();
+        assert_eq!(
+            json["partyChoices"],
+            serde_json::json!(["Quillon Ridge Bakery, Inc"])
+        );
+        assert_eq!(
+            json["nameParties"],
+            serde_json::json!(["Halvorsen Fixture Works LLC"])
+        );
+
+        for status in [QueueStatus::Ready, QueueStatus::Completed] {
+            let json =
+                serde_json::to_value(queue_item_dto(invoice_naming_its_customer(status)).unwrap())
+                    .unwrap();
+            assert!(json.get("partyChoices").is_none(), "{status:?}: {json}");
+            assert!(json.get("nameParties").is_none(), "{status:?}: {json}");
+        }
+        // A reading with no other party to offer sends neither.
+        let json =
+            serde_json::to_value(queue_item_dto(item(QueueStatus::NeedsReview, false)).unwrap())
+                .unwrap();
+        assert!(json.get("partyChoices").is_none(), "{json}");
+        assert!(json.get("nameParties").is_none(), "{json}");
     }
 
     // The queue was busy with another document, so the approved name waits

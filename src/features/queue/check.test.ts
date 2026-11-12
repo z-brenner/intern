@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkCell, checkText, itemFlaggedFields, itemReasonCodes, nameParts } from './check';
+import { checkCell, checkText, itemFlaggedFields, itemReasonCodes, nameParts, withParty } from './check';
 import { reasonCodes, shortReason } from '../../lib/reasons';
 import type { QueueItem } from '../../types';
 
@@ -65,5 +65,69 @@ describe('a proposed name in parts', () => {
     const typed = nameParts('Lease for 12 Main St.pdf', ['date', 'type', 'parties']);
     expect(typed.some((part) => part.flagged)).toBe(false);
     expect(typed.map((part) => part.text).join('')).toBe('Lease for 12 Main St.pdf');
+  });
+});
+
+describe('another party put in a name', () => {
+  /** The offer for a proposed stem whose parties the backend read as `nameParties`, with `choices` beside it. */
+  const offer = (proposed: string, nameParties: string[], choices: string[] = []) => ({ proposed, nameParties, choices });
+
+  it('takes the place of the party the name gives, however its type reads', () => {
+    const letter = offer('2012-06-19 Letter to U.S. Department of Justice', ['U.S. Department of Justice']);
+    expect(withParty(letter.proposed, 'Morgan, Lewis & Bockius LLP', letter)).toBe('2012-06-19 Letter to Morgan, Lewis & Bockius LLP');
+    // A type with a connecting word of its own keeps it: the backend said which words are the party.
+    const application = offer('2007-04-24 Application for Certification for City of Victorville', ['City of Victorville']);
+    expect(withParty(application.proposed, 'California Energy Commission', application))
+      .toBe('2007-04-24 Application for Certification for California Energy Commission');
+    // A name with no date yet is still a name with a party.
+    const undated = offer('Letter to Carl Malamud', ['Carl Malamud']);
+    expect(withParty(undated.proposed, 'Department of the Air Force', undated)).toBe('Letter to Department of the Air Force');
+  });
+
+  it('replaces the second side of a "between", and an earlier choice', () => {
+    const notice = offer('2008-01-24 Notice of Voluntary Dismissal between PA Advisors, LLC and WPP Group PLC', ['PA Advisors, LLC', 'WPP Group PLC'], ['Google Inc', 'Research In Motion Ltd']);
+    const once = withParty(notice.proposed, 'Google Inc', notice);
+    expect(once).toBe('2008-01-24 Notice of Voluntary Dismissal between PA Advisors, LLC and Google Inc');
+    expect(withParty(once, 'Research In Motion Ltd', notice))
+      .toBe('2008-01-24 Notice of Voluntary Dismissal between PA Advisors, LLC and Research In Motion Ltd');
+    // Choosing the party already there changes nothing.
+    expect(withParty(once, 'Google Inc', notice)).toBe(once);
+  });
+
+  it('leaves off a collision suffix, which the rename gives again if the new name needs one', () => {
+    const application = offer('2007-04-24 Application for Certification for City of Victorville (2)', ['City of Victorville']);
+    expect(withParty(application.proposed, 'California Energy Commission', application))
+      .toBe('2007-04-24 Application for Certification for California Energy Commission');
+    const agreement = offer('2024-01-05 Agreement between Acme Corporation and Beacon LLC (2)', ['Acme Corporation', 'Beacon LLC']);
+    expect(withParty(agreement.proposed, 'Contoso Inc', agreement)).toBe('2024-01-05 Agreement between Acme Corporation and Contoso Inc');
+  });
+
+  it('adds a party to a name that gave none after its whole type, with no type word taken for one', () => {
+    // A party left out for length, from a type holding "with" (real2-notice-12).
+    const notice = offer('2022-03-17 Notice in Accordance with Section 57C of the Railways Act 1993', []);
+    expect(withParty(notice.proposed, 'Department for Transport', notice))
+      .toBe('2022-03-17 Notice in Accordance with Section 57C of the Railways Act 1993 - Department for Transport');
+    // A party missing from the reading, from a type holding "for".
+    const request = offer('2024-01-05 Request for Production', []);
+    expect(withParty(request.proposed, 'Acme Corporation', request)).toBe('2024-01-05 Request for Production - Acme Corporation');
+    const invoice = offer('2023-10-05 Requester Invoice', [], ['Sam Brownell', 'Litware Inc']);
+    const added = withParty(invoice.proposed, 'Sam Brownell', invoice);
+    expect(added).toBe('2023-10-05 Requester Invoice - Sam Brownell');
+    // A second click replaces the first, and a connecting word the reviewer typed stays.
+    expect(withParty(added, 'Litware Inc', invoice)).toBe('2023-10-05 Requester Invoice - Litware Inc');
+    expect(withParty('2023-10-05 Requester Invoice from Sam', 'Litware Inc', invoice)).toBe('2023-10-05 Requester Invoice from Litware Inc');
+    expect(withParty('', 'Sam Brownell', offer('', []))).toBe('Sam Brownell');
+  });
+
+  it('replaces a party typed over by hand after the proposed type, whatever its connecting word', () => {
+    const invoice = offer('2024-02-09 Invoice INV-3301 from Fabrikam Inc.', ['Fabrikam Inc.'], ['Fabrikam Inc']);
+    expect(withParty('2024-02-09 Invoice INV-3301 from Fabrikm', 'Fabrikam Inc', invoice)).toBe('2024-02-09 Invoice INV-3301 from Fabrikam Inc');
+    const application = offer('2007-04-24 Application for Certification for City of Victorville', ['City of Victorville'], ['California Energy Commission']);
+    // A date chosen and the connecting word changed are kept; the type's own "for" is no connecting word.
+    expect(withParty('2007-05-01 Application for Certification to Cty of Victorvile', 'California Energy Commission', application))
+      .toBe('2007-05-01 Application for Certification to California Energy Commission');
+    // A name rewritten past the proposed type keeps every word typed.
+    expect(withParty('2007-04-24 Petition for Review for City of Victorvile', 'California Energy Commission', application))
+      .toBe('2007-04-24 Petition for Review for City of Victorvile - California Energy Commission');
   });
 });
