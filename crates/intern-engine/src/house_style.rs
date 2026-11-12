@@ -249,6 +249,33 @@ pub fn lesson_from_edit(
     rule.is_meaningful().then_some(rule)
 }
 
+/// The parties the name `proposed` gives, each exactly as the name writes
+/// it, in the order it gives them: the one after its connecting word, or
+/// the two sides of a "between". Read with the grammar that composed the
+/// name, as [`lesson_from_edit`] reads it, because a type can hold the same
+/// small words as a party ("Application for Certification for the City of
+/// Victorville"). Empty when the name gives no party, or is not one
+/// `proposal` composes - cut short for length, or typed by hand - so a
+/// party a reviewer chooses is put in place of these words only where the
+/// name is known to end with them.
+///
+/// `proposal` is the proposal the name was composed from, after any house
+/// style applied to it, as for [`lesson_from_edit`].
+pub fn named_parties(proposal: &ValidatedProposal, extension: &str, proposed: &str) -> Vec<String> {
+    let extension = sanitize_extension(extension);
+    let stem = editable_stem(proposed, &extension);
+    NameShape::of(proposal, &stem, &extension)
+        .and_then(|shape| shape.clause)
+        .map(|clause| {
+            clause
+                .parties
+                .into_iter()
+                .map(|(_, segment)| segment)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The composed name's own grammar, matched against the stem Intern offered,
 /// so each part can be told apart in the name the reviewer approved.
 struct NameShape {
@@ -874,6 +901,83 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// The parties a name gives are read with the grammar that composed it,
+    /// so a type that holds "for" is no party, the second side of a
+    /// "between" is told from the first, and capitals are given as the name
+    /// writes them.
+    #[test]
+    fn the_parties_a_name_gives_are_read_as_it_writes_them() {
+        let application = proposal(
+            Some("Application for Certification"),
+            &["CITY OF VICTORVILLE"],
+            PartyRelation::For,
+        );
+        let proposed = name(&application);
+        assert_eq!(
+            proposed,
+            "2026-04-01 Application for Certification for City of Victorville.pdf"
+        );
+        assert_eq!(
+            named_parties(&application, "pdf", &proposed),
+            vec!["City of Victorville"]
+        );
+        // A collision suffix and a date the reviewer typed are no part of it.
+        assert_eq!(
+            named_parties(
+                &application,
+                "pdf",
+                "2026-05-09 Application for Certification for City of Victorville (2).pdf"
+            ),
+            vec!["City of Victorville"]
+        );
+
+        let both = proposal(
+            Some("Statement of Work"),
+            &["Ridgeline Cartography LLC", "CONTOSO WORLDWIDE INC"],
+            PartyRelation::Between,
+        );
+        assert_eq!(
+            named_parties(&both, "pdf", &name(&both)),
+            vec!["Ridgeline Cartography LLC", "Contoso Worldwide Inc"]
+        );
+
+        // A spelling a rule wrote is given as the reviewer typed it.
+        let style = HouseStyle::new(vec![HouseRule::new(
+            RuleKind::Party,
+            "Contoso Worldwide, Inc.",
+            "CONTOSO",
+        )]);
+        let (styled, applied) = style.apply(&proposal(
+            Some("Invoice"),
+            &["Contoso Worldwide, Inc."],
+            PartyRelation::From,
+        ));
+        let proposed = compose_styled_filename(&styled, &applied, "pdf", &[]).value;
+        assert_eq!(named_parties(&styled, "pdf", &proposed), vec!["CONTOSO"]);
+    }
+
+    /// Nothing is given where the name is not known to end with the
+    /// parties: a name with none, one cut short for length, one typed by
+    /// hand.
+    #[test]
+    fn a_name_without_its_parties_gives_none() {
+        let untyped = proposal(Some("Board Minutes"), &[], PartyRelation::None);
+        assert!(named_parties(&untyped, "pdf", &name(&untyped)).is_empty());
+
+        let long = "Northwind Regional Transportation and Infrastructure Development Authority";
+        let shed = proposal(
+            Some("Memorandum of Understanding on Shared Maintenance Facilities"),
+            &[long],
+            PartyRelation::With,
+        );
+        let proposed = name(&shed);
+        assert!(!proposed.contains("Northwind"), "{proposed}");
+        assert!(named_parties(&shed, "pdf", &proposed).is_empty());
+
+        let invoice = proposal(Some("Invoice"), &["Acme"], PartyRelation::From);
+        assert!(named_parties(&invoice, "pdf", "2026-04-01 Acme invoice for March.pdf").is_empty());
     }
 
     #[test]
