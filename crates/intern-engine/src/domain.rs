@@ -867,6 +867,16 @@ pub struct AnalysisTelemetry {
     /// from analyses stored before it was kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_sha256: Option<String>,
+    /// The identity of everything else that shaped the reply
+    /// ([`crate::tiers::runtime_identity`]): the reply settings every
+    /// request carries, the local server's launch arguments for the tier,
+    /// and the llama.cpp build the release ships. Set, like `model_sha256`,
+    /// by the caller that launched the server. The same request to the same
+    /// file under another sampler, reply limit, micro-batch or build can be
+    /// answered differently, so a stored reply stands in for a fresh one
+    /// only where this is the same too. Absent where `model_sha256` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_sha256: Option<String>,
 }
 
 /// The local model that produced an analysis.

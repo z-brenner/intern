@@ -91,9 +91,10 @@ pub use worker::{
 /// 3 added, the same way, which local model read a document
 /// ([`AnalysisTelemetry::read_by`]).
 ///
-/// 4 added, the same way, the identity of the request a reply answered and
-/// of the model file that gave it ([`AnalysisTelemetry::request_sha256`],
-/// [`AnalysisTelemetry::model_sha256`]).
+/// 4 added, the same way, the identity of the request a reply answered, of
+/// the model file that gave it and of the runtime that ran it
+/// ([`AnalysisTelemetry::request_sha256`], [`AnalysisTelemetry::model_sha256`],
+/// [`AnalysisTelemetry::runtime_sha256`]).
 pub const ENGINE_CONTRACT_VERSION: u32 = 4;
 
 #[cfg(feature = "benchmark-transport")]

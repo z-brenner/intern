@@ -661,6 +661,7 @@ impl Engine {
                     read_by: None,
                     request_sha256: Some(request.sha256()),
                     model_sha256: None,
+                    runtime_sha256: None,
                 },
             );
             analysis.text_fingerprint = source_fingerprint(source).map(fingerprint::encode);
@@ -1584,6 +1585,7 @@ mod tests {
             Some(request.sha256().as_str())
         );
         assert_eq!(stored.telemetry.model_sha256, None, "the caller's to set");
+        assert_eq!(stored.telemetry.runtime_sha256, None, "the caller's to set");
 
         let again = Engine::with_proposer(Box::new(NoModel::local()))
             .revalidate(&source, "pdf", &[], &stored)

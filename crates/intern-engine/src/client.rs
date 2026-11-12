@@ -552,22 +552,18 @@ impl ModelClient {
         })
     }
 
-    /// The request body. Only the user turn, and a grammar particular to the
-    /// request, identify it ([`ModelRequest::sha256`]); everything else here
-    /// is transport, and the token-probability fields in particular change
-    /// no generated token.
+    /// The request body: the reply settings every request shares
+    /// ([`reply_settings`]), the turns, and the grammar. The turns, a
+    /// grammar particular to the request and a profile's seed identify it
+    /// ([`ModelRequest::sha256`]); the model's name and `stream` shape no
+    /// token, since a server holds one model, and the token-probability
+    /// fields in particular change no generated token.
     fn completion_request(&self, request: &ModelRequest) -> Value {
-        let mut body = json!({
-            "model": self.model_id,
-            "messages": chat_messages(request),
-            "stream": false,
-            "temperature": 0,
-            "top_k": 1,
-            "max_tokens": MAX_REPLY_TOKENS,
-            "grammar": request.grammar.as_deref().unwrap_or(RESPONSE_GRAMMAR),
-            "cache_prompt": true,
-            "chat_template_kwargs": template_switches()
-        });
+        let mut body = reply_settings();
+        body["model"] = json!(self.model_id);
+        body["messages"] = json!(chat_messages(request));
+        body["stream"] = json!(false);
+        body["grammar"] = json!(request.grammar.as_deref().unwrap_or(RESPONSE_GRAMMAR));
         if let Some(seed) = request.profile.and_then(PromptProfile::seed) {
             body["seed"] = json!(seed);
         }
@@ -596,6 +592,35 @@ fn chat_messages(request: &ModelRequest) -> Vec<Value> {
     }
     messages.push(json!({"role": "user", "content": request.prompt}));
     messages
+}
+
+/// What every evidence request sends, beside its turns and its grammar,
+/// that shapes the reply: greedy sampling, the reply's length limit, the
+/// server's prompt cache (a prefix the cache holds was computed in another
+/// batch than a fresh one), and the chat template's switches. The same on
+/// every request, so not part of [`ModelRequest::sha256`] - a recording
+/// replays under the settings it was made with - but part of what a local
+/// reply's runtime is ([`reply_settings_identity`]). Every request body is
+/// built on them ([`ModelClient::completion_request`]).
+fn reply_settings() -> Value {
+    json!({
+        "temperature": 0,
+        "top_k": 1,
+        "max_tokens": MAX_REPLY_TOKENS,
+        "cache_prompt": true,
+        "chat_template_kwargs": template_switches()
+    })
+}
+
+/// The identity of the reply settings every request shares
+/// ([`reply_settings`]): the SHA-256 of them as JSON. A release that changes
+/// any of them changes it, and a reply given under other settings is not
+/// the one a request would get now ([`crate::tiers::runtime_identity`]).
+pub fn reply_settings_identity() -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(reply_settings().to_string().as_bytes())
+    )
 }
 
 /// The chat template's switches, the same on every request.
@@ -1681,6 +1706,37 @@ mod tests {
         let proposal = wire.into_domain().unwrap();
         assert!(proposal.document_date.is_none());
         assert!(proposal.date_role.is_none());
+    }
+
+    /// Every field a request body sends is accounted for: it identifies the
+    /// request (the turns, the grammar, a profile's seed), shapes no token
+    /// (the model's name, `stream`, the token probabilities), or is a reply
+    /// setting every request shares, which the runtime identity covers. A
+    /// field added to the body without saying which fails here.
+    #[test]
+    fn every_field_a_request_sends_is_in_an_identity_or_shapes_no_token() {
+        let client = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m")
+            .unwrap()
+            .with_token_confidence(true);
+        let request = ModelRequest {
+            grammar: Some("root ::= \"{}\"".into()),
+            profile: Some(PromptProfile::Bonsai2),
+            ..ModelRequest::new("p")
+        };
+        let body = client.completion_request(&request);
+        let settings = reply_settings();
+        let settings = settings.as_object().unwrap();
+        for (field, value) in body.as_object().unwrap() {
+            match field.as_str() {
+                "messages" | "grammar" | "seed" => {}
+                "model" | "stream" | "logprobs" | "top_logprobs" => {}
+                setting => assert_eq!(settings.get(setting), Some(value), "{setting}"),
+            }
+        }
+        assert!(settings.keys().all(|setting| body.get(setting).is_some()));
+        assert!(body.get("seed").is_some() && body.get("logprobs").is_some());
+        assert_eq!(reply_settings_identity().len(), 64);
+        assert_eq!(reply_settings_identity(), reply_settings_identity());
     }
 
     #[test]
