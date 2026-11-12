@@ -1309,11 +1309,11 @@ impl RuntimeModel {
     /// memory, since the mapped weights are page cache the machine counts
     /// already. When that cannot be read, or a start or stop has the server's
     /// slot, the estimate ([`tiers::unload_gives_back`]), which on Linux is
-    /// about right for the 4B and about 2 GiB high for the 9B, since it runs
-    /// with `--no-repack` ([`tiers::resident_estimate`]), and, for the 9B
-    /// right after a document on Windows, about 2,600 MiB short
-    /// (`runtime-speed.yml` run 43063958237; about 5,200 MiB with repacked
-    /// weights, `bench/reports/windows-memory-2026-11-09`).
+    /// high for both models, since both run with `--no-repack` (about 2 GiB
+    /// for the 9B, about 1.4 GiB for the 4B; [`tiers::resident_estimate`]),
+    /// and, for the 9B right after a document on Windows, about 2,600 MiB
+    /// short (`runtime-speed.yml` run 43063958237; about 5,200 MiB with
+    /// repacked weights, `bench/reports/windows-memory-2026-11-09`).
     fn unload_gives_back(&self, tier: ModelTier) -> u64 {
         let measured = match self.server.try_lock() {
             Ok(server) => server.as_ref().and_then(|server| server.memory_released()),
