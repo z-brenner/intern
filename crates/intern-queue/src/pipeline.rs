@@ -3120,6 +3120,17 @@ impl Pipeline {
         self.paused.load(Ordering::SeqCst)
     }
 
+    /// Whether a run now would read a document: the queue is not paused, and
+    /// a document waits that the store would hand it
+    /// ([`QueueStore::has_claimable`]). The app asks before it loads the model
+    /// at sign-in and before it unloads an idle one.
+    pub fn has_document_waiting(&self) -> PipelineResult<bool> {
+        if self.is_paused() {
+            return Ok(false);
+        }
+        Ok(self.store.has_claimable()?)
+    }
+
     /// Why the queue stopped itself, while it is stopped: a code the window
     /// turns into a sentence. `None` while it runs, and for a pause a person
     /// asked for.

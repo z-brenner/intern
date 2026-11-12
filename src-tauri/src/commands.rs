@@ -861,6 +861,26 @@ struct RuntimeModel {
     /// Told when a tier's verdict changes outside a setup operation: a model
     /// that failed its self-test the first time a document loaded it.
     on_change: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Whether the queue would read a document now
+    /// ([`Pipeline::has_document_waiting`]), once launch has built the queue
+    /// ([`RuntimeModel::watch_queue`]). Until then documents are taken to
+    /// wait, as they are for a runtime no queue watches.
+    queue_waiting: Mutex<Option<QueueWaiting>>,
+}
+
+/// Asks the queue whether it would read a document now.
+type QueueWaiting = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// [`QueueWaiting`] for `pipeline`, which it does not keep alive: a queue
+/// that cannot answer is taken to have a document waiting, and one that is
+/// gone to have none.
+fn queue_waiting_on(pipeline: &Arc<Pipeline>) -> QueueWaiting {
+    let watched = Arc::downgrade(pipeline);
+    Arc::new(move || {
+        watched
+            .upgrade()
+            .is_some_and(|pipeline| pipeline.has_document_waiting().unwrap_or(true))
+    })
 }
 
 impl RuntimeModel {
@@ -919,7 +939,28 @@ impl RuntimeModel {
             provisional_pending: AtomicBool::new(true),
             upgrade_armed: AtomicBool::new(false),
             on_change: Mutex::new(None),
+            queue_waiting: Mutex::new(None),
         }
+    }
+
+    /// Lets the runtime ask the queue whether a document waits to be read:
+    /// what a launch asks before it loads a model nothing may need.
+    fn watch_queue(&self, waiting: QueueWaiting) {
+        *self
+            .queue_waiting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(waiting);
+    }
+
+    /// Whether the queue would read a document now; true while no queue is
+    /// watched, or the queue cannot say.
+    fn documents_waiting(&self) -> bool {
+        let waiting = self
+            .queue_waiting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        waiting.is_none_or(|waiting| waiting())
     }
 
     fn manifest(&self) -> &ModelManifest {
@@ -1476,6 +1517,14 @@ impl RuntimeModel {
     /// as having passed.
     /// An accurate model that fails is set aside and the fast one started in
     /// its place.
+    ///
+    /// A model the stamp vouches for is not started at all while no
+    /// document waits: it is marked tested, the queue opens, and the first
+    /// document loads it. Started at every sign-in, the accurate model was
+    /// read from disk, 5.7 GB, and held until the idle unload ten minutes
+    /// later, on every day with no document in that time. A server that will
+    /// not start is found by that document instead, and set aside then
+    /// ([`RuntimeModel::ensure`]).
     fn start_verified(&self, cancellation: &CancellationToken) -> Result<(), CommandError> {
         let lifecycle = self
             .lifecycle
@@ -1519,6 +1568,13 @@ impl RuntimeModel {
             };
             let tier = plan.first;
             let stamped = self.stamped(tier) == Some(true);
+            if stamped && !self.documents_waiting() {
+                if cancellation.is_canceled() {
+                    return Err(setup_canceled_error());
+                }
+                self.update_check(tier, |check| check.self_tested = true);
+                return Ok(());
+            }
             match self.start(&lifecycle, tier) {
                 Ok(Launch::Held) => return Ok(()),
                 Ok(Launch::Started) => {}
@@ -2651,11 +2707,13 @@ impl SetupManager {
                 manager.settle_tiers();
                 manager.set_state(final_state.0, final_state.1, final_state.2);
                 manager.operation.finish();
-                // A model this operation left installed but not started -
+                // A model this operation left installed but unable to serve -
                 // it was held for a hosted model, and the local one has been
                 // chosen again while it ran - is started now, rather than
                 // leaving the queue waiting on a server nothing will start.
-                if installed && !manager.runtime.is_held() && !manager.runtime.running() {
+                // Not one that is merely not running: a model the stamp
+                // vouches for waits, loadable, for the first document.
+                if installed && !manager.runtime.is_held() && !manager.runtime.serviceable() {
                     manager.verify_installed();
                 }
                 // Pressing Download on the setup screen asked for both
@@ -3604,6 +3662,9 @@ impl AppState {
         );
         events.watch(&pipeline);
         pipeline.recover()?;
+        // Before the setup thread is started (below): a launch loads the
+        // model only for a document that waits.
+        runtime.watch_queue(queue_waiting_on(&pipeline));
         // Opened after the pipeline so the pipeline's own store has already
         // migrated the schema this connection reads.
         let history = QueueStore::open(data.join("queue.sqlite3")).map_err(|_| CommandError {
@@ -8757,7 +8818,8 @@ mod runtime_tests {
     use super::{
         CommandError, LaunchedRuntime, LlamaLauncher, ProgressThrottle, RuntimeLauncher,
         RuntimeModel, RuntimeProcess, RuntimeSenses, SetupManager, SetupStateDto, SetupStatus,
-        VERIFICATION_STAMP, launch_local_model, llama_server_in,
+        VERIFICATION_STAMP, launch_local_model, llama_server_in, queue_waiting_on,
+        scratch_queue::{folder, queue, write},
     };
 
     /// Bytes chosen once and hashed offline; the digest below is theirs, so
@@ -9338,6 +9400,12 @@ mod runtime_tests {
         })
     }
 
+    /// Has `runtime` find a document waiting in its queue, or none, from now
+    /// on.
+    fn queue_waits(runtime: &RuntimeModel, waiting: bool) {
+        runtime.watch_queue(Arc::new(move || waiting));
+    }
+
     fn verified(runtime: &RuntimeModel) {
         runtime
             .start_verified(&CancellationToken::new())
@@ -9557,6 +9625,138 @@ mod runtime_tests {
         let rig = Rig::new();
         verified(&install.runtime_in(&rig, "1.1.0", &world));
         assert_eq!(rig.hash_count(), 2);
+    }
+
+    /// A launch whose model the stamp vouches for loads nothing while no
+    /// document waits: no digest, no start, no self-test, and the queue
+    /// open. The first document loads the model it is read by, once, and
+    /// tests nothing; a document waiting at launch has it started as before.
+    #[test]
+    fn a_vouched_model_waits_for_a_document_at_sign_in() {
+        let install = Install::new("sign-in-idle");
+        install.install_accurate();
+        verified(&install.runtime(&Rig::new(), "1.0.0"));
+
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        queue_waits(&runtime, false);
+        let (setup, states) = manager(&runtime, ModelSource::Local);
+        settle(&setup);
+        let counts = |rig: &Rig| {
+            (
+                rig.launches(),
+                rig.hash_count(),
+                rig.proposals.load(Ordering::SeqCst),
+            )
+        };
+        assert_eq!(counts(&rig), (0, 0, 0));
+        assert!(!runtime.running());
+        assert!(
+            setup.model_ready.load(Ordering::SeqCst),
+            "the queue is open"
+        );
+        assert_eq!(setup.get().unwrap().state, SetupStatus::Ready);
+        // And setup does not go round again for a model that is not
+        // running: one operation, one final state.
+        std::thread::sleep(Duration::from_millis(50));
+        while states.try_recv().is_ok() {}
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(states.try_recv().is_err(), "setup started over");
+
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!(reading.tier, ModelTier::Accurate);
+        assert_eq!(launched(&rig), [ModelTier::Accurate]);
+        assert_eq!(counts(&rig), (1, 0, 1), "the document, and no self-test");
+
+        // A document waiting at launch: started for it, as before.
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        queue_waits(&runtime, true);
+        let (setup, _states) = manager(&runtime, ModelSource::Local);
+        settle(&setup);
+        assert_eq!(launched(&rig), [ModelTier::Accurate]);
+        assert_eq!(counts(&rig), (1, 0, 0));
+        assert!(runtime.running());
+    }
+
+    /// What the stamp does not vouch for is self-tested at launch, document
+    /// or not, since only a model that has passed is loaded on demand: a new
+    /// install's model, and the model the next document needs at the first
+    /// launch after an update. After that, nothing loads until a document
+    /// does.
+    #[test]
+    fn an_unvouched_model_is_self_tested_at_launch_with_no_document_waiting() {
+        let install = Install::new("sign-in-untested");
+        let launch = |app_version: &str| {
+            let rig = Rig::new();
+            let runtime = install.runtime(&rig, app_version);
+            queue_waits(&runtime, false);
+            verified(&runtime);
+            (
+                rig.launches(),
+                rig.hash_count(),
+                rig.proposals.load(Ordering::SeqCst),
+            )
+        };
+        assert_eq!(launch("1.0.0"), (1, 1, 1), "a new install");
+        assert!(stamp_vouches_self_test(&install));
+        assert_eq!(launch("1.0.0"), (0, 0, 0));
+        assert_eq!(launch("1.1.0"), (1, 0, 1), "an update");
+        assert_eq!(launch("1.1.0"), (0, 0, 0));
+        std::fs::write(install.server(), b"a newer server binary").unwrap();
+        assert_eq!(launch("1.1.0"), (1, 0, 1), "a new server binary");
+        assert_eq!(launch("1.1.0"), (0, 0, 0));
+    }
+
+    /// Launch no longer starts a model the stamp vouches for, so one whose
+    /// server will not start is found by the first document: set aside for
+    /// the session, the document read by the other model, and its entry
+    /// dropped so the next launch checks it in full.
+    #[test]
+    fn a_vouched_model_that_will_not_start_is_found_by_the_first_document() {
+        let install = Install::new("sign-in-refused");
+        install.install_accurate();
+        verified(&install.runtime(&Rig::new(), "1.0.0"));
+
+        let rig = Rig::new();
+        *rig.refuse_launch.lock().unwrap() = Some(ModelTier::Accurate);
+        let runtime = install.runtime(&rig, "1.0.0");
+        queue_waits(&runtime, false);
+        verified(&runtime);
+        assert_eq!(rig.refused.load(Ordering::SeqCst), 0, "nothing started");
+
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!(reading.tier, ModelTier::Fast);
+        assert_eq!(rig.refused.load(Ordering::SeqCst), 1);
+        assert_eq!(launched(&rig), [ModelTier::Fast]);
+        assert!(runtime.tier_failure(ModelTier::Accurate).is_some());
+        assert_eq!(runtime.stamped(ModelTier::Accurate), None);
+    }
+
+    /// The question a launch asks, as `initialize` puts it to the queue: a
+    /// document added waits; with the queue paused, nothing does.
+    #[test]
+    fn a_launch_asks_the_queue_whether_a_document_waits() {
+        let install = Install::new("sign-in-queue");
+        verified(&install.runtime(&Rig::new(), "1.0.0"));
+        let data = folder("sign-in-queue");
+        let pipeline = Arc::new(queue(&data).0);
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        runtime.watch_queue(queue_waiting_on(&pipeline));
+
+        verified(&runtime);
+        assert_eq!(rig.launches(), 0, "an empty queue");
+        pipeline
+            .enqueue_files(&[write(&data, "notice.pdf", b"%PDF-1.7 a notice")])
+            .unwrap();
+        verified(&runtime);
+        assert_eq!(rig.launches(), 1, "a document waits");
+        pipeline.pause();
+        verified(&runtime);
+        assert_eq!(rig.launches(), 1, "paused, it does not");
+        assert!(!runtime.running());
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]

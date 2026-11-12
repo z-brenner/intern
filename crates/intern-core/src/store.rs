@@ -215,6 +215,26 @@ const NEWEST_RECEIPT: &str = "WHERE queue_item_id = ?1 ORDER BY id DESC LIMIT 1"
 const LATEST_COMPLETE_RECEIPT: &str =
     "WHERE queue_item_id = ?1 AND stage = 'complete' ORDER BY id DESC LIMIT 1";
 
+/// The queued row the next claim takes: none while any row is being
+/// extracted, read or applied, and none in doubt until the machine is shown
+/// to work for it; documents put back in doubt go behind every other, then
+/// oldest first.
+const NEXT_TO_CLAIM: &str = "SELECT id FROM queue_items
+     WHERE status = 'queued'
+       AND NOT EXISTS (
+         SELECT 1 FROM queue_items active
+         WHERE active.status IN ('extracting', 'analyzing', 'applying')
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM doubted_documents doubt
+         WHERE doubt.queue_item_id = queue_items.id AND doubt.proven = 0
+       )
+     ORDER BY EXISTS (
+         SELECT 1 FROM doubted_documents doubt
+         WHERE doubt.queue_item_id = queue_items.id
+       ), id
+     LIMIT 1";
+
 impl QueueStore {
     pub fn open(path: impl AsRef<Path>) -> InternResult<Self> {
         let mut connection = Connection::open(path).map_err(InternError::from)?;
@@ -447,25 +467,7 @@ impl QueueStore {
             .map_err(InternError::from)?;
         touch_session(&transaction, &self.session_id)?;
         let id = transaction
-            .query_row(
-                "SELECT id FROM queue_items
-             WHERE status = 'queued'
-               AND NOT EXISTS (
-                 SELECT 1 FROM queue_items active
-                 WHERE active.status IN ('extracting', 'analyzing', 'applying')
-               )
-               AND NOT EXISTS (
-                 SELECT 1 FROM doubted_documents doubt
-                 WHERE doubt.queue_item_id = queue_items.id AND doubt.proven = 0
-               )
-             ORDER BY EXISTS (
-                 SELECT 1 FROM doubted_documents doubt
-                 WHERE doubt.queue_item_id = queue_items.id
-               ), id
-             LIMIT 1",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
+            .query_row(NEXT_TO_CLAIM, [], |row| row.get::<_, i64>(0))
             .optional()
             .map_err(InternError::from)?;
         let Some(id) = id else {
@@ -488,6 +490,22 @@ impl QueueStore {
         let item = query_one(&transaction, "WHERE id = ?1", params![id])?;
         transaction.commit().map_err(InternError::from)?;
         Ok(Some(item))
+    }
+
+    /// Whether [`Self::claim_next`] would take a row now, without taking
+    /// it: a queued document, with nothing else being extracted, read or
+    /// applied, that is not in doubt waiting for the machine to be shown to
+    /// work. What the app asks before it lets the model go, or loads it at
+    /// sign-in: a document in doubt over a reader crash can wait for days for
+    /// a document of its kind, and one behind a rename left applying waits
+    /// for the recovery, so neither keeps a model loaded that nothing reads.
+    pub fn has_claimable(&self) -> InternResult<bool> {
+        let connection = self.lock()?;
+        Ok(connection
+            .query_row(NEXT_TO_CLAIM, [], |row| row.get::<_, i64>(0))
+            .optional()
+            .map_err(InternError::from)?
+            .is_some())
     }
 
     pub fn renew_lease(&self, id: i64) -> InternResult<QueueItem> {

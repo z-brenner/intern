@@ -1227,6 +1227,18 @@ already had. A failed self-test removes its entry, so that file is read in
 full next time. The stamps alpha.15 to alpha.17 wrote (schema 3) are read for
 their digests alone; one of an earlier schema - the single-model build's, or
 one that recorded a single server binary for every file - vouches for nothing.
+A launch that finds both checks standing for the model the next document
+would be read by, and no document waiting, starts nothing: the model is
+marked tested, the queue opens, and the first document loads it. Until
+alpha.17 every sign-in loaded it - the accurate model's 5.7 GB, read from a
+disk that had just booted - and held it until the ten-minute idle unload,
+documents or not. A document waiting at launch, left from the last session,
+has the model started as before. Waiting means what the next run would read
+(`Pipeline::has_document_waiting`): nothing while the queue is paused, not a
+document in doubt that waits for the machine to be shown to work, and not
+one behind a rename left applying. A server that will not start is found by
+the first document instead of at launch, and set aside there as it would be
+at launch, the document read by the other model.
 Within a session the digest is read at most once: restarts - a cancel, a
 recovery, a swap, a reload after idle - start a file that still looks exactly
 as it did when it was checked, and refuse one that does not. The
