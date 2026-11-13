@@ -568,13 +568,19 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       {item.houseRules && item.houseRules.length > 0 && <p className="check-hint house-style-hint" role="note" aria-label="Learned spellings applied">
         Uses your spelling: {item.houseRules.map((rule, index) => <span key={`${rule.kind}-${rule.from}`}>{index > 0 ? '; ' : ''}<q>{rule.from}</q> written as <strong>{rule.to}</strong></span>)}{item.houseRules[item.houseRules.length - 1].to.trimEnd().endsWith('.') ? '' : '.'} Change or forget it under Settings.
       </p>}
+      {/*
+        Each action says on screen which spelling it is for whenever the note
+        above lists more than one: a bare "Use on its own" under three
+        spellings, one of them just checked and named in the line below it,
+        read as an action for that one.
+      */}
       {(unchecked.length > 0 || spellingNote) && <div ref={spellingChecks} className="spelling-checks" role="group" aria-label="Use a learned spelling on its own" tabIndex={-1}>
         {unchecked.map((rule) => askingSpelling === rule.id
           ? <UseOnItsOwnQuestion key={rule.id} rule={rule} describedBy={`${fieldId}-spelling-${rule.id}`} disabled={busy}
             note="Choosing this does not approve this document: it still waits for you."
             onConfirm={() => void checkSpelling(rule)} onCancel={() => { setAskingSpelling(undefined); setSpellingFocus({ rule: rule.id }); }} />
           : <div key={rule.id} className="spelling-check">
-            {unchecked.length > 1 && <span><q>{rule.from}</q> written as <strong>{rule.to}</strong></span>}
+            {usedRules.length > 1 && <span><q>{rule.from}</q> written as <strong>{rule.to}</strong></span>}
             <button type="button" data-rule={rule.id} disabled={busy || askingSpelling !== undefined} aria-label={`Use on its own: ${spellingLabel(rule)}`} onClick={() => { setSpellingNote(undefined); setAskingSpelling(rule.id); }}>Use on its own</button>
           </div>)}
         {spellingNote && <p className={spellingNote.failed ? 'form-error' : 'spelling-checked'} role={spellingNote.failed ? 'alert' : 'status'}>{spellingNote.text}</p>}

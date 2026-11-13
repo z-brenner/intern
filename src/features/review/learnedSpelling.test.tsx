@@ -181,6 +181,39 @@ describe('using a held document\'s spelling on its own', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: /Use on its own: Contoso/ })).not.toBeInTheDocument());
   });
 
+  // The note above lists every spelling the name used. A bare "Use on its
+  // own" under it - the only unchecked one of three, or the one left after
+  // the other was checked and named in the line below - read as an action
+  // for whichever spelling was nearest. Each says which it is on screen
+  // whenever the note lists more than one.
+  it('names the spelling beside "Use on its own" when it is the one unchecked of several the note lists', async () => {
+    const oneUnchecked = spellingBridge(spellings.map((rule) => rule.id === '2' ? { ...rule, confirmed: 1 } : rule));
+    render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={oneUnchecked} />);
+    await screen.findByRole('button', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' });
+    const group = screen.getByRole('group', { name: 'Use a learned spelling on its own' });
+    expect(within(group).getAllByRole('button', { name: /^Use on its own:/ })).toHaveLength(1);
+    expect(group).toHaveTextContent('Contoso Worldwide, Inc. written as Contoso');
+  });
+
+  it('names the spelling beside the "Use on its own" left once the other was checked', async () => {
+    const bridge = spellingBridge(spellings);
+    render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={bridge} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' }));
+    fireEvent.click(within(screen.getByRole('group', { name: /^Use on its own:/ })).getByRole('button', { name: 'Use on its own' }));
+    await screen.findByRole('status');
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Use on its own: Contoso/ })).not.toBeInTheDocument());
+    const left = screen.getByRole('group', { name: 'Use a learned spelling on its own' });
+    expect(within(left).getAllByRole('button', { name: /^Use on its own:/ })).toHaveLength(1);
+    expect(left).toHaveTextContent('Ridgeline Cartography LLC written as Ridgeline Cartography');
+  });
+
+  it('shows the action alone under a note of one spelling', async () => {
+    const one: QueueItem = { ...held, houseRules: [held.houseRules![0]] };
+    render(<ReviewInspector item={one} drawer={false} {...handlers()} spellings={spellingBridge(spellings)} />);
+    await screen.findByRole('button', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' });
+    expect(screen.getByRole('group', { name: 'Use a learned spelling on its own' })).toHaveTextContent(/^Use on its own$/);
+  });
+
   it('is offered from the review window of the app, which reads the spellings from the bridge', async () => {
     const base = createInMemoryBridge({ items: [held], learnedRules: spellings });
     const houseRuleCheck = vi.fn(base.houseRuleCheck);
