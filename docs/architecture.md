@@ -704,12 +704,24 @@ rounds of review kept finding wordings that read as a respelling but were a
 decision about one document - another party joined to the named one ("John
 Smith, Jane Doe"), a short form of another party, a note - each of which,
 learned, renamed every later document giving the word, ready ones filed
-without review. So every name a rule changes - or the type and parties the
-folder and the filing report are read from, which a name can leave out (a
-first party shed for length, the third of a "between") - waits in review
-with `LEARNED_SPELLING_UNCONFIRMED`, never ready, until a person has checked
-the rule (`LearnedRule::confirmed`, counted in `house_rules.confirmed` for
-the spelling in `house_rules.confirmed_to`).
+without review. So every name a rule changes waits in review with
+`LEARNED_SPELLING_UNCONFIRMED`, never ready, until a person has checked the
+rule (`LearnedRule::confirmed`, counted in `house_rules.confirmed` for the
+spelling in `house_rules.confirmed_to`).
+
+A rule nobody has checked touches only what a person sees: it is used on a
+record only where the name shows it - the name composed with it gives its
+spelling and differs from the name composed without it (`shown_rules`). The
+folder and the filing report are read from the type and the parties, and a
+name can leave out a party a rule respells (a first party shed for length,
+the third of a "between"); such a rule is not used on that record at all,
+which is filed and reported under the checked rules' and the document's own
+words and is not held. So every name held with
+`LEARNED_SPELLING_UNCONFIRMED` shows the spelling it waits on, and no rule is
+left that no name could show a person. Once the rule is checked, on another
+document, it is used everywhere it fires, folder and report included: the
+documents still waiting are composed again then, and a name held for it
+loses the reason.
 
 A check is evidence that the rule is a spelling, and an approval is that
 evidence only where the rule's words could have been wrong. So an approval
@@ -765,10 +777,8 @@ count only while the rule writes the spelling checked. A document whose
 approved name takes out a spelling nobody had checked is filed and reported
 under the document's own words where the name gives them, whatever note or
 party follows them (`ProposalRecord::rejected_rules`); a checked spelling's
-folder stays the party's. A rule that fires but changes none of the name,
-type or parties - a party the name leaves out as the person's own - holds
-nothing. The hold is decided wherever a name is composed under the rules in
-force: a new reading, Re-analyze, a validation again after an update, and the
+folder stays the party's. The hold is decided wherever a name is composed
+under the rules in force: a new reading, Re-analyze, a validation again after an update, and the
 waiting documents a rule learned or used renames (a ready one goes to review
 in the same write that renames it); and no unapproved name a rule no person
 has checked changed is left ready, however the row came to be ready: the
@@ -777,7 +787,8 @@ model, paused or not, as well as before the scheduler files anything. Whether
 a row is held is decided again on its record as stored, in the transaction
 that puts it in review, so an approval made in that moment stands. Rules
 learned before alpha.18 were never checked, so after the update each of them
-waits for one check too. The wording rules still keep Intern from learning
+waits for one check too; a ready row such a rule touched where its name does
+not show it is composed again when the queue opens, rather than held. The wording rules still keep Intern from learning
 what they recognise; they are no longer what keeps a wrong name from being
 filed.
 

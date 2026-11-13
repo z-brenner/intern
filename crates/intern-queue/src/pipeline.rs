@@ -838,15 +838,16 @@ impl ProposalRecord {
     /// from the reading with every rule in [`Self::house_rules`], or the
     /// type and parties it is composed from, are not those composed with
     /// only the rules that `checked` says a person has approved the work of
-    /// (see [`LearnedRule::confirmed`]). The type and the parties count as
-    /// well as the name because the folder and the filing report are read
-    /// from them, and a name can leave out a party a rule respelled - the
-    /// first, shed for length, whose folder the document still goes in, or
-    /// the third of a "between" - and was filed without review into the
-    /// folder, and under the report, an unchecked rule wrote. A rule that
-    /// fired but changes none of it - a respelling of a party the name
-    /// leaves out as the person's own organization - holds nothing.
-    /// `extension` is the source file's.
+    /// (see [`LearnedRule::confirmed`]). A record composed now holds an
+    /// unchecked rule only where its name shows it (see [`shown_rules`]),
+    /// so for one the name is what differs; the type and the parties count
+    /// as well for a record an earlier build composed with such a rule where
+    /// the name leaves its party out - the first, shed for length, whose
+    /// folder the document still goes in, or the third of a "between" -
+    /// which was filed without review into the folder, and under the
+    /// report, the rule wrote. A rule that fired but changes none of it - a
+    /// respelling of a party the name leaves out as the person's own
+    /// organization - holds nothing. `extension` is the source file's.
     ///
     /// The wording of an edit cannot tell every spelling from a decision
     /// about one document, so this is what keeps a wrong rule from filing a
@@ -1973,8 +1974,9 @@ pub struct LearnedRule {
     /// on a document new to Intern that does not give in its own words what
     /// the spelling adds (see [`Pipeline::confirm_kept_spellings`]) - the
     /// only approval that shows the spelling is one. Until then a name the
-    /// rule changes, or where the document is filed and reported, waits for
-    /// a person ([`LEARNED_SPELLING_UNCONFIRMED`]); one check is enough.
+    /// rule changes waits for a person ([`LEARNED_SPELLING_UNCONFIRMED`]),
+    /// and where it does not show in the name it is not used (see
+    /// [`shown_rules`]); one check is enough.
     /// "Use now" in the list of learned spellings is no check. A different spelling for the same word starts over at
     /// none, as `seen` does, and the checks count for the spelling checked
     /// alone, whichever release respelled it since; every rule learned
@@ -2015,6 +2017,24 @@ impl Spellings {
         )
     }
 
+    /// `proposal` respelled by the rules in force that a name composed
+    /// from it applies (see [`shown_rules`]), with those rules: every
+    /// checked rule that fires, and an unchecked one only where the name
+    /// shows it. `own_names` are the person's organization's names the name
+    /// is composed by, and `extension` the source file's.
+    fn styled(
+        &self,
+        proposal: &ValidatedProposal,
+        own_names: &[String],
+        extension: &str,
+    ) -> (ValidatedProposal, Vec<HouseRule>) {
+        let (_, fired) = self.style().apply(proposal);
+        let rules = shown_rules(proposal, fired, own_names, extension, |rule| {
+            self.checked(rule)
+        });
+        HouseStyle::new(rules).apply(proposal)
+    }
+
     /// Whether a person has checked the work of `rule`, as a name applied
     /// it: learned for the same word, with exactly this spelling, and
     /// approved once (see [`LearnedRule::confirmed`]). A rule forgotten or
@@ -2026,6 +2046,64 @@ impl Spellings {
                 && learned.to == rule.to
                 && learned.is_checked()
         })
+    }
+}
+
+/// Those of `fired` - the rules in force that fire on `proposal` - that a
+/// name composed from it, by the other side of `own_names`, applies: every
+/// one a person has checked (`checked`), and one nobody has checked only
+/// where the name shows it - the name composed with it gives its spelling
+/// (see [`keeps_spelling`]) and is not the name composed without it.
+/// `extension` is the source file's.
+///
+/// An unchecked rule whose work would show only in the folder a document
+/// is filed in and what its filing reports - a first party the name sheds
+/// for length, the third party of a "between" - is not used on that record
+/// at all: its folder, its report and its parties are the checked rules'
+/// and the document's own words, and nothing holds it for a spelling it
+/// does not show. Such records used to wait for a person
+/// ([`LEARNED_SPELLING_UNCONFIRMED`]) under a name that gave no word of
+/// the spelling, and a rule that never shows in a name was left with every
+/// document it touched waiting and no name a person could check it by. So
+/// every name held for an unchecked rule shows that rule's spelling; once
+/// a person has checked it on another document, it is used here too (see
+/// [`Pipeline::restyle_waiting`]).
+///
+/// Taking one rule out can change what another shows - a shorter party
+/// leaves room for one the name shed - so the rules are asked again until
+/// none is taken out.
+fn shown_rules(
+    proposal: &ValidatedProposal,
+    fired: Vec<HouseRule>,
+    own_names: &[String],
+    extension: &str,
+    checked: impl Fn(&HouseRule) -> bool,
+) -> Vec<HouseRule> {
+    let name = |rules: Vec<HouseRule>| {
+        let (styled, applied) = HouseStyle::new(rules).apply(proposal);
+        let (named, _) = counterparty_view(&styled, own_names);
+        compose_styled_filename(&named, &applied, extension, &[]).value
+    };
+    let mut rules = fired;
+    loop {
+        let named = name(rules.clone());
+        let hidden = rules.iter().position(|rule| {
+            !checked(rule)
+                && (!keeps_spelling(rule, extension, &named)
+                    || name(
+                        rules
+                            .iter()
+                            .filter(|other| *other != rule)
+                            .cloned()
+                            .collect(),
+                    ) == named)
+        });
+        match hidden {
+            Some(index) => {
+                rules.remove(index);
+            }
+            None => return rules,
+        }
     }
 }
 
@@ -2173,6 +2251,7 @@ impl Pipeline {
             settings,
             database.parent().unwrap_or(Path::new(".")).to_path_buf(),
         );
+        pipeline.restyle_waiting_as_opened();
         pipeline.hold_ready_under_unchecked_spellings();
         Ok(pipeline)
     }
@@ -2224,12 +2303,26 @@ impl Pipeline {
             settings,
             database.parent().unwrap_or(Path::new(".")).to_path_buf(),
         );
+        pipeline.restyle_waiting_as_opened();
         pipeline.hold_ready_under_unchecked_spellings();
         Ok(pipeline)
     }
 
-    /// Puts in review every ready document whose name, or where it is filed,
-    /// a learned spelling no person has checked changed (see
+    /// Composes again, as the queue opens, every waiting document an earlier
+    /// release named with a learned spelling nobody has checked whose work
+    /// its name does not show (see [`shown_rules`]): that release used such
+    /// a spelling on the folder and the filing report too, which this one
+    /// does only once the spelling is checked. Without this, the hold below
+    /// put such a document in review under a name that gave no word of the
+    /// spelling. Nothing for a document whose rules are as they would be
+    /// composed now; a record that cannot be read now is left to the hold.
+    fn restyle_waiting_as_opened(&self) {
+        let _ = self.restyle_waiting();
+    }
+
+    /// Puts in review every ready document whose name a learned spelling no
+    /// person has checked changed - or, on a record an earlier build
+    /// composed, where it is filed (see
     /// [`Self::held_for_unchecked_spelling`]): when the queue opens, and on
     /// every recovery pass. Such a row is one an earlier release left ready,
     /// since after the update every rule it learned is unchecked and a name
@@ -3396,18 +3489,19 @@ impl Pipeline {
         // The document's words, respelled the way review has taught Intern
         // to. Applied here, after validation, so the evidence stayed the
         // document's and only the name is the reviewer's.
-        let spellings = self.repository.spellings()?;
-        let (styled, house_rules) = spellings.style().apply(&analysis.proposal);
         // And named by the other side when it names the person's own
         // organization too. Settings that cannot be read name nobody, so the
         // name carries every party, as it did before the setting existed; an
         // automatic rename reports the unreadable file
-        // (`settle_new_record`).
+        // (`settle_new_record`). A rule nobody has checked is applied only
+        // where the name shows it (see `shown_rules`).
         let own_names = self
             .settings
             .load()
             .map(|settings| settings.own_names())
             .unwrap_or_default();
+        let spellings = self.repository.spellings()?;
+        let (styled, house_rules) = spellings.styled(&analysis.proposal, &own_names, extension);
         let (named, _) = counterparty_view(&styled, &own_names);
         let filename =
             self.compose_for_target(&item.source_path, &named, &house_rules, extension, existing);
@@ -3747,8 +3841,12 @@ impl Pipeline {
     /// to review with [`LEARNED_SPELLING_UNCONFIRMED`] in the same write
     /// that renames it, so no scheduler pass files the new name in between,
     /// and its revision moves as any document's sent to review does. One
-    /// renamed back - the rule forgotten - loses the reason but stays in
-    /// review: what else held it is not known here.
+    /// renamed back - the rule forgotten - or held for a rule a person has
+    /// checked since, on another document, loses the reason but stays in
+    /// review: what else held it is not known here. A rule nobody has
+    /// checked is used only where the name shows it (see [`shown_rules`]),
+    /// so one checked since can change the rules of a name it does not
+    /// change, which is stored without moving the revision.
     fn recompose(
         &self,
         spellings: &Spellings,
@@ -3764,18 +3862,27 @@ impl Pipeline {
         if !untouched(&record) {
             return Ok(false);
         }
-        let (styled, house_rules) = spellings.style().apply(&record.analysis.proposal);
         let own_names = own_names.map_or_else(|| record.own_names.clone(), <[String]>::to_vec);
-        if house_rules == record.house_rules && own_names == record.own_names {
-            return Ok(false);
-        }
-        let (named, _) = counterparty_view(&styled, &own_names);
         let extension = item
             .source_path
             .extension()
             .and_then(|value| value.to_str())
             .unwrap_or_default()
             .to_owned();
+        let (styled, house_rules) =
+            spellings.styled(&record.analysis.proposal, &own_names, &extension);
+        // A name held for a spelling checked since - on another document -
+        // says the spelling has not been checked: the reason is taken back,
+        // though the name is as it was.
+        let checked_since = record
+            .reasons
+            .iter()
+            .any(|reason| reason == LEARNED_SPELLING_UNCONFIRMED)
+            && !record.holds_unchecked_spelling(&extension, |rule| spellings.checked(rule));
+        if house_rules == record.house_rules && own_names == record.own_names && !checked_since {
+            return Ok(false);
+        }
+        let (named, _) = counterparty_view(&styled, &own_names);
         let existing = names_beside(
             item.source_path.parent().unwrap_or_else(|| Path::new(".")),
             &item.source_path,
@@ -3864,9 +3971,17 @@ impl Pipeline {
                 None => lesson,
             }
         });
-        self.confirm_kept_spellings(id, record, extension, approved, lesson.as_ref())?;
+        // A rule checked now is used on the waiting documents whose names
+        // do not show it as well (see `shown_rules`), and a name held for
+        // it says so no more: they are restyled.
+        let checked =
+            self.confirm_kept_spellings(id, record, extension, approved, lesson.as_ref())?;
         let Some(lesson) = lesson else {
-            return Ok(());
+            return if checked {
+                self.restyle_waiting()
+            } else {
+                Ok(())
+            };
         };
         if HouseRule::key(&lesson.to) == lesson.from_key() || !is_a_spelling(&lesson) {
             self.repository.forget_rule_for(lesson.kind, &lesson.from)?;
@@ -3882,7 +3997,11 @@ impl Pipeline {
             // short - decides who this document is with. Learned, it would
             // put that party in every later name giving those words, or of
             // that type, documents that never mention it included.
-            return Ok(());
+            return if checked {
+                self.restyle_waiting()
+            } else {
+                Ok(())
+            };
         } else if lesson.is_meaningful() {
             self.repository.learn(
                 &lesson,
@@ -8201,7 +8320,7 @@ mod as_filed_tests {
         Support, ValidatedFacts, ValidatedParty, ValidatedProposal, compose_styled_filename,
     };
 
-    use super::{ProposalRecord, layout_subfolder};
+    use super::{ProposalRecord, layout_subfolder, shown_rules};
     use crate::settings::DestinationLayout;
 
     /// A `document_type` whose proposal gives `parties` behind `relation`,
@@ -8718,16 +8837,70 @@ mod as_filed_tests {
         assert!(failed.is_empty(), "{failed:#?}");
     }
 
-    /// A learned spelling that changes no word of the name still holds the
-    /// record where nobody has checked it, when it changes a party the name
-    /// leaves out - the third of a "between", here - since the filing
-    /// report gives that party in the spelling (see
-    /// [`ProposalRecord::holds_unchecked_spelling`]). One that changes
-    /// nothing at all - a respelling of the person's own organization, left
-    /// out - holds nothing.
+    /// A learned spelling nobody has checked is used on a record only where
+    /// its name shows it (see [`shown_rules`]): not for the third party of a
+    /// "between", which the name leaves out though the filing report gives
+    /// it, nor for a party left out as the person's own; but for a party the
+    /// name gives, beside it. Checked, it is used wherever it fires. A
+    /// record an earlier build composed with such a spelling is still held
+    /// for it (see [`ProposalRecord::holds_unchecked_spelling`]) until it is
+    /// composed again.
     #[test]
-    fn a_spelling_of_a_party_the_name_leaves_out_holds_the_record_unless_it_changes_nothing() {
+    fn a_spelling_nobody_checked_is_used_only_where_the_name_shows_it() {
         let third = record(
+            "Employment Agreement",
+            (
+                PartyRelation::Between,
+                &["John Smith", "Acme Corporation", "Beacon Staffing LLC"],
+            ),
+            &[],
+            &[],
+        );
+        let joined = HouseRule::new(
+            RuleKind::Party,
+            "Beacon Staffing LLC",
+            "Beacon Staffing LLC and Jane Doe",
+        );
+        let short = HouseRule::new(RuleKind::Party, "Acme Corporation", "Acme");
+        let proposal = &third.analysis.proposal;
+        let used = |fired: &[&HouseRule], checked: bool| {
+            shown_rules(
+                proposal,
+                fired.iter().map(|rule| (*rule).clone()).collect(),
+                &[],
+                "pdf",
+                |_| checked,
+            )
+        };
+        assert_eq!(used(&[&joined], false), Vec::<HouseRule>::new());
+        assert_eq!(used(&[&joined], true), vec![joined.clone()]);
+        assert_eq!(used(&[&short, &joined], false), vec![short.clone()]);
+        assert_eq!(
+            shown_rules(
+                proposal,
+                vec![short.clone(), joined.clone()],
+                &[],
+                "pdf",
+                |rule| *rule == joined
+            ),
+            vec![short.clone(), joined.clone()],
+            "a checked one beside an unchecked one the name shows"
+        );
+
+        let own = HouseRule::new(RuleKind::Party, "Acme Corporation", "ACME CORPORATION");
+        assert_eq!(
+            shown_rules(
+                proposal,
+                vec![own.clone()],
+                &["Acme Corporation".into()],
+                "pdf",
+                |_| false
+            ),
+            Vec::<HouseRule>::new(),
+            "the person's own, left out"
+        );
+
+        let earlier = record(
             "Employment Agreement",
             (
                 PartyRelation::Between,
@@ -8737,21 +8910,12 @@ mod as_filed_tests {
             &[("Beacon Staffing LLC", "Beacon Staffing LLC and Jane Doe")],
         );
         assert!(
-            !third.filename.contains("Jane Doe"),
+            !earlier.filename.contains("Jane Doe"),
             "the name leaves it out: {}",
-            third.filename
+            earlier.filename
         );
-        assert!(third.holds_unchecked_spelling("pdf", |_| false));
-        assert!(!third.holds_unchecked_spelling("pdf", |_| true));
-
-        let mut own = record(
-            "Employment Agreement",
-            (PartyRelation::Between, &["John Smith", "Acme Corporation"]),
-            &[],
-            &[("Acme Corporation", "ACME CORPORATION")],
-        );
-        own.own_names = vec!["Acme Corporation".into()];
-        assert!(!own.holds_unchecked_spelling("pdf", |_| false));
+        assert!(earlier.holds_unchecked_spelling("pdf", |_| false));
+        assert!(!earlier.holds_unchecked_spelling("pdf", |_| true));
     }
 }
 
