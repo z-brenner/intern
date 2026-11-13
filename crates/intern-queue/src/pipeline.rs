@@ -1629,12 +1629,17 @@ const NOTE_STARTS: [&str; 6] = [
 /// "John Smith" is offered, "Acme Corporation Holdings LLC" where its
 /// subsidiary "Acme Corporation" is, "John Smith Family Trust". `None`
 /// where the first such words are the choice in some spelling, or the
-/// type, before the first divider, or a note, after a note's start; and
-/// where they also hold, outside the choice's words, one of `others` - the
-/// spellings of a party the name still gives, or of another choice -
-/// joined to it by words that divide nothing here ("&", a comma): "Acme
-/// Corporation, Beacon Staffing LLC" or "John Smith & Acme Corporation" is
-/// two parties, not one longer one. `extension` is the source file's.
+/// type, before the first divider, or a note, after a note's start.
+///
+/// Words that also hold, outside the choice's words, one of `others` - the
+/// spellings of a party the name still gives, or of another choice - are
+/// two parties joined by words that divide nothing here ("&", a comma),
+/// not one longer one: "Acme Corporation, Beacon Staffing LLC" or "John
+/// Smith & Acme Corporation". The longer party typed is then the piece of
+/// them, between "&" and commas, that holds the choice, where that piece
+/// is more than the choice and holds none of `others`: "Estate of John
+/// Smith" in "Estate of John Smith & Beacon Staffing LLC", which was filed
+/// as the bare "John Smith". `extension` is the source file's.
 fn typed_around(
     approved: &str,
     extension: &str,
@@ -1689,8 +1694,28 @@ fn typed_around(
                 .all(|mine| run.end <= mine.start || run.start >= mine.end)
         })
     });
-    (index > 0 && !after_note && !holds_another && !chosen_spellings.contains(&key))
-        .then(|| segment.trim().to_owned())
+    if index == 0 || after_note {
+        return None;
+    }
+    if !holds_another {
+        return (!chosen_spellings.contains(&key)).then(|| segment.trim().to_owned());
+    }
+    segment
+        .split(['&', ','])
+        .map(str::trim)
+        .find(|piece| {
+            let key = HouseRule::key(piece);
+            chosen_spellings
+                .iter()
+                .any(|choice| holds_words(&key, choice))
+        })
+        .filter(|piece| {
+            let key = HouseRule::key(piece);
+            let words = key.split(' ').collect::<Vec<_>>();
+            !chosen_spellings.contains(&key)
+                && others.iter().all(|other| runs_of(&words, other).is_empty())
+        })
+        .map(str::to_owned)
 }
 
 /// `party` without a note typed after it - " re Probate", " RE: the
@@ -1748,8 +1773,12 @@ fn without_note(party: &str, known: &[String]) -> String {
 
 /// The words that end a company's name, as house style compares spellings
 /// ([`HouseRule::key`]): a note's start just in front of one is a word of
-/// the name ("Swiss Re Ltd", "Munich Re Group"), not a note.
-const COMPANY_FORMS: [&str; 16] = [
+/// the name ("Swiss Re Ltd", "Munich Re Group", "Munich Re Capital
+/// Limited"), not a note.
+const COMPANY_FORMS: [&str; 19] = [
+    "limited",
+    "company",
+    "incorporated",
     "ltd",
     "inc",
     "llc",
@@ -8171,6 +8200,25 @@ mod as_filed_tests {
                 "Employment Agreement between Acme Corporation & John Smith and Beacon Staffing LLC",
                 &[acme, smith, beacon],
             ),
+            // A longer party typed around a choice, joined so to a party
+            // the name still gives, is that piece of the words, as typed:
+            // these were filed as the bare choice, in "John Smith/" and
+            // "Acme Corporation/".
+            (
+                record(agreement, (PartyRelation::With, &[beacon]), &[smith], &[]),
+                "Employment Agreement with Estate of John Smith & Beacon Staffing LLC",
+                &["Estate of John Smith", beacon],
+            ),
+            (
+                record(agreement, (PartyRelation::With, &[beacon]), &[acme], &[]),
+                "Employment Agreement with Acme Corporation Holdings & Beacon Staffing LLC",
+                &["Acme Corporation Holdings", beacon],
+            ),
+            (
+                record(agreement, (PartyRelation::With, &[beacon]), &[smith], &[]),
+                "Employment Agreement with Beacon Staffing LLC, Estate of John Smith",
+                &[beacon, "Estate of John Smith"],
+            ),
             // A note's start that is a word of the party's own name - the
             // reading knows the party, or a word that ends a company's name
             // follows - is no note: these were filed in "Swiss/",
@@ -8199,6 +8247,16 @@ mod as_filed_tests {
                 record("Letter", (PartyRelation::To, &[acme]), &[], &[]),
                 "Letter to Munich Re Group",
                 &["Munich Re Group"],
+            ),
+            (
+                record("Letter", (PartyRelation::To, &[acme]), &[], &[]),
+                "Letter to Munich Re Capital Limited",
+                &["Munich Re Capital Limited"],
+            ),
+            (
+                record("Letter", (PartyRelation::To, &[acme]), &[], &[]),
+                "Letter to Hannover Re Company re the Treaty",
+                &["Hannover Re Company"],
             ),
             (
                 record("Letter", (PartyRelation::To, &[acme]), &[], &[]),
