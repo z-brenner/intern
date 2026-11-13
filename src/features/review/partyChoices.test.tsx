@@ -135,6 +135,32 @@ describe('other parties the document names', () => {
       expect(filename).toHaveFocus();
     });
 
+    /*
+      A paste holding a line break - a spreadsheet cell's "\r\n" - left the
+      break in the field until the change set the name from code; Chromium's
+      undo of the paste then put the old name after the new one, one Enter
+      from filing. It goes in as typed, a space for each break.
+    */
+    it('puts a pasted line break in as a space, through the editing command', async () => {
+      render(<App bridge={createInMemoryBridge({ items: [letter] })} />);
+      await selectRow(await screen.findByRole('row', { name: /Scan 0201.pdf/i }));
+      const filename = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      filename.focus();
+      filename.setSelectionRange(0, filename.value.length);
+      const paste = new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertFromPaste', data: '2012-06-19 Request Letter to Foo Bar\r\n' });
+      filename.dispatchEvent(paste);
+      expect(paste.defaultPrevented).toBe(true);
+      expect(insertText).toHaveBeenCalledTimes(1);
+      expect(insertText).toHaveBeenCalledWith('insertText', false, '2012-06-19 Request Letter to Foo Bar ');
+      expect(filename).toHaveValue('2012-06-19 Request Letter to Foo Bar ');
+
+      // Text without a break is left to the browser.
+      const plain = new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertFromPaste', data: 'x' });
+      filename.dispatchEvent(plain);
+      expect(plain.defaultPrevented).toBe(false);
+      expect(insertText).toHaveBeenCalledTimes(1);
+    });
+
     it('replaces whole words, so a letter is never split from its accent', async () => {
       // The name writes the accent as a letter and a combining mark; the party chosen has none.
       const accented: QueueItem = { ...letter, proposedFilename: '2012-06-19 Request Letter to Rene\u0301 Dupont.pdf', partyChoices: ['Rene Dupont'], nameParties: ['Rene\u0301 Dupont'] };

@@ -185,6 +185,28 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const fieldId = useId();
   useEffect(() => { if (confirmingRemove) confirmRef.current?.focus(); }, [confirmingRemove]);
+  // Text with a line break - a cell copied from a spreadsheet, a line from a
+  // document - goes into the name with a space for each break, as typed,
+  // through the browser's editing command. Pasted as it was, the field held
+  // the break until the change set the name from code, and Chromium's undo
+  // of that paste then put the old name after the new one: Ctrl+A, paste
+  // "2024-02-01 Engagement Letter with Contoso\r\n", Ctrl+Z gave "2024-02-01
+  // Engagement Letter with Contoso 2024-02-01 Engagement Letter with
+  // Northwind Traders", one Enter from filing. Registered on each render,
+  // so the field of the draft on screen has it.
+  useLayoutEffect(() => {
+    const field = filenameRef.current;
+    if (!field) return;
+    const asTyped = (event: InputEvent) => {
+      const text = event.data ?? event.dataTransfer?.getData('text/plain') ?? null;
+      if (text === null || !/[\r\n]/.test(text) || typeof document.execCommand !== 'function') return;
+      event.preventDefault();
+      if (document.execCommand('insertText', false, withoutLineBreaks(text))) return;
+      editStem(withoutLineBreaks(`${field.value.slice(0, field.selectionStart)}${text}${field.value.slice(field.selectionEnd)}`));
+    };
+    field.addEventListener('beforeinput', asTyped);
+    return () => field.removeEventListener('beforeinput', asTyped);
+  });
   // The More menu closes on a press anywhere outside it, as the toolbar's
   // does. It used to stay open over the panel until its own button was
   // pressed again or one of its actions taken.
