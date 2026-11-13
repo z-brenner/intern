@@ -3853,9 +3853,22 @@ impl Pipeline {
         item: &QueueItem,
         own_names: Option<&[String]>,
     ) -> PipelineResult<bool> {
-        let Some(mut record) = self.repository.load_proposal(item.id)? else {
+        let Some(read) = self.repository.load_proposal_json(item.id)? else {
             return Ok(false);
         };
+        self.recompose_read(spellings, item, own_names, &read)
+    }
+
+    /// [`Self::recompose`] of the record `read`, as stored a moment ago.
+    fn recompose_read(
+        &self,
+        spellings: &Spellings,
+        item: &QueueItem,
+        own_names: Option<&[String]>,
+        read: &str,
+    ) -> PipelineResult<bool> {
+        let mut record = serde_json::from_str::<ProposalRecord>(read)
+            .map_err(|_| PipelineError::new("INVALID_DATA", "stored proposal is invalid"))?;
         // A copy's name, or one typed for a document that could not be
         // read, has no facts behind it to compose a name from; and a name a
         // person approved, filed, or took back is theirs.
@@ -3899,35 +3912,13 @@ impl Pipeline {
         record.house_rules = house_rules;
         record.own_names = own_names;
         let held = hold_unchecked_spelling(&mut record, &extension, spellings);
-        let to_review = held && item.status == QueueStatus::Ready;
-        if renamed || to_review {
+        if renamed || (held && item.status == QueueStatus::Ready) {
             record.revision += 1;
         }
-        if !to_review {
-            self.repository.replace_proposal(item.id, &record)?;
-            return Ok(true);
-        }
-        match self
-            .repository
-            .store_in_review(item.id, &record, QueueStatus::Ready, None)
-        {
-            Ok(()) => Ok(true),
-            // No longer ready since the list was read. In review by now, it
-            // takes the new name all the same; anything else - being filed
-            // under the name it had - is left to what moved it.
-            Err(error) if error.code == "STATE_CONFLICT" => {
-                if self
-                    .store
-                    .get(item.id)?
-                    .is_some_and(|now| now.status == QueueStatus::NeedsReview)
-                {
-                    self.repository.replace_proposal(item.id, &record)?;
-                    return Ok(true);
-                }
-                Ok(false)
-            }
-            Err(error) => Err(error),
-        }
+        // Written only over the record read: whatever was written since - an
+        // approval above all - stands (see `replace_proposal_if`).
+        self.repository
+            .replace_proposal_if(item.id, read, &record, held)
     }
 
     /// What an approved edit teaches, if anything: a respelled party or
@@ -6354,6 +6345,75 @@ impl PipelineRepository {
                 .map_err(|_| PipelineError::new("INVALID_DATA", "stored proposal is invalid"))
         })
         .transpose()
+    }
+
+    /// Stores `record` as item `id`'s in place of the record it was composed
+    /// from, `read` - the stored JSON as it was read - provided the stored
+    /// record is still exactly that and the row still waits for a person,
+    /// in review or ready; a ready row goes to review in the same write
+    /// where the record is `held` for a person. Says whether it wrote.
+    ///
+    /// Decided and written in one IMMEDIATE transaction, as
+    /// [`Self::hold_ready_if`] is, so nothing written in between is written
+    /// over. A record composed again from one a person approved a moment
+    /// after it was read - by a Settings save, or a spelling learned, used
+    /// or checked - was written over the approval: the person's name and
+    /// sentence were lost for Intern's unapproved ones, and the approval's
+    /// filing then filed Intern's name, or found the row back in review.
+    /// Such a record is left as it is, and the next recomposition reads it
+    /// as it is now. One being filed - no longer waiting - is left to the
+    /// filing.
+    fn replace_proposal_if(
+        &self,
+        id: i64,
+        read: &str,
+        record: &ProposalRecord,
+        held: bool,
+    ) -> PipelineResult<bool> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
+        let stored = transaction
+            .query_row(
+                "SELECT proposal_json FROM proposals WHERE queue_item_id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(database_error)?;
+        if stored.as_deref() != Some(read) {
+            return Ok(false);
+        }
+        let status = transaction
+            .query_row(
+                "SELECT status FROM queue_items WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(database_error)?;
+        let ready = queue_status_text(QueueStatus::Ready);
+        let in_review = queue_status_text(QueueStatus::NeedsReview);
+        match status.as_deref() {
+            Some(status) if status == ready && held => {
+                store_in_review_on(&transaction, id, record, QueueStatus::Ready, None)?;
+            }
+            Some(status) if status == ready || status == in_review => {
+                let json = serde_json::to_string(record).map_err(|_| {
+                    PipelineError::new("INVALID_DATA", "proposal could not be stored")
+                })?;
+                transaction
+                    .execute(
+                        "UPDATE proposals SET proposal_json = ?1 WHERE queue_item_id = ?2",
+                        params![json, id],
+                    )
+                    .map_err(database_error)?;
+            }
+            _ => return Ok(false),
+        }
+        transaction.commit().map_err(database_error)?;
+        Ok(true)
     }
 
     /// Stores a record over the one a queue item already has.
@@ -9542,5 +9602,99 @@ mod hold_tests {
             pipeline.store.get(id).unwrap().unwrap().status,
             QueueStatus::Ready
         );
+    }
+
+    /// A person approves a waiting agreement in the moment between a
+    /// Settings save, or a spelling learned, used or checked, reading its
+    /// record to compose it again and writing it back - in review, or ready
+    /// and held by a spelling nobody has checked. The approval stands: the
+    /// name and sentence the person gave, the row ready for the approval to
+    /// file. The record composed from what the approval replaced was
+    /// written over it, unapproved, and the approval's filing then filed
+    /// Intern's name, or the row went back to review.
+    #[test]
+    fn an_approval_made_while_a_spelling_recomposes_the_row_stands() {
+        for (row, checked) in [("needs_review", 1), ("ready", 0)] {
+            let temp = tempfile::tempdir().unwrap();
+            let database = temp.path().join("queue.sqlite3");
+            let pipeline = Pipeline::with_local_files(
+                &database,
+                Arc::new(Unread),
+                Arc::new(Unread),
+                Arc::new(Unread),
+                SettingsStore::new(temp.path().join("settings.json")),
+            )
+            .unwrap();
+            let source = temp.path().join("a.pdf");
+            std::fs::write(&source, b"a.pdf").unwrap();
+            let id = pipeline.store.enqueue(&source, "hash").unwrap().id;
+
+            let mut record = ProposalRecord::synthetic(String::new(), String::new());
+            record.manual = false;
+            record.analysis.proposal = ValidatedProposal {
+                document_type: Some("Employment Agreement".into()),
+                document_date: Some("2024-04-12".into()),
+                date_role: None,
+                parties: vec!["John Smith".into(), "Acme Corporation".into()],
+                party_relation: PartyRelation::Between,
+                description: "An agreement.".into(),
+                confidence: 0.9,
+                evidence: Evidence::default(),
+            };
+            record.filename =
+                compose_styled_filename(&record.styled_proposal(), &[], "pdf", &[]).value;
+            let connection = Connection::open(&database).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, confirmed, confirmed_to, created_at, updated_at)
+                     VALUES ('party', 'acme corporation', 'Acme Corporation', 'Acme', 2, ?1, 'Acme', 1, 1)",
+                    params![checked],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE queue_items SET status = ?2 WHERE id = ?1",
+                    params![id, row],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO proposals(queue_item_id, proposal_json, created_at) VALUES (?1, ?2, 1)",
+                    params![id, serde_json::to_string(&record).unwrap()],
+                )
+                .unwrap();
+
+            let item = pipeline.store.get(id).unwrap().unwrap();
+            let read = pipeline.repository.load_proposal_json(id).unwrap().unwrap();
+            let approved = "2024-04-12 Employment Agreement with Acme Corporation.pdf";
+            pipeline
+                .repository
+                .approve_user_edit(id, item.status, approved, "Approved.", Vec::new())
+                .unwrap();
+            let spellings = pipeline.repository.spellings().unwrap();
+            assert!(
+                !pipeline
+                    .recompose_read(&spellings, &item, None, &read)
+                    .unwrap(),
+                "{row}"
+            );
+            let stored = pipeline.repository.load_proposal(id).unwrap().unwrap();
+            assert!(stored.approved, "{row}");
+            assert_eq!(stored.filename, approved, "{row}");
+            assert_eq!(stored.description, "Approved.", "{row}");
+            assert_eq!(stored.house_rules, Vec::new(), "{row}");
+            assert_eq!(
+                pipeline.store.get(id).unwrap().unwrap().status,
+                QueueStatus::Ready,
+                "{row}"
+            );
+
+            // Read after the approval, it is the person's and is left alone.
+            let item = pipeline.store.get(id).unwrap().unwrap();
+            assert!(
+                !pipeline.recompose(&spellings, &item, None).unwrap(),
+                "{row}"
+            );
+        }
     }
 }

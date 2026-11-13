@@ -692,7 +692,11 @@ every document but one whose name a person gave: the one just approved, one
 approved earlier that is waiting only for a busy queue, one whose filing
 failed and one whose rename they took back alike. That name is the
 reviewer's own text and would lose whatever the validated facts do not
-carry, the date they typed with it most of all.
+carry, the date they typed with it most of all. A recomposed record is
+written only over the record it was composed from, in the one transaction
+that checks the stored record is unchanged (`replace_proposal_if`), so an
+approval that lands between the read and the write stands and the
+recomposition leaves that document alone.
 Respelling a spelling Intern applied maps back to the document's word - the
 person changed their mind about the word, not about Intern - and restoring
 the document's own spelling retracts the rule. The whole memory is the list
