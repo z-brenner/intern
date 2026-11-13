@@ -66,7 +66,7 @@ pub use error::{EngineError, EngineErrorCode, EngineResult};
 pub use hosted::{HostedClient, HostedModelConfig, HostedProvider};
 pub use house_style::{
     HouseRule, HouseStyle, RuleKind, approved_party, compose_styled_filename, is_a_spelling,
-    lesson_from_edit, named_parties, party_and_more, respelled_party,
+    lesson_from_edit, named_parties, party_and_more, proposed_party, respelled_party, same_stem,
 };
 pub use manifest::{ModelFile, ModelManifest, ModelRole, ModelTier, TierModel};
 pub use naming::{compose_filename, party_as_named, sanitize_folder_name};

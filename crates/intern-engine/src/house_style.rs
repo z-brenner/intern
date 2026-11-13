@@ -489,6 +489,59 @@ pub fn approved_party(
     (!kept_with_more).then(|| party.to_owned())
 }
 
+/// Whether the name `approved` is the name `proposed` as review reads an
+/// edit: the same once the extension, the date and any collision suffix
+/// are set aside, as [`lesson_from_edit`] compares them. A name approved as
+/// Intern proposed it - unchanged, filed without review, or with only its
+/// date or a collision suffix different - edits nothing.
+pub fn same_stem(extension: &str, proposed: &str, approved: &str) -> bool {
+    let extension = sanitize_extension(extension);
+    editable_stem(proposed, &extension) == editable_stem(approved, &extension)
+}
+
+/// The party the name `proposed` gives, read as a name approved as
+/// proposed (see [`same_stem`]) has been read since before review edits
+/// were read for filing (alpha.17): the words after the type and a
+/// connecting word other than "between", whole. `None` for a name that
+/// gives no party, or two, and for one `proposal` does not compose;
+/// `proposal` is as for [`lesson_from_edit`].
+///
+/// It is [`approved_party`] as alpha.17 had it, for a name nobody edited,
+/// and none of what reads an edit since - a note after a party, a party
+/// kept with more words, a choice made in review - comes into it, so a
+/// name filed as proposed is filed exactly as it was: "Swiss Re Ltd" and
+/// "Citizens Concerning the Environment" whole.
+pub fn proposed_party(
+    proposal: &ValidatedProposal,
+    extension: &str,
+    proposed: &str,
+) -> Option<String> {
+    let extension = sanitize_extension(extension);
+    let stem = editable_stem(proposed, &extension);
+    let shape = NameShape::of(proposal, &stem, &extension)?;
+    if let Some(clause) = shape.clause.as_ref()
+        && let Some(kept_type) = stem
+            .strip_suffix(clause.text.as_str())
+            .and_then(|rest| rest.strip_suffix(format!(" {} ", clause.connector).as_str()))
+        && kept_type != shape.type_segment
+    {
+        return None;
+    }
+    let rest = stem
+        .strip_prefix(shape.type_segment.as_str())?
+        .strip_prefix(' ')?;
+    PartyRelation::ALL
+        .into_iter()
+        .filter(|relation| *relation != PartyRelation::Between)
+        .find_map(|relation| {
+            rest.strip_prefix(connector_word(relation))?
+                .strip_prefix(' ')
+        })
+        .map(str::trim)
+        .filter(|party| !party.is_empty())
+        .map(str::to_owned)
+}
+
 /// The composed name's own grammar, matched against the stem Intern offered,
 /// so each part can be told apart in the name the reviewer approved.
 struct NameShape {

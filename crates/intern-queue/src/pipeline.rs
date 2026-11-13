@@ -21,7 +21,7 @@ use intern_engine::{
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
     is_a_spelling, is_own_name, lesson_from_edit, named_parties, party_and_more, party_as_named,
-    respelled_party, sanitize_folder_name,
+    proposed_party, respelled_party, same_stem, sanitize_folder_name,
     setup::{semantic_probes, validate_semantic_probe},
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -951,6 +951,13 @@ impl ProposalRecord {
     /// which is the first party's, and the filing report are read from
     /// this. `extension` is the source file's.
     ///
+    /// A name approved as Intern proposed it - unchanged, or filed without
+    /// review, whatever its date or collision suffix (see [`same_stem`]) -
+    /// is no edit, and nothing below reads it: it is filed under the party
+    /// it gives (see [`proposed_party`]), exactly as alpha.17 filed it,
+    /// "Swiss Re Ltd" and "Citizens Concerning the Environment" whole. What
+    /// follows is how an edited name is read.
+    ///
     /// A choice is a party offered in review (see [`Self::party_choices`])
     /// that the name names and the proposed name did not, written whole
     /// (see `newly_named`) and not only inside another's words (see
@@ -1020,6 +1027,17 @@ impl ProposalRecord {
             return filed;
         }
         let proposed = compose_styled_filename(&styled, &self.house_rules, extension, &[]).value;
+        // A name approved as proposed - unchanged, or filed without review,
+        // its date or a collision suffix aside - edits nothing, and none of
+        // what reads an edit below comes into it: it is filed exactly as
+        // alpha.17 filed it, under the party the name gives (see
+        // `proposed_party`).
+        if same_stem(extension, &proposed, filename) {
+            if let Some(party) = proposed_party(&styled, extension, &proposed) {
+                put_first(&mut filed.parties, party);
+            }
+            return filed;
+        }
         let choices = self.party_choices();
         let chosen = named_choices(
             newly_named(
@@ -1098,21 +1116,8 @@ impl ProposalRecord {
                 seen.push(key);
                 first
             });
-        } else if let Some(party) = chosen.or(read)
-            && filed
-                .parties
-                .first()
-                .is_none_or(|first| HouseRule::key(first) != HouseRule::key(&party))
-        {
-            // In place of the party the proposed name gave, which is the
-            // first: a name with one party gives the first of them.
-            filed
-                .parties
-                .retain(|other| HouseRule::key(other) != HouseRule::key(&party));
-            match filed.parties.first_mut() {
-                Some(first) => *first = party,
-                None => filed.parties.push(party),
-            }
+        } else if let Some(party) = chosen.or(read) {
+            put_first(&mut filed.parties, party);
         }
         filed
     }
@@ -1240,6 +1245,24 @@ impl ProposalRecord {
             .flat_map(|facts| facts.parties.iter().map(|party| party.name.as_str()))
             .chain(self.analysis.proposal.parties.iter().map(String::as_str));
         !newly_named(found, &rules, extension, &self.filename, approved).is_empty()
+    }
+}
+
+/// `party` put in place of the first of `parties`, the one a name with a
+/// single party gives, unless it is that party already in some spelling
+/// (see [`HouseRule::key`]); one of the others it is is taken out, so it is
+/// given once. A name that gave none gives `party`.
+fn put_first(parties: &mut Vec<String>, party: String) {
+    if parties
+        .first()
+        .is_some_and(|first| HouseRule::key(first) == HouseRule::key(&party))
+    {
+        return;
+    }
+    parties.retain(|other| HouseRule::key(other) != HouseRule::key(&party));
+    match parties.first_mut() {
+        Some(first) => *first = party,
+        None => parties.push(party),
     }
 }
 
@@ -7368,7 +7391,8 @@ mod as_filed_tests {
         Support, ValidatedFacts, ValidatedParty, ValidatedProposal, compose_styled_filename,
     };
 
-    use super::ProposalRecord;
+    use super::{ProposalRecord, layout_subfolder};
+    use crate::settings::DestinationLayout;
 
     /// A `document_type` whose proposal gives `parties` behind `relation`,
     /// in a document validation found `found` in as well, named with the
@@ -7437,6 +7461,68 @@ mod as_filed_tests {
         record
             .as_filed("pdf", &format!("2024-04-12 {approved}.pdf"))
             .parties
+    }
+
+    /// A name approved as Intern proposed it - unchanged, filed without
+    /// review, or with only its date or a collision suffix different - is
+    /// no edit: it is filed, and reported, under the parties the reading
+    /// gives, whole, in the folder of the first, exactly as 3f4d24b
+    /// (alpha.17's filing) filed it. Parties holding a note's start ("Re",
+    /// "Concerning"), "&", a comma, " v " or "and" among them. Read as an
+    /// edit, "Swiss Re Ltd", "Munich Re Group", "Everest Re Group Ltd",
+    /// "Hannover Re Holdings" and "Citizens Concerning the Environment" were
+    /// cut at the note's start, and filed in "Swiss/", "Munich/",
+    /// "Everest/", "Hannover/" and "Citizens/".
+    #[test]
+    fn a_name_approved_as_proposed_is_filed_under_the_parties_it_gives_whole() {
+        use PartyRelation::{Between, For, None, To, With};
+        let mut failed = Vec::new();
+        for (relation, parties, folder) in [
+            (With, &["Swiss Re Ltd"][..], "Swiss Re Ltd"),
+            (
+                With,
+                &["Munich Re Group", "Acme Corporation"],
+                "Munich Re Group",
+            ),
+            (For, &["Everest Re Group Ltd"], "Everest Re Group Ltd"),
+            (None, &["Hannover Re Holdings"], "Hannover Re Holdings"),
+            (
+                To,
+                &["Citizens Concerning the Environment"],
+                "Citizens Concerning the Environment",
+            ),
+            (
+                Between,
+                &["Citizens Concerning the Environment", "John Smith"],
+                "Citizens Concerning the Environment",
+            ),
+            (Between, &["John Smith", "Swiss Re Ltd"], "John Smith"),
+            (With, &["Johnson & Johnson"], "Johnson & Johnson"),
+            (With, &["Acme Corp, Inc."], "Acme Corp, Inc"),
+            (With, &["Roe v Wade Legal Fund"], "Roe v Wade Legal Fund"),
+            (To, &["Barnes and Noble"], "Barnes and Noble"),
+        ] {
+            let record = record(
+                "Employment Agreement",
+                (relation, parties),
+                &["Beacon Staffing LLC"],
+                &[],
+            );
+            let stem = record.filename.strip_suffix(".pdf").unwrap();
+            for approved in [
+                record.filename.clone(),
+                format!("{stem} (2).pdf"),
+                format!("{}.pdf", stem.replacen("2024-04-12", "2023-01-31", 1)),
+            ] {
+                let filed = record.as_filed("pdf", &approved);
+                let in_folder = layout_subfolder(DestinationLayout::Party, &filed)
+                    .map(|path| path.to_string_lossy().into_owned());
+                if filed.parties != parties || in_folder.as_deref() != Some(folder) {
+                    failed.push(format!("{approved}: {:?} in {in_folder:?}", filed.parties));
+                }
+            }
+        }
+        assert!(failed.is_empty(), "{failed:#?}");
     }
 
     /// The parties a reviewer typed are filed as typed, beside those the
