@@ -7066,10 +7066,11 @@ fn long_agreement(index: usize, role: &str) -> (DocumentSource, ModelProposal) {
 }
 
 /// A second scan of a document a spelling was learned from - flagged as a
-/// near duplicate of its filing, or not, the filing taken back - approved
-/// as Intern named it, is the reviewer's own words approved again, and
-/// checks nothing; nor does a second scan of an agreement filed before the
-/// spelling was learned, approved to be filed anyway. Each counted as the
+/// near duplicate of its filing, or not, the filing taken back, or the
+/// text too short for a fingerprint - approved as Intern named it, is the
+/// reviewer's own words approved again, and checks nothing; nor does a
+/// second scan of an agreement filed before the spelling was learned,
+/// approved to be filed anyway. Each counted as the
 /// check, and the next agreement was filed without review under "John
 /// Smith, Jane Doe".
 #[test]
@@ -7092,6 +7093,21 @@ fn a_second_scan_of_a_document_a_spelling_was_learned_from_is_no_check_of_it() {
                 long_agreement(1, "senior analyst"),
                 long_agreement(3, "head of sales"),
             ],
+        ),
+        (
+            "a teacher's second scan, too short to fingerprint",
+            [0, 1, 1, 3]
+                .into_iter()
+                .map(|index| {
+                    agreement(
+                        index,
+                        EMPLOYMENT,
+                        PartyRelation::Between,
+                        &SMITH_AND_ACME,
+                        "This agreement is made by John Smith and Acme Corporation.",
+                    )
+                })
+                .collect(),
         ),
         (
             "a second scan of an agreement filed before",
@@ -7127,7 +7143,12 @@ fn a_second_scan_of_a_document_a_spelling_was_learned_from_is_no_check_of_it() {
                 .contains(&LEARNED_SPELLING_UNCONFIRMED.to_owned()),
             "{case}: {record:?}"
         );
-        assert_eq!(record.near_duplicate_of.is_some(), !undone, "{case}");
+        let short = case.ends_with("fingerprint");
+        assert_eq!(
+            record.near_duplicate_of.is_some(),
+            !undone && !short,
+            "{case}"
+        );
         rig.approve_as_proposed(rescan);
         assert_eq!(
             rig.rule(),

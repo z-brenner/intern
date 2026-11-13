@@ -741,12 +741,15 @@ of a name the rule changed counts as the check only when all of this holds:
   item); and not holding what a teacher held (`house_rule_teacher_content`,
   kept when a teacher leaves the queue): the same file by its SHA-256, or a
   text fingerprint within the near-duplicate distance of a teacher's with
-  the same date, or all but identical whatever its date. A teacher read
+  the same date, or all but identical whatever its date, or - for a text
+  too short to fingerprint - the very words a teacher gave, under the same
+  date (a digest of `DocumentWords`). A teacher read
   again after an undo, a failed filing or a Re-analyze, scanned again, or
   removed from the queue and added again is the reviewer's own words
   approved twice. Rules learned before alpha.18 kept no teachers; when the
-  queue first opens after the update, every document filed under a name
-  giving such a rule's spelling is taken as its teacher by what it holds.
+  queue first opens after the update, every document filed or approved
+  under a name giving such a rule's spelling is taken as its teacher by
+  what it holds.
 - The document does not give, in its own words, what the rule adds
   (`ProposalRecord::gives_what_it_adds`). The words a rule adds are the
   words of its spelling that are not words of the document's word, compared

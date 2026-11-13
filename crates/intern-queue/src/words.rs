@@ -120,6 +120,20 @@ impl DocumentWords {
                 .all(|bit| self.bits[bit / 64] & (1 << (bit % 64)) != 0)
     }
 
+    /// Sixteen hex digits that are the same for two documents giving the
+    /// same words, whatever their order, and almost never for two that do
+    /// not: a teacher of a learned spelling too short for a text
+    /// fingerprint, scanned again, is known by it (see
+    /// [`crate::pipeline::LearnedRule::confirmed`]).
+    pub fn digest(&self) -> String {
+        let bytes = self
+            .bits
+            .iter()
+            .flat_map(|bits| bits.to_le_bytes())
+            .collect::<Vec<_>>();
+        format!("{:016x}", fnv1a(&bytes))
+    }
+
     fn positions(&self, word: &str) -> impl Iterator<Item = usize> + use<> {
         let size = (self.bits.len() * 64) as u64;
         let first = fnv1a(word.as_bytes());
@@ -350,6 +364,14 @@ mod tests {
         let stored: String = words.clone().into();
         let again = DocumentWords::from(stored);
         assert_eq!(again, words);
+        assert_eq!(again.digest(), words.digest());
+        assert_eq!(
+            text("signed by O'Brien (DEQ). AGREEMENT between Doe, Jane\nand SMITH-JONES Holdings;")
+                .digest(),
+            words.digest(),
+            "the same words in another order"
+        );
+        assert_ne!(text("AGREEMENT between Doe, Jane").digest(), words.digest());
         assert!(again.gives("jane"));
         assert!(!again.gives("john"), "a word the text does not give");
     }

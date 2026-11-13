@@ -4000,6 +4000,7 @@ impl Pipeline {
                 &Teacher {
                     item: id,
                     fingerprint: record.analysis.text_fingerprint.clone(),
+                    words: record.document_words.as_ref().map(DocumentWords::digest),
                     filed_name: approved.to_owned(),
                 },
             )?;
@@ -4063,6 +4064,7 @@ impl Pipeline {
                 .text_fingerprint
                 .as_deref()
                 .and_then(fingerprint::decode),
+            words: record.document_words.as_ref().map(DocumentWords::digest),
             date: leading_date(approved).map(str::to_owned),
         };
         let mut checked = false;
@@ -6133,9 +6135,9 @@ impl PipelineRepository {
                 .map_err(database_error)?;
         }
         // The same documents by what they hold, kept when they leave the
-        // queue: the SHA-256 of the file, and the fingerprint of its text
-        // with the name it was approved under (see
-        // `PipelineRepository::confirm`). Made once; a database that had
+        // queue: the SHA-256 of the file, the fingerprint of its text, and
+        // the words it gives (`DocumentWords::digest`), with the name it was
+        // approved under (see `PipelineRepository::confirm`). Made once; a database that had
         // none takes its teachers from what it kept (see
         // `remember_teachers_by_content`).
         let had_teacher_content = table_exists(&connection, "house_rule_teacher_content")?;
@@ -6146,11 +6148,20 @@ impl PipelineRepository {
                    from_key TEXT NOT NULL,
                    source_hash TEXT NOT NULL,
                    fingerprint TEXT,
+                   words TEXT,
                    filed_name TEXT NOT NULL,
                    PRIMARY KEY(kind, from_key, source_hash)
                  );",
             )
             .map_err(database_error)?;
+        if !has_column(&connection, "house_rule_teacher_content", "words")? {
+            connection
+                .execute(
+                    "ALTER TABLE house_rule_teacher_content ADD COLUMN words TEXT",
+                    [],
+                )
+                .map_err(database_error)?;
+        }
         if !had_teacher_content {
             remember_teachers_by_content(&connection)?;
         }
@@ -6505,16 +6516,18 @@ impl PipelineRepository {
             .map_err(database_error)?;
         connection
             .execute(
-                "INSERT INTO house_rule_teacher_content(kind, from_key, source_hash, fingerprint, filed_name)
-                 SELECT ?1, ?2, source_hash, ?4, ?5 FROM queue_items WHERE id = ?3
+                "INSERT INTO house_rule_teacher_content(kind, from_key, source_hash, fingerprint, words, filed_name)
+                 SELECT ?1, ?2, source_hash, ?4, ?5, ?6 FROM queue_items WHERE id = ?3
                  ON CONFLICT(kind, from_key, source_hash) DO UPDATE SET
                    fingerprint = COALESCE(excluded.fingerprint, fingerprint),
+                   words = COALESCE(excluded.words, words),
                    filed_name = excluded.filed_name",
                 params![
                     rule.kind.as_str(),
                     rule.from_key(),
                     teacher.item,
                     teacher.fingerprint,
+                    teacher.words,
                     teacher.filed_name
                 ],
             )
@@ -6571,7 +6584,9 @@ impl PipelineRepository {
     /// one that holds what a teacher held - the same file, removed from the
     /// queue and added again, or a text within the near-duplicate distance
     /// of a teacher's and of its date (see [`same_document`]), or all but
-    /// identical whatever its date: a second scan.
+    /// identical whatever its date: a second scan; or, for a text too short
+    /// to fingerprint, the very words a teacher gave (see
+    /// [`DocumentWords::digest`]) under the same date.
     fn confirm(&self, rule: &HouseRule, checker: &Checker) -> PipelineResult<bool> {
         let connection = self.lock()?;
         let filed = connection
@@ -6597,7 +6612,7 @@ impl PipelineRepository {
             .map_err(database_error)?;
         let mut statement = connection
             .prepare(
-                "SELECT source_hash, fingerprint, filed_name FROM house_rule_teacher_content
+                "SELECT source_hash, fingerprint, words, filed_name FROM house_rule_teacher_content
                  WHERE kind = ?1 AND from_key = ?2",
             )
             .map_err(database_error)?;
@@ -6606,13 +6621,21 @@ impl PipelineRepository {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
                 ))
             })
             .map_err(database_error)?;
         for teacher in teachers {
-            let (hash, fingerprint, filed_name) = teacher.map_err(database_error)?;
+            let (hash, fingerprint, words, filed_name) = teacher.map_err(database_error)?;
             if source_hash.as_deref() == Some(hash.as_str()) {
+                return Ok(false);
+            }
+            let dated = leading_date(&filed_name);
+            if words.is_some()
+                && words == checker.words
+                && (dated.is_none() || checker.date.is_none() || dated == checker.date.as_deref())
+            {
                 return Ok(false);
             }
             let distance = fingerprint
@@ -7304,8 +7327,8 @@ fn remember_teachers_by_content(connection: &Connection) -> PipelineResult<()> {
         for (hash, record) in teachers {
             connection
                 .execute(
-                    "INSERT OR IGNORE INTO house_rule_teacher_content(kind, from_key, source_hash, fingerprint, filed_name)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT OR IGNORE INTO house_rule_teacher_content(kind, from_key, source_hash, fingerprint, words, filed_name)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         kind,
                         from_key,
@@ -7313,6 +7336,10 @@ fn remember_teachers_by_content(connection: &Connection) -> PipelineResult<()> {
                         record
                             .as_ref()
                             .and_then(|record| record.analysis.text_fingerprint.clone()),
+                        record
+                            .as_ref()
+                            .and_then(|record| record.document_words.as_ref())
+                            .map(DocumentWords::digest),
                         record
                             .as_ref()
                             .map(|record| record.filename.clone())
@@ -7327,19 +7354,23 @@ fn remember_teachers_by_content(connection: &Connection) -> PipelineResult<()> {
 
 /// A document whose approved edit taught a spelling: its queue item, the
 /// fingerprint of its text where it has one (see
-/// [`intern_engine::fingerprint`]), and the name it was approved under.
+/// [`intern_engine::fingerprint`]), the digest of the words it gives (see
+/// [`DocumentWords::digest`]), and the name it was approved under.
 struct Teacher {
     item: i64,
     fingerprint: Option<String>,
+    words: Option<String>,
     filed_name: String,
 }
 
 /// A document whose approval may check a spelling: its queue item, the
-/// fingerprint of its text where it has one, and the date the name
-/// approved for it gives.
+/// fingerprint of its text where it has one, the digest of the words it
+/// gives (see [`DocumentWords::digest`]), and the date the name approved
+/// for it gives.
 struct Checker {
     item: i64,
     fingerprint: Option<u64>,
+    words: Option<String>,
     date: Option<String>,
 }
 
