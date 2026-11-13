@@ -30,6 +30,12 @@ export const PRESS_SETTLES_MS = 500;
 type At = { x: number; y: number };
 const inside = (at: At, box: DOMRect) => at.x >= box.left && at.x < box.right && at.y >= box.top && at.y < box.bottom;
 const sameBox = (a: DOMRect, b: DOMRect) => a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height;
+/**
+ * Whether a point is away from the yes: at least the yes's own height off
+ * its box, every way. A hand resting on the mouse drifts a pixel or two; a
+ * pointer moved to a button comes from at least that button's size away.
+ */
+const away = (at: At, box: DOMRect) => Math.max(box.left - at.x, at.x - box.right, box.top - at.y, at.y - box.bottom) >= box.height;
 
 /**
  * The question "Use on its own" asks before it checks a spelling, where the
@@ -54,12 +60,21 @@ const sameBox = (a: DOMRect, b: DOMRect) => a.left === b.left && a.top === b.top
  * - the same kind of pointer was last seen somewhere else, off the yes as
  *   it is now: a mouse, a pen and a finger are each their own, and a
  *   finger's tap says nothing of where the mouse is;
- * - and for a mouse or a pen, which hover, it moved there, with the yes
+ * - for a mouse or a pen, which hover, it moved there, with the yes
  *   standing where it was when that pointer was last seen: a pointer that
  *   moved onto a yes that had moved since came there by the yes moving. A
  *   finger has no hover, nor has a pen that does not report it: they come
  *   onto the yes by touching down on it, and a pen that hovers does so
- *   only with the yes standing where it was when it last hovered.
+ *   only with the yes standing where it was when it last hovered;
+ * - and it came from away from the yes: at least the yes's own height off
+ *   it. A mouse or a pen that hovers was seen away from the yes standing
+ *   where it is, and has not been lost since; a finger, or a pen that does
+ *   not hover, last touched away from the yes as it is now. A hand resting
+ *   on the mouse drifts a pixel or two as it presses, and a yes that came
+ *   to rest with its edge beside a still pointer - opening there, scrolled
+ *   there - took such a drift across its edge as a pointer moved onto it.
+ *   A pointer moved to a button comes from at least that button's size
+ *   away; a pointer the yes came beside has to go away and come back.
  *
  * Where each pointer was last seen is lastInput's (`lastPointers`,
  * `watchPointer`). A report of a pointer where it already was is no move:
@@ -76,9 +91,9 @@ const sameBox = (a: DOMRect, b: DOMRect) => a.left === b.left && a.top === b.top
  * pointer that had come onto it then and still has: a click on the yes is
  * the end of no press that began elsewhere, by whatever pointer. A press
  * refused because its pointer had not says, beside the buttons, to move
- * the pointer off the yes and back - or for a finger, to tap the sentence
- * first - so that a person who means it is not left pressing a yes that
- * does nothing; nothing moves under the pointer for it.
+ * the pointer well off the yes and back - or for a finger, to tap well away
+ * from it first - so that a person who means it is not left pressing a yes
+ * that does nothing; nothing moves under the pointer for it.
  *
  * A press never gives the yes the focus: a press with another button, or
  * one let go off the yes, clicks nothing, and the focus it would have left
@@ -122,8 +137,15 @@ export function UseOnItsOwnQuestion({ rule, describedBy, note, disabled, onConfi
     const drawn = () => yes.current?.getBoundingClientRect() ?? new DOMRect();
     // Where each kind of pointer was last seen, and where the yes was then.
     const seen = new Map<string, At & { hover: boolean; box: DOMRect }>();
+    // For each kind of pointer, where the yes was when that pointer was last
+    // seen away from it, and not lost since.
+    const awayFrom = new Map<string, DOMRect>();
+    const see = (type: string, at: At, hover: boolean, box: DOMRect) => {
+      seen.set(type, { x: at.x, y: at.y, hover, box });
+      if (away(at, box)) awayFrom.set(type, box);
+    };
     const appeared = drawn();
-    for (const at of lastPointers()) seen.set(at.type, { x: at.x, y: at.y, hover: at.hover, box: appeared });
+    for (const at of lastPointers()) see(at.type, at, at.hover, appeared);
     // The pointers on the yes, each with where the yes was when it came.
     const came = new Map<string, DOMRect>();
     const stood = () => {
@@ -136,6 +158,7 @@ export function UseOnItsOwnQuestion({ rule, describedBy, note, disabled, onConfi
     const stop = watchPointer({
       lost(type) {
         seen.delete(type);
+        awayFrom.delete(type);
         came.delete(type);
       },
       seen(at, under) {
@@ -148,16 +171,22 @@ export function UseOnItsOwnQuestion({ rule, describedBy, note, disabled, onConfi
         const onTheYes = inside(at, box) && under instanceof Node && yes.current?.contains(under) === true;
         if (!onTheYes) came.delete(at.type);
         if (before !== undefined && before.x === at.x && before.y === at.y) return;
-        seen.set(at.type, { x: at.x, y: at.y, hover: at.hover, box });
+        see(at.type, at, at.hover, box);
         if (!onTheYes || before === undefined || inside(before, box)) return;
         // A mouse hovers, and comes onto the yes by moving, from where it was
-        // seen with the yes where it is: a press where it was not seen to
-        // move to is not that. A finger has no hover, nor has a pen that
-        // does not report it: they come onto it by touching down, from where
-        // they last touched off it. A pen that hovers is held to what a mouse
-        // is: touching down from where it hovered counts only when the yes
-        // stood still since.
-        if (at.press ? at.type === 'mouse' || (before.hover && !sameBox(before.box, box)) : !sameBox(before.box, box)) return;
+        // seen with the yes where it is, and from away from it: a press where
+        // it was not seen to move to is not that, nor a pixel's drift across
+        // the edge of a yes that came to rest beside it. A finger has no
+        // hover, nor has a pen that does not report it: they come onto it by
+        // touching down, from where they last touched away from it as it is
+        // now. A pen that hovers is held to what a mouse is: touching down
+        // from where it hovered counts only when the yes stood still since.
+        if (at.press && at.type === 'mouse') return;
+        const wasAway = awayFrom.get(at.type);
+        const arrived = at.press && !before.hover
+          ? away(before, box)
+          : sameBox(before.box, box) && wasAway !== undefined && sameBox(wasAway, box);
+        if (!arrived) return;
         came.set(at.type, box);
         if (frame === 0) frame = requestAnimationFrame(watch);
       },
@@ -203,8 +232,8 @@ export function UseOnItsOwnQuestion({ rule, describedBy, note, disabled, onConfi
       onClick={answer}>Use on its own</button>
     <button ref={cancel} type="button" onClick={onCancel}>Cancel</button></span>
     <div className="rule-confirm-again" role="status">{notOnIt === undefined ? null : notOnIt === 'touch'
-      ? 'Tap the sentence, then Use on its own.'
-      : 'Move off Use on its own, then back.'}</div>
+      ? 'Tap well away, then Use on its own.'
+      : 'Move well off Use on its own, then back.'}</div>
   </div>;
 }
 

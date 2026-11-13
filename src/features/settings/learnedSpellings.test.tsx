@@ -300,6 +300,58 @@ describe('the spellings Intern has learned', () => {
     }
   });
 
+  // A question opened from the keyboard, its yes appearing a pixel below a
+  // resting mouse, and a hand that drifts two pixels down as it presses; a
+  // mouse found on the yes after the page lost sight of it, over another
+  // window or with Intern behind one. Neither moved onto the yes from away
+  // from it, where the page saw it.
+  it('takes no press from a mouse the yes came beside, nor from one found on it after the page lost sight of it', async () => {
+    const clock = { now: 1000 };
+    vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
+    drawYes();
+    try {
+      const base = createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] });
+      const houseRuleCheck = vi.fn(base.houseRuleCheck);
+      render(<App bridge={{ ...base, houseRuleCheck }} />);
+      const dialog = await openSettings();
+      const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+      moveTo({ clientX: 150, clientY: yesAt.top - 1 });
+      const action = within(list).getByRole('button', { name: /^Use on its own:/ });
+      action.focus();
+      fireEvent.keyDown(action, { key: 'Enter' });
+      fireEvent.click(action, { detail: 0 });
+      const question = within(list).getByRole('group');
+      const yes = within(question).getByRole('button', { name: 'Use on its own' });
+      clock.now += PRESS_SETTLES_MS * 2;
+      const drifted = { clientX: 151, clientY: yesAt.top + 1 };
+      moveTo(drifted);
+      pressAt(yes, drifted);
+      expect(question).toBeInTheDocument();
+      expect(within(question).getByRole('status')).toHaveTextContent('Move well off Use on its own, then back.');
+
+      // Away from it, lost - the window lost the focus, or the mouse left
+      // the page - and found on it.
+      for (const lose of [() => fireEvent.blur(window), () => fireEvent.pointerOut(document.body, { pointerType: 'mouse', relatedTarget: null })]) {
+        clock.now += PRESS_SETTLES_MS * 2;
+        moveTo(offTheYes);
+        lose();
+        moveTo(onTheYes);
+        pressAt(yes, onTheYes);
+        expect(question).toBeInTheDocument();
+      }
+      expect(houseRuleCheck).not.toHaveBeenCalled();
+
+      // Away from it, seen, and onto it.
+      clock.now += PRESS_SETTLES_MS * 2;
+      moveTo(offTheYes);
+      moveTo(onTheYes);
+      pressAt(yes, onTheYes);
+      await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledOnce());
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('takes a yes from the pointer moved onto it, or from the keyboard at once', async () => {
     const clock = { now: 1000 };
     vi.spyOn(performance, 'now').mockImplementation(() => clock.now);

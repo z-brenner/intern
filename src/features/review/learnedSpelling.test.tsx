@@ -313,7 +313,7 @@ describe('using a held document\'s spelling on its own', () => {
       moveTo({ clientX: onTheYes.clientX + 1, clientY: onTheYes.clientY }, document.body);
       press(yes, 1);
       expect(question).toBeInTheDocument();
-      expect(again).toHaveTextContent('Move off Use on its own, then back.');
+      expect(again).toHaveTextContent('Move well off Use on its own, then back.');
       expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
     });
 
@@ -485,9 +485,16 @@ describe('using a held document\'s spelling on its own', () => {
       pressAt(yes, across, 'pen');
       expect(question).toBeInTheDocument();
       expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
-      // Hovering off the yes where it is now, then touching down on it.
+      // Hovering where it was, beside the yes where it is now, then touching
+      // down on it: still a pen the yes came to.
       clock.now += PRESS_SETTLES_MS * 2;
-      hover(offTheYes);
+      hover({ clientX: offTheYes.clientX + 1, clientY: offTheYes.clientY });
+      pressAt(yes, across, 'pen');
+      expect(question).toBeInTheDocument();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+      // Hovering away from the yes where it is now, then touching down on it.
+      clock.now += PRESS_SETTLES_MS * 2;
+      hover({ clientX: offTheYes.clientX, clientY: offTheYes.clientY - 40 });
       pressAt(yes, across, 'pen');
       await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
     });
@@ -496,7 +503,7 @@ describe('using a held document\'s spelling on its own', () => {
       const bridge = spellingBridge(spellings);
       const { question, yes } = await ask(bridge, onTheYes, 'touch');
       pressAt(yes, onTheYes, 'touch');
-      expect(within(question).getByRole('status')).toHaveTextContent('Tap the sentence, then Use on its own.');
+      expect(within(question).getByRole('status')).toHaveTextContent('Tap well away, then Use on its own.');
     });
 
     it('but Enter on the yes it was moved to at once', async () => {
@@ -565,9 +572,17 @@ describe('using a held document\'s spelling on its own', () => {
       expect(question).toBeInTheDocument();
       expect(cancel).toHaveFocus();
       expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
-      // Seen off it where it is now, and onto it.
+      // Seen off it where it is now, but beside it, and onto it: a hand that
+      // drifts a pixel one way and two the other while it presses.
       clock.now += PRESS_SETTLES_MS * 2;
-      moveTo(offTheYes);
+      moveTo({ clientX: offTheYes.clientX + 1, clientY: offTheYes.clientY });
+      moveTo(twitch);
+      pressAt(yes, twitch);
+      expect(question).toBeInTheDocument();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+      // Seen away from it where it is now, and onto it.
+      clock.now += PRESS_SETTLES_MS * 2;
+      moveTo({ clientX: offTheYes.clientX, clientY: offTheYes.clientY - 40 });
       moveTo(twitch);
       pressAt(yes, twitch);
       await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
@@ -686,8 +701,8 @@ describe('using a held document\'s spelling on its own', () => {
     // see it go, the yes maybe. A window snapped by a key moves the page
     // under a mouse that stays put. Where it is next seen is where it was
     // found, not a move onto the yes, and a mouse that had come onto the yes
-    // is no longer known to be on it. Off the yes and back, where the page
-    // sees it, it is answered.
+    // is no longer known to be on it, nor to have been away from it. Away
+    // from the yes and back, where the page sees it, it is answered.
     it.each([
       ['it left the page', () => { fireEvent.pointerOut(document.body, { pointerType: 'mouse', relatedTarget: null }); }],
       ['the window lost the focus', () => { fireEvent.blur(window); }],
@@ -698,7 +713,7 @@ describe('using a held document\'s spelling on its own', () => {
     ])('not from a mouse found on it once the page lost sight of it: %s', async (_how, lose) => {
       const bridge = spellingBridge(spellings);
       const { clock, question, yes } = await ask(bridge, offTheYes);
-      // Seen off it, lost, and found on it.
+      // Seen away from it, lost, and found on it.
       lose();
       moveTo(onTheYes);
       pressAt(yes, onTheYes);
@@ -712,9 +727,17 @@ describe('using a held document\'s spelling on its own', () => {
       moveTo(nudged);
       pressAt(yes, nudged);
       expect(question).toBeInTheDocument();
-      expect(within(question).getByRole('status')).toHaveTextContent('Move off Use on its own, then back.');
+      expect(within(question).getByRole('status')).toHaveTextContent('Move well off Use on its own, then back.');
+      // Seen away from it, lost, found beside it, and onto it.
+      clock.now += PRESS_SETTLES_MS * 2;
+      moveTo(offTheYes);
+      lose();
+      moveTo({ clientX: onTheYes.clientX, clientY: yesAt.top - 2 });
+      moveTo(onTheYes);
+      pressAt(yes, onTheYes);
+      expect(question).toBeInTheDocument();
       expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
-      // Off it, seen, and back onto it, and it is answered.
+      // Away from it, seen, and back onto it, and it is answered.
       clock.now += PRESS_SETTLES_MS * 2;
       moveTo(offTheYes);
       moveTo(onTheYes);
@@ -749,6 +772,71 @@ describe('using a held document\'s spelling on its own', () => {
       await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
     });
 
+    // A question opened from the keyboard, its yes appearing with its edge a
+    // pixel from where the mouse rests, and a hand on the mouse that drifts
+    // two pixels as it presses: the mouse moved onto the yes, but the yes
+    // came to it. A pointer comes onto the yes from away from it - at least
+    // the yes's own height off it - with the yes standing where it is.
+    it('not from a mouse that drifted onto it from beside it, where it appeared', async () => {
+      const bridge = spellingBridge(spellings);
+      const clock = { now: 1000 };
+      vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
+      drawYes();
+      render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={bridge} />);
+      const label = 'Use on its own: Contoso Worldwide, Inc. written as Contoso';
+      const action = await screen.findByRole('button', { name: label });
+      moveTo({ clientX: 150, clientY: 100 });
+      moveTo({ clientX: 150, clientY: yesAt.top - 1 });
+      fireEvent.keyDown(action, { key: 'Enter' });
+      fireEvent.click(action, { detail: 0 });
+      const question = screen.getByRole('group', { name: label });
+      const yes = within(question).getByRole('button', { name: 'Use on its own' });
+      clock.now += PRESS_SETTLES_MS * 2;
+      const drifted = { clientX: 151, clientY: yesAt.top + 1 };
+      moveTo(drifted);
+      pressAt(yes, drifted);
+      expect(question).toBeInTheDocument();
+      expect(within(question).getByRole('status')).toHaveTextContent('Move well off Use on its own, then back.');
+      // Off it by less than it is tall, and back: still beside it.
+      clock.now += PRESS_SETTLES_MS * 2;
+      moveTo({ clientX: 150, clientY: yesAt.top - yesAt.height + 1 });
+      moveTo(drifted);
+      pressAt(yes, drifted);
+      expect(question).toBeInTheDocument();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+      // Its height off it, and back onto it.
+      clock.now += PRESS_SETTLES_MS * 2;
+      moveTo({ clientX: 150, clientY: yesAt.top - yesAt.height });
+      moveTo(drifted);
+      pressAt(yes, drifted);
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
+
+    // A finger swipes the panel, and the yes comes to rest with its edge a
+    // pixel from where the finger lifted; a tap a few pixels from there lands
+    // on it. A finger comes onto the yes from a touch away from it as it is.
+    it('with a finger, not a tap a few pixels from its last, across the edge of a yes that came to rest between them', async () => {
+      const bridge = spellingBridge(spellings);
+      const { box, clock, question, yes } = await ask(bridge, offTheYes, 'touch');
+      const lifted = { clientX: 150, clientY: 300 };
+      fireEvent.pointerDown(document.body, { ...lifted, pointerType: 'touch' });
+      fireEvent.pointerCancel(document.body, { ...lifted, pointerType: 'touch' });
+      box.current = new DOMRect(100, lifted.clientY + 1, 120, 30);
+      const again = { clientX: 151, clientY: lifted.clientY + 3 };
+      pressAt(yes, again, 'touch');
+      expect(question).toBeInTheDocument();
+      expect(within(question).getByRole('status')).toHaveTextContent('Tap well away, then Use on its own.');
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+      // A tap away from it, on the sentence above it, and one on it.
+      clock.now += PRESS_SETTLES_MS * 2;
+      const sentence = question.querySelector('p')!;
+      const start = { clientX: 110, clientY: lifted.clientY - 40 };
+      fireEvent.pointerDown(sentence, { ...start, pointerType: 'touch' });
+      fireEvent.pointerUp(sentence, { ...start, pointerType: 'touch' });
+      fireEvent.click(sentence, { detail: 1 });
+      pressAt(yes, again, 'touch');
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
   });
 
   // Opened by a press, the question opens where its action was, sentence

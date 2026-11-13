@@ -11,10 +11,14 @@ import { vi } from 'vitest';
 
 export type Point = { clientX: number; clientY: number };
 
-/** Where the yes is drawn until a test moves it, and a point on it and one off it, above it, on its sentence. */
+/**
+ * Where the yes is drawn until a test moves it, a point on it, and one off
+ * it, above it on its sentence, away from it: more than its height off it,
+ * as a pointer moved to it comes from.
+ */
 export const yesAt = new DOMRect(100, 200, 120, 30);
 export const onTheYes: Point = { clientX: 150, clientY: 212 };
-export const offTheYes: Point = { clientX: 150, clientY: 180 };
+export const offTheYes: Point = { clientX: 150, clientY: 160 };
 
 const YES = '.rule-confirm button.primary';
 
