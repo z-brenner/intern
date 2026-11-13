@@ -152,3 +152,101 @@ test('a press on a control half under the decision lands on it', async ({ page }
   // scrolled clear again.
   expect(await tabThroughOpenPanel(page, panel, 'Lease Agreement - 123 Main St.pdf')).toEqual([]);
 });
+
+/*
+  The question opens where its action was, and the panel then scrolls it
+  clear of the decision - which can bring its yes under the pointer that
+  pressed the action. The second press of a double-click on the action, or
+  a second press straight after the first, then used the spelling on its
+  own with the sentence never read, and from then on a name it changed
+  could be filed without anyone looking at it. The yes takes a press only
+  when it is meant for it: not part of a double-click, and not within a
+  double-click's time of the question appearing or of a press it refused.
+*/
+
+/** Scroll positions of the panel at which a press on the action leaves the question's yes under the pointer. */
+const yesUnderThePointer = (panel: Locator, label: string) => panel.evaluate(async (element, name) => {
+  const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+  const found: number[] = [];
+  for (let top = 0; top <= element.scrollHeight - element.clientHeight; top += 2) {
+    element.scrollTop = top;
+    await frame();
+    const action = [...element.querySelectorAll<HTMLButtonElement>('button[aria-label]')].find((button) => button.getAttribute('aria-label') === name);
+    if (!action) throw new Error(`no action ${name}`);
+    const box = action.getBoundingClientRect();
+    const [x, y] = [box.left + box.width / 2, box.top + box.height / 2];
+    if (document.elementFromPoint(x, y) !== action) continue;
+    action.click();
+    await frame();
+    const question = element.querySelector('.rule-confirm');
+    const yes = question?.querySelector('button.primary');
+    if (yes && document.elementFromPoint(x, y) === yes) found.push(top);
+    question?.querySelector<HTMLButtonElement>('button:not(.primary)')?.click();
+    await frame();
+  }
+  return found;
+}, label);
+
+/** The centre of the named action, with the panel scrolled to `top`. */
+async function actionAt(panel: Locator, label: string, top: number) {
+  await panel.evaluate((element, at) => { element.scrollTop = at; }, top);
+  const box = (await panel.getByRole('button', { name: label }).boundingBox())!;
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) {
+  test(`a press meant for "Use on its own" opens the question and answers nothing, at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await page.goto('/?learnedSpellings=held');
+    const panel = await openDetails(page, 'SOW final v3.pdf');
+    const checked = panel.locator('.spelling-checked');
+    const labels = await panel.getByRole('button', { name: /^Use on its own:/ }).evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label') ?? ''));
+    expect(labels).toHaveLength(2);
+    for (const label of labels) {
+      const question = panel.getByRole('group', { name: label });
+      const yes = question.getByRole('button', { name: 'Use on its own' });
+      const tops = await yesUnderThePointer(panel, label);
+      // The hazard is there to be met: at some scroll, one press on the
+      // action leaves the yes under the pointer.
+      expect(tops.length, label).toBeGreaterThan(0);
+      const top = tops[Math.floor(tops.length / 2)];
+      let at = await actionAt(panel, label, top);
+      await page.mouse.click(at.x, at.y);
+      await expect(question).toBeVisible();
+      expect(await page.evaluate(({ x, y }) => Boolean(document.elementFromPoint(x, y)?.matches('.rule-confirm button.primary')), at), label).toBe(true);
+      await page.keyboard.press('Escape');
+      await expect(question).toHaveCount(0);
+
+      const presses: [string, () => Promise<void>][] = [
+        ['a double-click', () => page.mouse.dblclick(at.x, at.y)],
+        ['a triple-click', () => page.mouse.click(at.x, at.y, { clickCount: 3 })],
+        ['two single presses straight after each other', async () => { await page.mouse.click(at.x, at.y); await page.mouse.click(at.x, at.y); }],
+        // A double-click as slow as a system can be set to count one.
+        ['a slow double-click', async () => {
+          await page.mouse.move(at.x, at.y);
+          await page.mouse.down({ clickCount: 1 }); await page.mouse.up({ clickCount: 1 });
+          await page.waitForTimeout(800);
+          await page.mouse.down({ clickCount: 2 }); await page.mouse.up({ clickCount: 2 });
+        }],
+      ];
+      for (const [what, pressIt] of presses) {
+        at = await actionAt(panel, label, top);
+        await pressIt();
+        await expect(question, `${label}: ${what}`).toBeVisible();
+        await page.waitForTimeout(150);
+        await expect(checked, `${label}: ${what}`).toHaveCount(0);
+        await expect(question.getByRole('button', { name: 'Cancel' }), `${label}: ${what}`).toBeFocused();
+        await page.keyboard.press('Escape');
+        await expect(question).toHaveCount(0);
+      }
+
+      // A press after the sentence had time to be read is a yes.
+      at = await actionAt(panel, label, top);
+      await page.mouse.click(at.x, at.y);
+      await page.waitForTimeout(700);
+      await yes.click();
+      await expect(checked).toContainText('on its own from now on');
+      await expect(panel.getByRole('button', { name: label })).toHaveCount(0);
+    }
+  });
+}

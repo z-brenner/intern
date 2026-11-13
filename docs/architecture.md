@@ -731,7 +731,14 @@ first says, in plain words, with the document's word and the spelling
 exactly as they are, that every later document Intern reads as naming the
 word (for a type: reads as that type) will be named with the spelling, and
 may be filed under that name without the person's check; Cancel and Escape
-take the question back. The command (`house_rule_check`) carries the rule's
+take the question back. Its yes takes only a press meant for it
+(`UseOnItsOwnQuestion`): the question opens where the action was, and the
+review panel then scrolls it clear of the decision stuck to its bottom,
+which can bring the yes under the pointer that pressed the action. A press
+that is part of a double-click or more, or that comes within half a second
+of the question appearing or of a press the yes did not take, is no answer
+and puts the focus back on Cancel; a yes from the keyboard is taken at
+once. The command (`house_rule_check`) carries the rule's
 id and the spelling the person was shown - its kind, the document's word and
 the spelling - and the repository marks the rule checked, in one statement,
 only while it exists, is in force, and reads exactly that

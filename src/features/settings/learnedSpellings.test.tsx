@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
+import { PRESS_SETTLES_MS } from '../../components/UseOnItsOwn';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { HouseRule, LearnedRule } from '../../types';
 
@@ -187,6 +188,43 @@ describe('the spellings Intern has learned', () => {
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('The spelling could not be changed');
     await act(async () => { await Promise.resolve(); });
     expect(forget).toHaveFocus();
+  });
+
+  // The same question as in the review window, with the same yes: a press
+  // that is part of a double-click, or comes straight after the question
+  // appeared, is no answer. Only a press meant for it uses a spelling on
+  // its own.
+  it('takes as a yes only a press meant for it', async () => {
+    const clock = { now: 1000 };
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
+    try {
+      const unchecked: LearnedRule = { ...learned[1], confirmed: 0 };
+      const base = createInMemoryBridge({ learnedRules: [unchecked] });
+      const houseRuleCheck = vi.fn(base.houseRuleCheck);
+      render(<App bridge={{ ...base, houseRuleCheck }} />);
+      const dialog = await openSettings();
+      const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+      fireEvent.click(within(list).getByRole('button', { name: /Use on its own/ }), { detail: 1 });
+      const yes = within(list).getByRole('button', { name: 'Use on its own' });
+      // A press with the pointer focuses the button, as it does in Chromium.
+      const press = (presses: number) => { yes.focus(); fireEvent.click(yes, { detail: presses }); };
+      // Straight after the question appeared; the second press of a slow
+      // double-click; straight after a press it did not take.
+      press(1);
+      clock.now += PRESS_SETTLES_MS * 4;
+      press(2);
+      clock.now += PRESS_SETTLES_MS - 1;
+      press(1);
+      expect(within(list).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+      expect(houseRuleCheck).not.toHaveBeenCalled();
+
+      clock.now += PRESS_SETTLES_MS;
+      press(1);
+      await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledOnce());
+      await waitFor(() => expect(within(list).getAllByRole('listitem')[0]).not.toHaveTextContent('asks before filing'));
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('says a document type spelling renames every later document of that type, in its own words', async () => {

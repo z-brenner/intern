@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import { ReviewInspector } from '../../components/ReviewInspector';
+import { PRESS_SETTLES_MS } from '../../components/UseOnItsOwn';
 import { openRow } from '../queue/gridTesting';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 import { humanizeReason } from '../../lib/reasons';
@@ -161,6 +162,68 @@ describe('using a held document\'s spelling on its own', () => {
     expect(actions.onApprove).not.toHaveBeenCalled();
     expect(bridge.houseRuleCheck).toHaveBeenCalledOnce();
     await waitFor(() => expect(screen.getByRole('group', { name: 'Use a learned spelling on its own' })).toHaveFocus());
+  });
+
+  // The question opens where its action was, and the panel scrolls it clear
+  // of the decision, which can bring its yes under the pointer that pressed
+  // the action. The second press of a double-click, or a press straight
+  // after the first, used the spelling on its own with the sentence never
+  // read: from then on a wrong spelling's names were filed without review.
+  describe('takes as a yes only a press meant for it', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    /** A press with the pointer: it focuses the button, as it does in Chromium, and counts `presses`. */
+    const press = (button: HTMLElement, presses: number) => { button.focus(); fireEvent.click(button, { detail: presses }); };
+
+    async function ask(bridge: ReturnType<typeof spellingBridge>, clock: { now: number }) {
+      vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
+      render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={bridge} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' }), { detail: 1 });
+      const question = screen.getByRole('group', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' });
+      return { question, yes: within(question).getByRole('button', { name: 'Use on its own' }), cancel: within(question).getByRole('button', { name: 'Cancel' }) };
+    }
+
+    it('not the second press of a double-click, however slow', async () => {
+      const bridge = spellingBridge(spellings);
+      const clock = { now: 1000 };
+      const { question, yes, cancel } = await ask(bridge, clock);
+      clock.now += PRESS_SETTLES_MS * 4;
+      press(yes, 2);
+      press(yes, 3);
+      expect(question).toBeInTheDocument();
+      expect(cancel).toHaveFocus();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+    });
+
+    it('not a press straight after the question appeared, nor straight after a press it did not take', async () => {
+      const bridge = spellingBridge(spellings);
+      const clock = { now: 1000 };
+      const { question, yes, cancel } = await ask(bridge, clock);
+      clock.now += PRESS_SETTLES_MS - 1;
+      press(yes, 1);
+      expect(cancel).toHaveFocus();
+      // Clicking on and on is no answer either.
+      clock.now += PRESS_SETTLES_MS - 1;
+      press(yes, 1);
+      expect(question).toBeInTheDocument();
+      expect(cancel).toHaveFocus();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+
+      // A press once the sentence had time to be read is a yes.
+      clock.now += PRESS_SETTLES_MS;
+      press(yes, 1);
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledWith('1', { kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' }));
+      expect(await screen.findByRole('status')).toHaveTextContent('Intern will use \u201cContoso\u201d on its own from now on.');
+    });
+
+    it('but a yes from the keyboard at once', async () => {
+      const bridge = spellingBridge(spellings);
+      const { yes } = await ask(bridge, { now: 1000 });
+      // Enter or Space on the button it was moved to clicks it with no presses counted.
+      yes.focus();
+      fireEvent.click(yes, { detail: 0 });
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
   });
 
   // The record's spelling can be older than the spelling: an approval of
