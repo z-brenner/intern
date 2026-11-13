@@ -738,20 +738,35 @@ in Settings, and the focus goes back to the action; closing Settings'
 question asks, the other spellings' actions wait, in the review window and
 in Settings. Its yes takes a press of the pointer - a click that counts
 presses, or one that began with the pointer down on it and no key pressed
-since - only once the pointer has come onto it since the question appeared
-(`UseOnItsOwnQuestion`, with where the pointer was last seen kept by
-`lastInput`): moved onto it from a point off it, both as the yes is at that
-moment, after the pointer was seen off it - or, for a finger, which has no
-hover, touched down on it from a point off it. A move to where the pointer
-already was is not counted: browsers send one after a scroll or a change of
-layout, WebKit above all. So a yes that came under a pointer that did not
-move to it - the question opening under the pointer that pressed its action,
-the row below a closed question moving up, a scroll, a question opened from
-the keyboard scrolled under a resting mouse - takes no press until the
-pointer has moved off it and back. Earlier rounds kept the yes from coming
-under the pointer in each way found, and each time another way was found;
-this does not depend on how the yes got there. Two older rules stay behind
-it. Opened by a press, the question opens where the action was, sentence
+since - only when the press began on the yes, by a pointer that came onto
+the yes since the question appeared and is on it still
+(`UseOnItsOwnQuestion`, with where each kind of pointer was last seen kept
+by `lastInput`). A pointer came onto the yes when the browser finds the yes
+itself under it - not something drawn over the yes's box, as the More menu
+and the decision it grows, or Settings and its backdrop, are; when the same
+kind of pointer was last seen off the yes as the yes is now - a mouse, a pen
+and a finger are each their own, and a finger's tap says nothing of where
+the mouse is; and, for a mouse or a pen, which hover, when it moved there
+with the yes standing where it was when that pointer was last seen. A
+pointer that moved onto a yes that had moved since came there by the yes
+moving: a scroll that left the yes's edge a pixel from a still mouse, and a
+twitch of the hand across it. A finger, which has no hover, comes onto the
+yes by touching down on it. A report of a pointer where it already was is no
+move; it says what is under the pointer now, and a pointer it finds off the
+yes is no longer on it. A pointer is off the yes once it is seen anywhere
+else, or once the yes moves at all, away and back included: the yes is
+watched every frame while a pointer is on it, and measured again at the
+press. So a yes that came under a pointer that did not move to it - the
+question opening under the pointer that pressed its action, the row below a
+closed question moving up, a scroll, a question opened from the keyboard
+scrolled under a resting mouse, a menu or a dialog over it going away -
+takes no press until the pointer has been seen off it where it is now and
+comes back onto it. A press never gives the yes the focus: a press with
+another button, or one let go off the yes, clicks nothing, and the focus
+Chromium gives a pressed button left on the yes made the next Enter or Space
+a yes from the keyboard. Earlier rounds kept the yes from coming under the
+pointer in each way found, and each time another way was found; this does
+not depend on how the yes got there. Two older rules stay behind it. Opened by a press, the question opens where the action was, sentence
 first, and nothing the press sets off moves what is under the pointer
 (`afterAPress`): Cancel takes the focus where it is, and neither the review
 panel nor Settings scrolls until a key is pressed. The review panel used to

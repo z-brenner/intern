@@ -4,7 +4,7 @@ import { App } from '../../App';
 import { ReviewInspector } from '../../components/ReviewInspector';
 import { PRESS_SETTLES_MS } from '../../components/UseOnItsOwn';
 import { openRow } from '../queue/gridTesting';
-import { drawYes, moveTo, offTheYes, onTheYes, pressAt } from './pointerTesting';
+import { drawYes, moveTo, nextFrame, offTheYes, onTheYes, pressAt, yesAt } from './pointerTesting';
 import type { Point } from './pointerTesting';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 import { humanizeReason } from '../../lib/reasons';
@@ -63,8 +63,12 @@ function handlers() {
   };
 }
 
-/** A press with the pointer where it is: it focuses the button and counts `presses`. */
-const press = (button: HTMLElement, presses: number) => { button.focus(); fireEvent.click(button, { detail: presses }); };
+/** A press on the yes where the pointer is, on it, as Chromium makes one: the pointer down, the mouse down, and a click counting `presses`. */
+const press = (button: HTMLElement, presses: number) => {
+  fireEvent.pointerDown(button, { ...onTheYes, pointerType: 'mouse' });
+  if (fireEvent.mouseDown(button, onTheYes)) button.focus();
+  fireEvent.click(button, { ...onTheYes, detail: presses });
+};
 
 /** A statement of work held for a spelling nobody has checked, as the backend lists it. */
 const held: QueueItem = {
@@ -260,9 +264,10 @@ describe('using a held document\'s spelling on its own', () => {
   // Every rule above was about where the yes was put under the pointer, and
   // each round found another way it came there: the panel's scroll, a row
   // moving up in Settings, a question opened from the keyboard scrolled
-  // under a resting mouse. The yes takes a press of the pointer only once
-  // the pointer came onto it after the question appeared - moved onto it
-  // from off it, as it is at that moment - however it got there.
+  // under a resting mouse. The yes takes a press of the pointer only from
+  // a pointer that came onto it after the question appeared - found on the
+  // yes itself, from where that pointer was last seen off it, the yes
+  // standing still - however it got there.
   describe('takes a press only from a pointer that came onto the yes', () => {
     afterEach(() => vi.restoreAllMocks());
 
@@ -389,6 +394,150 @@ describe('using a held document\'s spelling on its own', () => {
       fireEvent.keyDown(yes, { key: 'Enter' });
       fireEvent.click(yes, { detail: 0 });
       await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
+
+    // What is under the pointer is what the browser finds there, not the
+    // yes's box: the More menu, or the decision grown over the yes, is not
+    // the yes. A pointer moved onto Keep original where it lay over the
+    // yes's box came onto the yes; a press closed the menu, and the yes it
+    // uncovered under the still pointer took the press after it.
+    it('not from a pointer that came onto something drawn over it, nor one with something drawn over it since', async () => {
+      const bridge = spellingBridge(spellings);
+      const { clock, question, yes, cancel } = await ask(bridge, offTheYes);
+      const over = document.createElement('button');
+      document.body.append(over);
+      moveTo(onTheYes, over);
+      over.remove();
+      pressAt(yes, onTheYes);
+      expect(question).toBeInTheDocument();
+      expect(cancel).toHaveFocus();
+      // On the yes, then onto something drawn over it there, and it goes.
+      clock.now += PRESS_SETTLES_MS * 2;
+      moveTo(offTheYes);
+      moveTo(onTheYes);
+      document.body.append(over);
+      moveTo({ clientX: onTheYes.clientX + 1, clientY: onTheYes.clientY }, over);
+      over.remove();
+      pressAt(yes, { clientX: onTheYes.clientX + 1, clientY: onTheYes.clientY });
+      expect(question).toBeInTheDocument();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+    });
+
+    // A report of the pointer where it already was says what is under it
+    // now. When that is not the yes, the pointer is no longer on it.
+    it('not from a pointer reported where it was on something drawn over the yes since it came', async () => {
+      const bridge = spellingBridge(spellings);
+      const { question, yes } = await ask(bridge, offTheYes);
+      moveTo(onTheYes);
+      const over = document.createElement('div');
+      document.body.append(over);
+      moveTo(onTheYes, over);
+      over.remove();
+      pressAt(yes, onTheYes);
+      expect(question).toBeInTheDocument();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+    });
+
+    // A scroll or a change of layout left the yes's edge a pixel from a
+    // still pointer, and a twitch of the hand crossed it. The pointer moved,
+    // but onto a yes that had come to it: it has to be seen where it is
+    // with the yes where it is, and then come onto it.
+    it('not from a pointer that crossed onto a yes that moved since it was last seen', async () => {
+      const bridge = spellingBridge(spellings);
+      const { box, clock, question, yes, cancel } = await ask(bridge, offTheYes);
+      box.current = new DOMRect(100, offTheYes.clientY + 1, 120, 30);
+      const twitch = { clientX: offTheYes.clientX, clientY: offTheYes.clientY + 2 };
+      moveTo(twitch);
+      pressAt(yes, twitch);
+      expect(question).toBeInTheDocument();
+      expect(cancel).toHaveFocus();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+      // Seen off it where it is now, and onto it.
+      clock.now += PRESS_SETTLES_MS * 2;
+      moveTo(offTheYes);
+      moveTo(twitch);
+      pressAt(yes, twitch);
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
+
+    // The pointer came onto the yes, and the yes moved - a scroll away and
+    // back, a change of layout - under the pointer that stayed put.
+    it('not once the yes moved under a pointer that came onto it, away and back as well', async () => {
+      const bridge = spellingBridge(spellings);
+      const { box, clock, question, yes } = await ask(bridge, offTheYes);
+      moveTo(onTheYes);
+      box.current = new DOMRect(100, 400, 120, 30);
+      await nextFrame();
+      box.current = yesAt;
+      await nextFrame();
+      pressAt(yes, onTheYes);
+      expect(question).toBeInTheDocument();
+      // Moved by a few pixels, still under the pointer, and pressed before the next frame.
+      clock.now += PRESS_SETTLES_MS * 2;
+      moveTo(offTheYes);
+      moveTo(onTheYes);
+      box.current = new DOMRect(100, 205, 120, 30);
+      pressAt(yes, onTheYes);
+      expect(question).toBeInTheDocument();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+    });
+
+    // A touch screen and a mouse: each pointer is its own. The mouse rests
+    // where the yes opens, and a finger taps the action. A hand back on the
+    // mouse, a pixel's move, is not the mouse coming onto the yes; nor does
+    // a finger that came onto it let a press of the mouse through.
+    it('not from a mouse that never moved onto it, after a finger', async () => {
+      const bridge = spellingBridge(spellings);
+      moveTo(onTheYes);
+      const { clock, question, yes, cancel } = await ask(bridge, offTheYes, 'touch');
+      const nudged = { clientX: onTheYes.clientX + 1, clientY: onTheYes.clientY };
+      moveTo(nudged);
+      pressAt(yes, nudged);
+      expect(question).toBeInTheDocument();
+      expect(cancel).toHaveFocus();
+      // A finger touches down on the yes from off it, and goes on to scroll: no click.
+      clock.now += PRESS_SETTLES_MS * 2;
+      fireEvent.pointerDown(yes, { ...onTheYes, pointerType: 'touch' });
+      fireEvent.pointerCancel(yes, { ...onTheYes, pointerType: 'touch' });
+      pressAt(yes, nudged);
+      expect(question).toBeInTheDocument();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+    });
+
+    // A click on the yes that did not begin there is no press on it,
+    // whatever pointer came onto it: a finger's tap on Keep original over
+    // the yes closed the More menu, and its click landed on the yes the
+    // menu uncovered, under a mouse that had come onto it.
+    it('not a click that did not begin on it, whatever pointer is on it', async () => {
+      const bridge = spellingBridge(spellings);
+      const { question, yes } = await ask(bridge, offTheYes);
+      moveTo(onTheYes);
+      const keep = document.createElement('button');
+      document.body.append(keep);
+      fireEvent.pointerDown(keep, { ...onTheYes, pointerType: 'touch' });
+      keep.remove();
+      fireEvent.click(yes, { ...onTheYes, detail: 1 });
+      expect(question).toBeInTheDocument();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+    });
+
+    // A press with another button, or one let go off the yes, clicks
+    // nothing, so nothing refused it, and the focus Chromium gives the
+    // button pressed stayed on the yes: the next Enter, or Space, was a yes
+    // from the keyboard. A press never gives the yes the focus.
+    it('never takes the focus from a press, so a key after it is no yes', async () => {
+      const bridge = spellingBridge(spellings);
+      const { question, yes, cancel } = await ask(bridge, onTheYes);
+      for (const button of [2, 1, 0]) {
+        fireEvent.pointerDown(yes, { ...onTheYes, pointerType: 'mouse', button });
+        if (fireEvent.mouseDown(yes, { ...onTheYes, button })) yes.focus();
+        fireEvent.mouseUp(document.body, { button });
+        expect(cancel).toHaveFocus();
+      }
+      fireEvent.keyDown(document.activeElement!, { key: 'Enter' });
+      fireEvent.click(document.activeElement!, { detail: 0 });
+      expect(question).not.toBeInTheDocument();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
     });
   });
 

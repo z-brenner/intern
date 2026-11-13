@@ -262,3 +262,272 @@ test('Escape after a press on the sentence let go off the question takes back on
   await expect(panel).toBeVisible();
   await expect(action).toBeFocused();
 });
+
+/*
+  What is under the pointer is what the browser finds there, not the yes's
+  box. With the More menu open, the decision stuck to the bottom of the
+  review panel grows over the question's yes. A press on Keep original,
+  where it lies over the yes, closes the menu; the yes it uncovers is under
+  the pointer, and a press again, because nothing seemed to happen, is no
+  answer. A pointer seen on Keep original was not on the yes.
+*/
+/** Open the question in the review panel by a press on its action, its buttons brought above the decision with the wheel. */
+async function questionAboveTheDecision(page: Page) {
+  await page.goto('/?learnedSpellings=held');
+  const panel = await openDetails(page, 'SOW final v3.pdf');
+  const action = panel.getByRole('button', { name: CONTOSO });
+  await action.scrollIntoViewIfNeeded();
+  await panel.evaluate((element, label) => {
+    const button = [...element.querySelectorAll('button')].find((candidate) => candidate.getAttribute('aria-label') === label)!;
+    element.scrollTop += button.getBoundingClientRect().bottom + 8 - element.querySelector('.inspector-actions')!.getBoundingClientRect().top;
+  }, CONTOSO);
+  const opening = await centre(action);
+  await page.mouse.click(opening.x, opening.y);
+  const question = panel.getByRole('group', { name: CONTOSO });
+  const yes = question.getByRole('button', { name: 'Use on its own' });
+  await expect(question).toBeVisible();
+  const box = (await yes.boundingBox())!;
+  const decision = await panel.locator('.inspector-actions').evaluate((element) => element.getBoundingClientRect().top);
+  if (box.y + box.height + 4 > decision) {
+    await page.mouse.wheel(0, Math.ceil(box.y + box.height + 4 - decision));
+    await expect.poll(async () => (await yes.boundingBox())!.y + (await yes.boundingBox())!.height).toBeLessThanOrEqual(decision);
+  }
+  return { panel, question, yes };
+}
+
+/** A point on `a` that lies over `b`'s box, when there is one. */
+const over = (a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) => {
+  const x0 = Math.max(a.x, b.x) + 2, x1 = Math.min(a.x + a.width, b.x + b.width) - 2;
+  const y0 = Math.max(a.y, b.y) + 2, y1 = Math.min(a.y + a.height, b.y + b.height) - 2;
+  return x0 < x1 && y0 < y1 ? { x: (x0 + x1) / 2, y: (y0 + y1) / 2 } : undefined;
+};
+
+for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) {
+  test(`a press on Keep original over the yes, and a press again on the yes it uncovered, check nothing, at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    const { panel, question, yes } = await questionAboveTheDecision(page);
+    const more = await centre(panel.getByRole('button', { name: 'More review actions' }));
+    await page.mouse.move(more.x, more.y, { steps: 6 });
+    await page.mouse.click(more.x, more.y);
+    const menu = panel.getByRole('group', { name: 'More review actions' });
+    await expect(menu).toBeVisible();
+    const keep = panel.getByRole('button', { name: /Keep original/ });
+    const at = over((await keep.boundingBox())!, (await yes.boundingBox())!)!;
+    expect(at, 'Keep original lies over the yes').toBeDefined();
+    await page.mouse.move(at.x, at.y, { steps: 8 });
+    expect(await under(page, at)).not.toBe(`the yes of ${CONTOSO}`);
+    await page.waitForTimeout(300);
+    await pressHere(page);
+    await expect(menu).toHaveCount(0);
+    expect(await under(page, at)).toBe(`the yes of ${CONTOSO}`);
+    await page.waitForTimeout(700);
+    await pressHere(page);
+    await page.waitForTimeout(250);
+    await expect(question).toBeVisible();
+    await expect(panel.locator('.spelling-checked')).toHaveCount(0);
+  });
+}
+
+/*
+  Settings opened over the review panel, its backdrop over the question's
+  yes. A press there does nothing; Escape closes Settings, and the yes is
+  under a pointer that never moved onto it.
+*/
+for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) {
+  test(`a press where Settings lay over the yes, after Settings closed, checks nothing, at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await page.goto('/?learnedSpellings=held');
+    const panel = await openDetails(page, 'SOW final v3.pdf');
+    const action = panel.getByRole('button', { name: CONTOSO });
+    await action.scrollIntoViewIfNeeded();
+    await panel.evaluate((element, label) => {
+      const button = [...element.querySelectorAll('button')].find((candidate) => candidate.getAttribute('aria-label') === label)!;
+      element.scrollTop += button.getBoundingClientRect().top - element.getBoundingClientRect().top - 80;
+    }, CONTOSO);
+    const opening = await centre(action);
+    await page.mouse.click(opening.x, opening.y);
+    const question = panel.getByRole('group', { name: CONTOSO });
+    const at = await centre(question.getByRole('button', { name: 'Use on its own' }));
+    expect(await under(page, at)).toBe(`the yes of ${CONTOSO}`);
+    await page.getByRole('button', { name: 'Settings' }).evaluate((button: HTMLElement) => button.click());
+    const dialog = page.getByRole('dialog', { name: 'Settings' });
+    await expect(dialog).toBeVisible();
+    await page.mouse.move(at.x, at.y, { steps: 10 });
+    expect(await under(page, at)).not.toBe(`the yes of ${CONTOSO}`);
+    await page.waitForTimeout(400);
+    await pressHere(page);
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    expect(await under(page, at)).toBe(`the yes of ${CONTOSO}`);
+    await page.waitForTimeout(700);
+    await pressHere(page);
+    await page.waitForTimeout(250);
+    await expect(question).toBeVisible();
+    await expect(panel.locator('.spelling-checked')).toHaveCount(0);
+  });
+}
+
+/*
+  A press with another button on a yes the pointer did not move to clicks
+  nothing, so nothing refused it, and the focus Chromium gives a pressed
+  button stayed on the yes: Enter or Space after it was a yes from the
+  keyboard. A press never gives the yes the focus.
+*/
+for (const surface of ['review panel', 'Settings'] as const) {
+  test(`a right press on the yes, and Enter, check nothing, in the ${surface}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1400, height: 900 });
+    const host = surface === 'Settings' ? await learnedSpellings(page) : await (async () => { await page.goto('/?learnedSpellings=held'); return openDetails(page, 'SOW final v3.pdf'); })();
+    const action = host.getByRole('button', { name: CONTOSO });
+    await action.scrollIntoViewIfNeeded();
+    const scroller = surface === 'Settings' ? host.locator('.dialog-body') : host;
+    const top = await scroller.evaluate((element) => element.scrollTop);
+    const question = host.getByRole('group', { name: CONTOSO });
+    const yes = question.getByRole('button', { name: 'Use on its own' });
+    const cancel = question.getByRole('button', { name: 'Cancel' });
+    // Where the yes ends up when the question is opened from the keyboard; then the mouse rests there.
+    await action.focus();
+    await page.keyboard.press('Enter');
+    const at = await centre(yes);
+    await page.keyboard.press('Escape');
+    await scroller.evaluate((element, scrollTop) => { element.scrollTop = scrollTop; }, top);
+    await page.mouse.move(at.x, at.y);
+    await action.focus();
+    await page.keyboard.press('Enter');
+    expect(await under(page, at)).toBe(`the yes of ${CONTOSO}`);
+    await page.waitForTimeout(700);
+    for (const button of ['right', 'middle'] as const) {
+      await page.mouse.down({ button }); await page.waitForTimeout(80); await page.mouse.up({ button });
+      await expect(cancel).toBeFocused();
+    }
+    await page.keyboard.press('Enter');
+    await expect(question).toHaveCount(0);
+    if (surface === 'Settings') expect((await states(host))[0]).toBe('In use · asks before filing');
+    else await expect(host.locator('.spelling-checked')).toHaveCount(0);
+  });
+}
+
+/*
+  The pointer came onto the yes, and the yes moved under it and back - the
+  wheel rolled away and back. A pointer the yes left is not on it, and the
+  yes that came back under it came by itself. Moved off it and back, it is.
+*/
+test('a press after the yes scrolled away from the pointer on it and back checks nothing until the pointer comes onto it again, in Settings', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const dialog = await learnedSpellings(page);
+  const opening = await centre(dialog.getByRole('button', { name: CONTOSO }));
+  await page.mouse.click(opening.x, opening.y);
+  const question = dialog.getByRole('group', { name: CONTOSO });
+  const yes = question.getByRole('button', { name: 'Use on its own' });
+  const sentence = await centre(question.locator('p'));
+  const at = await centre(yes);
+  await page.mouse.move(sentence.x, sentence.y, { steps: 3 });
+  await page.mouse.move(at.x, at.y, { steps: 3 });
+  expect(await under(page, at)).toBe(`the yes of ${CONTOSO}`);
+  await page.mouse.wheel(0, -300);
+  await expect.poll(() => under(page, at)).not.toBe(`the yes of ${CONTOSO}`);
+  await page.waitForTimeout(300);
+  await page.mouse.wheel(0, 300);
+  await expect.poll(() => under(page, at)).toBe(`the yes of ${CONTOSO}`);
+  await page.waitForTimeout(700);
+  await pressHere(page);
+  await page.waitForTimeout(250);
+  await expect(question).toBeVisible();
+  expect((await states(dialog))[0]).toBe('In use · asks before filing');
+  await page.waitForTimeout(600);
+  await page.mouse.move(sentence.x, sentence.y, { steps: 3 });
+  await page.mouse.move(at.x, at.y, { steps: 3 });
+  await pressHere(page);
+  await expect(question).toHaveCount(0);
+  expect((await states(dialog))[0]).toBe('In use');
+});
+
+/*
+  A scroll that leaves the yes's edge a pixel from a still mouse, and a
+  twitch of the hand across it. The mouse moved, but onto a yes that came
+  to it: it has to be seen where it is with the yes where it is now first.
+*/
+test('a twitch across the edge of a yes that scrolled beside a still mouse checks nothing, in the review panel', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await page.goto('/?learnedSpellings=held');
+  const panel = await openDetails(page, 'SOW final v3.pdf');
+  const action = panel.getByRole('button', { name: CONTOSO });
+  const question = panel.getByRole('group', { name: CONTOSO });
+  const yes = question.getByRole('button', { name: 'Use on its own' });
+  await panel.evaluate((element, label) => {
+    const button = [...element.querySelectorAll('button')].find((candidate) => candidate.getAttribute('aria-label') === label)!;
+    element.scrollTop += button.getBoundingClientRect().top - element.getBoundingClientRect().top - 200;
+  }, CONTOSO);
+  const opening = await centre(action);
+  await page.mouse.move(opening.x, opening.y, { steps: 3 });
+  await page.mouse.down(); await page.mouse.up();
+  await expect(question).toBeVisible();
+  const box = (await yes.boundingBox())!;
+  const rest = { x: box.x + box.width / 2, y: box.y + box.height + 60 };
+  await page.mouse.move(rest.x, rest.y, { steps: 5 });
+  await page.mouse.wheel(0, -40);
+  await page.waitForTimeout(400);
+  // Where the wheel stopped, its top a pixel below the mouse.
+  await panel.evaluate((element, y) => { element.scrollTop -= y + 1 - element.querySelector('.rule-confirm button.primary')!.getBoundingClientRect().top; }, rest.y);
+  await page.waitForTimeout(700);
+  const twitch = { x: rest.x, y: rest.y + 2 };
+  await page.mouse.move(twitch.x, twitch.y);
+  expect(await under(page, twitch)).toBe(`the yes of ${CONTOSO}`);
+  await pressHere(page);
+  await page.waitForTimeout(250);
+  await expect(question).toBeVisible();
+  await expect(panel.locator('.spelling-checked')).toHaveCount(0);
+});
+
+/*
+  A touch screen: a finger has no hover, and comes onto the yes by
+  touching down on it, from where it last touched off it. Each pointer is
+  its own: a finger's tap says nothing of where the mouse is.
+*/
+test.describe('with a touch screen', () => {
+  test.use({ hasTouch: true });
+
+  test('a tap on Keep original over the yes checks nothing, though its click lands on the yes it uncovers', async ({ page }) => {
+    await page.setViewportSize({ width: 1400, height: 900 });
+    const { panel, question, yes } = await questionAboveTheDecision(page);
+    await page.waitForTimeout(600);
+    const more = await centre(panel.getByRole('button', { name: 'More review actions' }));
+    await page.touchscreen.tap(more.x, more.y);
+    await expect(panel.getByRole('group', { name: 'More review actions' })).toBeVisible();
+    const keep = panel.getByRole('button', { name: /Keep original/ });
+    const at = over((await keep.boundingBox())!, (await yes.boundingBox())!)!;
+    expect(at, 'Keep original lies over the yes').toBeDefined();
+    await page.waitForTimeout(400);
+    await page.touchscreen.tap(at.x, at.y);
+    await page.waitForTimeout(300);
+    await expect(question).toBeVisible();
+    await expect(panel.locator('.spelling-checked')).toHaveCount(0);
+  });
+
+  for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) {
+    test(`a finger opens the question with its yes under the resting mouse; a pixel's move of the mouse and a press check nothing, in Settings at ${size.width}x${size.height}`, async ({ page }) => {
+      await page.setViewportSize(size);
+      const dialog = await learnedSpellings(page);
+      const question = dialog.getByRole('group', { name: CONTOSO });
+      const yes = question.getByRole('button', { name: 'Use on its own' });
+      const tap = await centre(dialog.getByRole('button', { name: CONTOSO }));
+      await page.touchscreen.tap(tap.x, tap.y);
+      const at = await centre(yes);
+      await page.keyboard.press('Escape');
+      await expect(question).toHaveCount(0);
+      await page.mouse.move(at.x, at.y, { steps: 5 });
+      await page.touchscreen.tap(tap.x, tap.y);
+      expect(await under(page, at)).toBe(`the yes of ${CONTOSO}`);
+      await page.waitForTimeout(600);
+      await page.mouse.move(at.x + 1, at.y);
+      await pressHere(page);
+      await page.waitForTimeout(250);
+      await expect(question).toBeVisible();
+      expect((await states(dialog))[0]).toBe('In use · asks before filing');
+      // A tap on it is a finger coming onto it, from where it last touched.
+      await page.waitForTimeout(600);
+      await page.touchscreen.tap(at.x, at.y);
+      await expect(question).toHaveCount(0);
+      expect((await states(dialog))[0]).toBe('In use');
+    });
+  }
+});

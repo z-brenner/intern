@@ -210,8 +210,12 @@ describe('the spellings Intern has learned', () => {
       pressAt(within(list).getByRole('button', { name: /Use on its own/ }), offTheYes);
       const yes = within(list).getByRole('button', { name: 'Use on its own' });
       moveTo(onTheYes);
-      // A press with the pointer focuses the button, as it does in Chromium.
-      const press = (presses: number) => { yes.focus(); fireEvent.click(yes, { detail: presses }); };
+      // A press where the pointer is, on the yes, as Chromium makes one.
+      const press = (presses: number) => {
+        fireEvent.pointerDown(yes, { ...onTheYes, pointerType: 'mouse' });
+        if (fireEvent.mouseDown(yes, onTheYes)) yes.focus();
+        fireEvent.click(yes, { ...onTheYes, detail: presses });
+      };
       // Straight after the question appeared; the second press of a slow
       // double-click; straight after a press it did not take.
       press(1);
