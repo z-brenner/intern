@@ -1983,8 +1983,9 @@ pub struct LearnedRule {
     /// only approval that shows the spelling is one. Until then a name the
     /// rule changes waits for a person ([`LEARNED_SPELLING_UNCONFIRMED`]),
     /// and where it does not show in the name it is not used (see
-    /// [`shown_rules`]); one check is enough. "Use now" in the list of
-    /// learned spellings is no check. A different spelling for the same
+    /// [`shown_rules`]); one check is enough. "Use on its own" in the list
+    /// of learned spellings is one too (see [`Pipeline::check_rule`]); "Use
+    /// now" is not. A different spelling for the same
     /// word starts over at none, as `seen` does, and the checks count for
     /// the spelling checked alone, whichever release respelled it since;
     /// every rule learned before alpha.18 counted none, so each waits for
@@ -3778,6 +3779,37 @@ impl Pipeline {
             ));
         }
         self.restyle_waiting()
+    }
+
+    /// Check a learned spelling in use on a person's word in Settings, for
+    /// the spelling `to` they were shown: the way out for a spelling no
+    /// approval can check - one whose added words every document gives
+    /// itself, a legal name each contract spells out before it shortens it -
+    /// and for one they would rather not wait on. They are told first that
+    /// every later document Intern reads as naming the word will be named
+    /// by the spelling, and may be filed without their check. Counted as an
+    /// approval's check is (see [`LearnedRule::confirmed`]), with nothing
+    /// asked of a document, there being none: from then on the names the
+    /// rule changes are filed like any other reading, and the documents
+    /// still waiting are restyled as after a check on a document, a name
+    /// held for the spelling losing the reason. A spelling for the same word
+    /// learned later starts over unchecked, as after any check.
+    ///
+    /// Only a spelling in force, as `to` spells it: one respelled since the
+    /// list was shown is not the one the person agreed to, and is refused
+    /// (`RULE_CHANGED`) rather than checked.
+    pub fn check_rule(&self, id: i64, to: &str) -> PipelineResult<()> {
+        match self.repository.check_rule(id, to)? {
+            None => Err(PipelineError::new(
+                "RULE_NOT_FOUND",
+                "learned spelling does not exist",
+            )),
+            Some(false) => Err(PipelineError::new(
+                "RULE_CHANGED",
+                "learned spelling is not in use as it was shown",
+            )),
+            Some(true) => self.restyle_waiting(),
+        }
     }
 
     /// Recomposes the proposed name of every document still waiting under
@@ -6775,6 +6807,35 @@ impl PipelineRepository {
             .execute("DELETE FROM house_rules WHERE id = ?1", params![id])
             .map_err(database_error)?;
         Ok(removed == 1)
+    }
+
+    /// Counts a person's check of rule `id` given in Settings, for the
+    /// spelling `to` they were shown, as [`Self::confirm`] counts one given
+    /// by an approval, without asking anything of a document: there is
+    /// none. `None` for a rule that does not exist, `Some(false)` for one
+    /// not in force or no longer spelled `to`.
+    fn check_rule(&self, id: i64, to: &str) -> PipelineResult<Option<bool>> {
+        let connection = self.lock()?;
+        let changed = connection
+            .execute(
+                "UPDATE house_rules SET
+                   confirmed = CASE WHEN confirmed_to = to_value THEN confirmed + 1 ELSE 1 END,
+                   confirmed_to = to_value
+                 WHERE id = ?1 AND to_value = ?2 AND seen >= ?3",
+                params![id, to, EDITS_TO_LEARN],
+            )
+            .map_err(database_error)?;
+        if changed == 1 {
+            return Ok(Some(true));
+        }
+        let exists = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM house_rules WHERE id = ?1)",
+                params![id],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(database_error)?;
+        Ok(exists.then_some(false))
     }
 
     /// Puts a rule in force at once. Not checked: the list shows the

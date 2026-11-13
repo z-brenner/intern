@@ -249,6 +249,13 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   houseRuleForget(id: string): Promise<void>;
   /** Apply a learned spelling from now on without waiting for a second edit. */
   houseRuleUse(id: string): Promise<void>;
+  /**
+   * Use a learned spelling in use on its own: check it, for the spelling
+   * `to` the person was shown, so the names it changes are filed without
+   * waiting for a person. Refused with RULE_CHANGED when the spelling is
+   * not in use or reads otherwise now.
+   */
+  houseRuleCheck(id: string, to: string): Promise<void>;
 }
 
 /**

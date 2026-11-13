@@ -33,6 +33,7 @@ function updateFailure(error: unknown): string {
 function ruleFailure(error: unknown): string {
   const code = typeof error === 'object' && error && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
   if (code === 'RULE_NOT_FOUND') return 'That spelling is no longer in the list; it may have been forgotten already. (RULE_NOT_FOUND)';
+  if (code === 'RULE_CHANGED') return 'That spelling changed since the list was shown, so it was not used on its own. Look at it again. (RULE_CHANGED)';
   const message = error instanceof Error ? error.message : typeof error === 'object' && error && 'message' in error && typeof error.message === 'string' ? error.message : '';
   return message.trim() ? `The spelling could not be changed: ${message.trim()}${code ? ` (${code})` : ''}` : 'The spelling could not be changed.';
 }
@@ -331,9 +332,25 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     ruleInFlight.current = true;
     setRulesError('');
     try { await run(); setRules(await bridge.houseRulesList()); }
-    catch (error) { setRulesError(ruleFailure(error)); }
+    catch (error) {
+      setRulesError(ruleFailure(error));
+      // A spelling that changed under the person is shown as it is now.
+      if (typeof error === 'object' && error && 'code' in error && error.code === 'RULE_CHANGED') {
+        await bridge.houseRulesList().then(setRules, () => undefined);
+      }
+    }
     finally { ruleInFlight.current = false; }
   };
+  /*
+    "Use on its own" checks a spelling in use that no approval has checked:
+    one whose added words every document gives itself never can be. It is
+    the one action here that lets Intern file names without a person, so it
+    says what it does - for every later document - before it does it, and
+    Cancel holds the focus.
+  */
+  const [checkingRule, setCheckingRule] = useState<string>();
+  const cancelCheck = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (checkingRule !== undefined) cancelCheck.current?.focus(); }, [checkingRule]);
   /*
     The two folders change through a folder picker, never a typed path, and
     as safely as setup changes them: a pair the backend would refuse is
@@ -547,10 +564,20 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
             <span className="rule-kind">{rule.kind === 'party' ? 'Party' : 'Type'}</span>
             <span className="rule-change"><q>{rule.from}</q> written as <strong>{rule.to}</strong></span>
             <span className="rule-state">{!rule.active ? 'Seen once · in use after one more edit' : rule.confirmed > 0 ? 'In use' : 'In use · not checked yet'}</span>
-            <span className="rule-actions">
+            {checkingRule === rule.id ? <div className="rule-confirm" role="group" aria-label={`Use on its own: ${rule.from} written as ${rule.to}`} aria-describedby={`rule-check-${rule.id}`} onKeyDown={(event) => {
+              // Escape takes back the question, not the whole dialog.
+              if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setCheckingRule(undefined); }
+            }}>
+              <p id={`rule-check-${rule.id}`}>{rule.kind === 'party'
+                ? <>Every later document Intern reads as naming <q>{rule.from}</q> will name <q>{rule.to}</q> instead, and may be filed under that name without your check.</>
+                : <>Every later document Intern reads as a <q>{rule.from}</q> will be called a <q>{rule.to}</q> instead, and may be filed under that name without your check.</>} Do this only if that is right for every one of them.</p>
+              <button type="button" className="primary" onClick={() => { setCheckingRule(undefined); void changeRule(() => bridge.houseRuleCheck(rule.id, rule.to)); }}>Use on its own</button>
+              <button ref={cancelCheck} type="button" onClick={() => setCheckingRule(undefined)}>Cancel</button>
+            </div> : <span className="rule-actions">
               {!rule.active && <button type="button" aria-label={`Use now: ${rule.from} written as ${rule.to}`} onClick={() => void changeRule(() => bridge.houseRuleUse(rule.id))}>Use now</button>}
+              {rule.active && rule.confirmed === 0 && <button type="button" aria-label={`Use on its own: ${rule.from} written as ${rule.to}`} onClick={() => { setRulesError(''); setCheckingRule(rule.id); }}>Use on its own</button>}
               <button type="button" aria-label={`Forget: ${rule.from} written as ${rule.to}`} onClick={() => void changeRule(() => bridge.houseRuleForget(rule.id))}>Forget</button>
-            </span>
+            </span>}
           </li>)}
         </ul>}
         {rulesError && <p className="form-error" role="alert">{rulesError}</p>}

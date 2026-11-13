@@ -8062,6 +8062,127 @@ fn an_approval_of_a_document_with_a_page_intern_did_not_read_is_no_check() {
     assert_eq!(rig.filed_as(fourth), None);
 }
 
+/// A spelling no approval can check: "Smith" written as "John Smith",
+/// learned from agreements that each give John Smith's full name before
+/// calling him Smith, so that no approval of a name it changes shows the
+/// spelling is one. A person checks it in Settings ("Use on its own"), for
+/// the spelling they were shown: the name held for it loses the reason, and
+/// the next agreement it changes is filed on its own. A spelling for the
+/// same word learned later starts over unchecked: put in use ("Use now"),
+/// the next name it changes waits again, and the check given for the old
+/// spelling does not check the new one.
+#[test]
+fn a_spelling_checked_in_settings_files_on_its_own_until_it_is_respelled() {
+    let named = "This agreement is made by John Smith (\"Smith\") and Acme Corporation.";
+    let parties = ["Smith", "Acme Corporation"];
+    let readings = (0..5)
+        .map(|index| agreement(index, EMPLOYMENT, PartyRelation::Between, &parties, named))
+        .collect();
+    let mut rig = Probation::reading(&parties, readings);
+    for _ in 0..2 {
+        let id = rig.read_next();
+        rig.approve(
+            id,
+            "Employment Agreement between John Smith and Acme Corporation",
+        );
+    }
+    assert_eq!(rig.rule(), rule_state("Smith", "John Smith", 2, 0));
+    let id = rig.pipeline.learned_rules().unwrap()[0].id;
+    rig.automatic(true);
+
+    let third = rig.read_next();
+    let held = rig.item(third);
+    assert_eq!(held.status, QueueStatus::NeedsReview);
+    assert_eq!(
+        held.proposal.unwrap().reasons,
+        vec![LEARNED_SPELLING_UNCONFIRMED]
+    );
+
+    // Not a spelling it was never shown as, nor one that does not exist.
+    assert_eq!(
+        rig.pipeline
+            .check_rule(id, "John Smith Jr.")
+            .unwrap_err()
+            .code,
+        "RULE_CHANGED"
+    );
+    assert_eq!(
+        rig.pipeline
+            .check_rule(id + 100, "John Smith")
+            .unwrap_err()
+            .code,
+        "RULE_NOT_FOUND"
+    );
+    assert_eq!(rig.rule(), rule_state("Smith", "John Smith", 2, 0));
+
+    rig.pipeline.check_rule(id, "John Smith").unwrap();
+    assert_eq!(rig.rule(), rule_state("Smith", "John Smith", 2, 1));
+    let waiting = rig.item(third).proposal.unwrap();
+    assert!(
+        !waiting
+            .reasons
+            .contains(&LEARNED_SPELLING_UNCONFIRMED.to_owned()),
+        "{:?}",
+        waiting.reasons
+    );
+    assert_eq!(
+        waiting.filename,
+        "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+
+    let fourth = rig.read_next();
+    assert_eq!(rig.item(fourth).status, QueueStatus::Completed);
+    assert_eq!(
+        rig.filed_as(fourth),
+        Some((
+            "John Smith".into(),
+            "2024-07-01 Employment Agreement between John Smith and Acme Corporation.pdf".into()
+        ))
+    );
+
+    // Respelled on the agreement still waiting, then put in use at once.
+    rig.approve(
+        third,
+        "Employment Agreement between Johnny Smith and Acme Corporation",
+    );
+    assert_eq!(rig.rule(), rule_state("Smith", "Johnny Smith", 1, 0));
+    // Not a spelling that is not in use yet: the list offers no check of
+    // one, and it would be filed on its own the moment it was put in use.
+    assert_eq!(
+        rig.pipeline
+            .check_rule(id, "Johnny Smith")
+            .unwrap_err()
+            .code,
+        "RULE_CHANGED"
+    );
+    rig.pipeline.use_rule(id).unwrap();
+    assert_eq!(rig.rule(), rule_state("Smith", "Johnny Smith", 2, 0));
+
+    let fifth = rig.read_next();
+    let held = rig.item(fifth);
+    assert_eq!(held.status, QueueStatus::NeedsReview);
+    assert_eq!(
+        held.proposal.unwrap().reasons,
+        vec![LEARNED_SPELLING_UNCONFIRMED]
+    );
+    assert_eq!(rig.filed_as(fifth), None);
+    assert_eq!(
+        rig.pipeline.check_rule(id, "John Smith").unwrap_err().code,
+        "RULE_CHANGED",
+        "the check of the old spelling"
+    );
+    rig.pipeline.check_rule(id, "Johnny Smith").unwrap();
+    assert_eq!(rig.rule(), rule_state("Smith", "Johnny Smith", 2, 1));
+    assert!(
+        rig.item(fifth)
+            .proposal
+            .unwrap()
+            .reasons
+            .iter()
+            .all(|reason| reason != LEARNED_SPELLING_UNCONFIRMED)
+    );
+}
+
 /// A statement of work the firm signed with a supplier, dated `written`.
 fn statement_of_work(written: &str) -> DocumentSource {
     parsed(&format!(

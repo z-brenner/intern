@@ -819,7 +819,17 @@ of a name the rule changed counts as the check only when all of this holds:
   had.
 
 "Use now" in Settings is no check either: it shows the words, not a name
-they made. One check is enough: from then on the names the rule changes
+they made. "Use on its own" is, and is offered only for a rule in force that
+nobody has checked: Settings first says, in plain words, that every later
+document Intern reads as naming the word will be named with the spelling and
+may be filed without the person's check, and on their word
+`Pipeline::check_rule` counts a check of the spelling they were shown, as
+`PipelineRepository::confirm` counts an approval's, with nothing asked of a
+document (there is none). A rule respelled since the list was shown is
+refused (`RULE_CHANGED`) rather than checked, and the documents still
+waiting are restyled as after any check. It is the way out for a rule no
+approval can check (below), and for one a person would rather not wait on.
+One check is enough: from then on the names the rule changes
 are filed like any other reading. A short form, a legal form or an
 acronym is checked by the first approval of any new document; a spelling
 that adds a word ("John Smith" for "Smith") by the first of one that does
@@ -828,8 +838,9 @@ review panel says only that the spelling has not been checked yet. A
 spelling whose added words every document gives itself - a legal name
 each contract defines before it shortens it ("Acme Widgets
 International, Inc." for "Acme"), a first name each agreement is signed
-with, a type each document is titled with - is never checked: every name
-it changes waits for a person for as long as the spelling is kept, and
+with, a type each document is titled with - is never checked by an
+approval: every name it changes waits for a person until they check it in
+Settings ("Use on its own") or for as long as the spelling is kept, and
 nothing beside the name says which words keep it waiting. That is the
 price of the guard: a run of words, or a count of approvals, would take
 the "John Smith, Jane Doe" agreement that names both as a check.

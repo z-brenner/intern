@@ -489,14 +489,19 @@ past what Intern reads); or characters Intern could not decode. A word counts
 however it is written: with or without accents, "Łukasz" or "Lukasz",
 "Müller" or "Mueller", "O'Brien" or "OBrien", "Smith-Jones" or "Smith Jones",
 "J. P." or "JP", broken across a line, or beside a "™". Some spellings
-are never checked: one whose words every document gives itself - a full legal
-name each contract defines before it shortens it, a first name each agreement
-is signed with - leaves every name it changes waiting for you for as long as
-you keep it. Spellings learned before alpha.18 wait for a check too. Settings
-lists everything learned, with "Use now" for a spelling you want at once (the
-names it changes still wait until it is checked) and "Forget" for one you do
-not, and the review panel says "Uses your spelling" whenever a name differs
-from the evidence under it. The evidence itself always keeps the document's
+are never checked by an approval: one whose words every document gives itself -
+a full legal name each contract defines before it shortens it, a first name
+each agreement is signed with - leaves every name it changes waiting for you
+until you check it in Settings. Spellings learned before alpha.18 wait for a
+check too. Settings lists everything learned, with "Use now" for a spelling you
+want at once (the names it changes still wait until it is checked), "Use on its
+own" for a spelling in use that is not checked yet, and "Forget" for one you do
+not want. "Use on its own" first says what it does - every later document
+Intern reads as naming the word is named with the spelling, and may be filed
+without your check - and checks the spelling as it then reads; a different
+spelling for the same word learned later waits for a check again. The review
+panel says "Uses your spelling" whenever a name differs from the evidence
+under it. The evidence itself always keeps the document's
 own words: a learned spelling changes what Intern calls a thing, never what it
 found.
 

@@ -5533,6 +5533,28 @@ pub async fn house_rule_use(id: String, state: State<'_, AppState>) -> Result<()
     Ok(())
 }
 
+/// Use a learned spelling on its own: the person, told that every later
+/// document Intern reads as naming its word will be named by it and may be
+/// filed without their check, checks it for the spelling they were shown
+/// (`to`). Refused as `RULE_CHANGED` for a spelling not in use or respelled
+/// since; a spelling for the same word learned later starts over
+/// unchecked.
+///
+/// Blocking, as forgetting one is.
+#[tauri::command]
+pub async fn house_rule_check(
+    id: String,
+    to: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.check_rule(id, &to))
+        .await
+        .map_err(|_| background_task_failed("spelling change"))??;
+    Ok(())
+}
+
 /// Blocking: a queue database write, which can wait out another
 /// connection's for up to the five-second busy timeout.
 #[tauri::command]
@@ -8732,9 +8754,9 @@ mod ipc_thread_tests {
     use super::{
         cloud_roots, descriptions_backfill, document_open, document_reveal, filed_folder_create,
         history_clear, history_count, history_export, history_list, hosted_model_test,
-        house_rule_forget, house_rule_use, inbox_folder_create, intake_status, operation_undo,
-        proposal_keep_original, queue_cancel, queue_list, queue_reanalyze, queue_remove,
-        queue_retry, settings_save,
+        house_rule_check, house_rule_forget, house_rule_use, inbox_folder_create, intake_status,
+        operation_undo, proposal_keep_original, queue_cancel, queue_list, queue_reanalyze,
+        queue_remove, queue_retry, settings_save,
     };
 
     /// Accepts a command only if calling it returns a future. WebView2
@@ -8779,6 +8801,7 @@ mod ipc_thread_tests {
         // Renames every waiting document again, listing each target folder.
         leaves_the_ipc_thread_2(house_rule_forget);
         leaves_the_ipc_thread_2(house_rule_use);
+        leaves_the_ipc_thread_3(house_rule_check);
     }
 
     #[test]
