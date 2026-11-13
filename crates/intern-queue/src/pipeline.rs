@@ -877,8 +877,9 @@ impl ProposalRecord {
     }
 
     /// Whether the document gives, in its own words, what the learned
-    /// spelling `rule` adds to the document's word (see [`words::added`]):
-    /// its text does, or a name its reading gives - a party the proposal,
+    /// spelling `rule` adds to the document's word, or any part of it (see
+    /// [`words::added`] and [`words::gives`]): its text does, or a name its
+    /// reading gives - a party the proposal,
     /// the validated facts or the model's reply names, or its type. Such a
     /// document's name is right with the spelling's words in it whatever
     /// the spelling is worth, so approving it is no check of the spelling:
@@ -1976,12 +1977,12 @@ pub struct LearnedRule {
     /// only approval that shows the spelling is one. Until then a name the
     /// rule changes waits for a person ([`LEARNED_SPELLING_UNCONFIRMED`]),
     /// and where it does not show in the name it is not used (see
-    /// [`shown_rules`]); one check is enough.
-    /// "Use now" in the list of learned spellings is no check. A different spelling for the same word starts over at
-    /// none, as `seen` does, and the checks count for the spelling checked
-    /// alone, whichever release respelled it since; every rule learned
-    /// before alpha.18 counted none, so each waits for one check after the
-    /// update too.
+    /// [`shown_rules`]); one check is enough. "Use now" in the list of
+    /// learned spellings is no check. A different spelling for the same
+    /// word starts over at none, as `seen` does, and the checks count for
+    /// the spelling checked alone, whichever release respelled it since;
+    /// every rule learned before alpha.18 counted none, so each waits for
+    /// one check after the update too.
     pub confirmed: u32,
     /// Unix seconds of the latest edit that taught it.
     pub learned_at: i64,
@@ -7195,11 +7196,12 @@ fn table_exists(connection: &Connection, table: &str) -> PipelineResult<bool> {
 /// `house_rule_teacher_content`, and [`PipelineRepository::confirm`]), once,
 /// when that table is first made: the documents `house_rule_teachers` names
 /// by item and, for a spelling it names none of - one an earlier release
-/// learned, which kept no teachers - every document filed under a name that
-/// gives the spelling (see [`keeps_spelling`]): its teachers are among
-/// them, as is every name it wrote then that nobody checked. Kept by what
-/// they hold, the same file added again after it left the queue is still a
-/// teacher. Nothing where the queue keeps no documents.
+/// learned, which kept no teachers - every document filed, or approved by a
+/// person, under a name that gives the spelling (see [`keeps_spelling`]):
+/// its teachers are among them (one whose filing failed is still waiting,
+/// approved), as is every name it wrote then that nobody checked. Kept by
+/// what they hold, the same file added again after it left the queue is
+/// still a teacher. Nothing where the queue keeps no documents.
 fn remember_teachers_by_content(connection: &Connection) -> PipelineResult<()> {
     for table in ["queue_items", "proposals", "operation_receipts"] {
         if !table_exists(connection, table)? {
@@ -7229,17 +7231,17 @@ fn remember_teachers_by_content(connection: &Connection) -> PipelineResult<()> {
     let read = |json: Option<String>| {
         json.and_then(|json| serde_json::from_str::<ProposalRecord>(&json).ok())
     };
-    let filed = {
+    let documents = {
         let mut statement = connection
             .prepare(
-                "SELECT items.source_hash, items.source_path, proposals.proposal_json
+                "SELECT items.source_hash, items.source_path, proposals.proposal_json,
+                   EXISTS (
+                     SELECT 1 FROM operation_receipts receipts
+                     WHERE receipts.queue_item_id = items.id
+                       AND receipts.direction = 'apply' AND receipts.stage = 'complete'
+                   )
                  FROM queue_items items
-                 JOIN proposals ON proposals.queue_item_id = items.id
-                 WHERE EXISTS (
-                   SELECT 1 FROM operation_receipts receipts
-                   WHERE receipts.queue_item_id = items.id
-                     AND receipts.direction = 'apply' AND receipts.stage = 'complete'
-                 )",
+                 JOIN proposals ON proposals.queue_item_id = items.id",
             )
             .map_err(database_error)?;
         statement
@@ -7248,6 +7250,7 @@ fn remember_teachers_by_content(connection: &Connection) -> PipelineResult<()> {
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, bool>(3)?,
                 ))
             })
             .map_err(database_error)?
@@ -7278,16 +7281,18 @@ fn remember_teachers_by_content(connection: &Connection) -> PipelineResult<()> {
                 .map_err(database_error)?
         };
         let teachers = if taught.is_empty() {
-            filed
+            documents
                 .iter()
-                .filter_map(|(hash, path, json)| {
+                .filter_map(|(hash, path, json, filed)| {
                     let record = read(Some(json.clone()))?;
                     let extension = Path::new(path)
                         .extension()
                         .and_then(|value| value.to_str())
                         .unwrap_or_default();
-                    (!record.is_synthetic() && keeps_spelling(&rule, extension, &record.filename))
-                        .then(|| (hash.clone(), Some(record)))
+                    ((*filed || record.approved || record.reviewed)
+                        && !record.is_synthetic()
+                        && keeps_spelling(&rule, extension, &record.filename))
+                    .then(|| (hash.clone(), Some(record)))
                 })
                 .collect::<Vec<_>>()
         } else {

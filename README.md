@@ -466,10 +466,10 @@ you in review, even with automatic renaming on: approve the name if it is
 right, or put the document's word back to make Intern forget the spelling.
 Your approval checks the spelling when the document is new to Intern - not
 one you taught it with, not one filed before or a second scan of one - and
-does not already say, in its own words, what the spelling adds. Approving
-"John Smith, Jane Doe" on an agreement that names Jane Doe shows nothing
-about whether every "John Smith" is "John Smith, Jane Doe", so the next name
-it changes waits again. A short form, a company form, a change of case or an
+does not already say, in its own words, any of what the spelling adds.
+Approving "John Smith, Jane Doe" on an agreement that names Jane Doe shows
+nothing about whether every "John Smith" is "John Smith, Jane Doe", so the
+next name it changes waits again. A short form, a company form, a change of case or an
 acronym is checked by the first approval. Spellings learned before alpha.18
 wait for a check too. Settings lists everything learned, with "Use now" for
 a spelling you want at once (the names it changes still wait until it is

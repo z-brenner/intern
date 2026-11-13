@@ -6917,87 +6917,93 @@ const JOINED: &str = "Employment Agreement between John Smith, Jane Doe and Acme
 /// alone, and a third, a new agreement that names John Smith, Jane Doe and
 /// Acme Corporation itself, is approved as Intern named it - the right name
 /// for it. That approval shows nothing about the spelling: the agreement
-/// gives "Jane Doe" in its own words, as it would for anyone. So the
-/// spelling stays unchecked, and the fourth agreement, naming John Smith
-/// alone, waits for a person. It counted as the check, and the fourth was
-/// filed without review as "... between John Smith, Jane Doe and Acme
+/// gives "Jane Doe" in its own words, as it would for anyone - or part of
+/// it, "J. Doe", which reads as the same person to the one approving. So
+/// the spelling stays unchecked, and the fourth agreement, naming John
+/// Smith alone, waits for a person. It counted as the check, and the fourth
+/// was filed without review as "... between John Smith, Jane Doe and Acme
 /// Corporation" in "John Smith, Jane Doe/".
 #[test]
 fn an_approval_of_words_the_document_gives_itself_is_no_check_of_a_spelling() {
     let alone = "This agreement is made by John Smith and Acme Corporation.";
-    let three = "This agreement for a new role is made by John Smith, Jane Doe and Acme Corporation \
-                 and replaces no earlier one.";
-    let mut rig = Probation::reading(
-        &SMITH_AND_ACME,
-        vec![
-            agreement(
-                0,
-                EMPLOYMENT,
-                PartyRelation::Between,
-                &SMITH_AND_ACME,
-                alone,
-            ),
-            agreement(
-                1,
-                EMPLOYMENT,
-                PartyRelation::Between,
-                &SMITH_AND_ACME,
-                alone,
-            ),
-            agreement(
-                2,
-                EMPLOYMENT,
-                PartyRelation::Between,
-                &SMITH_AND_ACME,
-                three,
-            ),
-            agreement(
-                3,
-                EMPLOYMENT,
-                PartyRelation::Between,
-                &SMITH_AND_ACME,
-                alone,
-            ),
-        ],
-    );
-    for _ in 0..2 {
-        let id = rig.read_next();
-        rig.approve(id, JOINED);
+    for three in [
+        "This agreement for a new role is made by John Smith, Jane Doe and Acme Corporation \
+         and replaces no earlier one.",
+        "This agreement for a new role is made by John Smith, J. Doe and Acme Corporation \
+         and replaces no earlier one.",
+    ] {
+        let mut rig = Probation::reading(
+            &SMITH_AND_ACME,
+            vec![
+                agreement(
+                    0,
+                    EMPLOYMENT,
+                    PartyRelation::Between,
+                    &SMITH_AND_ACME,
+                    alone,
+                ),
+                agreement(
+                    1,
+                    EMPLOYMENT,
+                    PartyRelation::Between,
+                    &SMITH_AND_ACME,
+                    alone,
+                ),
+                agreement(
+                    2,
+                    EMPLOYMENT,
+                    PartyRelation::Between,
+                    &SMITH_AND_ACME,
+                    three,
+                ),
+                agreement(
+                    3,
+                    EMPLOYMENT,
+                    PartyRelation::Between,
+                    &SMITH_AND_ACME,
+                    alone,
+                ),
+            ],
+        );
+        for _ in 0..2 {
+            let id = rig.read_next();
+            rig.approve(id, JOINED);
+        }
+        assert_eq!(
+            rig.rule(),
+            rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
+        );
+        rig.automatic(true);
+
+        let third = rig.read_next();
+        let held = rig.item(third);
+        assert_eq!(held.status, QueueStatus::NeedsReview, "{three}");
+        let record = held.proposal.unwrap();
+        assert_eq!(record.filename, format!("2024-06-07 {JOINED}.pdf"));
+        assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
+        rig.approve_as_proposed(third);
+        assert_eq!(
+            rig.filed_as(third),
+            Some((
+                "John Smith, Jane Doe".into(),
+                format!("2024-06-07 {JOINED}.pdf")
+            ))
+        );
+        assert_eq!(
+            rig.rule(),
+            rule_state("John Smith", "John Smith, Jane Doe", 2, 0),
+            "the agreement gives Jane Doe itself: {three}"
+        );
+
+        let fourth = rig.read_next();
+        let held = rig.item(fourth);
+        assert_eq!(held.status, QueueStatus::NeedsReview, "{three}");
+        assert_eq!(
+            held.proposal.unwrap().reasons,
+            vec![LEARNED_SPELLING_UNCONFIRMED]
+        );
+        assert_eq!(rig.filed_as(fourth), None, "the wrong name is not filed");
     }
-    assert_eq!(
-        rig.rule(),
-        rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
-    );
-    rig.automatic(true);
-
-    let third = rig.read_next();
-    let held = rig.item(third);
-    assert_eq!(held.status, QueueStatus::NeedsReview);
-    let record = held.proposal.unwrap();
-    assert_eq!(record.filename, format!("2024-06-07 {JOINED}.pdf"));
-    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
-    rig.approve_as_proposed(third);
-    assert_eq!(
-        rig.filed_as(third),
-        Some((
-            "John Smith, Jane Doe".into(),
-            format!("2024-06-07 {JOINED}.pdf")
-        ))
-    );
-    assert_eq!(
-        rig.rule(),
-        rule_state("John Smith", "John Smith, Jane Doe", 2, 0),
-        "the agreement gives Jane Doe itself"
-    );
-
-    let fourth = rig.read_next();
-    let held = rig.item(fourth);
-    assert_eq!(held.status, QueueStatus::NeedsReview);
-    assert_eq!(
-        held.proposal.unwrap().reasons,
-        vec![LEARNED_SPELLING_UNCONFIRMED]
-    );
-    assert_eq!(rig.filed_as(fourth), None, "the wrong name is not filed");
 }
 
 /// A spelling an earlier release learned, which kept no record of the
@@ -7235,6 +7241,96 @@ fn a_document_a_spelling_from_an_earlier_release_was_learned_from_added_again_is
 
     rig.automatic(true);
     let mut rig = rig;
+    let next = rig.read_next();
+    assert_eq!(rig.item(next).status, QueueStatus::NeedsReview);
+    assert_eq!(rig.filed_as(next), None);
+}
+
+/// The same for a teacher whose filing failed, still waiting in review
+/// when the queue first opens after the update: approved, though never
+/// filed, it is taken as a teacher by what it holds too.
+#[test]
+fn a_teacher_whose_filing_failed_before_the_update_added_again_is_no_check() {
+    let mut rig = Probation::new(&SMITH_AND_ACME);
+    let first = rig.read_next();
+    let second = rig.read_next();
+    rig.approve(first, JOINED);
+    // The folder the second goes to cannot be made: a file has its name.
+    let filed = rig.temp.path().join("filed");
+    let folder = filed.join("John Smith, Jane Doe");
+    std::fs::rename(&folder, filed.join("moved")).unwrap();
+    std::fs::write(&folder, b"in the way").unwrap();
+    let date = PROBATION_DATES[1].0;
+    assert!(
+        rig.pipeline
+            .approve(
+                second,
+                &format!("{date} {JOINED}.pdf"),
+                "An employment agreement."
+            )
+            .is_err()
+    );
+    std::fs::remove_file(&folder).unwrap();
+    let failed = rig.item(second);
+    assert_eq!(failed.status, QueueStatus::NeedsReview);
+    assert!(failed.proposal.as_ref().unwrap().reviewed);
+    assert_eq!(
+        rig.rule(),
+        rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
+    );
+    let Probation { temp, pipeline, .. } = rig;
+    drop(pipeline);
+    // As alpha.17 left the database: nothing kept of the teachers.
+    let database = Connection::open(temp.path().join("queue.sqlite3")).unwrap();
+    database
+        .execute("DELETE FROM house_rule_teachers", [])
+        .unwrap();
+    let _ = database.execute("DROP TABLE house_rule_teacher_content", []);
+    drop(database);
+    let (pipeline, filing) = reading_pipeline(
+        temp.path(),
+        PROBATION_DATES[2..]
+            .iter()
+            .map(|(_, written)| dated_text(written))
+            .collect(),
+        PROBATION_DATES[2..]
+            .iter()
+            .map(|(iso, written)| dated_proposal(iso, written))
+            .collect(),
+        &SMITH_AND_ACME,
+        DestinationLayout::Party,
+    );
+    let mut rig = Probation {
+        temp,
+        pipeline,
+        filing,
+        read: 3,
+    };
+    rig.pipeline.remove(second, false).unwrap();
+    let again = rig
+        .pipeline
+        .enqueue_files(&[rig
+            .temp
+            .path()
+            .join("inbox")
+            .join("b.pdf")
+            .canonicalize()
+            .unwrap()])
+        .unwrap()
+        .remove(0)
+        .id;
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(
+        rig.item(again).proposal.unwrap().reasons,
+        vec![LEARNED_SPELLING_UNCONFIRMED]
+    );
+    rig.approve_as_proposed(again);
+    assert_eq!(
+        rig.rule(),
+        rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
+    );
+
+    rig.automatic(true);
     let next = rig.read_next();
     assert_eq!(rig.item(next).status, QueueStatus::NeedsReview);
     assert_eq!(rig.filed_as(next), None);

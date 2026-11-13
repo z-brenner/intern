@@ -166,7 +166,7 @@ impl From<String> for DocumentWords {
 /// less the words of `rule.from` read either way, the company forms
 /// ([`COMPANY_FORMS`]) and the words that only join others
 /// ([`JOINING_WORDS`]). A document gives what the rule adds when it gives
-/// every word of one of them (see [`gives`]).
+/// any of their words (see [`gives`]).
 ///
 /// `None` - nothing a document could give in its own words - where either
 /// reading leaves no word: a short form ("Acme" for "Acme Corporation"), a
@@ -198,9 +198,15 @@ pub fn added(rule: &HouseRule) -> Option<Vec<Vec<String>>> {
     (!readings.iter().any(Vec::is_empty)).then(|| readings.into())
 }
 
-/// Whether a document gives what a rule adds (see [`added`]): every word of
-/// one reading of it in `text`, the words its text gives, or among the
+/// Whether a document gives what a rule adds (see [`added`]), or any part
+/// of it: a word of it in `text`, the words its text gives, or among the
 /// words of `named`, the names its reading gives (its parties, its type).
+/// A part is enough. A document that writes "J. Doe" or "Ms. Doe" can make
+/// "John Smith, Jane Doe" read as its own words to the person approving
+/// it, as surely as one that writes "Jane Doe" or "Doe, Jane"; and asking
+/// for the whole as a run of words is more than the words kept can answer.
+/// The price is a spelling that adds two words or more, one of which the
+/// document gives on its own, waiting for another document's approval.
 /// Without the words of its text - a reading stored before they were kept,
 /// or a document read from a page image - it is not known, and taken to
 /// give them: in doubt, no check.
@@ -212,11 +218,10 @@ pub fn gives(added: &[Vec<String>], text: Option<&DocumentWords>, named: &[&str]
         .iter()
         .flat_map(|name| words_of(name).into_iter().chain(pieces_of(name)))
         .collect::<HashSet<_>>();
-    added.iter().any(|reading| {
-        reading
-            .iter()
-            .all(|word| named.contains(word) || text.gives(word))
-    })
+    added
+        .iter()
+        .flatten()
+        .any(|word| named.contains(word) || text.gives(word))
 }
 
 /// Whether `short` is an acronym of `long`: a single word, but for any
@@ -419,18 +424,21 @@ mod tests {
     }
 
     /// A document gives what a spelling adds when its text, or a name its
-    /// reading gives, holds every added word - in any order ("Doe, Jane") -
-    /// and not when one is missing; without its text, it is taken to.
+    /// reading gives, holds any added word - in any order ("Doe, Jane"), or
+    /// part of it ("J. Doe") - and not when it holds none; without its
+    /// text, it is taken to.
     #[test]
-    fn a_document_gives_what_a_spelling_adds_only_with_every_word() {
+    fn a_document_gives_what_a_spelling_adds_with_any_word_of_it() {
         let joined = added(&party("John Smith", "John Smith, Jane Doe")).unwrap();
         let first = added(&party("Smith", "John Smith")).unwrap();
         let both = text("Agreement between John Smith, Jane Doe and Acme Corporation.");
         let inverted = text("Agreement between Smith, John and Doe, Jane.");
-        let alone = text("Agreement between Mr. Smith and Acme Corporation. Witness: Jane Roe.");
+        let initial = text("Agreement between John Smith, J. Doe and Acme Corporation.");
+        let alone = text("Agreement between Mr. Smith and Acme Corporation.");
         assert!(gives(&joined, Some(&both), &[]));
         assert!(gives(&joined, Some(&inverted), &[]));
-        assert!(!gives(&joined, Some(&alone), &[]), "Jane, but no Doe");
+        assert!(gives(&joined, Some(&initial), &[]), "part of it");
+        assert!(!gives(&joined, Some(&alone), &[]));
         assert!(
             gives(&joined, Some(&alone), &["Jane Doe"]),
             "a party the reading gives"

@@ -757,10 +757,12 @@ of a name the rule changed counts as the check only when all of this holds:
   form added or changed - or that is an acronym of the document's word, or
   the word an acronym stands for, asks nothing more. Otherwise the
   document's text, and every name its reading gives (the proposal's
-  parties, the validated facts, the model's reply, the type), must lack at
-  least one added word, in any order: "John Smith, Jane Doe" approved on an
-  agreement that names Jane Doe is the right name for that agreement and
-  says nothing about the next, which names John Smith alone. The text's
+  parties, the validated facts, the model's reply, the type), must give
+  none of the added words, in any order or part: "John Smith, Jane Doe"
+  approved on an agreement that names Jane Doe - or "Doe, Jane", or "J.
+  Doe" - is the right name for that agreement and says nothing about the
+  next, which names John Smith alone. A spelling that adds two words, one
+  of which a document gives, waits for another document's approval. The text's
   words are kept with each reading (`ProposalRecord::document_words`, a
   Bloom filter of every word the extractor read: it can say a word is there
   when it is not, which counts no check, but never the reverse). A reading
