@@ -141,14 +141,16 @@ const RELATION_BEFORE_PARTY = / (with|from|for|to|-) $/;
  * connecting word that follows it, which the reviewer may have changed ("to"
  * for "from"), or - in a name that gave none - after its whole type, where
  * the party is added after " - ", as Intern names a party it gives no
- * relation to. Words typed after the party there - " re Merger" after the
- * proposed "to U.S. Department of Justice", or after a party an earlier
- * click put in - stay after the new one; a party typed over by hand is
- * replaced with whatever follows it, since no known party says where it
- * ends. A name rewritten past what the proposed one says keeps every word
- * the reviewer typed, with the party added after " - ". No type word is
- * taken for a party. A collision suffix is left off: the rename gives the
- * new name its own if it still needs one.
+ * relation to. A note typed after a known party there - " re Merger" after
+ * the proposed "to U.S. Department of Justice", or after a party an earlier
+ * click put in - stays after the new one (`knownLead`). Any other words
+ * there go with the party they follow: a party typed over by hand, and one
+ * lengthened by hand ("Smith" to "Smith and Sons, Inc."), are replaced
+ * whole, since no known party says where they end. A name rewritten past
+ * what the proposed one says keeps every word the reviewer typed, with the
+ * party added after " - ". No type word is taken for a party. A collision
+ * suffix is left off: the rename gives the new name its own if it still
+ * needs one.
  */
 export function withParty(stem: string, party: string, offer: PartyOffer): string {
   const body = withoutCollision(stem);
@@ -157,7 +159,7 @@ export function withParty(stem: string, party: string, offer: PartyOffer): strin
   if (ending) return `${body.slice(0, body.length - ending.length)}${party}`;
   const slot = partySlot(body, offer);
   if (slot) {
-    const there = partyStart(slot.words, known);
+    const there = knownLead(slot.words, known);
     return `${slot.before}${party}${there ? slot.words.slice(there.length) : ''}`;
   }
   const kept = body.trimEnd();
@@ -167,7 +169,7 @@ export function withParty(stem: string, party: string, offer: PartyOffer): strin
 /**
  * Which of the known parties - the proposed name's own and those offered -
  * a stem gives, read as `withParty` reads it: the longest it ends with, or
- * the one its party starts with, before words typed after it. The chip for
+ * the one its party starts with, before a note typed after it. The chip for
  * it is shown pressed.
  */
 export function partyGiven(stem: string, offer: PartyOffer): string | undefined {
@@ -176,7 +178,7 @@ export function partyGiven(stem: string, offer: PartyOffer): string | undefined 
   const ending = partyEnding(body, known);
   if (ending) return ending;
   const slot = partySlot(body, offer);
-  return slot ? partyStart(slot.words, known) : undefined;
+  return slot ? knownLead(slot.words, known) : undefined;
 }
 
 /** Where a party goes in a stem: the words before it, from the date to the connecting word, and the words there now. */
@@ -220,6 +222,25 @@ function partySlot(body: string, offer: PartyOffer): PartySlot | undefined {
  */
 function partyStart(words: string, known: readonly string[]): string | undefined {
   return [...known].filter(Boolean).sort((a, b) => b.length - a.length).find((run) => words.startsWith(`${run} `));
+}
+
+/**
+ * The start of a note about the document, after a party: " re Merger",
+ * " re: the lease", " regarding", " about", " concerning", " - signed",
+ * " (signed)". Words that do not start one may be more of the party.
+ */
+const NOTE_AFTER_PARTY = /^ (?:re:?|regarding|about|concerning|-) |^ \(/i;
+
+/**
+ * The known party a party's words start with, when what follows it is a
+ * note (`NOTE_AFTER_PARTY`): "U.S. Department of Justice" of "U.S.
+ * Department of Justice re Merger". None when the words after it may be
+ * more of the party, as in "Smith and Sons, Inc." - "Smith" says where that
+ * party starts, not where it ends.
+ */
+function knownLead(words: string, known: readonly string[]): string | undefined {
+  const run = partyStart(words, known);
+  return run && NOTE_AFTER_PARTY.test(words.slice(run.length)) ? run : undefined;
 }
 
 /** A stem without its leading date. */
