@@ -702,16 +702,50 @@ person changed their mind about the word, not about Intern - and restoring
 the document's own spelling retracts the rule. The whole memory is the list
 in Settings; nothing is learned that cannot be seen and forgotten there.
 
-A rule in force is still on probation until a person has checked its work
-once. The edits it is learned from are read for their wording, and four
-rounds of review kept finding wordings that read as a respelling but were a
-decision about one document - another party joined to the named one ("John
-Smith, Jane Doe"), a short form of another party, a note - each of which,
-learned, renamed every later document giving the word, ready ones filed
-without review. So every name a rule changes waits in review with
+A rule in force is still on probation until a person has checked it. The
+edits it is learned from are read for their wording, and four rounds of
+review kept finding wordings that read as a respelling but were a decision
+about one document - another party joined to the named one ("John Smith,
+Jane Doe"), a short form of another party, a note - each of which, learned,
+renamed every later document giving the word, ready ones filed without
+review. So every name a rule changes waits in review with
 `LEARNED_SPELLING_UNCONFIRMED`, never ready, until a person has checked the
 rule (`LearnedRule::confirmed`, counted in `house_rules.confirmed` for the
 spelling in `house_rules.confirmed_to`).
+
+A rule is checked only by a person's explicit word for it: "Use on its own"
+(`Pipeline::check_rule`). No approval checks a rule, on any document. An
+approval of a name the rule changed shows that the name is right for that
+document; it would show the rule right for every later one only where the
+document did not itself give the words the rule adds, and that cannot be
+read soundly from a document's text: attempts to read it kept missing words
+a document gave - a name OCR split ("J ane"), initials ("L. Smith"),
+look-alike letters from another script, an abbreviation, an OCR misreading,
+a header Intern does not read, a logo, a script written without spaces. So
+however many names a rule changed were approved, the next one waits again.
+
+"Use on its own" is offered in the review window, beside "Uses your
+spelling", for each rule in force nobody has checked that a held document's
+name used, and in Settings for every rule in force nobody has checked. Each
+first says, in plain words, with the document's word and the spelling
+exactly as they are, that every later document Intern reads as naming the
+word (for a type: reads as that type) will be named with the spelling, and
+may be filed under that name without the person's check; Cancel and Escape
+take the question back. The command (`house_rule_check`) carries the rule's
+id and the spelling the person was shown - its kind, the document's word and
+the spelling - and the repository marks the rule checked, in one statement,
+only while it exists, is in force, and reads exactly that
+(`PipelineRepository::check_rule`): a rule forgotten is refused
+(`RULE_NOT_FOUND`), and one not in force, or respelled or learned from other
+words since it was shown, is refused (`RULE_CHANGED`) and shown again as it
+now reads. Checking a rule approves and files nothing. The documents still
+waiting are restyled as after any change to the rules (`restyle_waiting`):
+the rule is used where their names did not show it, and a name held for it
+loses `LEARNED_SPELLING_UNCONFIRMED` but stays in review, since what else
+held it is not known there; it is filed when a person approves it. One
+check is enough: from then on the names the rule changes are filed like any
+other reading. "Use now" is no check: it puts a rule seen once in force,
+unchecked.
 
 A rule nobody has checked touches only what a person sees: it is used on a
 record only where the name shows it - the name composed with it gives its
@@ -722,143 +756,35 @@ the third of a "between"); such a rule is not used on that record at all,
 which is filed and reported under the checked rules' and the document's own
 words and is not held. So every name held with
 `LEARNED_SPELLING_UNCONFIRMED` shows the spelling it waits on, and no rule is
-left that no name could show a person. Once the rule is checked, on another
-document, it is used everywhere it fires, folder and report included: the
-documents still waiting are composed again then, and a name held for it
-loses the reason.
+left that no name could show a person. Once the rule is checked, it is used everywhere it fires, folder and report
+included: the documents still waiting are composed again then, and a name
+held for it loses the reason.
 
-A check is evidence that the rule is a spelling, and an approval is that
-evidence only where the rule's words could have been wrong. So an approval
-of a name the rule changed counts as the check only when all of this holds:
-
-- It leaves the rule's words where the rule wrote them: the name as
-  proposed (its date or a collision suffix aside), or one other part of it
-  respelled. An edit of two parts can keep the rule's words only inside
-  words of its own ("John Smith, Jane Doe Trust").
-- The document is new to Intern. Not a near duplicate of a filing
-  (`near_duplicate_of`); never filed itself (a completed apply receipt);
-  not one whose edit taught the rule (`house_rule_teachers`, by queue
-  item); and not holding what a teacher held (`house_rule_teacher_content`,
-  kept when a teacher leaves the queue): the same file by its SHA-256, or a
-  text fingerprint within the near-duplicate distance of a teacher's with
-  the same date, or all but identical whatever its date, or - for a text
-  too short to fingerprint - the very words a teacher gave, under the same
-  date (a digest of `DocumentWords`), or - where neither a fingerprint nor
-  the words of both are kept to compare - any document under the teacher's
-  date. A teacher read
-  again after an undo, a failed filing or a Re-analyze, scanned again, or
-  removed from the queue and added again is the reviewer's own words
-  approved twice. Rules learned before alpha.18 kept no teachers, and their
-  readings kept no words; when the queue first opens after the update,
-  every document the queue holds whose name gives such a rule's spelling,
-  or whose reading the rule respells, is taken as its teacher by what it
-  holds - filed or waiting, approved or not, since a teacher whose filing
-  failed and that was read again keeps no trace of the approval that
-  taught.
-- The document does not give, in its own words, what the rule adds
-  (`ProposalRecord::gives_what_it_adds`). The words a rule adds are the
-  words of its spelling that are not words of the document's word, compared
-  as house style compares them with accents, ligatures and compatibility
-  forms folded ("José", "Jose" and "Jose" with a combining accent are one
-  word) - only letters and digits are decomposed, so a sign beside a word
-  ("Widgets™") is taken out as punctuation is - and a letter Unicode does
-  not decompose read as the one a person types for it ("Łukasz" is
-  "Lukasz", "Søren" "Soren", "ß" "ss", "æ" "ae", "þ" "th", a modifier
-  letter apostrophe an apostrophe), and an umlaut, "ø" or "å" read written
-  out as well ("Müller" is "muller" and "mueller"); read as written, split
-  at punctuation, and run together ("Smith Jones" is "smithjones"), with
-  letters spaced out as initials read together ("J. P." is "jp"), leaving
-  out legal forms
-  (Ltd, Inc, LLC, Corporation, Limited, Company, ...; not Group or Holdings,
-  which name another company of the same family) and words that only join
-  others (of, the, and, for, ...). A rule that adds none - a short form, a
-  change of case, accents or punctuation, a legal form added or changed - or
-  that is an acronym of the document's word, a leading prefix such as "U.S."
-  left out or not, asks nothing more. The words an acronym stands for
-  ("American Broadcasting Company" for "ABC") are words like any other: a
-  letter that spells them out shows nothing about the next "ABC". Otherwise
-  the document's text, and every name its reading gives (the proposal's
-  parties, the validated facts, the model's reply, the type), must give none
-  of the added words, in any order or part: "John Smith, Jane Doe" approved
-  on an agreement that names Jane Doe - or "Doe, Jane", or "J. Doe" - is the
-  right name for that agreement and says nothing about the next, which names
-  John Smith alone. A spelling that adds two words, one of which a document
-  gives, waits for another document's approval. The text's words are kept
-  with each reading (`ProposalRecord::document_words`, a Bloom filter of
-  every word the extractor read, in every form above, with a word broken
-  across a line by a hyphen read whole; it can say a word is there when it
-  is not, which counts no check, but never the reverse), and a word of a
-  spelling is given when the text gives it whole or in two or three parts
-  of three letters or more ("Smith Jones" gives "smithjones"; the parts are
-  not known to be side by side, which errs towards no check). They are kept
-  only for a document Intern read whole and surely (`DocumentWords::of`):
-  not one with a page that could not be read as text (`barely_readable`);
-  nor one whose page image is of a page no OCR reading stands for (a page
-  whose image is the page, a text layer of bad OCR kept with the image of
-  its unsure reading; a blank scanned page, which OCR read as having
-  nothing on it, is read); nor one with any worker warning but a corrupt
-  text layer a scan's OCR reading took the place of (`NATIVE_TEXT_CORRUPT`):
-  `TEXT_UNREAD` (a page or an image on one kept without a reading the
-  worker trusts, image or no image going with it), `LOW_OCR_CONFIDENCE`,
-  `TEXT_TRUNCATED`, `CONTENT_ELIDED`, or a code this build does not know;
-  nor one whose text holds characters the reader could not decode (a
-  replacement character, a C1 control, a word in a font's private-use
-  characters). Such a reading, and one stored before the words were kept,
-  counts no check for a rule that adds words: in doubt the next document
-  waits again. A scan OCR read with confidence gives the words OCR read, as
-  any other page does, whether or not an image of it went with it: the
-  image is not shown to the model, so the text is everything the reading
-  had.
-
-"Use now" in Settings is no check either: it shows the words, not a name
-they made. "Use on its own" is, and is offered only for a rule in force that
-nobody has checked: Settings first says, in plain words, that every later
-document Intern reads as naming the word will be named with the spelling and
-may be filed without the person's check, and on their word
-`Pipeline::check_rule` counts a check of the spelling they were shown, as
-`PipelineRepository::confirm` counts an approval's, with nothing asked of a
-document (there is none). A rule respelled since the list was shown is
-refused (`RULE_CHANGED`) rather than checked, and the documents still
-waiting are restyled as after any check. It is the way out for a rule no
-approval can check (below), and for one a person would rather not wait on.
-One check is enough: from then on the names the rule changes
-are filed like any other reading. A short form, a legal form or an
-acronym is checked by the first approval of any new document; a spelling
-that adds a word ("John Smith" for "Smith") by the first of one that does
-not give the word itself, so an approval may leave it waiting, and the
-review panel says only that the spelling has not been checked yet. A
-spelling whose added words every document gives itself - a legal name
-each contract defines before it shortens it ("Acme Widgets
-International, Inc." for "Acme"), a first name each agreement is signed
-with, a type each document is titled with - is never checked by an
-approval: every name it changes waits for a person until they check it in
-Settings ("Use on its own") or for as long as the spelling is kept, and
-nothing beside the name says which words keep it waiting. That is the
-price of the guard: a run of words, or a count of approvals, would take
-the "John Smith, Jane Doe" agreement that names both as a check.
 Putting the document's own word back instead, with nothing else in the name
 changed, retracts the rule (one that changes another part too teaches
-nothing, and the rule stays unchecked), and a third
-spelling for the same word starts the count and the checks over; a release
-that does not know the checks respells without starting them over, so they
-count only while the rule writes the spelling checked. A document whose
-approved name takes out a spelling nobody had checked is filed and reported
-under the document's own words where the name gives them, whatever note or
-party follows them (`ProposalRecord::rejected_rules`); a checked spelling's
-folder stays the party's. The hold is decided wherever a name is composed
-under the rules in force: a new reading, Re-analyze, a validation again after an update, and the
-waiting documents a rule learned or used renames (a ready one goes to review
-in the same write that renames it); and no unapproved name a rule no person
-has checked changed is left ready, however the row came to be ready: the
-queue holds such rows when it opens and on every recovery pass, model or no
-model, paused or not, as well as before the scheduler files anything. Whether
-a row is held is decided again on its record as stored, in the transaction
-that puts it in review, so an approval made in that moment stands. Rules
-learned before alpha.18 were never checked, so after the update each of them
-waits for one check too; a ready row such a rule touched where its name does
-not show it is composed again when the queue opens, rather than held. The wording rules still keep Intern from learning
-what they recognise; they are no longer what keeps a wrong name from being
-filed.
+nothing, and the rule stays unchecked), and a third spelling for the same
+word starts the count and the checks over; a release that does not know the
+checks respells without starting them over, so they count only while the
+rule writes the spelling checked. A document whose approved name takes out a
+spelling nobody had checked is filed and reported under the document's own
+words where the name gives them, whatever note or party follows them
+(`ProposalRecord::rejected_rules`); a checked spelling's folder stays the
+party's. The hold is decided wherever a name is composed under the rules in
+force: a new reading, Re-analyze, a validation again after an update, and
+the waiting documents a rule learned or used renames (a ready one goes to
+review in the same write that renames it); and no unapproved name a rule no
+person has checked changed is left ready, however the row came to be ready:
+the queue holds such rows when it opens and on every recovery pass, model or
+no model, paused or not, as well as before the scheduler files anything.
+Whether a row is held is decided again on its record as stored, in the
+transaction that puts it in review, so an approval made in that moment
+stands. Rules learned before alpha.18 were never checked, so after the update
+each of them waits for its check too; a ready row such a rule touched where
+its name does not show it is composed again when the queue opens, rather
+than held. A database a development build of alpha.18 used, when an approval
+could count as the check, starts every rule over unchecked as it opens. The
+wording rules still keep Intern from learning what they recognise; they are
+no longer what keeps a wrong name from being filed.
 
 ### Your organization
 

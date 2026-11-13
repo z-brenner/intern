@@ -459,51 +459,43 @@ what was left on the table.
 The document says "Contoso Worldwide, Inc."; you call it "Contoso". Respell a
 party or a document type in review and Intern remembers it. The second time you
 make the same change it becomes the spelling Intern uses. One edit is a
-decision about one document; two are a preference. Until a new spelling is
-checked, every name it changes waits for you in review, even with automatic
-renaming on: approve the name if it is right, or put the document's word back,
-changing nothing else, to make Intern forget the spelling. Until it is checked,
-a spelling is used only where the name shows it: a document whose name leaves
-out the party it respells (a long party left out for length, the third party of
-a "between") is filed and reported under the document's own words, and does not
-wait for it. Once checked, the spelling is used in the name, the layout folder,
-and the description record, for every later document that names the same thing.
+decision about one document; two are a preference.
 
-Your approval checks the spelling when the document is new to Intern - not one
-you taught it with, not one filed before or a second scan of one - and does
-not already say, in its own words, any of what the spelling adds. Approving
-"John Smith, Jane Doe" on an agreement that names Jane Doe shows nothing about
-whether every "John Smith" is "John Smith, Jane Doe", so the next name it
-changes waits again. The same goes for "Acme Holdings" on an agreement that
-names Acme Holdings, the parent of Acme, and for "American Broadcasting
-Company" on a letter that spells out ABC. A short form, a legal form (Inc.,
-Corporation, Ltd), a change of case or accents, or an acronym of the
-document's words ("EPA" for "U.S. Environmental Protection Agency") is checked
-by the first approval. A scan counts by the text Intern read from it. A
-document Intern did not read whole and surely checks nothing: one with a page
-it could not read as text, or whose image went to the model with no OCR
-reading of it; a text layer of bad OCR kept because OCR could not do better;
-an image on a page that OCR could not read, or read too unsurely to use; text
-OCR was unsure of, cut at Intern's limits, or left out (a spreadsheet's rows
-past what Intern reads); or characters Intern could not decode. A word counts
-however it is written: with or without accents, "Łukasz" or "Lukasz",
-"Müller" or "Mueller", "O'Brien" or "OBrien", "Smith-Jones" or "Smith Jones",
-"J. P." or "JP", broken across a line, or beside a "™". Some spellings
-are never checked by an approval: one whose words every document gives itself -
-a full legal name each contract defines before it shortens it, a first name
-each agreement is signed with - leaves every name it changes waiting for you
-until you check it in Settings. Spellings learned before alpha.18 wait for a
-check too. Settings lists everything learned, with "Use now" for a spelling you
-want at once (the names it changes still wait until it is checked), "Use on its
-own" for a spelling in use that is not checked yet, and "Forget" for one you do
-not want. "Use on its own" first says what it does - every later document
-Intern reads as naming the word is named with the spelling, and may be filed
-without your check - and checks the spelling as it then reads; a different
-spelling for the same word learned later waits for a check again. The review
-panel says "Uses your spelling" whenever a name differs from the evidence
-under it. The evidence itself always keeps the document's
-own words: a learned spelling changes what Intern calls a thing, never what it
-found.
+A spelling in use still fills in names, but every name it changes waits for
+you in review, even with automatic renaming on, until you choose "Use on its
+own" for that spelling. Approving a name the spelling changed does not count:
+the name may be right for that document - an agreement that names Jane Doe
+itself is rightly "John Smith, Jane Doe" - and still be wrong for the next,
+and Intern cannot tell that reliably from a document's text. So a name it
+changes keeps waiting, document after document, until you say the spelling is
+right for every one of them. If a name is right, approve it; if it is not,
+put the document's own word back, changing nothing else, and Intern forgets
+the spelling. Until you choose "Use on its own", a spelling is used only where
+the name shows it: a document whose name leaves out the party it respells (a
+long party left out for length, the third party of a "between") is filed and
+reported under the document's own words, and does not wait for it.
+
+"Use on its own" is offered in two places: in the review window, beside
+"Uses your spelling", for each spelling a waiting document's name used that
+you have not chosen it for, and in Settings, under Learned spellings, for
+every spelling in use. Each first says, in plain words, what it does - every
+later document Intern reads as naming the word will be named with the
+spelling, and may be filed under that name without your check - and Cancel
+takes the question back. It checks the spelling exactly as it was shown to
+you; one that changed in the meantime is refused, and shown again as it now
+reads. It does not approve or file the document in front of you: that one
+still waits for your decision. Once chosen, the spelling is used in the name,
+the layout folder, and the description record, for every later document that
+names the same thing, and those names are filed like any other. A different
+spelling for the same word, learned later, waits for its own choice. Spellings
+learned before alpha.18 wait for one too.
+
+Settings lists everything learned, with "Use now" for a spelling seen once
+that you want at once (the names it changes still wait until you choose "Use
+on its own"), "Use on its own", and "Forget" for one you do not want. The
+review panel says "Uses your spelling" whenever a name differs from the
+evidence under it. The evidence itself always keeps the document's own words:
+a learned spelling changes what Intern calls a thing, never what it found.
 
 ## Development
 
