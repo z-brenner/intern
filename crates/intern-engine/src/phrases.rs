@@ -324,18 +324,21 @@ const NUMBER_HOLDERS: &[&str] = &[
 
 /// Whether the token before `label` names what the number there belongs
 /// to, rather than ending the title before them: one of
-/// [`NUMBER_HOLDERS`], before "No." or "Number" and a figure (or the
-/// line's end, where the figure wrapped) or before a "#" figure, right
-/// after a kind of document or after a stop - "Notice of Civil Penalty
-/// Assessment and Order *Case* No. WQ-SW-WR-2023-626", "Notice of
-/// Violation and Order *Docket* No. 24-0113", "Notice of Intent to Revoke
-/// Permit *File* #4471", "Notice of Violation, *Case* No. 24-0113". The
-/// number is the case's, the docket's or the file's, not the document's,
-/// and the title ends before the word. After any other word the same word
-/// can be the title's own - "Notice of Related Case No. 3", "Order to Show
-/// Cause No. 2024-15" - and stays, as it does where a stop sets it apart
-/// from the number ("Notice of Intent to Close Permit File, No. 2024-15")
-/// or no figure follows ("... Permit File No Further Action Required").
+/// [`NUMBER_HOLDERS`], before "No.", "Number" or a "#" set apart from its
+/// figure - with a colon or without - and a figure (or the line's end,
+/// where the figure wrapped), or before a "#" figure, right after a kind of
+/// document or after a stop - "Notice of Civil Penalty Assessment and
+/// Order *Case* No. WQ-SW-WR-2023-626", "... and Order *Case* #
+/// WQ-SW-WR-2023-626", "... and Order *Case* #: WQ-SW-WR-2023-626",
+/// "Notice of Violation and Order *Docket* No. 24-0113", "Notice of Intent
+/// to Revoke Permit *File* #4471", "Notice of Violation, *Case* No.
+/// 24-0113". The number is the case's, the docket's or the file's, not the
+/// document's, and the title ends before the word. After any other word
+/// the same word can be the title's own - "Notice of Related Case No. 3",
+/// "Order to Show Cause No. 2024-15" - and stays, as it does where a stop
+/// sets it apart from the number ("Notice of Intent to Close Permit File,
+/// No. 2024-15") or no figure follows ("... Permit File No Further Action
+/// Required").
 fn labels_the_number(tokens: &[&str], label: usize) -> bool {
     let core = |token: &str| -> String {
         normalize(token)
@@ -351,7 +354,8 @@ fn labels_the_number(tokens: &[&str], label: usize) -> bool {
     };
     let has_digit = |token: &str| token.chars().any(|character| character.is_ascii_digit());
     let stops = |token: &str| token.ends_with([',', ';', ':', '.']);
-    let numbered = (NUMBER_LABELS.contains(&core(number).as_str())
+    let numbered = ((NUMBER_LABELS.contains(&core(number).as_str())
+        || number.trim_end_matches(':') == "#")
         && tokens.get(label + 1).is_none_or(|next| has_digit(next)))
         || (number.starts_with('#') && has_digit(number));
     numbered
@@ -1614,6 +1618,47 @@ mod tests {
                 "notice",
                 "Notice of Civil Penalty Assessment and Order",
             ),
+            // A label written apart from its figure, or with a colon.
+            (
+                "Re: Notice of Civil Penalty Assessment and Order Case # WQ-SW-WR-2023-626",
+                "notice",
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            (
+                "Re: Notice of Civil Penalty Assessment and Order Case #: WQ-SW-WR-2023-626",
+                "notice",
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            (
+                "Re: Notice of Civil Penalty Assessment and Order Case No: WQ-SW-WR-2023-626",
+                "notice",
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            (
+                "Re: Notice of Civil Penalty Assessment and Order Case Number: WQ-SW-WR-2023-626",
+                "notice",
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            (
+                "Re: Notice of Civil Penalty Assessment and Order Case #",
+                "notice",
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            (
+                "NOTICE OF VIOLATION AND ORDER CASE # CE2024-0123",
+                "notice",
+                "Notice of Violation and Order",
+            ),
+            (
+                "Notice of Violation and Order File # 4471",
+                "notice",
+                "Notice of Violation and Order",
+            ),
+            (
+                "Notice of Violation and Order Docket #: 24-0113",
+                "notice",
+                "Notice of Violation and Order",
+            ),
             (
                 "NOTICE OF VIOLATION AND ORDER DOCKET NO. 24-0113",
                 "notice",
@@ -1687,9 +1732,24 @@ mod tests {
                 "order",
                 "Order to Show Cause",
             ),
+            (
+                "Notice of Related Case # 3:21-cv-00412",
+                "notice",
+                "Notice of Related Case",
+            ),
+            (
+                "Order to Show Cause #: 2024-15",
+                "order",
+                "Order to Show Cause",
+            ),
             // Set apart from the number, or before a "No" with no figure.
             (
                 "Notice of Intent to Close Permit File, No. 2024-15",
+                "notice",
+                "Notice of Intent to Close Permit File",
+            ),
+            (
+                "Notice of Intent to Close Permit File, # 2024-15",
                 "notice",
                 "Notice of Intent to Close Permit File",
             ),
