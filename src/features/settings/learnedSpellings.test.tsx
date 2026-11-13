@@ -137,6 +137,58 @@ describe('the spellings Intern has learned', () => {
     expect(houseRuleUse).not.toHaveBeenCalled();
   });
 
+  // "Use now" and "Forget" take away the button that was pressed: Use now
+  // turns into "Use on its own", Forget takes the row. The focus fell to the
+  // page, outside the dialog, and a screen reader lost its place. It goes to
+  // the spelling's row, the row that took a forgotten one's place, the one
+  // before it at the end of the list, or the section's heading when none is
+  // left; a Forget refused leaves it on Forget.
+  it('keeps the focus in the list when Use now or Forget takes away the button pressed', async () => {
+    const third: LearnedRule = { id: '3', kind: 'party', from: 'Northwind Traders', to: 'Northwind', seen: 2, active: true, confirmed: 0, learnedAt: 1716369300 };
+    render(<App bridge={createInMemoryBridge({ learnedRules: [learned[0], learned[1], third] })} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    const rows = () => within(list).getAllByRole('listitem');
+    // Pressed from the keyboard: the button has the focus when it is pressed.
+    const press = (button: HTMLElement) => { button.focus(); fireEvent.click(button); };
+
+    press(within(rows()[0]).getByRole('button', { name: 'Use now: Contoso Worldwide, Inc. written as Contoso' }));
+    await waitFor(() => expect(within(rows()[0]).queryByRole('button', { name: /Use now/ })).not.toBeInTheDocument());
+    await waitFor(() => expect(rows()[0]).toHaveFocus());
+    expect(rows()[0]).toHaveTextContent('In use · asks before filing');
+
+    // The first of three: the row that took its place.
+    press(within(rows()[0]).getByRole('button', { name: /^Forget:/ }));
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    await waitFor(() => expect(rows()[0]).toHaveFocus());
+    expect(rows()[0]).toHaveTextContent('Quarterly Operations Review written as Meeting Minutes');
+
+    // The last: the one before it.
+    press(within(rows()[1]).getByRole('button', { name: /^Forget:/ }));
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    await waitFor(() => expect(rows()[0]).toHaveFocus());
+
+    // The only one: the section's heading, with "Nothing yet" under it.
+    press(within(rows()[0]).getByRole('button', { name: /^Forget:/ }));
+    expect(await within(dialog).findByText(/Nothing yet\./)).toBeVisible();
+    await waitFor(() => expect(within(dialog).getByText('Learned spellings', { selector: 'summary' })).toHaveFocus());
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+  });
+
+  it('leaves the focus on Forget when forgetting is refused', async () => {
+    const base = createInMemoryBridge({ learnedRules: learned });
+    const houseRuleForget = vi.fn(async () => { throw { code: 'DATABASE_UNAVAILABLE', message: 'the queue database is locked' }; });
+    render(<App bridge={{ ...base, houseRuleForget }} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    const forget = within(within(list).getAllByRole('listitem')[1]).getByRole('button', { name: /^Forget:/ });
+    forget.focus();
+    fireEvent.click(forget);
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('The spelling could not be changed');
+    await act(async () => { await Promise.resolve(); });
+    expect(forget).toHaveFocus();
+  });
+
   it('says a document type spelling renames every later document of that type, in its own words', async () => {
     const type: LearnedRule = { ...learned[1], confirmed: 0 };
     render(<App bridge={createInMemoryBridge({ learnedRules: [type] })} />);

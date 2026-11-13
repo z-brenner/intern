@@ -346,26 +346,43 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     "Use on its own" is the only way a learned spelling is checked: no
     approval checks one. It is the one action here that lets Intern file
     names without a person, so it says what it does - for every later
-    document - before it does it, and Cancel holds the focus. Answered or
-    taken back, the focus goes back to the spelling's row: to the action
-    when the question was taken back, to the row itself once the spelling
-    is used on its own and the action is gone. It went to the page.
+    document - before it does it, and Cancel holds the focus.
+
+    A change that takes away the control that had the focus puts it back
+    in the list rather than on the page, outside the dialog: to the action
+    when the question was taken back; to the spelling's row once it is used
+    on its own or put in use, the button pressed gone; to the row that took
+    a forgotten spelling's place, the one before it at the end of the list,
+    or the section's heading when none is left. A focus the change left
+    where it was - a Forget refused - stays there.
   */
   const [checkingRule, setCheckingRule] = useState<string>();
   const rulesList = useRef<HTMLUListElement>(null);
-  const [focusRule, setFocusRule] = useState<{ id: string; on: 'action' | 'row' }>();
+  const rulesHeading = useRef<HTMLElement>(null);
+  const [focusRule, setFocusRule] = useState<{ id: string; on: 'action' | 'row'; index?: number }>();
   useEffect(() => {
     if (!focusRule || checkingRule !== undefined) return;
-    const row = [...(rulesList.current?.querySelectorAll<HTMLElement>('li[data-rule]') ?? [])].find((li) => li.dataset.rule === focusRule.id);
-    const action = focusRule.on === 'action' ? row?.querySelector<HTMLElement>('button[data-action="use-on-its-own"]') : undefined;
-    (action ?? row)?.focus();
     setFocusRule(undefined);
+    const focused = document.activeElement;
+    if (focused && focused !== document.body && dialog.current?.contains(focused)) return;
+    const rows = [...(rulesList.current?.querySelectorAll<HTMLElement>('li[data-rule]') ?? [])];
+    const row = rows.find((li) => li.dataset.rule === focusRule.id) ?? (focusRule.index === undefined ? undefined : rows[Math.min(focusRule.index, rows.length - 1)]);
+    const action = focusRule.on === 'action' ? row?.querySelector<HTMLElement>('button[data-action="use-on-its-own"]') : undefined;
+    (action ?? row ?? rulesHeading.current)?.focus();
   }, [focusRule, checkingRule, rules]);
   const takeBackCheck = (id: string) => { setCheckingRule(undefined); setFocusRule({ id, on: 'action' }); };
   const checkRule = async (rule: LearnedRule) => {
     setCheckingRule(undefined);
     await changeRule(() => bridge.houseRuleCheck(rule.id, { kind: rule.kind, from: rule.from, to: rule.to }));
     setFocusRule({ id: rule.id, on: 'row' });
+  };
+  const putInUse = async (rule: LearnedRule) => {
+    await changeRule(() => bridge.houseRuleUse(rule.id));
+    setFocusRule({ id: rule.id, on: 'row' });
+  };
+  const forgetRule = async (rule: LearnedRule, index: number) => {
+    await changeRule(() => bridge.houseRuleForget(rule.id));
+    setFocusRule({ id: rule.id, on: 'row', index });
   };
   /*
     The two folders change through a folder picker, never a typed path, and
@@ -566,7 +583,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         <p className="check-hint">Anything Intern is less sure about still waits for you in the queue.</p>
       </details>
       <details className="settings-group settings-advanced">
-        <summary>Learned spellings</summary>
+        <summary ref={rulesHeading}>Learned spellings</summary>
         {/*
           Learned from edits, never from the model, and never on the first
           edit: one change is a decision about one document. The list is the
@@ -576,14 +593,14 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         <p className="section-lead">Intern learns repeated spelling corrections. You can change or forget them here.</p>
         {rules !== undefined && rules.length === 0 && <p className="check-hint">Nothing yet. Change a party's name or a document type in review and it will appear here.</p>}
         {rules !== undefined && rules.length > 0 && <ul ref={rulesList} className="learned-rules" aria-label="Learned spellings">
-          {rules.map((rule) => <li key={rule.id} data-rule={rule.id} tabIndex={-1}>
+          {rules.map((rule, index) => <li key={rule.id} data-rule={rule.id} tabIndex={-1}>
             <span className="rule-kind">{rule.kind === 'party' ? 'Party' : 'Type'}</span>
             <span className="rule-change"><q>{rule.from}</q> written as <strong>{rule.to}</strong></span>
             <span className="rule-state">{!rule.active ? 'Seen once · in use after one more edit' : rule.confirmed > 0 ? 'In use' : 'In use · asks before filing'}</span>
             {checkingRule === rule.id ? <UseOnItsOwnQuestion rule={rule} describedBy={`rule-check-${rule.id}`} onConfirm={() => void checkRule(rule)} onCancel={() => takeBackCheck(rule.id)} /> : <span className="rule-actions">
-              {!rule.active && <button type="button" aria-label={`Use now: ${spellingLabel(rule)}`} onClick={() => void changeRule(() => bridge.houseRuleUse(rule.id))}>Use now</button>}
+              {!rule.active && <button type="button" aria-label={`Use now: ${spellingLabel(rule)}`} onClick={() => void putInUse(rule)}>Use now</button>}
               {rule.active && rule.confirmed === 0 && <button type="button" data-action="use-on-its-own" aria-label={`Use on its own: ${spellingLabel(rule)}`} onClick={() => { setRulesError(''); setCheckingRule(rule.id); }}>Use on its own</button>}
-              <button type="button" aria-label={`Forget: ${spellingLabel(rule)}`} onClick={() => void changeRule(() => bridge.houseRuleForget(rule.id))}>Forget</button>
+              <button type="button" aria-label={`Forget: ${spellingLabel(rule)}`} onClick={() => void forgetRule(rule, index)}>Forget</button>
             </span>}
           </li>)}
         </ul>}
