@@ -20,8 +20,8 @@ use intern_engine::{
     counterparty_view,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
-    is_own_name, lesson_from_edit, named_parties, party_and_more, party_as_named, respelled_party,
-    sanitize_folder_name,
+    is_a_spelling, is_own_name, lesson_from_edit, named_parties, party_and_more, party_as_named,
+    respelled_party, sanitize_folder_name,
     setup::{semantic_probes, validate_semantic_probe},
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -1106,10 +1106,11 @@ impl ProposalRecord {
                         && !holds_words(&to, &from)
                         && (!holds_words(key, &to) || holds_words(&from, &to)))
             });
-            !respelled
-                && keys
-                    .iter()
-                    .any(|key| holds_words(&to, key) || holds_words(key, &to))
+            keys.iter().any(|key| typed_short(key, &from, &to))
+                || (!respelled
+                    && keys
+                        .iter()
+                        .any(|key| holds_words(&to, key) || holds_words(key, &to)))
         })
     }
 
@@ -1297,6 +1298,32 @@ fn name_words(filename: &str, extension: &str) -> String {
         .filter(|(_, suffix)| !extension.is_empty() && suffix.eq_ignore_ascii_case(extension))
         .map_or(name, |(stem, _)| stem);
     HouseRule::key(stem)
+}
+
+/// Whether the key `to`, put in place of the key `from`, is the party
+/// `party` typed short, where `party` holds `from` with words of its own
+/// around it: `to` keeps the words in front of `from` as a run ("trustee of
+/// acme corp" for "acme corporation" beside "trustee of acme corporation",
+/// "estate of j smith" beside "estate of john smith"), or, where two words
+/// or more follow `from`, `from` and the first of them ("city of boston law
+/// dept" beside "city of boston law department"). One word after `from` is
+/// a suffix of the same party ("acme corp inc" beside "acme corporation
+/// inc" is a spelling still); `to` leaving out every word of the party's
+/// own is a short form of the named one ("acme" beside "acme corporation
+/// holdings llc").
+fn typed_short(party: &str, from: &str, to: &str) -> bool {
+    let words = party.split(' ').collect::<Vec<_>>();
+    let Some(run) = runs_of(&words, from)
+        .into_iter()
+        .next()
+        .filter(|run| run.len() < words.len())
+    else {
+        return false;
+    };
+    let front = words[..run.start].join(" ");
+    let after = &words[run.end..];
+    (!front.is_empty() && holds_words(to, &front))
+        || (after.len() >= 2 && holds_words(to, &format!("{from} {}", after[0])))
 }
 
 /// Whether the key `spelling` holds the key `words` as a run of whole
@@ -3055,6 +3082,15 @@ impl Pipeline {
     /// changed again is a change of mind about the document's word, not
     /// about Intern's; restoring the document's own spelling retracts the
     /// rule.
+    ///
+    /// So the change is asked again, traced back to the document's word,
+    /// whether it is a spelling of that word at all (see [`is_a_spelling`]).
+    /// A rule an earlier build learned, "Acme Property -> Tenants from City
+    /// of Boston", respelled as "Tenants from City of Boston Inc", holds no
+    /// more connecting words than the spelling Intern applied, but more than
+    /// "Acme Property": it teaches nothing, and the rule the reviewer
+    /// changed, one this build would not learn, is retracted. Such words
+    /// used to take the rule's place, to be learned on the next such edit.
     fn learn_from_edit(
         &self,
         record: &ProposalRecord,
@@ -3075,7 +3111,7 @@ impl Pipeline {
             Some(applied) => HouseRule::new(lesson.kind, applied.from.clone(), lesson.to),
             None => lesson,
         };
-        if HouseRule::key(&lesson.to) == lesson.from_key() {
+        if HouseRule::key(&lesson.to) == lesson.from_key() || !is_a_spelling(&lesson) {
             self.repository.forget_rule_for(lesson.kind, &lesson.from)?;
         } else if record.names_a_party_anew(&self.repository.active_style()?, extension, approved)
             || record.names_another_party(&lesson)
@@ -6680,6 +6716,87 @@ mod party_choice_tests {
             "Acme Corporation",
             "Acme Corporation Holdings"
         ));
+    }
+
+    /// A party whose name holds the named party's after words of its own -
+    /// "Trustee of", "Estate of", "Friends of" - or before two or more -
+    /// "Law Department" - is another party typed short where the new
+    /// spelling keeps those words in front, or the named party's words and
+    /// the first after them, whatever the rest is shortened to. Each was
+    /// learned as the named party's spelling ("Acme Corporation -> Trustee
+    /// of Acme Corp"), and named every later document giving it, ready ones
+    /// filed without review. A suffix of one word is a spelling still, as
+    /// is a short form that crosses over to no other party.
+    #[test]
+    fn a_longer_party_typed_short_is_another_party() {
+        let edit = |named: &str, other: &str, to: &str| {
+            letter(
+                named,
+                &[named, other],
+                vec![party(named, Support::Cited), party(other, Support::Cited)],
+            )
+            .names_another_party(&HouseRule::new(RuleKind::Party, named, to))
+        };
+        let mut failed = Vec::new();
+        for (named, other, to, another) in [
+            (
+                "Acme Corporation",
+                "Trustee of Acme Corporation",
+                "Trustee of Acme Corp",
+                true,
+            ),
+            (
+                "John Smith",
+                "Estate of John Smith",
+                "Estate of J Smith",
+                true,
+            ),
+            (
+                "City of Victorville",
+                "Friends of City of Victorville",
+                "Friends of Victorville",
+                true,
+            ),
+            (
+                "City of Boston",
+                "City of Boston Law Department",
+                "City of Boston Law Dept",
+                true,
+            ),
+            // The price: the reading's titled spelling of the named party
+            // typed short crosses over to it too.
+            ("John Smith", "Dr John Smith", "Dr J Smith", true),
+            // Still spellings.
+            (
+                "Acme Corporation",
+                "Acme Corporation Inc",
+                "Acme Corp Inc",
+                false,
+            ),
+            (
+                "Acme Corporation",
+                "Trustee of Acme Corporation",
+                "Acme Corp",
+                false,
+            ),
+            (
+                "City of Boston",
+                "City of Boston Law Department",
+                "Boston",
+                false,
+            ),
+            (
+                "Acme Corporation",
+                "Acme Corporation Holdings LLC",
+                "Acme",
+                false,
+            ),
+        ] {
+            if edit(named, other, to) != another {
+                failed.push(format!("{named} -> {to} beside {other}"));
+            }
+        }
+        assert!(failed.is_empty(), "{failed:#?}");
     }
 }
 

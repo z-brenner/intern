@@ -4391,6 +4391,21 @@ fn approved_twice(
     other: &'static str,
     approved: &str,
 ) -> ChosenTwice {
+    approved_twice_after(&[], (relation, named), other, approved, (relation, named))
+}
+
+/// As [`approved_twice`], for the two agreements `named`, a relation and
+/// the parties their name gives (none, for a name that gives no party),
+/// where an earlier build had learned the party spellings `rules`, each
+/// "from -> to", and applies them: the name gives each party as its rule
+/// spells it. The third agreement names the parties `third`.
+fn approved_twice_after(
+    rules: &[(&str, &str)],
+    (relation, named): (PartyRelation, &[&'static str]),
+    other: &'static str,
+    approved: &str,
+    third: (PartyRelation, &[&'static str]),
+) -> ChosenTwice {
     let temp = tempdir().unwrap();
     let inbox = temp.path().join("inbox");
     std::fs::create_dir_all(&inbox).unwrap();
@@ -4399,42 +4414,71 @@ fn approved_twice(
         ("2024-05-03", "May 3, 2024"),
         ("2024-06-07", "June 7, 2024"),
     ];
-    let parties = named.join(" and ");
-    let mut texts = dates
-        .iter()
-        .take(2)
-        .map(|(_, written)| {
-            parsed(&format!(
-                "Employment Agreement signed {written} by {parties}, which is related to {other}."
-            ))
-        })
-        .collect::<Vec<_>>();
-    texts.push(parsed(&format!(
-        "Employment Agreement signed June 7, 2024 by {parties}."
-    )));
-    let replies = dates
-        .iter()
-        .map(|(iso, written)| ModelProposal {
+    let reading = |index: usize| {
+        let (iso, written) = dates[index];
+        let (relation, named) = if index < 2 {
+            (relation, named)
+        } else {
+            (third.0, third.1)
+        };
+        let parties = named.join(" and ");
+        let signed = if named.is_empty() {
+            format!("Employment Agreement signed {written}")
+        } else {
+            format!("Employment Agreement signed {written} by {parties}")
+        };
+        let text = if index < 2 {
+            format!("{signed}, which is related to {other}.")
+        } else {
+            format!("{signed}.")
+        };
+        let reply = ModelProposal {
             parties: named.iter().map(|party| (*party).to_owned()).collect(),
             party_relation: relation,
-            description: format!(
-                "Employment agreement {} {parties} covering duties, salary, and term.",
-                relation.as_str()
-            ),
+            description: if named.is_empty() {
+                "Employment agreement covering duties, salary, and term.".to_owned()
+            } else {
+                format!(
+                    "Employment agreement {} {parties} covering duties, salary, and term.",
+                    relation.as_str()
+                )
+            },
             evidence: Evidence {
-                parties: vec![format!("by {parties}")],
+                parties: if named.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![format!("by {parties}")]
+                },
                 ..dated_proposal(iso, written).evidence
             },
             ..dated_proposal(iso, written)
-        })
-        .collect();
+        };
+        (parsed(&text), reply)
+    };
+    let (texts, replies) = (0..dates.len()).map(reading).unzip();
+    let mut found = named.to_vec();
+    for party in [other].iter().chain(third.1) {
+        if !found.contains(party) {
+            found.push(party);
+        }
+    }
     let (pipeline, filing) = reading_pipeline(
         temp.path(),
         texts,
         replies,
-        &named.iter().copied().chain([other]).collect::<Vec<_>>(),
+        &found,
         DestinationLayout::Party,
     );
+    let database = Connection::open(temp.path().join("queue.sqlite3")).unwrap();
+    for (from, to) in rules {
+        database
+            .execute(
+                "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, created_at, updated_at)
+                 VALUES ('party', ?1, ?2, ?3, 2, unixepoch(), unixepoch())",
+                rusqlite::params![intern_engine::HouseRule::key(from), from, to],
+            )
+            .unwrap();
+    }
     let queued = pipeline
         .enqueue_files(&[source(&inbox, "a.pdf"), source(&inbox, "b.pdf")])
         .unwrap()
@@ -4443,12 +4487,26 @@ fn approved_twice(
         .collect::<Vec<_>>();
     pipeline.run_until_idle().unwrap();
     let first = record_of(&pipeline, queued[0]);
+    let spelled = named
+        .iter()
+        .map(|party| {
+            rules
+                .iter()
+                .find(|(from, _)| from == party)
+                .map_or(*party, |(_, to)| *to)
+        })
+        .collect::<Vec<_>>()
+        .join(" and ");
     assert_eq!(
         first.filename,
-        format!(
-            "2024-04-12 Employment Agreement {} {parties}.pdf",
-            relation.as_str()
-        )
+        match relation {
+            _ if named.is_empty() => "2024-04-12 Employment Agreement.pdf".to_owned(),
+            PartyRelation::None => format!("2024-04-12 Employment Agreement - {spelled}.pdf"),
+            relation => format!(
+                "2024-04-12 Employment Agreement {} {spelled}.pdf",
+                relation.as_str()
+            ),
+        }
     );
     assert_eq!(first.party_choices(), vec![other]);
     for (index, (date, _)) in dates.iter().take(2).enumerate() {
@@ -5127,6 +5185,181 @@ fn a_party_respelled_into_words_with_a_connecting_word_teaches_nothing() {
             assert_eq!(respelled.reported, [reported; 2], "{approved}");
         }
     }
+}
+
+/// The name a third agreement is filed under, giving the parties `named`
+/// behind `relation`, as Intern composes it from the document's words.
+fn third_named(relation: PartyRelation, named: &[&str]) -> String {
+    let parties = named.join(" and ");
+    match relation {
+        _ if named.is_empty() => "2024-06-07 Employment Agreement.pdf".to_owned(),
+        PartyRelation::None => format!("2024-06-07 Employment Agreement - {parties}.pdf"),
+        relation => format!(
+            "2024-06-07 Employment Agreement {} {parties}.pdf",
+            relation.as_str()
+        ),
+    }
+}
+
+/// A party the document names typed short after words of its own, a party
+/// joined to another however the joining words are typed, and a type given
+/// a party are no spelling. Approved twice, each was learned, and the third
+/// agreement, ready, was filed without review under those words:
+/// "2024-06-07 Employment Agreement for Trustee of Acme Corp.pdf" where
+/// "Trustee of Acme Corporation" is offered, "... with Estate of J Smith"
+/// where "Estate of John Smith" is, "... with Acme Corp – Jane Doe" (an en
+/// dash), "... between John Smith and Jane Doe and Acme Corporation", "...
+/// with Smith v Acme Corp", and "Employment Agreement - Contoso Ltd between
+/// John Smith and Acme Corporation" from a party typed onto a name that gave
+/// none. Now nothing is learned, and the third keeps the document's words.
+#[test]
+fn a_party_typed_short_joined_to_another_or_given_to_a_type_teaches_nothing() {
+    use PartyRelation::{Between, For, None, With};
+    let acme = "Acme Corporation";
+    let smith = "John Smith";
+    let beacon = "Beacon Staffing LLC";
+    let both = (Between, &[smith, acme][..]);
+    let mut failed = Vec::new();
+    for (relation, named, other, approved, third) in [
+        (
+            For,
+            &[acme][..],
+            "Trustee of Acme Corporation",
+            "Employment Agreement for Trustee of Acme Corp",
+            Option::None,
+        ),
+        (
+            With,
+            &[smith],
+            "Estate of John Smith",
+            "Employment Agreement with Estate of J Smith",
+            Option::None,
+        ),
+        (
+            For,
+            &["City of Victorville"],
+            "Friends of City of Victorville",
+            "Employment Agreement for Friends of Victorville",
+            Option::None,
+        ),
+        (
+            With,
+            &["City of Boston"],
+            "City of Boston Law Department",
+            "Employment Agreement with City of Boston Law Dept",
+            Option::None,
+        ),
+        (
+            With,
+            &[acme],
+            beacon,
+            "Employment Agreement with Acme Corp \u{2013} Jane Doe",
+            Option::None,
+        ),
+        (
+            None,
+            &[acme],
+            beacon,
+            "Employment Agreement - Contoso Ltd \u{2013} Acme Corporation",
+            Option::None,
+        ),
+        (
+            Between,
+            &[smith, acme],
+            beacon,
+            "Employment Agreement between John Smith and Jane Doe and Acme Corporation",
+            Option::None,
+        ),
+        (
+            Between,
+            &[smith, acme],
+            beacon,
+            "Employment Agreement between John Smith & Mary Smith and Acme Corporation",
+            Option::None,
+        ),
+        (
+            With,
+            &[acme],
+            beacon,
+            "Employment Agreement with Acme Corporation and Jane Doe",
+            Option::None,
+        ),
+        (
+            None,
+            &[acme],
+            beacon,
+            "Employment Agreement - Smith v Acme Corp",
+            Option::None,
+        ),
+        (
+            With,
+            &[acme],
+            beacon,
+            "Employment Agreement with Jane Doe on behalf of Acme Corp",
+            Option::None,
+        ),
+        (
+            Between,
+            &[smith, acme],
+            beacon,
+            "Employment Agreement - Jane Doe between John Smith and Acme Corporation",
+            Option::None,
+        ),
+        (
+            None,
+            &[],
+            beacon,
+            "Employment Agreement - Contoso Ltd",
+            Some(both),
+        ),
+        (
+            None,
+            &[],
+            beacon,
+            "Employment Agreement for Contoso Ltd",
+            Some(both),
+        ),
+        (
+            None,
+            &[],
+            "Contoso Ltd",
+            "Employment Agreement - Contoso",
+            Some(both),
+        ),
+    ] {
+        let third = third.unwrap_or((relation, named));
+        let edited = approved_twice_after(&[], (relation, named), other, approved, third);
+        let kept = third_named(third.0, third.1);
+        if !edited.learned.is_empty() || edited.third != kept {
+            failed.push(format!(
+                "{approved}: learned {:?}, the third filed as {}",
+                edited.learned, edited.third
+            ));
+        }
+    }
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// A rule an earlier build learned that this one would not - "Acme
+/// Property -> Tenants from City of Boston" - respelled again in review
+/// into words that are no spelling of the document's own either ("Tenants
+/// from City of Boston Inc"), teaches nothing, and the rule the reviewer
+/// changed is retracted. The new words were put in the rule's place, to be
+/// learned on the next such edit.
+#[test]
+fn a_rule_an_earlier_build_learned_respelled_into_no_spelling_is_retracted() {
+    let edited = approved_twice_after(
+        &[("Acme Property", "Tenants from City of Boston")],
+        (PartyRelation::To, &["Acme Property"]),
+        "Beacon Staffing LLC",
+        "Employment Agreement to Tenants from City of Boston Inc",
+        (PartyRelation::To, &["Acme Property"]),
+    );
+    assert!(edited.learned.is_empty(), "learned {:?}", edited.learned);
+    assert_eq!(
+        edited.third,
+        "2024-06-07 Employment Agreement to Acme Property.pdf"
+    );
 }
 
 /// A type lengthened in front of the party the name gave, now behind
