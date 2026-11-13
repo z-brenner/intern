@@ -236,14 +236,32 @@ pub fn compose_styled_filename(
 /// something else. "Trustee for Acme Corp" for "Acme Corporation", a party
 /// the document names typed short, and "Tenants from City of Boston" for
 /// "Acme Property", words the document gives as no party at all, teach
-/// nothing. "and" and "of" are no such words, being as common inside a
-/// party's name ("Johnson and Johnson", "Friends of City of Victorville")
-/// as between two. The price is a party respelled on purpose into such
-/// words ("CDC" into "Centers for Disease Control", "Acme Ltd" into "Acme
-/// (UK) Ltd"), which teaches nothing and is made again by hand; a type may
-/// hold any of them ("Application for Certification"). What the reviewer
-/// put in the party's place is still read for filing (see
-/// [`respelled_party`]).
+/// nothing. So do words that join two parties outside the name's grammar
+/// ("Smith v Acme Corp", "vs", "versus", "Jane Doe on behalf of Acme
+/// Corp", "Acme Corp by its Trustee"), and "and" or "&" on a side of a
+/// "between", or beside a party of two words or more kept whole ("Acme
+/// Corporation and Jane Doe"). A dash is found however it was typed ("–",
+/// "--") and a space whatever it is; " (" is a note only where its
+/// parenthetical ends the words ("Acme (signed)"), so "Acme (UK) Ltd" is a
+/// spelling; and a word that ends the words introduces nothing ("Swiss
+/// Re"). "and" and "of" are otherwise no such words, being as common
+/// inside a party's name ("Johnson and Johnson", "Friends of City of
+/// Victorville") as between two. The price is a party respelled on purpose
+/// into such words ("CDC" into "Centers for Disease Control", "Acme" into
+/// "Acme (UK)", "Acme Property" into "Acme Property and Casualty"), which
+/// teaches nothing and is made again by hand; a type may hold most of them
+/// ("Application for Certification"). What the reviewer put in the party's
+/// place is still read for filing (see [`respelled_party`]).
+///
+/// A type is never lengthened into one given a party (see
+/// [`is_a_spelling`]): with the divider or "between" ("Employment
+/// Agreement - Jane Doe" in front of the party clause kept), or a party
+/// added behind a connecting word to a name that gave none ("Employment
+/// Agreement - Contoso Ltd", "Employment Agreement for Contoso Ltd"), which
+/// [`approved_party`] reads as that party. Learned, it would name every
+/// later document of the type for that party. The price is a name that gave
+/// no party lengthened on purpose with a connecting word ("Invoice for
+/// March"), made again by hand.
 pub fn lesson_from_edit(
     proposal: &ValidatedProposal,
     extension: &str,
@@ -296,6 +314,10 @@ fn read_edit(
     }
     let shape = NameShape::of(proposal, &before, &extension)?;
     let rule = match shape.clause {
+        // A party added after the type of a name that gave none, behind a
+        // connecting word ("Employment Agreement - Contoso Ltd", "... for
+        // Contoso Ltd"), as `approved_party` reads it: not a longer type.
+        None if adds_a_party(&after, &shape.type_segment) => return None,
         None => HouseRule::new(
             RuleKind::DocumentType,
             proposal.document_type.clone()?,
@@ -329,7 +351,47 @@ fn read_edit(
             }
         }
     };
-    rule.is_meaningful().then_some(rule)
+    // A type given a party is no spelling (see `is_a_spelling`); a party's
+    // new words were asked as much by `PartyClause::lesson`.
+    (rule.is_meaningful() && (rule.kind == RuleKind::Party || is_a_spelling(&rule))).then_some(rule)
+}
+
+/// Whether `rule` could be applied to every later name as a spelling: its
+/// `to` holds no more of the words that set one party apart from another,
+/// or from the type, than its `from` does. For a party (see
+/// [`PartyClause::lesson`]), no connecting word of the name's grammar, a
+/// note's start, or words that join two parties outside it ("Smith v Acme
+/// Corp", "Jane Doe on behalf of Acme Corp", "Acme Corp by its Trustee"),
+/// nor "and" or "&" where the words hold a party of two words or more
+/// whole and another beside it ("Acme Corporation and Jane Doe"). For a
+/// type, no divider, "between", or a caption's "v", "vs" or "versus" -
+/// "Employment Agreement - Jane Doe" is a type given a party. A rule
+/// traced back to the document's own word, after a house rule respelled
+/// it, is asked this again of that word.
+pub fn is_a_spelling(rule: &HouseRule) -> bool {
+    match rule.kind {
+        RuleKind::Party => !holds_another_separator(&rule.to, &rule.from, false),
+        RuleKind::DocumentType => !TYPE_GIVEN_A_PARTY
+            .iter()
+            .any(|mark| mark.count(&rule.to, false) > mark.count(&rule.from, true)),
+    }
+}
+
+/// Whether `name` is `type_segment`, a connecting word naming puts before
+/// a party - " - " and "between" among them, in any case and however the
+/// dash or the spaces were typed - and more words: a party added to a name
+/// that gave none.
+fn adds_a_party(name: &str, type_segment: &str) -> bool {
+    name.strip_prefix(type_segment)
+        .filter(|rest| rest.starts_with(char::is_whitespace))
+        .is_some_and(|rest| {
+            let rest = spaced(rest).to_lowercase();
+            PartyRelation::ALL.into_iter().any(|relation| {
+                rest.strip_prefix(connector_word(relation))
+                    .and_then(|more| more.strip_prefix(' '))
+                    .is_some_and(|more| !HouseRule::key(more).is_empty())
+            })
+        })
 }
 
 /// The parties the name `proposed` gives, each exactly as the name writes
@@ -553,9 +615,14 @@ impl PartyClause {
     /// "Trustee for Acme Corp" or "Tenants from City of Boston" for "Acme
     /// Corporation" names another party, or the party and something else,
     /// and learned would name every later document giving that party.
+    ///
+    /// On a side of a "between", "and" and "&" are counted too, being the
+    /// clause's own words for joining two parties: "Jane Doe and Acme
+    /// Corporation" for "Acme Corporation" names two.
     fn lesson(&self, approved: &str) -> Option<HouseRule> {
+        let between = self.connector == connector_word(PartyRelation::Between);
         self.respelling(approved)
-            .filter(|edit| !holds_another_separator(&edit.to, &edit.from))
+            .filter(|edit| !holds_another_separator(&edit.to, &edit.from, between))
     }
 
     /// The one party the reviewer respelled, if exactly one was, and the
@@ -591,20 +658,17 @@ impl PartyClause {
     /// from Acme Property Inc" for "Acme Property" - or in front of one,
     /// another party or a note after it: "Acme Property from Jane Doe",
     /// "Acme Property re Lease". The connecting word or the note is found in
-    /// the words as written, in any case, since a key has no " - " or " (".
+    /// the words as written, in any case, since a key has no " - " or " ("
+    /// (see [`separators_in`]).
     fn keeps(&self, words: &str, from: &str, segment: &str) -> bool {
-        let lower = words.to_ascii_lowercase();
+        let words = spaced(words);
         [from, segment].into_iter().any(|kept| {
             let kept = HouseRule::key(kept);
             let holds = |side: &str| {
                 !kept.is_empty()
                     && format!(" {} ", HouseRule::key(side)).contains(&format!(" {kept} "))
             };
-            separators().any(|separator| {
-                lower
-                    .match_indices(separator.as_str())
-                    .any(|(at, _)| holds(&words[..at]) || holds(&words[at + separator.len()..]))
-            })
+            separators_in(&words).any(|(at, end)| holds(&words[..at]) || holds(&words[end..]))
         })
     }
 }
@@ -629,16 +693,11 @@ const NOTES_AFTER_A_PARTY: [&str; 6] = [
 /// PROPERTY re Lease" or "Acme (signed)" for the party "Carl Malamud",
 /// "Acme Property" or "Acme". Such words name the party and something
 /// else. The connecting word or the note is found in the words as written,
-/// in any case, since a key has no " - " or " (".
+/// in any case, since a key has no " - " or " (" (see [`separators_in`]).
 pub fn party_and_more(words: &str, party: &str) -> bool {
     let party = HouseRule::key(party);
-    let lower = words.to_ascii_lowercase();
-    !party.is_empty()
-        && separators().any(|separator| {
-            lower
-                .match_indices(separator.as_str())
-                .any(|(at, _)| HouseRule::key(&words[..at]) == party)
-        })
+    let words = spaced(words);
+    !party.is_empty() && separators_in(&words).any(|(at, _)| HouseRule::key(&words[..at]) == party)
 }
 
 /// What begins something other than more of a party's name: a connecting
@@ -651,29 +710,174 @@ fn separators() -> impl Iterator<Item = String> {
         .chain(NOTES_AFTER_A_PARTY.map(str::to_owned))
 }
 
-/// Whether `words` hold one of [`separators`] more often than the party
-/// `party` does: a connecting word or a note's word as a whole word, as
-/// house style compares spellings ([`HouseRule::key`]) - "for" in "Trustee
-/// for Acme Corp", "re" in "Tenants RE: the Lease", "from" at the start of
-/// "from City of Boston" - and " - " or " (", which a key has not, as
-/// written. "Centers for Disease Control" holds "for" no more often than
-/// "Center for Disease Control"; "Trustee for Center for Disease Control"
-/// holds it more often.
-fn holds_another_separator(words: &str, party: &str) -> bool {
-    separators().any(|separator| {
-        let word = HouseRule::key(&separator);
-        let count = |text: &str| {
-            if word.is_empty() {
-                text.matches(separator.as_str()).count()
+/// Where [`separators`] are found in `words`, [`spaced`] already, in any
+/// case, as byte ranges: each one that begins something other than more of
+/// the name (see [`begins_more`]).
+fn separators_in(words: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
+    let lower = words.to_ascii_lowercase();
+    separators()
+        .flat_map(move |separator| {
+            lower
+                .match_indices(separator.as_str())
+                .map(|(at, _)| (at, at + separator.len()))
+                .collect::<Vec<_>>()
+        })
+        .filter(|&(at, end)| begins_more(words, at, end))
+}
+
+/// Whether the separator `words[at..end]` begins something other than more
+/// of a party's name: always, but for " (", which begins a note only where
+/// its parenthetical ends the words - "Acme (signed)", "Smith (Trustee)" -
+/// and not where more of the name follows its ")", as in "Acme (UK) Ltd".
+fn begins_more(words: &str, at: usize, end: usize) -> bool {
+    words[at..end] != *" (" || {
+        let rest = &words[end..];
+        rest.find(')')
+            .is_none_or(|close| !rest[close + 1..].chars().any(char::is_alphanumeric))
+    }
+}
+
+/// `words` as a separator is found in them: every dash a divider is typed
+/// with ("–", "—", "‐", "−", "－") written "-", a token of dashes alone
+/// ("--") written "-", and every space - a non-breaking one, a tab, two in
+/// a row - one " ". So "Acme Corp – Jane Doe" and "Acme Corp -- Jane Doe"
+/// are divided as "Acme Corp - Jane Doe" is, and " for " is found between
+/// non-breaking spaces. Words are never changed otherwise.
+fn spaced(words: &str) -> String {
+    words
+        .split_whitespace()
+        .map(|token| {
+            let token = token
+                .chars()
+                .map(|character| match character {
+                    '\u{2010}'..='\u{2015}' | '\u{2212}' | '\u{fe58}' | '\u{fe63}' | '\u{ff0d}' => {
+                        '-'
+                    }
+                    other => other,
+                })
+                .collect::<String>();
+            if token.chars().all(|character| character == '-') {
+                "-".to_owned()
             } else {
-                HouseRule::key(text)
-                    .split(' ')
-                    .filter(|held| *held == word)
+                token
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A mark that sets a party apart from another, or from the type, as
+/// [`holds_another_separator`] and [`is_a_spelling`] count it.
+#[derive(Clone, Copy)]
+enum Mark {
+    /// Whole words, as house style compares spellings ([`HouseRule::key`]):
+    /// "for" in "Trustee FOR Acme Corp", "re" in "RE: the Lease". Words that
+    /// end new words introduce nothing: "Swiss Re" for "Swiss Reinsurance
+    /// Company Ltd" holds no note. A party's own name counts all it holds,
+    /// so "Swiss Re Ltd" for "Swiss Re" holds no more.
+    Words(&'static str),
+    /// Written so, in [`spaced`] words, where it begins something other
+    /// than more of the name (see [`begins_more`]): " - ", " (", and the
+    /// " v " of a caption, in lower case so the "V" of "Fund V" is none.
+    Written(&'static str),
+}
+
+impl Mark {
+    /// How many times `text` holds the mark, words that end it among them
+    /// where `ending`.
+    fn count(self, text: &str, ending: bool) -> usize {
+        match self {
+            Self::Words(marked) => {
+                let marked = marked.split(' ').collect::<Vec<_>>();
+                let key = HouseRule::key(text);
+                let words = key.split(' ').collect::<Vec<_>>();
+                words
+                    .windows(marked.len())
+                    .enumerate()
+                    .filter(|(at, run)| {
+                        *run == marked && (ending || at + marked.len() < words.len())
+                    })
                     .count()
             }
-        };
-        count(words) > count(party)
-    })
+            Self::Written(marked) => {
+                let text = spaced(text);
+                text.match_indices(marked)
+                    .filter(|(at, _)| begins_more(&text, *at, at + marked.len()))
+                    .count()
+            }
+        }
+    }
+}
+
+/// The connecting words naming puts before a party, and the starts of a
+/// note, as [`separators`] gives them, as they are counted: a word as a
+/// whole word ("re" of " re: " too), " - " and " (" as written.
+fn separator_marks() -> impl Iterator<Item = Mark> {
+    PartyRelation::ALL
+        .into_iter()
+        .map(|relation| match connector_word(relation) {
+            "-" => Mark::Written(" - "),
+            word => Mark::Words(word),
+        })
+        .chain(NOTES_AFTER_A_PARTY.into_iter().map(|note| {
+            let word = note.trim().trim_end_matches(':');
+            if word.chars().all(char::is_alphanumeric) {
+                Mark::Words(word)
+            } else {
+                Mark::Written(note)
+            }
+        }))
+}
+
+/// Words that join two parties outside the name's grammar: a case's
+/// caption ("Smith v Acme Corp", "v.", "vs", "versus"), and a party acting
+/// for another ("Jane Doe on behalf of Acme Corp", "Acme Corp by its
+/// Trustee"). "c/o" and "d/b/a" cannot be typed in a name.
+const JOINING: [Mark; 6] = [
+    Mark::Written(" v "),
+    Mark::Written(" v. "),
+    Mark::Words("vs"),
+    Mark::Words("versus"),
+    Mark::Words("by"),
+    Mark::Words("on behalf of"),
+];
+
+/// The words that join the two sides of a "between", which join a party to
+/// another wherever they are typed beside the party kept whole.
+const AND: [Mark; 2] = [Mark::Words("and"), Mark::Written(" & ")];
+
+/// What a type is never lengthened with, but a type given a party is: the
+/// divider naming puts before a party, "between", and a caption's "v".
+const TYPE_GIVEN_A_PARTY: [Mark; 6] = [
+    Mark::Written(" - "),
+    Mark::Words("between"),
+    Mark::Written(" v "),
+    Mark::Written(" v. "),
+    Mark::Words("vs"),
+    Mark::Words("versus"),
+];
+
+/// Whether `words` hold a mark of another party more often than the party
+/// `party` does (see [`Mark`]): a connecting word or a note's start (see
+/// [`separator_marks`]) - "for" in "Trustee for Acme Corp", "re" in "Tenants
+/// RE: the Lease", "from" at the start of "from City of Boston", " - "
+/// however its dash is typed - or a word joining two parties outside the
+/// name's grammar (see [`JOINING`]). "Centers for Disease Control" holds
+/// "for" no more often than "Center for Disease Control"; "Trustee for
+/// Center for Disease Control" holds it more often. "and" and "&" (see
+/// [`AND`]) are counted on a side of a "between", where `between`, and
+/// where `words` hold a party of two words or more whole beside more:
+/// "Acme Corporation and Jane Doe", but not "Johnson and Johnson" for
+/// "Johnson", nor "Barnes and Noble" for "Barnes Noble".
+fn holds_another_separator(words: &str, party: &str, between: bool) -> bool {
+    let kept = HouseRule::key(party);
+    let joined = between
+        || (kept.split(' ').count() >= 2
+            && format!(" {} ", HouseRule::key(words)).contains(&format!(" {kept} ")));
+    separator_marks()
+        .chain(JOINING)
+        .chain(AND.into_iter().filter(|_| joined))
+        .any(|mark| mark.count(words, false) > mark.count(party, true))
 }
 
 /// The words of `name` in front of a connecting word that the party `kept`
@@ -1837,12 +2041,6 @@ mod tests {
                 PartyRelation::With,
                 "Grant Agreement with Centers for Disease Control",
             ),
-            (
-                "Lease",
-                &["Acme Ltd"][..],
-                PartyRelation::With,
-                "Lease with Acme (UK) Ltd",
-            ),
         ] {
             let respelled = proposal(Some(document_type), parties, relation);
             let approved = format!("2026-04-01 {approved}.pdf");
@@ -2044,6 +2242,355 @@ mod tests {
         ] {
             assert!(!party_and_more(words, party), "{words}");
         }
+    }
+
+    /// Words that join a party to another, or a type given a party, are no
+    /// spelling, however the joining words are typed. Each of these was
+    /// learned, after two such edits, and named every later document,
+    /// ready ones filed without review: "Acme Corporation -> Acme Corp –
+    /// Jane Doe" (an en dash), "Acme Corporation -> Jane Doe and Acme
+    /// Corporation" (one side of a "between"), "Acme Corporation -> Smith v
+    /// Acme Corp" (a case's caption), the type "Employment Agreement ->
+    /// Employment Agreement - Contoso Ltd" (a party added to a name that
+    /// gave none) or "Employment Agreement - Jane Doe" (in front of the
+    /// party clause kept).
+    #[test]
+    fn a_party_joined_to_another_or_a_type_given_a_party_teaches_nothing() {
+        let mut failed = Vec::new();
+        for (document_type, parties, relation, approved) in [
+            // A party added after the type of a name that gave none.
+            (
+                "Employment Agreement",
+                &[][..],
+                PartyRelation::None,
+                "Employment Agreement - Contoso Ltd",
+            ),
+            (
+                "Employment Agreement",
+                &[][..],
+                PartyRelation::None,
+                "Employment Agreement for Contoso Ltd",
+            ),
+            (
+                "Employment Agreement",
+                &[][..],
+                PartyRelation::None,
+                "Employment Agreement with Contoso Ltd",
+            ),
+            (
+                "Employment Agreement",
+                &[][..],
+                PartyRelation::None,
+                "Employment Agreement between Contoso Ltd and Jane Doe",
+            ),
+            (
+                "Employment Agreement",
+                &[][..],
+                PartyRelation::None,
+                "Employment Agreement \u{2013} Contoso Ltd",
+            ),
+            // The divider typed with another dash, or other spaces.
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement with Acme Corp \u{2013} Jane Doe",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement with Acme Corp \u{2014} Jane Doe",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement with Acme Corp -- Jane Doe",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement with Acme Corp\u{a0}-\u{a0}Jane Doe",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::None,
+                "Employment Agreement - Contoso Ltd \u{2013} Acme Corporation",
+            ),
+            // Two parties on one side of a "between".
+            (
+                "Employment Agreement",
+                &["John Smith", "Acme Corporation"][..],
+                PartyRelation::Between,
+                "Employment Agreement between John Smith and Jane Doe and Acme Corporation",
+            ),
+            (
+                "Employment Agreement",
+                &["John Smith", "Acme Corporation"][..],
+                PartyRelation::Between,
+                "Employment Agreement between John Smith & Mary Smith and Acme Corporation",
+            ),
+            (
+                "Employment Agreement",
+                &["John Smith", "Acme Corporation"][..],
+                PartyRelation::Between,
+                "Employment Agreement between John Smith and Acme Corporation and Beacon LLC",
+            ),
+            (
+                "Employment Agreement",
+                &["John Smith", "Acme Corporation"][..],
+                PartyRelation::Between,
+                "Employment Agreement between John and Mary Smith and Acme Corporation",
+            ),
+            // The party kept whole with another joined to it.
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement with Acme Corporation and Jane Doe",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement with Jane Doe and Acme Corporation",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement with Acme Corporation & Jane Doe",
+            ),
+            // Words that join two parties outside the name's grammar.
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::None,
+                "Employment Agreement - Smith v Acme Corp",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::None,
+                "Employment Agreement - Smith v. Acme Corp",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::None,
+                "Employment Agreement - Smith vs Acme Corp",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::None,
+                "Employment Agreement - Smith versus Acme Corp",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement with Jane Doe on behalf of Acme Corp",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement with Acme Corp by its Trustee",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement with Acme Corp by Jane Doe",
+            ),
+            // A type given a party in front of the party clause kept.
+            (
+                "Employment Agreement",
+                &["John Smith", "Acme Corporation"][..],
+                PartyRelation::Between,
+                "Employment Agreement - Jane Doe between John Smith and Acme Corporation",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement between Jane Doe with Acme Corporation",
+            ),
+            (
+                "Complaint",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Complaint Smith v Acme with Acme Corporation",
+            ),
+            (
+                "Invoice",
+                &["Acme"][..],
+                PartyRelation::None,
+                "Invoice - Contoso - Acme",
+            ),
+            // The price: a type lengthened on a name that gave no party,
+            // a party put in a note's parenthesis, or a party of two words
+            // or more given another with "and", is made again by hand.
+            ("Invoice", &[][..], PartyRelation::None, "Invoice for March"),
+            (
+                "Lease",
+                &["Acme"][..],
+                PartyRelation::With,
+                "Lease with Acme (UK)",
+            ),
+            (
+                "Lease",
+                &["Acme Property"][..],
+                PartyRelation::With,
+                "Lease with Acme Property and Casualty",
+            ),
+        ] {
+            let joined = proposal(Some(document_type), parties, relation);
+            let approved = format!("2026-04-01 {approved}.pdf");
+            if let Some(lesson) = lesson_from_edit(&joined, "pdf", &name(&joined), &approved) {
+                failed.push(format!(
+                    "{approved}: {:?} {} -> {}",
+                    lesson.kind, lesson.from, lesson.to
+                ));
+            }
+        }
+
+        // Still spellings: a parenthesis with more of the name after it, a
+        // "re" that ends the words, "and" or "&" in a party of one word or
+        // in words that do not hold the party whole, a "V" in capitals, a
+        // comma, and a type with no party in it.
+        for (document_type, parties, relation, approved, kind, from, to) in [
+            (
+                "Lease",
+                &["Acme Ltd"][..],
+                PartyRelation::With,
+                "Lease with Acme (UK) Ltd",
+                RuleKind::Party,
+                "Acme Ltd",
+                "Acme (UK) Ltd",
+            ),
+            (
+                "Lease",
+                &["Acme"][..],
+                PartyRelation::With,
+                "Lease with Acme (UK) Ltd",
+                RuleKind::Party,
+                "Acme",
+                "Acme (UK) Ltd",
+            ),
+            (
+                "Reinsurance Agreement",
+                &["Swiss Reinsurance Company Ltd"][..],
+                PartyRelation::With,
+                "Reinsurance Agreement with Swiss Re",
+                RuleKind::Party,
+                "Swiss Reinsurance Company Ltd",
+                "Swiss Re",
+            ),
+            (
+                "Reinsurance Agreement",
+                &["Swiss Re"][..],
+                PartyRelation::With,
+                "Reinsurance Agreement with Swiss Re Ltd",
+                RuleKind::Party,
+                "Swiss Re",
+                "Swiss Re Ltd",
+            ),
+            (
+                "Lease",
+                &["Johnson"][..],
+                PartyRelation::With,
+                "Lease with Johnson & Johnson",
+                RuleKind::Party,
+                "Johnson",
+                "Johnson & Johnson",
+            ),
+            (
+                "Lease",
+                &["Barnes Noble"][..],
+                PartyRelation::With,
+                "Lease with Barnes and Noble",
+                RuleKind::Party,
+                "Barnes Noble",
+                "Barnes and Noble",
+            ),
+            (
+                "Subscription Agreement",
+                &["Acme Fund"][..],
+                PartyRelation::With,
+                "Subscription Agreement with Acme Fund V",
+                RuleKind::Party,
+                "Acme Fund",
+                "Acme Fund V",
+            ),
+            (
+                "Lease",
+                &["Acme Corp"][..],
+                PartyRelation::With,
+                "Lease with Acme Corp, Inc.",
+                RuleKind::Party,
+                "Acme Corp",
+                "Acme Corp, Inc.",
+            ),
+            (
+                "Invoice",
+                &[][..],
+                PartyRelation::None,
+                "Services Invoice",
+                RuleKind::DocumentType,
+                "Invoice",
+                "Services Invoice",
+            ),
+            (
+                "Employment Agreement",
+                &["John Smith", "Acme Corporation"][..],
+                PartyRelation::Between,
+                "Executive Employment Agreement between John Smith and Acme Corporation",
+                RuleKind::DocumentType,
+                "Employment Agreement",
+                "Executive Employment Agreement",
+            ),
+        ] {
+            let respelled = proposal(Some(document_type), parties, relation);
+            let approved = format!("2026-04-01 {approved}.pdf");
+            let lesson = lesson_from_edit(&respelled, "pdf", &name(&respelled), &approved)
+                .map(|lesson| (lesson.kind, lesson.from, lesson.to));
+            if lesson != Some((kind, from.to_owned(), to.to_owned())) {
+                failed.push(format!("{approved}: {lesson:?}, not a spelling"));
+            }
+        }
+
+        // A parenthesis with more of the name after it is part of the
+        // party, for filing too; one that ends the words is a note.
+        let letter = proposal(Some("Letter"), &["Smith"], PartyRelation::To);
+        for (approved, read) in [
+            ("Letter to Smith (UK) Ltd", Some("Smith (UK) Ltd")),
+            ("Letter to Smith (Trustee)", None),
+            ("Letter to Smith (Trustee) re Lease", None),
+        ] {
+            let approved = format!("2026-04-01 {approved}.pdf");
+            let respelled =
+                respelled_party(&letter, "pdf", &name(&letter), &approved).map(|edit| edit.to);
+            let party = approved_party(&letter, "pdf", &name(&letter), &approved);
+            if respelled.as_deref() != read || party.as_deref() != read {
+                failed.push(format!("{approved}: read {respelled:?} and {party:?}"));
+            }
+        }
+        for (words, party, more) in [
+            ("Acme (UK) Ltd", "Acme", false),
+            ("Acme (signed)", "Acme", true),
+            ("Acme \u{2013} signed", "Acme", true),
+            ("Acme\u{a0}for\u{a0}Jane Doe", "Acme", true),
+        ] {
+            if party_and_more(words, party) != more {
+                failed.push(format!("{words}: party and more is not {more}"));
+            }
+        }
+        assert!(failed.is_empty(), "{failed:#?}");
     }
 
     #[test]
