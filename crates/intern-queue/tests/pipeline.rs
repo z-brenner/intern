@@ -6536,6 +6536,52 @@ fn a_spelling_that_changes_only_the_folder_or_the_report_waits_for_a_person() {
     assert!(filing.filed.lock().unwrap().is_empty());
 }
 
+/// A name a person gave - the date typed by hand - is kept when a spelling
+/// is put in use or Settings change while the document is back in review:
+/// after they took its rename back, and after its filing failed because the
+/// file changed. It was composed again from the reading, and the date and
+/// words they typed were lost.
+#[test]
+fn a_name_a_person_gave_is_kept_when_the_spellings_change() {
+    let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
+    let first = rig.read_next();
+    let second = rig.read_next();
+    let third = rig.read_next();
+    let typed = "1999-01-01 Employment Agreement between John Smith and Acme Corporation.pdf";
+    rig.pipeline
+        .approve(second, typed, "A sentence typed.")
+        .unwrap();
+    rig.pipeline.undo(second).unwrap();
+    assert_eq!(rig.item(second).status, QueueStatus::NeedsReview);
+    std::fs::write(rig.temp.path().join("inbox").join("c.pdf"), b"changed").unwrap();
+    let typed_third = "1999-02-02 Employment Agreement between John Smith and Acme Corporation.pdf";
+    assert_eq!(
+        rig.pipeline
+            .approve(third, typed_third, "Another sentence typed.")
+            .unwrap_err()
+            .code,
+        "FILE_CHANGED"
+    );
+    assert_eq!(rig.item(third).status, QueueStatus::NeedsReview);
+
+    rig.approve(first, "Employment Agreement between John Smith and Acme");
+    let id = rig.pipeline.learned_rules().unwrap()[0].id;
+    rig.pipeline.use_rule(id).unwrap();
+    rig.pipeline
+        .refresh_own_names(&["John Smith".to_owned()])
+        .unwrap();
+    for (id, name, sentence) in [
+        (second, typed, "A sentence typed."),
+        (third, typed_third, "Another sentence typed."),
+    ] {
+        let record = rig.item(id).proposal.unwrap();
+        assert_eq!(
+            (record.filename.as_str(), record.description.as_str()),
+            (name, sentence)
+        );
+    }
+}
+
 /// A held agreement whose wrong spelling the reviewer takes out, putting
 /// the document's own word back with a note after it, is filed in the
 /// folder of the document's word, and reported under it: the spelling

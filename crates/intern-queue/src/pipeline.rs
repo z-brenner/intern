@@ -3642,7 +3642,13 @@ impl Pipeline {
     /// carry, the date they typed in most of all. An earlier approval waiting
     /// for the queue counts too: a rule learned while it waited once rebuilt
     /// its name, and the scheduler then filed the rebuilt name under the
-    /// approval - without the date the reviewer had typed.
+    /// approval - without the date the reviewer had typed. So does every
+    /// name a person has acted on that is back in review (see
+    /// [`untouched`]): an approval whose filing failed - the file changed,
+    /// was open elsewhere, or the folder was out of reach - and a rename
+    /// they took back. Their name and date were thrown away by the next
+    /// Settings save, "Use now" or "Forget", or approval that taught
+    /// something.
     fn recompose_waiting(&self, own_names: Option<&[String]>) -> PipelineResult<()> {
         let spellings = self.repository.spellings()?;
         let mut changed = false;
@@ -3687,8 +3693,9 @@ impl Pipeline {
             return Ok(false);
         };
         // A copy's name, or one typed for a document that could not be
-        // read, has no facts behind it to compose a name from.
-        if record.approved || record.is_synthetic() {
+        // read, has no facts behind it to compose a name from; and a name a
+        // person approved, filed, or took back is theirs.
+        if !untouched(&record) {
             return Ok(false);
         }
         let (styled, house_rules) = spellings.style().apply(&record.analysis.proposal);
