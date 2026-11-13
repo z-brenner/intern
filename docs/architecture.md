@@ -688,10 +688,11 @@ into the connector, and a diff would credit it all to one party.
 A rule takes effect on the second identical edit (`EDITS_TO_LEARN`), or at
 once when a person says "Use now" in Settings, and every document still
 waiting is recomposed under it so the queue shows the change immediately -
-every document but one whose name a person approved, the one just approved
-and one approved earlier that is waiting only for a busy queue alike. That
-name is the reviewer's own text and would lose whatever the validated facts
-do not carry, the date they typed with it most of all.
+every document but one whose name a person gave: the one just approved, one
+approved earlier that is waiting only for a busy queue, one whose filing
+failed and one whose rename they took back alike. That name is the
+reviewer's own text and would lose whatever the validated facts do not
+carry, the date they typed with it most of all.
 Respelling a spelling Intern applied maps back to the document's word - the
 person changed their mind about the word, not about Intern - and restoring
 the document's own spelling retracts the rule. The whole memory is the list
@@ -703,24 +704,44 @@ rounds of review kept finding wordings that read as a respelling but were a
 decision about one document - another party joined to the named one ("John
 Smith, Jane Doe"), a short form of another party, a note - each of which,
 learned, renamed every later document giving the word, ready ones filed
-without review. So every name a rule changes waits in review with
-`LEARNED_SPELLING_UNCONFIRMED`, never ready, until a person approves a name
-the rule changed - on a document it was not learned from - keeping its
-spelling (`LearnedRule::confirmed`, counted in `house_rules.confirmed`), or
-chooses "Use now" in Settings, where its text is shown. One check is enough:
-from then on the names it changes are filed like any other reading. Putting
-the document's own word back instead retracts the rule, and a third spelling
-for the same word starts the count and the checks over. A rule that fires
-but changes nothing in the name - a party the name leaves out - holds
+without review. So every name a rule changes - or the type and parties the
+folder and the filing report are read from, which a name can leave out (a
+first party shed for length, the third of a "between") - waits in review
+with `LEARNED_SPELLING_UNCONFIRMED`, never ready, until a person approves a
+name the rule changed keeping its spelling (`LearnedRule::confirmed`,
+counted in `house_rules.confirmed` for the spelling in
+`house_rules.confirmed_to`). Only such an approval counts. It is of a
+document the rule was not learned from: the documents whose edits taught a
+rule are kept in `house_rule_teachers`, and one of them approved again -
+read again after an undo, a failed filing or a Re-analyze - is the
+reviewer's own words approved twice. And it leaves the rule's words where
+the rule wrote them: the name as proposed, or one other part of it
+respelled; an edit of two parts can keep the rule's words only inside words
+of its own ("John Smith, Jane Doe Trust"). "Use now" in Settings is no
+check either: it shows the words, not a name they made. One check is
+enough: from then on the names it changes are filed like any other reading.
+Putting the document's own word back instead retracts the rule, and a third
+spelling for the same word starts the count and the checks over; a release
+that does not know the checks respells without starting them over, so they
+count only while the rule writes the spelling checked. A document whose
+approved name takes out a spelling nobody had checked is filed and reported
+under the document's own words where the name gives them, whatever note or
+party follows them (`ProposalRecord::rejected_rules`); a checked spelling's
+folder stays the party's. A rule that fires but changes none of the name,
+type or parties - a party the name leaves out as the person's own - holds
 nothing. The hold is decided wherever a name is composed under the rules in
 force: a new reading, Re-analyze, a validation again after an update, and the
 waiting documents a rule learned or used renames (a ready one goes to review
-in the same write that renames it); and the scheduler files no unapproved
-name a rule no person has checked changed, however the row came to be ready.
-Rules learned before alpha.18 were never checked, so after the update each
-of them waits for one check too. The wording rules still keep Intern from
-learning what they recognise; they are no longer what keeps a wrong name
-from being filed.
+in the same write that renames it); and no unapproved name a rule no person
+has checked changed is left ready, however the row came to be ready: the
+queue holds such rows when it opens and on every recovery pass, model or no
+model, paused or not, as well as before the scheduler files anything. Whether
+a row is held is decided again on its record as stored, in the transaction
+that puts it in review, so an approval made in that moment stands. Rules
+learned before alpha.18 were never checked, so after the update each of them
+waits for one check too. The wording rules still keep Intern from learning
+what they recognise; they are no longer what keeps a wrong name from being
+filed.
 
 ### Your organization
 
