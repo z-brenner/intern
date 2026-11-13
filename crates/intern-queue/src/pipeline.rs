@@ -966,26 +966,39 @@ impl ProposalRecord {
     /// offered does. So a respelling into words another party's name
     /// shares - "Acme" for "Acme Corporation" in a document that also names
     /// Acme Holdings LLC - is not learned either, while another party typed
-    /// with a suffix the document does not give - "Beacon Staffing Inc" -
+    /// with a suffix the document does not give, or abbreviated, so that
+    /// neither it nor the new spelling holds the other - "Beacon Staffing
+    /// Inc", or "Acme Corp Holdings" for "Acme Corporation Holdings LLC" -
     /// still is.
     ///
     /// The party being respelled never counts: the one the replaced words
     /// are, and one whose name holds them or that they hold, as the
     /// reading's other spelling of that party - "Acme Corporation Inc"
     /// beside a name's "Acme Corporation" - would. Such a one counts after
-    /// all when the new spelling crosses over to it: holds the replaced
-    /// words, when the party holds them, or is a run of them, when they hold
-    /// the party. A parent and its subsidiary, an estate and the person, a
-    /// city's department and the city are each two parties, one name holding
-    /// the other's, so choosing the other of such a pair, as offered or
-    /// typed short, teaches nothing in either direction; "Acme" for "Acme
-    /// Corporation" beside its parent "Acme Corporation Holdings LLC" does
-    /// not cross over to the parent, and is learned. The price falls on a
-    /// party the reading spells one way in the name and another, a suffix
-    /// longer or shorter, in its facts: a new spelling over to the facts'
-    /// one - "Beacon Staffing" for a name's "Beacon Staffing LLC" when the
-    /// facts give "Beacon Staffing", or the reverse - is not learned either,
-    /// which costs the reviewer only that edit made again.
+    /// all when the new spelling crosses over to it: to a party whose name
+    /// holds the replaced words, by holding them too, or by being a run of
+    /// the party's words that is no run of theirs; to a party the replaced
+    /// words hold, by being a run of them. A parent and its subsidiary, an
+    /// estate and the person, a city's department and the city are each two
+    /// parties, one name holding the other's, so choosing the other of such
+    /// a pair, as offered or typed short, teaches nothing in either
+    /// direction: "Acme Corporation Holdings LLC", "Acme Corporation
+    /// Holdings" or "Corporation Holdings LLC" for "Acme Corporation" beside
+    /// that parent, "Law Department" or "Boston Law Department" for "City of
+    /// Boston" beside its "City of Boston Law Department", "Acme
+    /// Corporation" or "Acme" for the parent beside "Acme Corporation". A
+    /// short form of the longer party that is a run of the named, shorter
+    /// one's words as well does not cross over: "Acme" for "Acme
+    /// Corporation" beside the parent, or "Boston" for "City of Boston"
+    /// beside its department, is learned, as is "Acme Corp", which is no run
+    /// of the parent's words.
+    ///
+    /// The price falls on a party the reading spells one way in the name
+    /// and another, a suffix longer or shorter, in its facts: a new spelling
+    /// over to the facts' one - "Beacon Staffing" for a name's "Beacon
+    /// Staffing LLC" when the facts give "Beacon Staffing", or the reverse -
+    /// is not learned either, which costs the reviewer only that edit made
+    /// again.
     fn names_another_party(&self, lesson: &HouseRule) -> bool {
         let to = HouseRule::key(&lesson.to);
         let from = lesson.from_key();
@@ -999,7 +1012,9 @@ impl ProposalRecord {
             let respelled = keys.iter().any(|key| {
                 *key == from
                     || (holds_words(&from, key) && !holds_words(&from, &to))
-                    || (holds_words(key, &from) && !holds_words(&to, &from))
+                    || (holds_words(key, &from)
+                        && !holds_words(&to, &from)
+                        && (!holds_words(key, &to) || holds_words(&from, &to)))
             });
             !respelled
                 && keys
@@ -6306,8 +6321,10 @@ mod party_choice_tests {
     /// the city - is a party of its own, and so is the named party's
     /// subsidiary, person or city when the name gives the longer one:
     /// choosing the other, as offered or typed short, is no spelling either
-    /// way. A respelling of the named party that does not cross over to the
-    /// other is still a spelling.
+    /// way, the longer one's short form included when it leaves out the
+    /// named party's words. A respelling of the named party that does not
+    /// cross over to the other is still a spelling, a short form of both
+    /// included.
     #[test]
     fn a_party_whose_name_holds_the_named_ones_or_is_held_by_it_is_another_party() {
         let edit = |named: &str, other: &str, to: &str| {
@@ -6331,17 +6348,31 @@ mod party_choice_tests {
         ));
         assert!(edit("John Smith", estate, estate));
         assert!(edit("City of Boston", department, department));
-        // The shorter party chosen for the longer.
+        // ... typed short as a run of its own words that is none of the
+        // named party's, too.
+        assert!(edit("City of Boston", department, "Law Department"));
+        assert!(edit("City of Boston", department, "Boston Law Department"));
+        assert!(edit("Acme Corporation", parent, "Corporation Holdings LLC"));
+        assert!(edit("John Smith", estate, "Estate"));
+        // The shorter party chosen for the longer, as offered or typed
+        // short.
         assert!(edit(parent, "Acme Corporation", "Acme Corporation"));
+        assert!(edit(parent, "Acme Corporation", "Acme"));
         assert!(edit(estate, "John Smith", "John Smith"));
         assert!(edit(department, "City of Boston", "City of Boston"));
 
-        // Respellings of the named party, which cross over to neither.
+        // Respellings of the named party, which cross over to neither: a
+        // short form of both, the named party's words as well as the
+        // other's, among them.
         assert!(!edit("Acme Corporation", parent, "Acme Corp"));
         assert!(!edit("Acme Corporation", parent, "Acme"));
         assert!(!edit("John Smith", estate, "J. Smith"));
+        assert!(!edit("City of Boston", department, "Boston"));
         assert!(!edit(parent, "Acme Corporation", "Acme Corp Holdings"));
         assert!(!edit(department, "City of Boston", "Boston Law Department"));
+        // The other party abbreviated holds neither name, nor is held by
+        // either: still learned, the gap the guard leaves.
+        assert!(!edit("Acme Corporation", parent, "Acme Corp Holdings"));
 
         // The reading's other spelling of the named party, in its facts, is
         // that party: a respelling that does not cross over to it is still

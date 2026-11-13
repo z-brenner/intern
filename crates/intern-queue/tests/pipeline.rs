@@ -4176,11 +4176,16 @@ fn agreement_naming_also(written: &str, employer: &str, also: &str) -> DocumentS
 }
 
 /// Agreements with `employer` that also name `other`, a party whose name
-/// holds the employer's or is held by it. The reviewer chooses `other` in
-/// place of the employer on two of them, and a third, with the employer
-/// alone, is read once automatic renaming is on. Returns the rules learned
-/// and the name the third was filed under.
-fn nested_party_chosen_twice(employer: &'static str, other: &'static str) -> (Vec<String>, String) {
+/// holds the employer's or is held by it. The reviewer writes `chosen` -
+/// `other` as offered, or typed another way - in place of the employer on
+/// two of them, and a third, with the employer alone, is read once
+/// automatic renaming is on. Returns the rules learned and the name the
+/// third was filed under.
+fn nested_party_chosen_twice(
+    employer: &'static str,
+    other: &'static str,
+    chosen: &str,
+) -> (Vec<String>, String) {
     let temp = tempdir().unwrap();
     let inbox = temp.path().join("inbox");
     std::fs::create_dir_all(&inbox).unwrap();
@@ -4233,8 +4238,8 @@ fn nested_party_chosen_twice(employer: &'static str, other: &'static str) -> (Ve
         pipeline
             .approve(
                 queued[index],
-                &format!("{date} Employment Agreement between John Smith and {other}.pdf"),
-                &format!("Employment agreement between John Smith and {other}."),
+                &format!("{date} Employment Agreement between John Smith and {chosen}.pdf"),
+                &format!("Employment agreement between John Smith and {chosen}."),
             )
             .unwrap();
     }
@@ -4286,21 +4291,65 @@ fn nested_party_chosen_twice(employer: &'static str, other: &'static str) -> (Ve
 /// the parent alone filed under the subsidiary.
 #[test]
 fn a_party_whose_name_holds_the_named_ones_teaches_no_spelling() {
-    let (learned, filed_as) =
-        nested_party_chosen_twice("Acme Corporation", "Acme Corporation Holdings LLC");
+    let (learned, filed_as) = nested_party_chosen_twice(
+        "Acme Corporation",
+        "Acme Corporation Holdings LLC",
+        "Acme Corporation Holdings LLC",
+    );
     assert!(learned.is_empty(), "learned {learned:?}");
     assert_eq!(
         filed_as,
         "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf"
     );
 
-    let (learned, filed_as) =
-        nested_party_chosen_twice("Acme Corporation Holdings LLC", "Acme Corporation");
+    let (learned, filed_as) = nested_party_chosen_twice(
+        "Acme Corporation Holdings LLC",
+        "Acme Corporation",
+        "Acme Corporation",
+    );
     assert!(learned.is_empty(), "learned {learned:?}");
     assert_eq!(
         filed_as,
         "2024-06-07 Employment Agreement between John Smith and Acme Corporation Holdings LLC.pdf"
     );
+}
+
+/// The longer party of such a pair typed as a run of its own words that
+/// leaves out the named party's - "Law Department" or "Boston Law
+/// Department" for "City of Boston" beside "City of Boston Law
+/// Department", "Corporation Holdings LLC" for "Acme Corporation" beside
+/// its parent - is that party as surely as its choice. It was taken for a
+/// respelling of the named party, the longer party's name holding the
+/// replaced words and the new spelling not, and the next agreement with
+/// the city alone, ready, was filed as "... and Law Department" without
+/// review.
+#[test]
+fn a_party_whose_name_holds_the_named_ones_typed_as_its_own_words_teaches_no_spelling() {
+    for (employer, other, chosen) in [
+        (
+            "City of Boston",
+            "City of Boston Law Department",
+            "Law Department",
+        ),
+        (
+            "City of Boston",
+            "City of Boston Law Department",
+            "Boston Law Department",
+        ),
+        (
+            "Acme Corporation",
+            "Acme Corporation Holdings LLC",
+            "Corporation Holdings LLC",
+        ),
+    ] {
+        let (learned, filed_as) = nested_party_chosen_twice(employer, other, chosen);
+        assert!(learned.is_empty(), "{chosen}: learned {learned:?}");
+        assert_eq!(
+            filed_as,
+            format!("2024-06-07 Employment Agreement between John Smith and {employer}.pdf"),
+            "{chosen}"
+        );
+    }
 }
 
 /// A party put in a name that gave none - one click on the party choices,
