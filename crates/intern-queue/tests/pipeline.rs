@@ -3972,7 +3972,8 @@ fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
 }
 
 /// A model whose readings carry the evidence pipeline's validated facts:
-/// `parties` are every party validation found the document to name.
+/// `parties` are the parties validation can find, and a reading's facts
+/// give each of them its document's text holds.
 struct FactsModel {
     inner: FakeModel,
     parties: Vec<&'static str>,
@@ -3990,6 +3991,7 @@ impl AnalyzerBoundary for FactsModel {
             parties: self
                 .parties
                 .iter()
+                .filter(|name| source.pages.iter().any(|page| page.text.contains(**name)))
                 .map(|name| ValidatedParty {
                     name: (*name).into(),
                     support: Support::Cited,
@@ -4162,6 +4164,192 @@ fn another_party_typed_in_a_short_form_teaches_no_spelling() {
         record_of(&pipeline, queued[2]).filename,
         "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf"
     );
+}
+
+/// An employment agreement with `employer`, signed `written`, that also
+/// names `also` - the employer's parent, or its subsidiary.
+fn agreement_naming_also(written: &str, employer: &str, also: &str) -> DocumentSource {
+    parsed(&format!(
+        "Employment Agreement signed {written} by John Smith and {employer}, \
+         which is related to {also}."
+    ))
+}
+
+/// Agreements with `employer` that also name `other`, a party whose name
+/// holds the employer's or is held by it. The reviewer writes `chosen` -
+/// `other` as offered, or typed another way - in place of the employer on
+/// two of them, and a third, with the employer alone, is read once
+/// automatic renaming is on. Returns the rules learned and the name the
+/// third was filed under.
+fn nested_party_chosen_twice(
+    employer: &'static str,
+    other: &'static str,
+    chosen: &str,
+) -> (Vec<String>, String) {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let dates = [
+        ("2024-04-12", "April 12, 2024"),
+        ("2024-05-03", "May 3, 2024"),
+        ("2024-06-07", "June 7, 2024"),
+    ];
+    let mut texts = dates
+        .iter()
+        .take(2)
+        .map(|(_, written)| agreement_naming_also(written, employer, other))
+        .collect::<Vec<_>>();
+    texts.push(parsed(&format!(
+        "Employment Agreement signed June 7, 2024 by John Smith and {employer}."
+    )));
+    let replies = dates
+        .iter()
+        .map(|(iso, written)| ModelProposal {
+            parties: vec!["John Smith".into(), employer.into()],
+            description: format!("Employment agreement between John Smith and {employer}."),
+            evidence: Evidence {
+                parties: vec![format!("by John Smith and {employer}")],
+                ..dated_proposal(iso, written).evidence
+            },
+            ..dated_proposal(iso, written)
+        })
+        .collect();
+    let (pipeline, filing) = reading_pipeline(
+        temp.path(),
+        texts,
+        replies,
+        &["John Smith", employer, other],
+        DestinationLayout::Flat,
+    );
+    let queued = pipeline
+        .enqueue_files(&[source(&inbox, "a.pdf"), source(&inbox, "b.pdf")])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let first = record_of(&pipeline, queued[0]);
+    assert_eq!(
+        first.filename,
+        format!("2024-04-12 Employment Agreement between John Smith and {employer}.pdf")
+    );
+    assert_eq!(first.party_choices(), vec![other]);
+    for (index, (date, _)) in dates.iter().take(2).enumerate() {
+        pipeline
+            .approve(
+                queued[index],
+                &format!("{date} Employment Agreement between John Smith and {chosen}.pdf"),
+                &format!("Employment agreement between John Smith and {chosen}."),
+            )
+            .unwrap();
+    }
+    let learned = pipeline
+        .learned_rules()
+        .unwrap()
+        .into_iter()
+        .map(|rule| format!("{} -> {}", rule.from, rule.to))
+        .collect();
+
+    let filed = temp.path().join("filed");
+    SettingsStore::new(temp.path().join("settings.json"))
+        .save(&AppSettings {
+            destination: filed.to_string_lossy().into_owned(),
+            destination_layout: DestinationLayout::Flat,
+            automatic_rename: true,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let third = pipeline
+        .enqueue_files(&[source(&inbox, "c.pdf")])
+        .unwrap()
+        .remove(0)
+        .id;
+    pipeline.run_until_idle().unwrap();
+    let filed_as = filing
+        .filed
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|document| document.item_id == third)
+        .expect("the third is ready, and filed without review")
+        .destination
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    (learned, filed_as)
+}
+
+/// A party whose name holds the named party's - the employer's parent,
+/// "Acme Corporation Holdings LLC" beside "Acme Corporation" - is a party
+/// of its own. Choosing it twice was learned as a spelling of the
+/// employer, since a party holding the replaced words was taken for the one
+/// being respelled, and the next agreement with the employer alone, ready,
+/// was filed under the parent without review. The mirror was learned too,
+/// a party held by the replaced words taken for that one: the subsidiary
+/// chosen twice where the name gave the parent, and the next agreement with
+/// the parent alone filed under the subsidiary.
+#[test]
+fn a_party_whose_name_holds_the_named_ones_teaches_no_spelling() {
+    let (learned, filed_as) = nested_party_chosen_twice(
+        "Acme Corporation",
+        "Acme Corporation Holdings LLC",
+        "Acme Corporation Holdings LLC",
+    );
+    assert!(learned.is_empty(), "learned {learned:?}");
+    assert_eq!(
+        filed_as,
+        "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+
+    let (learned, filed_as) = nested_party_chosen_twice(
+        "Acme Corporation Holdings LLC",
+        "Acme Corporation",
+        "Acme Corporation",
+    );
+    assert!(learned.is_empty(), "learned {learned:?}");
+    assert_eq!(
+        filed_as,
+        "2024-06-07 Employment Agreement between John Smith and Acme Corporation Holdings LLC.pdf"
+    );
+}
+
+/// The longer party of such a pair typed as a run of its own words that
+/// leaves out the named party's - "Law Department" or "Boston Law
+/// Department" for "City of Boston" beside "City of Boston Law
+/// Department", "Corporation Holdings LLC" for "Acme Corporation" beside
+/// its parent - is that party as surely as its choice. It was taken for a
+/// respelling of the named party, the longer party's name holding the
+/// replaced words and the new spelling not, and the next agreement with
+/// the city alone, ready, was filed as "... and Law Department" without
+/// review.
+#[test]
+fn a_party_whose_name_holds_the_named_ones_typed_as_its_own_words_teaches_no_spelling() {
+    for (employer, other, chosen) in [
+        (
+            "City of Boston",
+            "City of Boston Law Department",
+            "Law Department",
+        ),
+        (
+            "City of Boston",
+            "City of Boston Law Department",
+            "Boston Law Department",
+        ),
+        (
+            "Acme Corporation",
+            "Acme Corporation Holdings LLC",
+            "Corporation Holdings LLC",
+        ),
+    ] {
+        let (learned, filed_as) = nested_party_chosen_twice(employer, other, chosen);
+        assert!(learned.is_empty(), "{chosen}: learned {learned:?}");
+        assert_eq!(
+            filed_as,
+            format!("2024-06-07 Employment Agreement between John Smith and {employer}.pdf"),
+            "{chosen}"
+        );
+    }
 }
 
 /// A party put in a name that gave none - one click on the party choices,
