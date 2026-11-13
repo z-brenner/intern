@@ -697,6 +697,31 @@ person changed their mind about the word, not about Intern - and restoring
 the document's own spelling retracts the rule. The whole memory is the list
 in Settings; nothing is learned that cannot be seen and forgotten there.
 
+A rule in force is still on probation until a person has checked its work
+once. The edits it is learned from are read for their wording, and four
+rounds of review kept finding wordings that read as a respelling but were a
+decision about one document - another party joined to the named one ("John
+Smith, Jane Doe"), a short form of another party, a note - each of which,
+learned, renamed every later document giving the word, ready ones filed
+without review. So every name a rule changes waits in review with
+`LEARNED_SPELLING_UNCONFIRMED`, never ready, until a person approves a name
+the rule changed - on a document it was not learned from - keeping its
+spelling (`LearnedRule::confirmed`, counted in `house_rules.confirmed`), or
+chooses "Use now" in Settings, where its text is shown. One check is enough:
+from then on the names it changes are filed like any other reading. Putting
+the document's own word back instead retracts the rule, and a third spelling
+for the same word starts the count and the checks over. A rule that fires
+but changes nothing in the name - a party the name leaves out - holds
+nothing. The hold is decided wherever a name is composed under the rules in
+force: a new reading, Re-analyze, a validation again after an update, and the
+waiting documents a rule learned or used renames (a ready one goes to review
+in the same write that renames it); and the scheduler files no unapproved
+name a rule no person has checked changed, however the row came to be ready.
+Rules learned before alpha.18 were never checked, so after the update each
+of them waits for one check too. The wording rules still keep Intern from
+learning what they recognise; they are no longer what keeps a wrong name
+from being filed.
+
 ### Your organization
 
 A firm's own name is on almost everything it files, so a name that carries

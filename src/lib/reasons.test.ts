@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { describeActionError } from './actionErrors';
-import { describeQueueStop, humanizeReason } from './reasons';
+import { describeQueueStop, humanizeReason, shortReason } from './reasons';
 
 describe('humanizeReason', () => {
   it('translates a single code into its sentence', () => {
@@ -99,6 +99,15 @@ describe('humanizeReason', () => {
   it('tells a near-duplicate apart from an exact one', () => {
     expect(humanizeReason('NEAR_DUPLICATE')).toBe('This looks like a document that was filed already. Approve to file it as well, keep the original, or remove it.');
     expect(humanizeReason('LOW_CONFIDENCE, NEAR_DUPLICATE')).toContain('filed already');
+  });
+
+  // A name a learned spelling changed waits for a person until one has
+  // approved what the spelling writes: the sentence says why, and both ways
+  // out - approving it, or putting the document's word back.
+  it('says a learned spelling waits for its first check, and how to give or refuse it', () => {
+    const sentence = humanizeReason('LEARNED_SPELLING_UNCONFIRMED');
+    expect(sentence).toBe('Intern used a spelling it learned from your edits for the first time. Approve to let it use the spelling on its own, or change the name back to stop it.');
+    expect(shortReason(['LEARNED_SPELLING_UNCONFIRMED'])).toEqual({ text: 'New learned spelling', more: 0 });
   });
 
   it('explains a bare duplicate flag once the filed name it referred to is gone', () => {

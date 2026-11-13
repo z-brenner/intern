@@ -12,8 +12,8 @@ async function openSettings() {
 }
 
 const learned: LearnedRule[] = [
-  { id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso', seen: 1, active: false, learnedAt: 1716282900 },
-  { id: '2', kind: 'document_type', from: 'Quarterly Operations Review', to: 'Meeting Minutes', seen: 2, active: true, learnedAt: 1716196500 },
+  { id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso', seen: 1, active: false, confirmed: 0, learnedAt: 1716282900 },
+  { id: '2', kind: 'document_type', from: 'Quarterly Operations Review', to: 'Meeting Minutes', seen: 2, active: true, confirmed: 1, learnedAt: 1716196500 },
 ];
 
 describe('the spellings Intern has learned', () => {
@@ -50,6 +50,21 @@ describe('the spellings Intern has learned', () => {
     await waitFor(() => expect(houseRuleForget).toHaveBeenCalledWith('2'));
     await waitFor(() => expect(within(list).getAllByRole('listitem')).toHaveLength(1));
     expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('Contoso');
+  });
+
+  // A spelling learned from two edits is in use, but no name it changes is
+  // filed until a person has approved one: the list says it waits for that.
+  // "Use now" here counts as the check, as the person sees what it writes.
+  it('says a spelling in use waits for your check until a name it changed is approved', async () => {
+    const unchecked: LearnedRule = { ...learned[1], confirmed: 0 };
+    render(<App bridge={createInMemoryBridge({ learnedRules: [learned[0], unchecked] })} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    expect(within(list).getAllByRole('listitem')[1]).toHaveTextContent('In use · waits for your check');
+
+    fireEvent.click(within(within(list).getAllByRole('listitem')[0]).getByRole('button', { name: /Use now:/ }));
+    await waitFor(() => expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('In use'));
+    expect(within(list).getAllByRole('listitem')[0]).not.toHaveTextContent('waits for your check');
   });
 
   // Forgetting is instant and the row disappears, so a second click landing

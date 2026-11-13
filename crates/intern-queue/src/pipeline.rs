@@ -732,6 +732,14 @@ pub struct CopyOf {
 /// already filed. The record's `near_duplicate_of` names that filing.
 pub const NEAR_DUPLICATE: &str = "NEAR_DUPLICATE";
 
+/// The review reason for a name a learned spelling changed before any person
+/// has checked that spelling's work (see [`LearnedRule::confirmed`]): the
+/// document waits for a person, whatever its reading says, and is never
+/// filed on its own. Approving the name with the spelling in it lets Intern
+/// use the spelling on its own from then on; putting the document's own word
+/// back retracts it.
+pub const LEARNED_SPELLING_UNCONFIRMED: &str = "LEARNED_SPELLING_UNCONFIRMED";
+
 /// The note on an exact duplicate filed as a copy of the document it
 /// repeats: why it is named `COPY - ...` and was never read.
 pub const EXACT_COPY: &str = "EXACT_COPY";
@@ -800,6 +808,41 @@ impl ProposalRecord {
             .apply(&self.analysis.proposal)
             .0;
         counterparty_view(&styled, &self.own_names)
+    }
+
+    /// Whether a learned spelling no person has checked yet changed this
+    /// record's name: the name composed from the reading with every rule in
+    /// [`Self::house_rules`] is not the name composed with only those that
+    /// `checked` says a person has approved the work of (see
+    /// [`LearnedRule::confirmed`]). A rule that fired but changes nothing in
+    /// the name - a respelling of a party the name leaves out as the
+    /// person's own organization - holds nothing. `extension` is the source
+    /// file's.
+    ///
+    /// The wording of an edit cannot tell every spelling from a decision
+    /// about one document, so this is what keeps a wrong rule from filing a
+    /// name: a name it changed waits for a person until one has approved
+    /// what the rule writes, on a document it was not learned from.
+    pub fn holds_unchecked_spelling(
+        &self,
+        extension: &str,
+        checked: impl Fn(&HouseRule) -> bool,
+    ) -> bool {
+        if self.is_synthetic() || self.house_rules.iter().all(&checked) {
+            return false;
+        }
+        let name = |rules: Vec<HouseRule>| {
+            let (styled, applied) = HouseStyle::new(rules).apply(&self.analysis.proposal);
+            let (named, _) = counterparty_view(&styled, &self.own_names);
+            compose_styled_filename(&named, &applied, extension, &[]).value
+        };
+        let kept = self
+            .house_rules
+            .iter()
+            .filter(|rule| checked(rule))
+            .cloned()
+            .collect();
+        name(self.house_rules.clone()) != name(kept)
     }
 
     /// The other parties the document names, offered to a reviewer to put
@@ -1483,6 +1526,29 @@ fn without_note(party: &str) -> String {
         .to_owned()
 }
 
+/// Whether the name `approved` keeps what `rule` writes: a party's spelling
+/// anywhere in it, a type's where the name starts after its date, each as a
+/// run of whole words as house style compares spellings
+/// ([`HouseRule::key`]). `extension` is the source file's.
+fn keeps_spelling(rule: &HouseRule, extension: &str, approved: &str) -> bool {
+    let to = HouseRule::key(&rule.to);
+    match rule.kind {
+        RuleKind::Party => holds_words(&name_words(approved, extension), &to),
+        RuleKind::DocumentType => {
+            let name = approved.trim();
+            let stem = name
+                .rsplit_once('.')
+                .filter(|(_, suffix)| {
+                    !extension.is_empty() && suffix.eq_ignore_ascii_case(extension)
+                })
+                .map_or(name, |(stem, _)| stem);
+            let stem = leading_date(stem).map_or(stem, |date| stem[date.len()..].trim_start());
+            let words = HouseRule::key(stem);
+            !to.is_empty() && (words == to || words.starts_with(&format!("{to} ")))
+        }
+    }
+}
+
 /// Each run of `words` that is the key `party`, as word ranges: where a
 /// name written as house style compares spellings (see [`name_words`])
 /// holds the party whole.
@@ -1578,6 +1644,15 @@ pub struct LearnedRule {
     pub seen: u32,
     /// Whether Intern applies it: made often enough, or told to use it now.
     pub active: bool,
+    /// How many times a person has approved a name Intern composed with
+    /// this spelling in it - on a document it was not learned from - and
+    /// kept the spelling, or told Intern to use it in the list of learned
+    /// spellings. Until then a name the rule changes waits for a person
+    /// ([`LEARNED_SPELLING_UNCONFIRMED`]); one check is enough. A different
+    /// spelling for the same word starts over at none, as `seen` does, and
+    /// every rule learned before alpha.18 counted none, so each waits for one
+    /// check after the update too.
+    pub confirmed: u32,
     /// Unix seconds of the latest edit that taught it.
     pub learned_at: i64,
 }
@@ -1585,6 +1660,44 @@ pub struct LearnedRule {
 impl LearnedRule {
     pub fn rule(&self) -> HouseRule {
         HouseRule::new(self.kind, self.from.clone(), self.to.clone())
+    }
+
+    /// Whether a person has checked this rule's work (see
+    /// [`Self::confirmed`]).
+    pub fn is_checked(&self) -> bool {
+        self.confirmed > 0
+    }
+}
+
+/// The spellings review has taught, as the queue applies them: the rules in
+/// force, and which of those a person has checked.
+struct Spellings {
+    learned: Vec<LearnedRule>,
+}
+
+impl Spellings {
+    /// The rules in force: learned often enough, or told to be used.
+    fn style(&self) -> HouseStyle {
+        HouseStyle::new(
+            self.learned
+                .iter()
+                .filter(|rule| rule.active)
+                .map(LearnedRule::rule)
+                .collect(),
+        )
+    }
+
+    /// Whether a person has checked the work of `rule`, as a name applied
+    /// it: learned for the same word, with exactly this spelling, and
+    /// approved once (see [`LearnedRule::confirmed`]). A rule forgotten or
+    /// respelled since the name was composed is not.
+    fn checked(&self, rule: &HouseRule) -> bool {
+        self.learned.iter().any(|learned| {
+            learned.kind == rule.kind
+                && HouseRule::key(&learned.from) == rule.from_key()
+                && learned.to == rule.to
+                && learned.is_checked()
+        })
     }
 }
 
@@ -2910,8 +3023,9 @@ impl Pipeline {
     /// the validated facts the way the reviewer has taught Intern to spell
     /// them and by the other side where the person's own organization is
     /// named, collision-free where the document is going, and held for a
-    /// person when its text nearly repeats a filing's. Nobody has acted on
-    /// it yet.
+    /// person when its text nearly repeats a filing's, or when a learned
+    /// spelling no person has checked yet changed its name. Nobody has acted
+    /// on it yet.
     fn record_for(
         &self,
         item: &QueueItem,
@@ -2922,7 +3036,8 @@ impl Pipeline {
         // The document's words, respelled the way review has taught Intern
         // to. Applied here, after validation, so the evidence stayed the
         // document's and only the name is the reviewer's.
-        let (styled, house_rules) = self.repository.active_style()?.apply(&analysis.proposal);
+        let spellings = self.repository.spellings()?;
+        let (styled, house_rules) = spellings.style().apply(&analysis.proposal);
         // And named by the other side when it names the person's own
         // organization too. Settings that cannot be read name nobody, so the
         // name carries every party, as it did before the setting existed; an
@@ -2951,7 +3066,7 @@ impl Pipeline {
             reasons.push(NEAR_DUPLICATE.to_owned());
             status = ProposalStatus::NeedsReview;
         }
-        Ok(ProposalRecord {
+        let mut record = ProposalRecord {
             status,
             filename,
             description: analysis.description.clone(),
@@ -2965,7 +3080,9 @@ impl Pipeline {
             reviewed: false,
             manual: false,
             copy_of: None,
-        })
+        };
+        hold_unchecked_spelling(&mut record, extension, &spellings);
+        Ok(record)
     }
 
     /// What follows storing a new reading's `record`, now that the row is
@@ -2987,7 +3104,7 @@ impl Pipeline {
         if let Ok(current) = &settings {
             let names = current.own_names();
             if names != record.own_names {
-                self.recompose(&self.repository.active_style()?, item, Some(&names))?;
+                self.recompose(&self.repository.spellings()?, item, Some(&names))?;
             }
         }
         let ready_item = self.store.get(item.id)?.ok_or_else(|| {
@@ -2997,7 +3114,9 @@ impl Pipeline {
             )
         })?;
         self.events.queue_changed();
-        if next == QueueStatus::Ready {
+        // Named again just now, a learned spelling no person has checked
+        // can have sent it to review.
+        if next == QueueStatus::Ready && ready_item.status == QueueStatus::Ready {
             let settings = match settings {
                 Ok(settings) => settings,
                 Err(error) => {
@@ -3064,6 +3183,12 @@ impl Pipeline {
                 }
                 continue;
             };
+            // Whatever automatic renaming says, a name a learned spelling no
+            // person has checked changed is not left one click from filing:
+            // one an earlier release left ready, before such names waited.
+            if self.held_for_unchecked_spelling(&item, &proposal)? {
+                continue;
+            }
             if !automatic && !proposal.approved {
                 continue;
             }
@@ -3175,7 +3300,10 @@ impl Pipeline {
     }
 
     /// Apply a learned spelling from now on without waiting for a second
-    /// edit, including to documents still waiting.
+    /// edit, including to documents still waiting. The person chose it in
+    /// the list that shows what it writes, so it counts as checked (see
+    /// [`LearnedRule::confirmed`]): the names it changes are filed as any
+    /// other reading is.
     pub fn use_rule(&self, id: i64) -> PipelineResult<()> {
         if !self.repository.use_rule(id)? {
             return Err(PipelineError::new(
@@ -3217,13 +3345,13 @@ impl Pipeline {
     /// its name, and the scheduler then filed the rebuilt name under the
     /// approval - without the date the reviewer had typed.
     fn recompose_waiting(&self, own_names: Option<&[String]>) -> PipelineResult<()> {
-        let style = self.repository.active_style()?;
+        let spellings = self.repository.spellings()?;
         let mut changed = false;
         for item in self.store.list()? {
             if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready) {
                 continue;
             }
-            changed |= self.recompose(&style, &item, own_names)?;
+            changed |= self.recompose(&spellings, &item, own_names)?;
         }
         if changed {
             self.events.queue_changed();
@@ -3241,9 +3369,18 @@ impl Pipeline {
     /// never mentions, a respelling of a party the name leaves out - is
     /// stored without moving it, so whatever the reviewer has typed and not
     /// yet approved survives a Settings save.
+    ///
+    /// A name a learned spelling no person has checked yet changed waits for
+    /// a person (see [`ProposalRecord::holds_unchecked_spelling`]): a ready
+    /// document so renamed - a rule learned or used while it waited - goes
+    /// to review with [`LEARNED_SPELLING_UNCONFIRMED`] in the same write
+    /// that renames it, so no scheduler pass files the new name in between,
+    /// and its revision moves as any document's sent to review does. One
+    /// renamed back - the rule forgotten - loses the reason but stays in
+    /// review: what else held it is not known here.
     fn recompose(
         &self,
-        style: &HouseStyle,
+        spellings: &Spellings,
         item: &QueueItem,
         own_names: Option<&[String]>,
     ) -> PipelineResult<bool> {
@@ -3255,7 +3392,7 @@ impl Pipeline {
         if record.approved || record.is_synthetic() {
             return Ok(false);
         }
-        let (styled, house_rules) = style.apply(&record.analysis.proposal);
+        let (styled, house_rules) = spellings.style().apply(&record.analysis.proposal);
         let own_names = own_names.map_or_else(|| record.own_names.clone(), <[String]>::to_vec);
         if house_rules == record.house_rules && own_names == record.own_names {
             return Ok(false);
@@ -3278,14 +3415,40 @@ impl Pipeline {
             &extension,
             &existing,
         );
-        if filename != record.filename {
-            record.revision += 1;
-        }
+        let renamed = filename != record.filename;
         record.filename = filename;
         record.house_rules = house_rules;
         record.own_names = own_names;
-        self.repository.replace_proposal(item.id, &record)?;
-        Ok(true)
+        let held = hold_unchecked_spelling(&mut record, &extension, spellings);
+        let to_review = held && item.status == QueueStatus::Ready;
+        if renamed || to_review {
+            record.revision += 1;
+        }
+        if !to_review {
+            self.repository.replace_proposal(item.id, &record)?;
+            return Ok(true);
+        }
+        match self
+            .repository
+            .store_in_review(item.id, &record, QueueStatus::Ready, None)
+        {
+            Ok(()) => Ok(true),
+            // No longer ready since the list was read. In review by now, it
+            // takes the new name all the same; anything else - being filed
+            // under the name it had - is left to what moved it.
+            Err(error) if error.code == "STATE_CONFLICT" => {
+                if self
+                    .store
+                    .get(item.id)?
+                    .is_some_and(|now| now.status == QueueStatus::NeedsReview)
+                {
+                    self.repository.replace_proposal(item.id, &record)?;
+                    return Ok(true);
+                }
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// What an approved edit teaches, if anything: a respelled party or
@@ -3303,30 +3466,41 @@ impl Pipeline {
     /// "Acme Property": it teaches nothing, and the rule the reviewer
     /// changed, one this build would not learn, is retracted. Such words
     /// used to take the rule's place, to be learned on the next such edit.
+    ///
+    /// An approval of a name a rule changed that keeps the rule's spelling
+    /// is a person's check of that rule's work (see
+    /// [`Self::confirm_kept_spellings`]); the edits that taught it are not.
     fn learn_from_edit(
         &self,
         record: &ProposalRecord,
         extension: &str,
         approved: &str,
     ) -> PipelineResult<()> {
-        let Some(lesson) = lesson_from_edit(
+        let lesson = lesson_from_edit(
             &record.styled_proposal(),
             extension,
             &record.filename,
             approved,
-        ) else {
+        )
+        .map(|lesson| {
+            match record.house_rules.iter().find(|applied| {
+                applied.kind == lesson.kind && HouseRule::key(&applied.to) == lesson.from_key()
+            }) {
+                Some(applied) => HouseRule::new(lesson.kind, applied.from.clone(), lesson.to),
+                None => lesson,
+            }
+        });
+        self.confirm_kept_spellings(record, extension, approved, lesson.as_ref())?;
+        let Some(lesson) = lesson else {
             return Ok(());
-        };
-        let lesson = match record.house_rules.iter().find(|applied| {
-            applied.kind == lesson.kind && HouseRule::key(&applied.to) == lesson.from_key()
-        }) {
-            Some(applied) => HouseRule::new(lesson.kind, applied.from.clone(), lesson.to),
-            None => lesson,
         };
         if HouseRule::key(&lesson.to) == lesson.from_key() || !is_a_spelling(&lesson) {
             self.repository.forget_rule_for(lesson.kind, &lesson.from)?;
-        } else if record.names_a_party_anew(&self.repository.active_style()?, extension, approved)
-            || record.names_another_party(&lesson)
+        } else if record.names_a_party_anew(
+            &self.repository.spellings()?.style(),
+            extension,
+            approved,
+        ) || record.names_another_party(&lesson)
         {
             // Another party the document names is no spelling of the words
             // it took the place of, nor any part of a type: putting it in
@@ -3339,6 +3513,41 @@ impl Pipeline {
             self.repository.learn(&lesson)?;
         }
         self.restyle_waiting()
+    }
+
+    /// Counts a person's check of each learned spelling that changed the
+    /// name of `record` and that the name `approved` keeps (see
+    /// [`keeps_spelling`]), where the edit, read as `lesson` traced back to
+    /// the document's word, does not respell that word again: the person saw
+    /// what the rule writes on a document it was not learned from, and
+    /// approved it. One check is enough for Intern to file the names the
+    /// rule changes on its own (see [`LearnedRule::confirmed`]).
+    ///
+    /// A rule that fired but changes nothing in the name is not checked by
+    /// an approval of it. Nor is one the edit respells - into a third
+    /// spelling, which starts it over ([`PipelineRepository::learn`]) - or
+    /// takes back by putting the document's own word in the name, which
+    /// retracts it ([`Self::learn_from_edit`]). The edits that taught a
+    /// rule never count: none of their names was composed with it.
+    fn confirm_kept_spellings(
+        &self,
+        record: &ProposalRecord,
+        extension: &str,
+        approved: &str,
+        lesson: Option<&HouseRule>,
+    ) -> PipelineResult<()> {
+        for rule in &record.house_rules {
+            let respelled = lesson.is_some_and(|lesson| {
+                lesson.kind == rule.kind && lesson.from_key() == rule.from_key()
+            });
+            if !respelled
+                && keeps_spelling(rule, extension, approved)
+                && record.holds_unchecked_spelling(extension, |other| other != rule)
+            {
+                self.repository.confirm(rule)?;
+            }
+        }
+        Ok(())
     }
 
     fn analyze_with_deadline(
@@ -3473,6 +3682,38 @@ impl Pipeline {
         Ok(verified)
     }
 
+    /// Puts the ready `item` in review where `record`, which no person has
+    /// approved, has a name a learned spelling no person has checked yet
+    /// changed (see [`ProposalRecord::holds_unchecked_spelling`]), and says
+    /// whether it did. Such a name is never filed without a person, however
+    /// the row came to be ready: the window shows it with
+    /// [`LEARNED_SPELLING_UNCONFIRMED`]. A row that could not be put in
+    /// review - no longer ready, or the database refused - is not filed
+    /// either.
+    fn held_for_unchecked_spelling(
+        &self,
+        item: &QueueItem,
+        record: &ProposalRecord,
+    ) -> PipelineResult<bool> {
+        if record.approved || record.house_rules.is_empty() {
+            return Ok(false);
+        }
+        let spellings = self.repository.spellings()?;
+        let extension = item
+            .source_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if !record.holds_unchecked_spelling(extension, |rule| spellings.checked(rule)) {
+            return Ok(false);
+        }
+        let _ = self
+            .repository
+            .mark_needs_review(item.id, LEARNED_SPELLING_UNCONFIRMED);
+        self.events.queue_changed();
+        Ok(true)
+    }
+
     fn apply_if_unchanged(
         &self,
         item: &QueueItem,
@@ -3527,6 +3768,14 @@ impl Pipeline {
         let filename = proposal
             .as_ref()
             .map_or(filename, |record| record.filename.as_str());
+        // Every filing without a person's approval passes here, and none
+        // files a name a learned spelling changed before a person has
+        // checked that spelling's work once.
+        if let Some(record) = proposal.as_ref()
+            && self.held_for_unchecked_spelling(item, record)?
+        {
+            return Ok(());
+        }
         if leading_date(filename).is_none() {
             self.repository.mark_needs_review(item.id, DATE_REQUIRED)?;
             self.events.queue_changed();
@@ -4655,7 +4904,8 @@ impl Pipeline {
     /// said, so a new reading may take its place: in review or ready by its
     /// record's own status, with no file error; its record [`untouched`],
     /// holding the request its reply answered, and no reason but the
-    /// reading's and a near duplicate's; and no rename of it ever begun.
+    /// reading's, a near duplicate's and an unchecked learned spelling's;
+    /// and no rename of it ever begun.
     fn waits_as_read(&self, item: &QueueItem, record: &ProposalRecord) -> PipelineResult<bool> {
         let as_read = matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready)
             && queue_status_for(record.status) == item.status
@@ -4664,6 +4914,7 @@ impl Pipeline {
             && record.analysis.telemetry.request_sha256.is_some()
             && record.reasons.iter().all(|reason| {
                 reason == NEAR_DUPLICATE
+                    || reason == LEARNED_SPELLING_UNCONFIRMED
                     || record
                         .analysis
                         .review_reasons
@@ -5265,6 +5516,7 @@ impl PipelineRepository {
                    from_value TEXT NOT NULL,
                    to_value TEXT NOT NULL,
                    seen INTEGER NOT NULL DEFAULT 1,
+                   confirmed INTEGER NOT NULL DEFAULT 0,
                    created_at INTEGER NOT NULL,
                    updated_at INTEGER NOT NULL,
                    UNIQUE(kind, from_key)
@@ -5284,6 +5536,18 @@ impl PipelineRepository {
                  );",
             )
             .map_err(database_error)?;
+        // How many times a person checked a rule's work (see
+        // `LearnedRule::confirmed`), which releases before alpha.18 did not
+        // keep: each rule they learned starts unchecked, and waits for one
+        // check like a rule learned today.
+        if !has_column(&connection, "house_rules", "confirmed")? {
+            connection
+                .execute(
+                    "ALTER TABLE house_rules ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )
+                .map_err(database_error)?;
+        }
         let legacy_exists = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_proposals')",
             [], |row| row.get::<_, bool>(0),
@@ -5499,7 +5763,7 @@ impl PipelineRepository {
         let connection = self.lock()?;
         let mut statement = connection
             .prepare(
-                "SELECT id, kind, from_value, to_value, seen, updated_at FROM house_rules
+                "SELECT id, kind, from_value, to_value, seen, confirmed, updated_at FROM house_rules
                  ORDER BY updated_at DESC, id DESC",
             )
             .map_err(database_error)?;
@@ -5511,13 +5775,14 @@ impl PipelineRepository {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, u32>(4)?,
-                    row.get::<_, i64>(5)?,
+                    row.get::<_, u32>(5)?,
+                    row.get::<_, i64>(6)?,
                 ))
             })
             .map_err(database_error)?;
         let mut rules = Vec::new();
         for row in rows {
-            let (id, kind, from, to, seen, learned_at) = row.map_err(database_error)?;
+            let (id, kind, from, to, seen, confirmed, learned_at) = row.map_err(database_error)?;
             let Some(kind) = RuleKind::parse(&kind) else {
                 continue;
             };
@@ -5528,25 +5793,25 @@ impl PipelineRepository {
                 to,
                 seen,
                 active: seen >= EDITS_TO_LEARN,
+                confirmed,
                 learned_at,
             });
         }
         Ok(rules)
     }
 
-    /// The rules in force: learned often enough, or told to be used.
-    fn active_style(&self) -> PipelineResult<HouseStyle> {
-        Ok(HouseStyle::new(
-            self.list_rules()?
-                .into_iter()
-                .filter(|rule| rule.active)
-                .map(|rule| rule.rule())
-                .collect(),
-        ))
+    /// The spellings learned: the rules in force - learned often enough, or
+    /// told to be used - and which of them a person has checked.
+    fn spellings(&self) -> PipelineResult<Spellings> {
+        Ok(Spellings {
+            learned: self.list_rules()?,
+        })
     }
 
     /// Records one respelling. The same change again counts it up; a
-    /// different spelling for the same word starts the count over.
+    /// different spelling for the same word starts the count over, and the
+    /// checks of the spelling it replaces with it (see
+    /// [`LearnedRule::confirmed`]): a person checked what that one wrote.
     fn learn(&self, rule: &HouseRule) -> PipelineResult<LearnedRule> {
         let connection = self.lock()?;
         connection
@@ -5555,6 +5820,7 @@ impl PipelineRepository {
                  VALUES (?1, ?2, ?3, ?4, 1, unixepoch(), unixepoch())
                  ON CONFLICT(kind, from_key) DO UPDATE SET
                    seen = CASE WHEN to_value = excluded.to_value THEN seen + 1 ELSE 1 END,
+                   confirmed = CASE WHEN to_value = excluded.to_value THEN confirmed ELSE 0 END,
                    to_value = excluded.to_value,
                    from_value = excluded.from_value,
                    updated_at = unixepoch()",
@@ -5563,7 +5829,7 @@ impl PipelineRepository {
             .map_err(database_error)?;
         connection
             .query_row(
-                "SELECT id, from_value, to_value, seen, updated_at FROM house_rules
+                "SELECT id, from_value, to_value, seen, confirmed, updated_at FROM house_rules
                  WHERE kind = ?1 AND from_key = ?2",
                 params![rule.kind.as_str(), rule.from_key()],
                 |row| {
@@ -5574,11 +5840,27 @@ impl PipelineRepository {
                         to: row.get(2)?,
                         seen: row.get(3)?,
                         active: row.get::<_, u32>(3)? >= EDITS_TO_LEARN,
-                        learned_at: row.get(4)?,
+                        confirmed: row.get(4)?,
+                        learned_at: row.get(5)?,
                     })
                 },
             )
             .map_err(database_error)
+    }
+
+    /// Counts one check of `rule`'s work (see [`LearnedRule::confirmed`]):
+    /// a person approved a name it changed, spelling and all. Nothing for a
+    /// rule forgotten, respelled or no longer in force since the name was
+    /// composed.
+    fn confirm(&self, rule: &HouseRule) -> PipelineResult<()> {
+        self.lock()?
+            .execute(
+                "UPDATE house_rules SET confirmed = confirmed + 1
+                 WHERE kind = ?1 AND from_key = ?2 AND to_value = ?3 AND seen >= ?4",
+                params![rule.kind.as_str(), rule.from_key(), rule.to, EDITS_TO_LEARN],
+            )
+            .map_err(database_error)?;
+        Ok(())
     }
 
     /// Keeps the text fingerprint of a document just filed, under the name
@@ -5671,11 +5953,16 @@ impl PipelineRepository {
         Ok(removed == 1)
     }
 
+    /// Puts a rule in force at once, checked: a person told Intern to use
+    /// it, in the list where its spelling is shown (see
+    /// [`LearnedRule::confirmed`]).
     fn use_rule(&self, id: i64) -> PipelineResult<bool> {
         let changed = self
             .lock()?
             .execute(
-                "UPDATE house_rules SET seen = MAX(seen, ?2), updated_at = unixepoch() WHERE id = ?1",
+                "UPDATE house_rules SET seen = MAX(seen, ?2), confirmed = MAX(confirmed, 1),
+                     updated_at = unixepoch()
+                 WHERE id = ?1",
                 params![id, EDITS_TO_LEARN],
             )
             .map_err(database_error)?;
@@ -5883,16 +6170,33 @@ impl PipelineRepository {
         let mut record = self
             .load_proposal(id)?
             .ok_or_else(|| PipelineError::new("INVALID_DATA", "proposal is missing"))?;
-        record.status = ProposalStatus::NeedsReview;
         if let Some(reason) = reason
             && !record.reasons.iter().any(|entry| entry == reason)
         {
             record.reasons.push(reason.to_owned());
         }
+        record.revision += 1;
+        self.store_in_review(id, &record, row_status, error_code)
+    }
+
+    /// Stores `record` as item `id`'s, waiting for a person, and moves the
+    /// row to review from `row_status`, its code set to `error_code` when
+    /// one is given and left as it is otherwise: one transaction, so the
+    /// row is never ready under a record that is not. `STATE_CONFLICT` when
+    /// the row is no longer `row_status`. The caller has said why, among the
+    /// record's reasons, and moved its revision.
+    fn store_in_review(
+        &self,
+        id: i64,
+        record: &ProposalRecord,
+        row_status: QueueStatus,
+        error_code: Option<&str>,
+    ) -> PipelineResult<()> {
+        let mut record = record.clone();
+        record.status = ProposalStatus::NeedsReview;
         // A document waiting for a person is no longer a document waiting to
         // be filed, whatever was approved before.
         record.approved = false;
-        record.revision += 1;
         let mut connection = self.lock()?;
         let transaction = connection.transaction().map_err(database_error)?;
         let changed = transaction.execute(
@@ -6045,6 +6349,22 @@ impl PipelineRepository {
     }
 }
 
+/// Whether `table` has a column named `column`.
+fn has_column(connection: &Connection, table: &str, column: &str) -> PipelineResult<bool> {
+    let mut statement = connection
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(database_error)?;
+    let names = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(database_error)?;
+    for name in names {
+        if name.map_err(database_error)? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Records on `connection` that `release` read or considered item `id`.
 /// Nothing, for an item that is gone.
 fn mark_release(connection: &Connection, id: i64, release: &str) -> PipelineResult<()> {
@@ -6073,6 +6393,35 @@ fn untouched(record: &ProposalRecord) -> bool {
             .reasons
             .iter()
             .any(|reason| reason == UNDONE || reason == ALREADY_NAMED)
+}
+
+/// Marks `record` as waiting for a person where a learned spelling no person
+/// has checked yet changed its name (see
+/// [`ProposalRecord::holds_unchecked_spelling`]), and takes the reason back
+/// where none does any more - the rule forgotten, or respelled, since -
+/// leaving the record in review all the same: what else held it is not
+/// known here, and a person will see it. Says whether it is held.
+fn hold_unchecked_spelling(
+    record: &mut ProposalRecord,
+    extension: &str,
+    spellings: &Spellings,
+) -> bool {
+    let held = record.holds_unchecked_spelling(extension, |rule| spellings.checked(rule));
+    let marked = record
+        .reasons
+        .iter()
+        .any(|reason| reason == LEARNED_SPELLING_UNCONFIRMED);
+    if held {
+        if !marked {
+            record.reasons.push(LEARNED_SPELLING_UNCONFIRMED.to_owned());
+        }
+        record.status = ProposalStatus::NeedsReview;
+    } else if marked {
+        record
+            .reasons
+            .retain(|reason| reason != LEARNED_SPELLING_UNCONFIRMED);
+    }
+    held
 }
 
 /// Whether a stored reading is provisional and nobody has acted on it

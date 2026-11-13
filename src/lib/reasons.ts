@@ -117,6 +117,13 @@ const SENTENCES: Record<string, string> = {
   // already filed - a second scan, a re-export, a copy saved again. The
   // inspector names that filing beside this sentence.
   NEAR_DUPLICATE: 'This looks like a document that was filed already. Approve to file it as well, keep the original, or remove it.',
+  // Set on a name a spelling learned from review edits changed before any
+  // person approved a name it changed (LearnedRule::confirmed in
+  // pipeline.rs): an edit's wording cannot always tell a spelling from a
+  // decision about one document, so a rule files nothing on its own until
+  // it has been checked once. Approving keeps the spelling and checks it;
+  // putting the document's own word back retracts the rule.
+  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits for the first time. Approve to let it use the spelling on its own, or change the name back to stop it.',
   // Set when a person undoes a rename. The file is back under its original
   // name and the proposal is still here, so the document waits for a decision
   // rather than being renamed again by the next automatic pass.
@@ -245,6 +252,7 @@ const SHORT: Record<string, string> = {
   MODEL_INPUT_TOO_LARGE: 'Too long for the model',
   DUPLICATE: 'Already filed',
   NEAR_DUPLICATE: 'Possible duplicate',
+  LEARNED_SPELLING_UNCONFIRMED: 'New learned spelling',
   EXACT_COPY: 'Exact copy',
   UNDONE: 'Rename undone',
   ALREADY_NAMED: 'Already had this name',

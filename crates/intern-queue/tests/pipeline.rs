@@ -33,9 +33,9 @@ use intern_queue::{
     paths::display_path,
     pipeline::{
         ALREADY_NAMED, AnalyzerBoundary, CoreFileActions, DuplicateOracle, FileActions,
-        FiledDocument, FilingSink, KnownFiling, ModelFailure, NEAR_DUPLICATE, Pipeline,
-        PipelineError, PipelineEventSink, PipelineProgress, SimilarFiling, UNDONE, UnfiledDocument,
-        WorkerBoundary, WorkerFailure,
+        FiledDocument, FilingSink, KnownFiling, LEARNED_SPELLING_UNCONFIRMED, ModelFailure,
+        NEAR_DUPLICATE, Pipeline, PipelineError, PipelineEventSink, PipelineItem, PipelineProgress,
+        SimilarFiling, UNDONE, UnfiledDocument, WorkerBoundary, WorkerFailure,
     },
     settings::{AppSettings, DestinationLayout, SettingsStore},
 };
@@ -3865,7 +3865,8 @@ fn record_of(pipeline: &Pipeline, id: i64) -> intern_queue::ProposalRecord {
 /// the document's words. Shortening it a second time makes it a spelling:
 /// the document still waiting is renamed in the queue, the one processed
 /// afterwards is proposed with it, and what is filed under it reports the
-/// reviewer's word while the analysis keeps the document's.
+/// reviewer's word while the analysis keeps the document's. Until a person
+/// has approved a name the spelling changed, each such name waits for one.
 #[test]
 fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
     let temp = tempdir().unwrap();
@@ -3924,6 +3925,7 @@ fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
         .unwrap();
     let rules = pipeline.learned_rules().unwrap();
     assert_eq!((rules[0].seen, rules[0].active), (2, true));
+    assert_eq!(rules[0].confirmed, 0, "nobody has checked what it writes");
     let waiting = record_of(&pipeline, queued[2]);
     assert_eq!(
         waiting.filename, "2024-06-07 Employment Agreement between John Smith and Acme.pdf",
@@ -3931,6 +3933,8 @@ fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
     );
     assert_eq!(waiting.revision, 2);
     assert_eq!(waiting.house_rules.len(), 1);
+    assert_eq!(waiting.status, ProposalStatus::NeedsReview);
+    assert_eq!(waiting.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
     assert_eq!(
         waiting.analysis.proposal.parties,
         vec!["John Smith", "Acme Corporation"],
@@ -3946,6 +3950,7 @@ fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
         "2024-07-01 Employment Agreement between John Smith and Acme.pdf"
     );
     assert_eq!(proposed.house_rules[0].to, "Acme");
+    assert_eq!(proposed.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
 
     pipeline
         .approve(
@@ -3964,11 +3969,12 @@ fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
             .iter()
             .any(|document| document.proposal.parties == vec!["John Smith", "Acme"])
     );
+    let rule = pipeline.learned_rules().unwrap().remove(0);
     assert_eq!(
-        pipeline.learned_rules().unwrap()[0].seen,
-        2,
+        rule.seen, 2,
         "approving the spelling Intern applied teaches nothing new"
     );
+    assert_eq!(rule.confirmed, 1, "but checks it");
 }
 
 /// A model whose readings carry the evidence pipeline's validated facts:
@@ -5653,6 +5659,418 @@ fn respelling_interns_own_spelling(facts: &[&'static str]) {
         pipeline.learned_rules().unwrap().is_empty(),
         "the document's word restored retracts the rule (facts: {facts:?})"
     );
+}
+
+/// Employment agreements between John Smith and Acme Corporation, one a
+/// month from April 2024, read one at a time - each after what came before
+/// was approved - and filed by party. The readings carry validated facts
+/// naming `found`, and every one is ready: what review edits teach decides
+/// whether a later one is filed without review.
+struct Probation {
+    temp: tempfile::TempDir,
+    pipeline: Pipeline,
+    filing: Arc<RecordingFiling>,
+    read: usize,
+}
+
+/// The agreements [`Probation`] reads, in turn: ISO date and as written.
+const PROBATION_DATES: [(&str, &str); 5] = [
+    ("2024-04-12", "April 12, 2024"),
+    ("2024-05-03", "May 3, 2024"),
+    ("2024-06-07", "June 7, 2024"),
+    ("2024-07-01", "July 1, 2024"),
+    ("2024-08-02", "August 2, 2024"),
+];
+
+impl Probation {
+    fn new(found: &[&'static str]) -> Self {
+        Self::after(found, |_| {})
+    }
+
+    /// [`Self::new`], with the queue database's file made by `before`
+    /// before Intern opens it: one an earlier release left.
+    fn after(found: &[&'static str], before: impl FnOnce(&Path)) -> Self {
+        let temp = tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("inbox")).unwrap();
+        before(&temp.path().join("queue.sqlite3"));
+        let (pipeline, filing) = reading_pipeline(
+            temp.path(),
+            PROBATION_DATES
+                .iter()
+                .map(|(_, written)| dated_text(written))
+                .collect(),
+            PROBATION_DATES
+                .iter()
+                .map(|(iso, written)| dated_proposal(iso, written))
+                .collect(),
+            found,
+            DestinationLayout::Party,
+        );
+        Self {
+            temp,
+            pipeline,
+            filing,
+            read: 0,
+        }
+    }
+
+    /// Automatic renaming switched on or off, filing by party.
+    fn automatic(&self, on: bool) {
+        SettingsStore::new(self.temp.path().join("settings.json"))
+            .save(&AppSettings {
+                destination: self
+                    .temp
+                    .path()
+                    .join("filed")
+                    .to_string_lossy()
+                    .into_owned(),
+                destination_layout: DestinationLayout::Party,
+                automatic_rename: on,
+                ..AppSettings::default()
+            })
+            .unwrap();
+    }
+
+    /// Adds the next agreement and lets the queue run: its item.
+    fn read_next(&mut self) -> i64 {
+        let name = format!("{}.pdf", ["a", "b", "c", "d", "e"][self.read]);
+        self.read += 1;
+        let id = self
+            .pipeline
+            .enqueue_files(&[source(&self.temp.path().join("inbox"), &name)])
+            .unwrap()
+            .remove(0)
+            .id;
+        self.pipeline.run_until_idle().unwrap();
+        id
+    }
+
+    fn item(&self, id: i64) -> PipelineItem {
+        self.pipeline
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == id)
+            .unwrap()
+    }
+
+    /// The folder and the name the item was filed under, as its filing
+    /// report gives them, if it was filed.
+    fn filed_as(&self, id: i64) -> Option<(String, String)> {
+        self.filing
+            .filed
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|document| document.item_id == id)
+            .map(|document| {
+                let leaf = |path: &Path| path.file_name().unwrap().to_string_lossy().into_owned();
+                (
+                    leaf(document.destination.parent().unwrap()),
+                    leaf(&document.destination),
+                )
+            })
+    }
+
+    /// Approves item `id` under `stem`, after its date.
+    fn approve(&self, id: i64, stem: &str) {
+        let date = PROBATION_DATES[usize::try_from(id - 1).unwrap()].0;
+        self.pipeline
+            .approve(
+                id,
+                &format!("{date} {stem}.pdf"),
+                "An employment agreement.",
+            )
+            .unwrap();
+    }
+
+    /// The one rule learned, as (from, to, seen, active, confirmed).
+    fn rule(&self) -> (String, String, u32, bool, u32) {
+        let rules = self.pipeline.learned_rules().unwrap();
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        let rule = &rules[0];
+        (
+            rule.from.clone(),
+            rule.to.clone(),
+            rule.seen,
+            rule.active,
+            rule.confirmed,
+        )
+    }
+}
+
+fn rule_state(from: &str, to: &str, seen: u32, confirmed: u32) -> (String, String, u32, bool, u32) {
+    (from.into(), to.into(), seen, seen >= 2, confirmed)
+}
+
+/// A spelling learned from two edits changes the next name, and that name
+/// waits for a person even with automatic renaming on: nobody has seen
+/// what the rule writes on a document it was not learned from. Approved as
+/// it is, the rule is checked, and the next name it changes is filed on its
+/// own like any other reading. The third agreement used to be filed without
+/// review the moment it was read, under a spelling nobody had looked at.
+#[test]
+fn a_learned_spelling_waits_for_one_check_then_files_on_its_own() {
+    let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
+    let first = rig.read_next();
+    let second = rig.read_next();
+    for id in [first, second] {
+        assert_eq!(rig.item(id).status, QueueStatus::Ready);
+        rig.approve(id, "Employment Agreement between John Smith and Acme");
+    }
+    assert_eq!(rig.rule(), rule_state("Acme Corporation", "Acme", 2, 0));
+
+    rig.automatic(true);
+    let third = rig.read_next();
+    let held = rig.item(third);
+    assert_eq!(held.status, QueueStatus::NeedsReview);
+    let record = held.proposal.unwrap();
+    assert_eq!(
+        record.filename, "2024-06-07 Employment Agreement between John Smith and Acme.pdf",
+        "the rule's spelling is in the name, for the reviewer to check"
+    );
+    assert_eq!(record.status, ProposalStatus::NeedsReview);
+    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
+    assert_eq!(rig.filed_as(third), None, "not filed without review");
+
+    rig.pipeline
+        .approve(third, &record.filename, &record.description)
+        .unwrap();
+    assert_eq!(
+        rig.filed_as(third),
+        Some((
+            "John Smith".into(),
+            "2024-06-07 Employment Agreement between John Smith and Acme.pdf".into()
+        ))
+    );
+    assert_eq!(
+        rig.rule(),
+        rule_state("Acme Corporation", "Acme", 2, 1),
+        "approving the rule's spelling checks it, and teaches nothing new"
+    );
+
+    let fourth = rig.read_next();
+    assert_eq!(rig.item(fourth).status, QueueStatus::Completed);
+    assert_eq!(
+        rig.filed_as(fourth),
+        Some((
+            "John Smith".into(),
+            "2024-07-01 Employment Agreement between John Smith and Acme.pdf".into()
+        )),
+        "filed without review, in the spelling checked"
+    );
+}
+
+/// A rule learned wrong - the wording of an edit read as a respelling when
+/// it was another party joined to the named one, here "between John Smith,
+/// Jane Doe and Acme Corporation" teaching "John Smith -> John Smith, Jane
+/// Doe" - renames the next agreement, but cannot file it: it waits for the
+/// reviewer, who puts the document's own word back, and that retracts the
+/// rule. The agreement after it keeps its own word, and is filed without
+/// review. The third used to be filed as "... between John Smith, Jane Doe
+/// and Acme Corporation" in a folder "John Smith, Jane Doe", without review.
+#[test]
+fn a_wrong_rule_cannot_file_a_name_and_is_retracted_in_review() {
+    let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
+    let joined = "Employment Agreement between John Smith, Jane Doe and Acme Corporation";
+    let first = rig.read_next();
+    let second = rig.read_next();
+    for id in [first, second] {
+        rig.approve(id, joined);
+    }
+    // The wording no heuristic refuses yet; whatever it teaches, the rule
+    // waits for a check.
+    assert_eq!(
+        rig.rule(),
+        rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
+    );
+
+    rig.automatic(true);
+    let third = rig.read_next();
+    let held = rig.item(third);
+    assert_eq!(held.status, QueueStatus::NeedsReview);
+    let record = held.proposal.unwrap();
+    assert_eq!(record.filename, format!("2024-06-07 {joined}.pdf"));
+    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
+    assert_eq!(rig.filed_as(third), None, "the wrong name is not filed");
+
+    rig.approve(
+        third,
+        "Employment Agreement between John Smith and Acme Corporation",
+    );
+    assert!(
+        rig.pipeline.learned_rules().unwrap().is_empty(),
+        "the document's own word put back retracts the rule"
+    );
+    assert_eq!(
+        rig.filed_as(third),
+        Some((
+            "John Smith".into(),
+            "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf".into()
+        ))
+    );
+
+    let fourth = rig.read_next();
+    assert_eq!(
+        rig.filed_as(fourth),
+        Some((
+            "John Smith".into(),
+            "2024-07-01 Employment Agreement between John Smith and Acme Corporation.pdf".into()
+        )),
+        "the next agreement keeps its own word, filed without review"
+    );
+}
+
+/// A ready agreement waiting with automatic renaming off - one click from
+/// filing - that a rule learned meanwhile renames goes to review with the
+/// reason, and switching automatic renaming on does not file it. It stayed
+/// ready under the new name, and the next pass filed it without review.
+#[test]
+fn a_ready_document_a_new_rule_renames_while_it_waits_goes_to_review() {
+    let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
+    let first = rig.read_next();
+    let second = rig.read_next();
+    let third = rig.read_next();
+    let waiting = rig.item(third);
+    assert_eq!(waiting.status, QueueStatus::Ready);
+    let revision = waiting.proposal.unwrap().revision;
+    for id in [first, second] {
+        rig.approve(id, "Employment Agreement between John Smith and Acme");
+    }
+    assert_eq!(rig.rule(), rule_state("Acme Corporation", "Acme", 2, 0));
+
+    let renamed = rig.item(third);
+    assert_eq!(renamed.status, QueueStatus::NeedsReview);
+    let record = renamed.proposal.unwrap();
+    assert_eq!(
+        record.filename,
+        "2024-06-07 Employment Agreement between John Smith and Acme.pdf"
+    );
+    assert_eq!(record.status, ProposalStatus::NeedsReview);
+    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
+    assert_eq!(record.revision, revision + 1);
+
+    rig.automatic(true);
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(rig.item(third).status, QueueStatus::NeedsReview);
+    assert_eq!(rig.filed_as(third), None);
+}
+
+/// A rule an earlier release learned and put in force - before Intern kept
+/// whether a person had checked one - is unchecked after the update, and
+/// the next name it changes waits for a person like a rule learned today.
+/// It was filed without review.
+#[test]
+fn a_rule_from_an_earlier_release_is_unchecked_and_holds_the_next_name_it_changes() {
+    let mut rig = Probation::after(&["John Smith", "Acme Corporation"], |database| {
+        let connection = Connection::open(database).unwrap();
+        // The table as alpha.17 made it, with a rule in force in it.
+        connection
+            .execute_batch(
+                "CREATE TABLE house_rules (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   kind TEXT NOT NULL,
+                   from_key TEXT NOT NULL,
+                   from_value TEXT NOT NULL,
+                   to_value TEXT NOT NULL,
+                   seen INTEGER NOT NULL DEFAULT 1,
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL,
+                   UNIQUE(kind, from_key)
+                 );
+                 INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, created_at, updated_at)
+                 VALUES ('party', 'acme corporation', 'Acme Corporation', 'Acme', 2, 1, 1);",
+            )
+            .unwrap();
+    });
+    assert_eq!(rig.rule(), rule_state("Acme Corporation", "Acme", 2, 0));
+
+    rig.automatic(true);
+    let first = rig.read_next();
+    let held = rig.item(first);
+    assert_eq!(held.status, QueueStatus::NeedsReview);
+    let record = held.proposal.unwrap();
+    assert_eq!(
+        record.filename,
+        "2024-04-12 Employment Agreement between John Smith and Acme.pdf"
+    );
+    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
+    assert_eq!(rig.filed_as(first), None);
+}
+
+/// "Use now" in the list of learned spellings - where the person sees what
+/// the rule writes - puts it in force checked: the next name it changes is
+/// filed without review.
+#[test]
+fn a_spelling_put_in_use_from_the_list_is_checked() {
+    let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
+    let first = rig.read_next();
+    rig.approve(first, "Employment Agreement between John Smith and Acme");
+    assert_eq!(rig.rule(), rule_state("Acme Corporation", "Acme", 1, 0));
+
+    let id = rig.pipeline.learned_rules().unwrap()[0].id;
+    rig.pipeline.use_rule(id).unwrap();
+    assert_eq!(rig.rule(), rule_state("Acme Corporation", "Acme", 2, 1));
+
+    rig.automatic(true);
+    let second = rig.read_next();
+    assert_eq!(
+        rig.filed_as(second),
+        Some((
+            "John Smith".into(),
+            "2024-05-03 Employment Agreement between John Smith and Acme.pdf".into()
+        ))
+    );
+}
+
+/// A checked rule respelled in review into a third spelling starts over:
+/// learned again, the new spelling waits for a check of its own. The check
+/// was of what the old spelling wrote.
+#[test]
+fn a_new_spelling_for_a_checked_rule_waits_for_a_check_of_its_own() {
+    let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
+    let first = rig.read_next();
+    rig.approve(first, "Employment Agreement between John Smith and Acme");
+    let id = rig.pipeline.learned_rules().unwrap()[0].id;
+    rig.pipeline.use_rule(id).unwrap();
+    assert_eq!(rig.rule(), rule_state("Acme Corporation", "Acme", 2, 1));
+
+    let second = rig.read_next();
+    assert_eq!(
+        rig.item(second).proposal.unwrap().filename,
+        "2024-05-03 Employment Agreement between John Smith and Acme.pdf"
+    );
+    assert_eq!(rig.item(second).status, QueueStatus::Ready, "checked");
+    rig.approve(
+        second,
+        "Employment Agreement between John Smith and Acme Corp",
+    );
+    assert_eq!(
+        rig.rule(),
+        rule_state("Acme Corporation", "Acme Corp", 1, 0),
+        "a different spelling starts the count and the checks over"
+    );
+    let third = rig.read_next();
+    rig.approve(
+        third,
+        "Employment Agreement between John Smith and Acme Corp",
+    );
+    assert_eq!(
+        rig.rule(),
+        rule_state("Acme Corporation", "Acme Corp", 2, 0)
+    );
+
+    rig.automatic(true);
+    let fourth = rig.read_next();
+    let held = rig.item(fourth);
+    assert_eq!(held.status, QueueStatus::NeedsReview);
+    let record = held.proposal.unwrap();
+    assert_eq!(
+        record.filename,
+        "2024-07-01 Employment Agreement between John Smith and Acme Corp.pdf"
+    );
+    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
+    assert_eq!(rig.filed_as(fourth), None);
 }
 
 /// A statement of work the firm signed with a supplier, dated `written`.

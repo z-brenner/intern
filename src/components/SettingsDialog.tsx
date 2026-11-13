@@ -546,7 +546,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           {rules.map((rule) => <li key={rule.id}>
             <span className="rule-kind">{rule.kind === 'party' ? 'Party' : 'Type'}</span>
             <span className="rule-change"><q>{rule.from}</q> written as <strong>{rule.to}</strong></span>
-            <span className="rule-state">{rule.active ? 'In use' : 'Seen once · in use after one more edit'}</span>
+            <span className="rule-state">{!rule.active ? 'Seen once · in use after one more edit' : rule.confirmed > 0 ? 'In use' : 'In use · waits for your check'}</span>
             <span className="rule-actions">
               {!rule.active && <button type="button" aria-label={`Use now: ${rule.from} written as ${rule.to}`} onClick={() => void changeRule(() => bridge.houseRuleUse(rule.id))}>Use now</button>}
               <button type="button" aria-label={`Forget: ${rule.from} written as ${rule.to}`} onClick={() => void changeRule(() => bridge.houseRuleForget(rule.id))}>Forget</button>

@@ -461,11 +461,16 @@ party or a document type in review and Intern remembers it. The second time
 you make the same change it becomes the spelling Intern uses, in the name, the
 layout folder, and the description record, for every later document that
 names the same thing. One edit is a decision about one document; two are a
-preference. Settings lists everything learned, with "Use now" for a spelling
-you want at once and "Forget" for one you do not, and the review panel says
-"Uses your spelling" whenever a name differs from the evidence under it. The
-evidence itself always keeps the document's own words: a learned spelling
-changes what Intern calls a thing, never what it found.
+preference. Until you have approved one name it changed, every name a new
+spelling changes waits for you in review, even with automatic renaming on -
+approve it to let Intern use the spelling on its own, or put the document's
+word back to make it forget the spelling. Spellings learned before alpha.18
+wait for that one check too. Settings lists everything learned, with "Use
+now" for a spelling you want at once and "Forget" for one you do not, and
+the review panel says "Uses your spelling" whenever a name differs from the
+evidence under it. The evidence itself always keeps the document's own
+words: a learned spelling changes what Intern calls a thing, never what it
+found.
 
 ## Development
 

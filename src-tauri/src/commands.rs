@@ -206,6 +206,9 @@ pub struct LearnedRuleDto {
     to: String,
     seen: u32,
     active: bool,
+    /// How many times a person checked what it writes: none, and a name it
+    /// changes waits for a person (see `LearnedRule::confirmed`).
+    confirmed: u32,
     learned_at: i64,
 }
 
@@ -218,6 +221,7 @@ impl From<LearnedRule> for LearnedRuleDto {
             to: rule.to,
             seen: rule.seen,
             active: rule.active,
+            confirmed: rule.confirmed,
             learned_at: rule.learned_at,
         }
     }
