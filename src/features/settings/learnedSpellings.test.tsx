@@ -328,6 +328,42 @@ describe('the spellings Intern has learned', () => {
     }
   });
 
+  // As in the review window: while one spelling is asked about, the other
+  // spellings' actions wait. A press on another's "Use on its own" closed
+  // the question above it and opened its own where the pointer was.
+  it('leaves every other spelling\'s actions waiting while it asks', async () => {
+    const rules: LearnedRule[] = [
+      { id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso', seen: 2, active: true, confirmed: 0, learnedAt: 1 },
+      { id: '2', kind: 'party', from: 'Ridgeline Cartography LLC', to: 'Ridgeline Cartography', seen: 2, active: true, confirmed: 0, learnedAt: 2 },
+      { id: '3', kind: 'party', from: 'Northwind Traders', to: 'Northwind', seen: 1, active: false, confirmed: 0, learnedAt: 3 },
+    ];
+    const base = createInMemoryBridge({ learnedRules: rules });
+    const houseRuleUse = vi.fn(base.houseRuleUse);
+    const houseRuleForget = vi.fn(base.houseRuleForget);
+    render(<App bridge={{ ...base, houseRuleUse, houseRuleForget }} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    const rows = () => within(list).getAllByRole('listitem');
+    fireEvent.click(within(rows()[0]).getByRole('button', { name: /^Use on its own:/ }));
+    const question = within(rows()[0]).getByRole('group');
+    const others = [...within(rows()[1]).getAllByRole('button'), ...within(rows()[2]).getAllByRole('button')];
+    expect(others.map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Use on its own: Ridgeline Cartography LLC written as Ridgeline Cartography', 'Forget: Ridgeline Cartography LLC written as Ridgeline Cartography',
+      'Use now: Northwind Traders written as Northwind', 'Forget: Northwind Traders written as Northwind',
+    ]);
+    for (const button of others) {
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+    }
+    expect(question).toBeInTheDocument();
+    expect(within(list).getAllByRole('group')).toHaveLength(1);
+    expect(houseRuleUse).not.toHaveBeenCalled();
+    expect(houseRuleForget).not.toHaveBeenCalled();
+
+    fireEvent.click(within(question).getByRole('button', { name: 'Cancel' }));
+    for (const button of others) expect(button).toBeEnabled();
+  });
+
   // Opened by a press, the question takes the focus where it is: the
   // browser scrolled its Cancel into view when it opened past the bottom of
   // the dialog's body, and brought whatever the scroll brought under the
@@ -363,6 +399,55 @@ describe('the spellings Intern has learned', () => {
     } finally {
       focus.mockRestore();
     }
+  });
+
+  // A press on the sentence let go off the question clicks nothing in it,
+  // and leaves the focus on the row. Escape there closed Settings, and with
+  // it whatever had not been saved. Wherever the focus is in the dialog,
+  // Escape takes back the question and nothing else.
+  it('takes back the question, and only the question, on Escape wherever the focus is in the dialog', async () => {
+    const base = createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] });
+    const houseRuleCheck = vi.fn(base.houseRuleCheck);
+    const onSave = vi.fn(base.saveSettings);
+    render(<App bridge={{ ...base, houseRuleCheck, saveSettings: onSave }} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    const names = within(dialog).getByRole('textbox', { name: "Your organization's names" });
+    fireEvent.change(names, { target: { value: 'Fabrikam LLP' } });
+    const action = () => within(list).getByRole('button', { name: /^Use on its own:/ });
+    for (const focusElsewhere of [
+      () => within(list).getByRole('listitem').focus(),
+      () => names.focus(),
+      () => within(dialog).getByRole('button', { name: 'Save settings' }).focus(),
+    ]) {
+      pressAt(action(), offTheYes);
+      const question = within(list).getByRole('group');
+      fireEvent.pointerDown(question.querySelector('p')!, { ...offTheYes, pointerType: 'mouse' });
+      focusElsewhere();
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+      expect(question).not.toBeInTheDocument();
+      expect(dialog).toBeInTheDocument();
+      await waitFor(() => expect(action()).toHaveFocus());
+    }
+    expect(names).toHaveValue('Fabrikam LLP');
+    expect(houseRuleCheck).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+    // With no question open, Escape closes Settings as before.
+    fireEvent.keyDown(action(), { key: 'Escape' });
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+  });
+
+  // Closing the section over an open question takes the question back: it
+  // is not left asking where it cannot be seen.
+  it('takes back the question when its section is closed', async () => {
+    render(<App bridge={createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] })} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    fireEvent.click(within(list).getByRole('button', { name: /^Use on its own:/ }));
+    expect(within(list).getByRole('group')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByText('Learned spellings', { selector: 'summary' }));
+    await waitFor(() => expect(within(list).queryByRole('group')).not.toBeInTheDocument());
+    expect(dialog).toBeInTheDocument();
   });
 
   it('says a document type spelling renames every later document of that type, in its own words', async () => {

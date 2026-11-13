@@ -52,6 +52,51 @@ async function learnedSpellings(page: Page) {
   return dialog;
 }
 
+/** The state each learned spelling's row says it is in. */
+const states = (dialog: Locator) => dialog.locator('.learned-rules .rule-state').allTextContents();
+
+/*
+  The route the last review found, and the presses that followed it there:
+  a double-click slower than the system's, a double-click and a press again,
+  a press again after a second.
+*/
+const after: [string, (page: Page) => Promise<void>][] = [
+  ['a double-click slower than the system\'s', async (page) => { await page.waitForTimeout(700); await pressHere(page); }],
+  ['a double-click, and a press again', async (page) => { await page.waitForTimeout(150); await pressHere(page, 2); await page.waitForTimeout(650); await pressHere(page); }],
+  ['a press again after a second', async (page) => { await page.waitForTimeout(1000); await pressHere(page); }],
+];
+
+for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) {
+  test(`in Settings, a press on another spelling's "Use on its own" while one is asked about does nothing, at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    const dialog = await learnedSpellings(page);
+    const before = await states(dialog);
+    expect(before.filter((state) => state === 'In use · asks before filing')).toHaveLength(2);
+    for (const [what, pressAgain] of after) {
+      const contoso = dialog.getByRole('group', { name: CONTOSO });
+      const opening = await centre(dialog.getByRole('button', { name: CONTOSO }));
+      await page.mouse.click(opening.x, opening.y);
+      await expect(contoso).toBeVisible();
+      await page.waitForTimeout(500);
+      // Where Ridgeline's action is now, below the question.
+      const ridgeline = dialog.getByRole('button', { name: RIDGELINE });
+      await expect(ridgeline, what).toBeDisabled();
+      const at = await centre(ridgeline);
+      await page.mouse.move(at.x, at.y);
+      await pressHere(page);
+      expect(await under(page, at), what).toBe(RIDGELINE);
+      await pressAgain(page);
+      await page.waitForTimeout(150);
+      await expect(contoso, what).toBeVisible();
+      await expect(dialog.locator('.rule-confirm'), what).toHaveCount(1);
+      expect(await states(dialog), what).toEqual(before);
+      await page.keyboard.press('Escape');
+      await expect(contoso).toHaveCount(0);
+      await expect(dialog).toBeVisible();
+    }
+  });
+}
+
 /*
   A question opened from the keyboard is scrolled into sight, Cancel and
   all, and the scroll can bring its yes under a mouse resting on the panel.
@@ -159,4 +204,61 @@ test('the yes moved to after reading is taken on the first press, in the review 
   await pressHere(page);
   await expect(question).toHaveCount(0);
   await expect(dialog.locator('li[data-rule="2"] .rule-state')).toHaveText('In use');
+});
+
+/*
+  A press on the sentence let go off the question clicks nothing in it,
+  and leaves the focus on the row (Settings) or the group (the review
+  drawer) around it. Escape there closed Settings, with what was not saved,
+  or the drawer. It takes back the question, and nothing else.
+*/
+test('Escape after a press on the sentence let go off the question takes back only the question, in Settings', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const dialog = await learnedSpellings(page);
+  await dialog.locator('summary', { hasText: 'Naming and filing' }).click();
+  const names = dialog.getByRole('textbox', { name: "Your organization's names" });
+  await names.fill('Fabrikam LLP');
+  const action = dialog.getByRole('button', { name: CONTOSO });
+  await action.scrollIntoViewIfNeeded();
+  const at = await centre(action);
+  await page.mouse.click(at.x, at.y);
+  const question = dialog.getByRole('group', { name: CONTOSO });
+  const sentence = await centre(question.locator('p'));
+  const row = (await dialog.locator('li[data-rule="1"] .rule-change').boundingBox())!;
+  await page.mouse.move(sentence.x, sentence.y);
+  await page.mouse.down();
+  await page.mouse.move(row.x + 4, row.y + row.height / 2, { steps: 4 });
+  await page.mouse.up();
+  await expect(dialog.locator('li[data-rule="1"]')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(question).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await expect(action).toBeFocused();
+  await expect(names).toHaveValue('Fabrikam LLP');
+  // With no question open, Escape closes Settings as before.
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+});
+
+test('Escape after a press on the sentence let go off the question takes back only the question, in the review drawer', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.goto('/?learnedSpellings=held');
+  const panel = await openDetails(page, 'SOW final v3.pdf');
+  await expect(panel).toHaveAttribute('role', 'dialog');
+  const action = panel.getByRole('button', { name: CONTOSO });
+  await action.scrollIntoViewIfNeeded();
+  const at = await centre(action);
+  await page.mouse.click(at.x, at.y);
+  const question = panel.getByRole('group', { name: CONTOSO });
+  const sentence = await centre(question.locator('p'));
+  const note = (await panel.getByRole('note', { name: 'Learned spellings applied' }).boundingBox())!;
+  await page.mouse.move(sentence.x, sentence.y);
+  await page.mouse.down();
+  await page.mouse.move(note.x + 10, note.y + note.height / 2, { steps: 4 });
+  await page.mouse.up();
+  await expect(panel.getByRole('group', { name: 'Use a learned spelling on its own' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(question).toHaveCount(0);
+  await expect(panel).toBeVisible();
+  await expect(action).toBeFocused();
 });

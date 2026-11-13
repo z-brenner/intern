@@ -348,15 +348,27 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     names without a person, so it says what it does - for every later
     document - before it does it, and Cancel holds the focus.
 
-    A change that takes away the control that had the focus puts it back
-    in the list rather than on the page, outside the dialog: to the action
-    when the question was taken back; to the spelling's row once it is used
-    on its own or put in use, the button pressed gone; to the row that took
-    a forgotten spelling's place, the one before it at the end of the list,
-    or the section's heading when none is left. A focus the change left
-    where it was - a Forget refused - stays there.
+    While it asks, the other spellings' actions wait: a press on another
+    "Use on its own" closed the question above it, its row moved up by the
+    height the question had taken, and the new question opened with its
+    yes under the pointer that had pressed the action. The question's yes
+    no longer takes a press from a pointer that did not move to it
+    (UseOnItsOwnQuestion), and nothing in the list moves while it asks, as
+    in the review window. Escape takes back the question, and nothing else,
+    wherever the focus is in the dialog: a press on its sentence let go off
+    the question leaves the focus on the row, and Escape there closed
+    Settings with whatever was not saved.
+
+    A taken-back question gives the focus back to its action. A change that
+    takes away the control that had the focus puts it back in the list
+    rather than on the page, outside the dialog: to the spelling's row once
+    it is used on its own or put in use, the button pressed gone; to the row
+    that took a forgotten spelling's place, the one before it at the end of
+    the list, or the section's heading when none is left. A focus such a
+    change left where it was - a Forget refused - stays there.
   */
   const [checkingRule, setCheckingRule] = useState<string>();
+  const asking = checkingRule !== undefined;
   const rulesList = useRef<HTMLUListElement>(null);
   const rulesHeading = useRef<HTMLElement>(null);
   const [focusRule, setFocusRule] = useState<{ id: string; on: 'action' | 'row'; index?: number }>();
@@ -364,13 +376,23 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     if (!focusRule || checkingRule !== undefined) return;
     setFocusRule(undefined);
     const focused = document.activeElement;
-    if (focused && focused !== document.body && dialog.current?.contains(focused)) return;
+    if (focusRule.on === 'row' && focused && focused !== document.body && dialog.current?.contains(focused)) return;
     const rows = [...(rulesList.current?.querySelectorAll<HTMLElement>('li[data-rule]') ?? [])];
     const row = rows.find((li) => li.dataset.rule === focusRule.id) ?? (focusRule.index === undefined ? undefined : rows[Math.min(focusRule.index, rows.length - 1)]);
     const action = focusRule.on === 'action' ? row?.querySelector<HTMLElement>('button[data-action="use-on-its-own"]') : undefined;
     (action ?? row ?? rulesHeading.current)?.focus();
   }, [focusRule, checkingRule, rules]);
   const takeBackCheck = (id: string) => { setCheckingRule(undefined); setFocusRule({ id, on: 'action' }); };
+  // Escape reaches the question it takes back without the key handler below
+  // depending on which question is open.
+  const takeBack = useRef<() => boolean>(() => false);
+  useEffect(() => {
+    takeBack.current = () => {
+      if (checkingRule === undefined) return false;
+      takeBackCheck(checkingRule);
+      return true;
+    };
+  }, [checkingRule]);
   const checkRule = async (rule: LearnedRule) => {
     setCheckingRule(undefined);
     await changeRule(() => bridge.houseRuleCheck(rule.id, { kind: rule.kind, from: rule.from, to: rule.to }));
@@ -478,7 +500,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   useEffect(() => {
     (destination.current ?? layout.current)?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); close.current(); return; }
+      if (event.key === 'Escape') { event.preventDefault(); if (!takeBack.current()) close.current(); return; }
       if (event.key !== 'Tab') return;
       const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary') ?? []).filter((element) => {
         let ancestor = element.parentElement;
@@ -582,7 +604,8 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         <label className="check-label"><input type="checkbox" checked={Boolean(next.automaticRename)} onChange={(event) => setNext({ ...next, automaticRename: event.target.checked })} />Automatically rename high-confidence files</label>
         <p className="check-hint">Anything Intern is less sure about still waits for you in the queue.</p>
       </details>
-      <details className="settings-group settings-advanced">
+      {/* A question is not left open in a section closed over it: closing the section takes it back. */}
+      <details className="settings-group settings-advanced" onToggle={(event) => { if (!event.currentTarget.open) setCheckingRule(undefined); }}>
         <summary ref={rulesHeading}>Learned spellings</summary>
         {/*
           Learned from edits, never from the model, and never on the first
@@ -598,9 +621,9 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
             <span className="rule-change"><q>{rule.from}</q> written as <strong>{rule.to}</strong></span>
             <span className="rule-state">{!rule.active ? 'Seen once · in use after one more edit' : rule.confirmed > 0 ? 'In use' : 'In use · asks before filing'}</span>
             {checkingRule === rule.id ? <UseOnItsOwnQuestion rule={rule} describedBy={`rule-check-${rule.id}`} onConfirm={() => void checkRule(rule)} onCancel={() => takeBackCheck(rule.id)} /> : <span className="rule-actions">
-              {!rule.active && <button type="button" aria-label={`Use now: ${spellingLabel(rule)}`} onClick={() => void putInUse(rule)}>Use now</button>}
-              {rule.active && rule.confirmed === 0 && <button type="button" data-action="use-on-its-own" aria-label={`Use on its own: ${spellingLabel(rule)}`} onClick={() => { setRulesError(''); setCheckingRule(rule.id); }}>Use on its own</button>}
-              <button type="button" aria-label={`Forget: ${spellingLabel(rule)}`} onClick={() => void forgetRule(rule, index)}>Forget</button>
+              {!rule.active && <button type="button" disabled={asking} aria-label={`Use now: ${spellingLabel(rule)}`} onClick={() => void putInUse(rule)}>Use now</button>}
+              {rule.active && rule.confirmed === 0 && <button type="button" disabled={asking} data-action="use-on-its-own" aria-label={`Use on its own: ${spellingLabel(rule)}`} onClick={() => { setRulesError(''); setCheckingRule(rule.id); }}>Use on its own</button>}
+              <button type="button" disabled={asking} aria-label={`Forget: ${spellingLabel(rule)}`} onClick={() => void forgetRule(rule, index)}>Forget</button>
             </span>}
           </li>)}
         </ul>}

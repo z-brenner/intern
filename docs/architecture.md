@@ -731,34 +731,39 @@ first says, in plain words, with the document's word and the spelling
 exactly as they are, that every later document Intern reads as naming the
 word (for a type: reads as that type) will be named with the spelling, and
 may be filed under that name without the person's check; Cancel and Escape
-take the question back. Its yes takes a press of the pointer - a click that
-counts presses, or one that began with the pointer down on it and no key
-pressed since - only once the pointer has come onto it since the question
-appeared (`UseOnItsOwnQuestion`, with where the pointer was last seen kept
-by `lastInput`): moved onto it from a point off it, both as the yes is at
-that moment, after the pointer was seen off it - or, for a finger, which has
-no hover, touched down on it from a point off it. A move to where the
-pointer already was is not counted: browsers send one after a scroll or a
-change of layout, WebKit above all. So a yes that came under a pointer that
-did not move to it - the question opening under the pointer that pressed its
-action, the row below a closed question moving up, a scroll, a question
-opened from the keyboard scrolled under a resting mouse - takes no press
-until the pointer has moved off it and back. Earlier rounds kept the yes
-from coming under the pointer in each way found, and each time another way
-was found; this does not depend on how the yes got there. Two older rules
-stay behind it. Opened by a press, the question opens where the action was,
-sentence first, and nothing the press sets off moves what is under the
-pointer (`afterAPress`): Cancel takes the focus where it is, and neither the
-review panel nor Settings scrolls until a key is pressed. The review panel
-used to scroll the question clear of the decision stuck to its bottom, which
-brought the yes under the pointer that had pressed the action: a
-double-click a little slower than the system's, or a press again, used the
-spelling on its own with the sentence never read. The next press lands on
-the sentence and leaves the focus on Cancel. And a press on the yes that is
-part of a double-click or more, or that began within half a second of the
-question appearing or of a press the yes did not take, is no answer. A press
-the yes refuses checks nothing and puts the focus back on Cancel; a yes from
-the keyboard or from assistive technology is taken at once. Opened from the
+take the question back. Escape takes back the question and nothing else -
+not the drawer, not Settings - wherever the focus is in the review panel or
+in Settings, and the focus goes back to the action; closing Settings'
+"Learned spellings" section takes back a question open in it. While a
+question asks, the other spellings' actions wait, in the review window and
+in Settings. Its yes takes a press of the pointer - a click that counts
+presses, or one that began with the pointer down on it and no key pressed
+since - only once the pointer has come onto it since the question appeared
+(`UseOnItsOwnQuestion`, with where the pointer was last seen kept by
+`lastInput`): moved onto it from a point off it, both as the yes is at that
+moment, after the pointer was seen off it - or, for a finger, which has no
+hover, touched down on it from a point off it. A move to where the pointer
+already was is not counted: browsers send one after a scroll or a change of
+layout, WebKit above all. So a yes that came under a pointer that did not
+move to it - the question opening under the pointer that pressed its action,
+the row below a closed question moving up, a scroll, a question opened from
+the keyboard scrolled under a resting mouse - takes no press until the
+pointer has moved off it and back. Earlier rounds kept the yes from coming
+under the pointer in each way found, and each time another way was found;
+this does not depend on how the yes got there. Two older rules stay behind
+it. Opened by a press, the question opens where the action was, sentence
+first, and nothing the press sets off moves what is under the pointer
+(`afterAPress`): Cancel takes the focus where it is, and neither the review
+panel nor Settings scrolls until a key is pressed. The review panel used to
+scroll the question clear of the decision stuck to its bottom, which brought
+the yes under the pointer that had pressed the action: a double-click a
+little slower than the system's, or a press again, used the spelling on its
+own with the sentence never read. The next press lands on the sentence and
+leaves the focus on Cancel. And a press on the yes that is part of a
+double-click or more, or that began within half a second of the question
+appearing or of a press the yes did not take, is no answer. A press the yes
+refuses checks nothing and puts the focus back on Cancel; a yes from the
+keyboard or from assistive technology is taken at once. Opened from the
 keyboard, the question is scrolled into sight, Cancel and all. The command
 (`house_rule_check`) carries the rule's id and the spelling the person was
 shown - its kind, the document's word and

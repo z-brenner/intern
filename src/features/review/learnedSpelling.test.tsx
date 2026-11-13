@@ -443,6 +443,33 @@ describe('using a held document\'s spelling on its own', () => {
       expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
     });
 
+    // A press on the sentence let go off the question clicks nothing in it,
+    // and leaves the focus on the group around it. Escape there closed the
+    // drawer, question and all.
+    it('takes back the question, and only the question, on Escape wherever the focus is in the drawer', async () => {
+      const bridge = spellingBridge(spellings);
+      const actions = handlers();
+      render(<ReviewInspector item={held} drawer {...actions} spellings={bridge} />);
+      const label = 'Use on its own: Contoso Worldwide, Inc. written as Contoso';
+      for (const focusElsewhere of [
+        () => screen.getByRole('group', { name: 'Use a learned spelling on its own' }).focus(),
+        () => screen.getByLabelText('Filename').focus(),
+      ]) {
+        const action = await screen.findByRole('button', { name: label });
+        pressAt(action, offTheYes);
+        const question = screen.getByRole('group', { name: label });
+        fireEvent.pointerDown(question.querySelector('p')!, { ...offTheYes, pointerType: 'mouse' });
+        focusElsewhere();
+        fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+        expect(question).not.toBeInTheDocument();
+        await waitFor(() => expect(screen.getByRole('button', { name: label })).toHaveFocus());
+      }
+      expect(actions.onClose).not.toHaveBeenCalled();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+      // With no question open, Escape closes the drawer as before.
+      fireEvent.keyDown(screen.getByRole('button', { name: label }), { key: 'Escape' });
+      expect(actions.onClose).toHaveBeenCalledOnce();
+    });
   });
 
   // The record's spelling can be older than the spelling: an approval of

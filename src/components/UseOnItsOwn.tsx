@@ -30,7 +30,8 @@ export const PRESS_SETTLES_MS = 500;
  * action was: the consequence, then Use on its own and Cancel, Cancel
  * holding the focus so that Enter pressed on is not a yes. Escape takes
  * back the question and nothing else - not the dialog or the drawer it is
- * in. `note` is said after the consequence.
+ * in, which take it back on Escape wherever the focus is in them. `note` is
+ * said after the consequence.
  *
  * The yes takes a press of the pointer only once the pointer has come onto
  * it since the question appeared: moved onto it from a point off it, both

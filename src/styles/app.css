@@ -677,6 +677,7 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .rule-state { font-size: 12px; color: var(--text-soft); white-space: nowrap; }
 .rule-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .rule-actions button { min-height: 30px; padding: 0 10px; }
+.rule-actions button:disabled { opacity: .5; cursor: default; }
 .learned-rules .rule-confirm { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
 .rule-confirm p { flex: 1 0 100%; margin: 0 0 2px; font-size: 12.5px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
 .rule-confirm q { font-weight: 600; }

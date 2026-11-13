@@ -379,6 +379,15 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       setMoreOpen(false);
       return;
     }
+    // Then the question "Use on its own" asks, wherever the focus is in the
+    // panel: a press on its sentence let go off the question leaves the
+    // focus on the group around it, and Escape there closed the drawer.
+    if (event.key === 'Escape' && askingSpelling !== undefined && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      event.stopPropagation();
+      takeBackSpelling(askingSpelling);
+      return;
+    }
     if (!drawer) return;
     if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
     if (event.key !== 'Tab') return;
@@ -429,6 +438,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     (trigger ?? spellingChecks.current)?.focus();
     setSpellingFocus(undefined);
   }, [spellingFocus, askingSpelling, learned]);
+  const takeBackSpelling = (rule: string) => { setAskingSpelling(undefined); setSpellingFocus({ rule }); };
   const checkSpelling = async (rule: LearnedRule) => {
     if (!spellings) return;
     setAskingSpelling(undefined);
@@ -574,7 +584,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         {unchecked.map((rule) => askingSpelling === rule.id
           ? <UseOnItsOwnQuestion key={rule.id} rule={rule} describedBy={`${fieldId}-spelling-${rule.id}`} disabled={busy}
             note="Choosing this does not approve this document: it still waits for you."
-            onConfirm={() => void checkSpelling(rule)} onCancel={() => { setAskingSpelling(undefined); setSpellingFocus({ rule: rule.id }); }} />
+            onConfirm={() => void checkSpelling(rule)} onCancel={() => takeBackSpelling(rule.id)} />
           : <div key={rule.id} className="spelling-check">
             {usedRules.length > 1 && <span><q>{rule.from}</q> written as <strong>{rule.to}</strong></span>}
             <button type="button" data-rule={rule.id} disabled={busy || askingSpelling !== undefined} aria-label={`Use on its own: ${spellingLabel(rule)}`} onClick={() => { setSpellingNote(undefined); setAskingSpelling(rule.id); }}>Use on its own</button>
