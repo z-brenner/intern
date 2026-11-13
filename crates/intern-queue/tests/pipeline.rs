@@ -4360,6 +4360,10 @@ fn a_party_whose_name_holds_the_named_ones_typed_as_its_own_words_teaches_no_spe
 struct ChosenTwice {
     /// The rules learned, as "from -> to".
     learned: Vec<String>,
+    /// The folder each of the two approved was filed in.
+    folders: Vec<String>,
+    /// The parties each one's filing report gives.
+    reported: Vec<Vec<String>>,
     /// The name the third was filed under, without review.
     third: String,
 }
@@ -4444,6 +4448,34 @@ fn chosen_twice(
         .into_iter()
         .map(|rule| format!("{} -> {}", rule.from, rule.to))
         .collect();
+    let folders = queued
+        .iter()
+        .map(|id| {
+            let item = pipeline
+                .list()
+                .unwrap()
+                .into_iter()
+                .find(|item| item.id == *id)
+                .unwrap();
+            assert_eq!(item.status, QueueStatus::Completed);
+            item.receipt
+                .unwrap()
+                .destination
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    let reported = filing
+        .filed
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|document| document.proposal.parties.clone())
+        .collect();
 
     let filed = temp.path().join("filed");
     SettingsStore::new(temp.path().join("settings.json"))
@@ -4472,7 +4504,12 @@ fn chosen_twice(
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    ChosenTwice { learned, third }
+    ChosenTwice {
+        learned,
+        folders,
+        reported,
+        third,
+    }
 }
 
 /// Another party the document names, written in the name whole - one
@@ -4742,6 +4779,99 @@ fn a_party_chosen_in_review_is_the_party_the_document_is_filed_under() {
         record_of(&pipeline, queued[0]).analysis.proposal.parties,
         vec!["Acme Corporation"],
         "the analysis keeps the document's reading"
+    );
+}
+
+/// A party chosen in review whose name ends with a connecting word and the
+/// party it took the place of - "FDIC as Receiver for Acme Corporation" for
+/// "Acme Corporation" - is the party the document is filed under, behind
+/// the name's own connecting word or another. The name's grammar reads such
+/// a name as a type lengthened in front of the party it kept, and it was
+/// filed, and reported, under the party the reviewer took out of it.
+#[test]
+fn a_party_chosen_in_review_that_ends_with_the_named_one_is_the_party_filed_under() {
+    for (relation, named, other, approved) in [
+        (
+            PartyRelation::With,
+            "Acme Corporation",
+            "FDIC as Receiver for Acme Corporation",
+            "with FDIC as Receiver for Acme Corporation",
+        ),
+        (
+            PartyRelation::For,
+            "Acme Corporation",
+            "Trustee for Acme Corporation",
+            "for Trustee for Acme Corporation",
+        ),
+        (
+            PartyRelation::To,
+            "John Smith",
+            "Estate of John Smith",
+            "to Estate of John Smith",
+        ),
+    ] {
+        let chosen = chosen_twice(relation, named, other, approved);
+        assert_eq!(chosen.folders, [other; 2], "{approved}");
+        assert_eq!(chosen.reported, [[other], [other]], "{approved}");
+    }
+}
+
+/// A party offered in review and written into the name another way - in
+/// capitals, with a note after it as a click keeps one, or in front of the
+/// party the name gave - is filed as it was offered: the reviewer chose
+/// that party. It was filed under what they typed, the note too, and in
+/// front of the party kept, under the party they had chosen against.
+#[test]
+fn a_party_offered_in_review_and_written_another_way_is_filed_as_offered() {
+    for approved in [
+        "with BEACON STAFFING LLC",
+        "with Beacon Staffing LLC re Merger",
+        "for Beacon Staffing LLC with Acme Corporation",
+    ] {
+        let chosen = chosen_twice(
+            PartyRelation::With,
+            "Acme Corporation",
+            "Beacon Staffing LLC",
+            approved,
+        );
+        assert!(
+            chosen.learned.is_empty(),
+            "{approved}: learned {:?}",
+            chosen.learned
+        );
+        assert_eq!(chosen.folders, ["Beacon Staffing LLC"; 2], "{approved}");
+        assert_eq!(
+            chosen.reported,
+            [["Beacon Staffing LLC"], ["Beacon Staffing LLC"]],
+            "{approved}"
+        );
+    }
+}
+
+/// A type lengthened in front of the party the name gave, now behind
+/// another connecting word - "Employment Agreement for Sales Staff from
+/// Acme Corporation" for "Employment Agreement for Acme Corporation" - is
+/// an edit to the type: the document is filed, and reported, under the
+/// party it kept, and made twice it teaches nothing. Its added words and
+/// the party were read as a new party, filed under "Sales Staff from Acme
+/// Corporation" and learned as that party's spelling.
+#[test]
+fn a_type_lengthened_before_the_party_behind_another_word_is_filed_under_that_party() {
+    let chosen = chosen_twice(
+        PartyRelation::For,
+        "Acme Corporation",
+        "Beacon Staffing LLC",
+        "for Sales Staff from Acme Corporation",
+    );
+    assert!(chosen.learned.is_empty(), "learned {:?}", chosen.learned);
+    assert_eq!(chosen.folders, ["Acme Corporation"; 2]);
+    assert_eq!(
+        chosen.reported,
+        [["Acme Corporation"], ["Acme Corporation"]]
+    );
+    assert_eq!(
+        chosen.third,
+        "2024-06-07 Employment Agreement for Acme Corporation.pdf"
     );
 }
 

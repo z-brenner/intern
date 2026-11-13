@@ -901,23 +901,41 @@ impl ProposalRecord {
     /// under gives them: its date (see [`proposal_as_applied`]), and the
     /// party a reviewer put in place of one the proposed name gave - another
     /// party the document names, chosen in review, or their own spelling.
-    /// The layout folder and the filing report are read from this, so a
-    /// document filed by party goes in the folder of the party its name
-    /// gives, not the one the reviewer took out of it.
+    /// The layout folder, which is the first party's, and the filing report
+    /// are read from this. `extension` is the source file's.
     ///
-    /// The name is read with the grammar that composed the proposed one: a
-    /// respelled side of a "between" as a lesson is read (see
-    /// [`lesson_from_edit`]), and otherwise the one party after the type it
-    /// kept, whatever the connecting word (see [`approved_party`]). An edit
-    /// to the type of a name that gave a party, keeping that party behind
-    /// the same connecting word or another, leaves the parties as proposed,
-    /// however the type changed: "Notice to Tenants from Acme Property" for
-    /// "Notice from Acme Property" or for "Notice to Acme Property". One
-    /// that changes the party as well and lengthens the type with words
-    /// that begin with a connecting word reads those words as part of the
-    /// party: "Notice to Tenants from City of Boston" for "Notice from Acme
-    /// Property" gives "Tenants from City of Boston". `extension` is the
-    /// source file's.
+    /// The party put in is the one party offered in review (see
+    /// [`Self::party_choices`]) that the name names and the proposed name
+    /// did not, written whole (see `newly_named`), where there is exactly
+    /// one: the reviewer chose it, with one click or typed, and it is filed
+    /// as offered, wherever in the name they wrote it - "Beacon Staffing
+    /// LLC" for "BEACON STAFFING LLC" typed, for "Beacon Staffing LLC re
+    /// Merger", and for "Employment Agreement for Beacon Staffing LLC with
+    /// Acme Corporation". Otherwise it is the words the grammar that
+    /// composed the proposed name reads as a party: a respelled party, or
+    /// side of a "between", as a lesson reads it (see [`lesson_from_edit`]),
+    /// or else the one party after the type the name kept, whatever the
+    /// connecting word (see [`approved_party`]). It takes the place of the
+    /// party such a lesson respells, or else of the first, the one a name
+    /// with a single party gives.
+    ///
+    /// So a choice is the party filed under where that grammar misreads it:
+    /// "FDIC as Receiver for Acme Corporation" chosen for "Acme
+    /// Corporation", behind "with" or "for", reads as a type lengthened in
+    /// front of the party it kept. Where neither gives a party, the parties
+    /// are as proposed: a type lengthened in front of the party it kept,
+    /// behind the same connecting word or another, with no party offered
+    /// among its words ("Notice to Tenants from Acme Property" for "Notice
+    /// from Acme Property" or for "Notice to Acme Property"), and another
+    /// type with another party that is not offered. The grammar compares
+    /// the words it keeps exactly. A name that changes the party to one not
+    /// offered and lengthens the type with words that begin with a
+    /// connecting word reads those words as part of the party - "Notice to
+    /// Tenants from City of Boston" for "Notice from Acme Property" gives
+    /// "Tenants from City of Boston" - and so does one that keeps the party
+    /// but respells it in case or punctuation: "Notice to Tenants from ACME
+    /// PROPERTY" for "Notice to Acme Property" gives "Tenants from ACME
+    /// PROPERTY".
     pub fn as_filed(&self, extension: &str, filename: &str) -> ValidatedProposal {
         let styled = self.styled_proposal();
         let mut filed = proposal_as_applied(&styled, filename);
@@ -925,15 +943,30 @@ impl ProposalRecord {
             return filed;
         }
         let proposed = compose_styled_filename(&styled, &self.house_rules, extension, &[]).value;
+        let choices = self.party_choices();
+        let chosen = match newly_named(
+            choices.iter().map(String::as_str),
+            &self.house_rules,
+            extension,
+            &proposed,
+            filename,
+        )
+        .as_slice()
+        {
+            [party] => Some((*party).to_owned()),
+            _ => None,
+        };
         if let Some(edit) = lesson_from_edit(&styled, extension, &proposed, filename)
             .filter(|edit| edit.kind == RuleKind::Party)
         {
+            let to = chosen.unwrap_or_else(|| edit.to.clone());
             for party in &mut filed.parties {
                 if edit.matches(party) {
-                    party.clone_from(&edit.to);
+                    party.clone_from(&to);
                 }
             }
-        } else if let Some(party) = approved_party(&styled, extension, &proposed, filename)
+        } else if let Some(party) =
+            chosen.or_else(|| approved_party(&styled, extension, &proposed, filename))
             && filed
                 .parties
                 .first()
