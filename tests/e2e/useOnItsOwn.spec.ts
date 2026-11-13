@@ -34,6 +34,15 @@ const under = (page: Page, at: Point) => page.evaluate(({ x, y }) => {
   return hit?.getAttribute('aria-label') ?? `${hit?.tagName}.${hit?.className}`;
 }, at);
 
+/** Whether the note beside a question's buttons says `text` where it can be seen, its first line and its last: in the window, and not under the decision or anything else. */
+const noteInSight = (question: Locator, text: string) => question.locator('.rule-confirm-again').evaluate((note, said) => {
+  const box = note.getBoundingClientRect();
+  const seen = (y: number) => { const hit = document.elementFromPoint(box.left + 12, y); return hit !== null && note.contains(hit); };
+  return note.textContent === said && box.top >= 0 && box.bottom <= window.innerHeight && seen(box.top + 6) && seen(box.bottom - 6);
+}, text);
+
+const MOVE_OFF_AND_BACK = 'Move off Use on its own, then back.';
+
 /** A single press where the pointer is, held as a hand holds one. */
 const pressHere = async (page: Page, clickCount = 1) => {
   await page.mouse.down({ clickCount }); await page.waitForTimeout(80); await page.mouse.up({ clickCount });
@@ -152,6 +161,9 @@ for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) 
     await expect(question).toBeVisible();
     await expect(panel.locator('.spelling-checked')).toHaveCount(0);
     await expect(question.getByRole('button', { name: 'Cancel' })).toBeFocused();
+    // It says what to do, where it can be seen, and the yes stays where it was.
+    expect(await noteInSight(question, MOVE_OFF_AND_BACK)).toBe(true);
+    expect(await under(page, at)).toBe(`the yes of ${CONTOSO}`);
 
     // Off the yes and back onto it, and a press after the half second.
     await page.waitForTimeout(600);
@@ -530,4 +542,69 @@ test.describe('with a touch screen', () => {
       expect((await states(dialog))[0]).toBe('In use');
     });
   }
+});
+
+/*
+  The way it is meant to be used, where the person's own wheel brings the
+  yes to rest under the pointer that pressed the action. The yes came to
+  the pointer, and is refused; that refusal said nothing, and a person who
+  meant it pressed again and again a yes that did nothing. It says what to
+  do, beside the buttons, and doing it is answered.
+*/
+for (const [surface, size] of [['review panel', { width: 1400, height: 900 }], ['review panel', { width: 800, height: 600 }], ['Settings', { width: 800, height: 600 }]] as const) {
+  test(`a yes the wheel brought under the pointer says what to do, and is answered once it is done, in the ${surface} at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    const host = surface === 'Settings' ? await learnedSpellings(page) : await (async () => { await page.goto('/?learnedSpellings=held'); return openDetails(page, 'SOW final v3.pdf'); })();
+    const action = host.getByRole('button', { name: CONTOSO });
+    await action.scrollIntoViewIfNeeded();
+    const at = await centre(action);
+    await page.mouse.move(at.x - 40, at.y - 30);
+    await page.mouse.move(at.x, at.y, { steps: 4 });
+    await pressHere(page);
+    const question = host.getByRole('group', { name: CONTOSO });
+    const yes = question.getByRole('button', { name: 'Use on its own' });
+    await expect(question).toBeVisible();
+    await page.waitForTimeout(700);
+    const below = await centre(yes);
+    await page.mouse.wheel(0, Math.round(below.y - at.y));
+    await expect.poll(() => under(page, at)).toBe(`the yes of ${CONTOSO}`);
+    await page.waitForTimeout(300);
+    await pressHere(page);
+    await page.waitForTimeout(150);
+    await expect(question).toBeVisible();
+    expect(await noteInSight(question, MOVE_OFF_AND_BACK)).toBe(true);
+    expect(await under(page, at)).toBe(`the yes of ${CONTOSO}`);
+    await page.waitForTimeout(600);
+    const sentence = await centre(question.locator('p'));
+    await page.mouse.move(sentence.x, sentence.y, { steps: 4 });
+    await page.mouse.move(at.x, at.y, { steps: 4 });
+    await pressHere(page);
+    if (surface === 'Settings') {
+      await expect(question).toHaveCount(0);
+      expect((await states(host))[0]).toBe('In use');
+    } else await expect(host.locator('.spelling-checked')).toContainText('Intern will use \u201cContoso\u201d on its own from now on.');
+  });
+}
+
+/*
+  A person quick to move onto the yes and press it, half a second after
+  the press that opened the question began - as a double-click is timed,
+  from its first press to its second - is answered on that press.
+*/
+test('a press on the yes half a second after the press that opened the question began is answered', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const dialog = await learnedSpellings(page);
+  const at = await centre(dialog.getByRole('button', { name: RIDGELINE }));
+  const question = dialog.getByRole('group', { name: RIDGELINE });
+  const yes = question.getByRole('button', { name: 'Use on its own' });
+  await page.mouse.move(at.x, at.y);
+  const began = Date.now();
+  await page.mouse.down(); await page.waitForTimeout(200); await page.mouse.up();
+  await expect(question).toBeVisible();
+  const to = await centre(yes);
+  await page.mouse.move(to.x, to.y, { steps: 5 });
+  await page.waitForTimeout(Math.max(0, began + 600 - Date.now()));
+  await page.mouse.down(); await page.waitForTimeout(150); await page.mouse.up();
+  await expect(question).toHaveCount(0);
+  await expect(dialog.locator('li[data-rule="2"] .rule-state')).toHaveText('In use');
 });

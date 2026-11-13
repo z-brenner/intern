@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
-import { afterAPress, lastPointers, watchPointer } from '../lib/lastInput';
+import { afterAPress, lastPointers, pressBeganAt, watchPointer } from '../lib/lastInput';
 import type { HouseRule } from '../types';
 
 /**
@@ -21,7 +21,9 @@ export const spellingLabel = (rule: HouseRule) => `${rule.from} written as ${rul
 /**
  * How long after the question appears, or after a press its yes did not
  * take, a press that begins on the yes is still the end of the press that
- * came before it: about the time a system gives a double-click.
+ * came before it: about the time a system gives a double-click. Opened by a
+ * press, the time runs from when that press began, as a double-click is
+ * timed from its first press to its second.
  */
 export const PRESS_SETTLES_MS = 500;
 
@@ -55,7 +57,9 @@ const sameBox = (a: DOMRect, b: DOMRect) => a.left === b.left && a.top === b.top
  * - and for a mouse or a pen, which hover, it moved there, with the yes
  *   standing where it was when that pointer was last seen: a pointer that
  *   moved onto a yes that had moved since came there by the yes moving. A
- *   finger has no hover: it comes onto the yes by touching down on it.
+ *   finger has no hover, nor has a pen that does not report it: they come
+ *   onto the yes by touching down on it, and a pen that hovers does so
+ *   only with the yes standing where it was when it last hovered.
  *
  * Where each pointer was last seen is lastInput's (`lastPointers`,
  * `watchPointer`). A report of a pointer where it already was is no move:
@@ -64,7 +68,11 @@ const sameBox = (a: DOMRect, b: DOMRect) => a.left === b.left && a.top === b.top
  * when it is seen anywhere else, or when the yes moves - it is watched
  * every frame while a pointer is on it - away and back included. A press
  * of the pointer is one that began on the yes, by a pointer that had come
- * onto it then and still has.
+ * onto it then and still has. A press refused because its pointer had not
+ * says, beside the buttons, to move the pointer off the yes and back - or
+ * for a finger, to tap the sentence first - so that a person who means it
+ * is not left pressing a yes that does nothing; nothing moves under the
+ * pointer for it.
  *
  * A press never gives the yes the focus: a press with another button, or
  * one let go off the yes, clicks nothing, and the focus it would have left
@@ -98,6 +106,8 @@ export function UseOnItsOwnQuestion({ rule, describedBy, note, disabled, onConfi
   const settled = useRef(Number.POSITIVE_INFINITY);
   /** The press now on the yes: the kind of pointer, when it began, and whether that pointer had come onto the yes. */
   const press = useRef<{ type: string; began: number; came: boolean } | undefined>(undefined);
+  /** The kind of pointer whose press was refused because it had not come onto the yes. */
+  const [notOnIt, setNotOnIt] = useState<string>();
   /** Whether a pointer of this kind came onto the yes and is on it still. */
   const onIt = useRef<(type: string) => boolean>(() => false);
   // Before the question is painted, and before its Cancel takes the focus
@@ -105,9 +115,9 @@ export function UseOnItsOwnQuestion({ rule, describedBy, note, disabled, onConfi
   useLayoutEffect(() => {
     const drawn = () => yes.current?.getBoundingClientRect() ?? new DOMRect();
     // Where each kind of pointer was last seen, and where the yes was then.
-    const seen = new Map<string, At & { box: DOMRect }>();
+    const seen = new Map<string, At & { hover: boolean; box: DOMRect }>();
     const appeared = drawn();
-    for (const at of lastPointers()) seen.set(at.type, { x: at.x, y: at.y, box: appeared });
+    for (const at of lastPointers()) seen.set(at.type, { x: at.x, y: at.y, hover: at.hover, box: appeared });
     // The pointers on the yes, each with where the yes was when it came.
     const came = new Map<string, DOMRect>();
     const stood = () => {
@@ -123,20 +133,25 @@ export function UseOnItsOwnQuestion({ rule, describedBy, note, disabled, onConfi
       const onTheYes = inside(at, box) && under instanceof Node && yes.current?.contains(under) === true;
       if (!onTheYes) came.delete(at.type);
       if (before !== undefined && before.x === at.x && before.y === at.y) return;
-      seen.set(at.type, { x: at.x, y: at.y, box });
+      seen.set(at.type, { x: at.x, y: at.y, hover: at.hover, box });
       if (!onTheYes || before === undefined || inside(before, box)) return;
-      // A mouse or a pen hovers, and comes onto the yes by moving, from
-      // where it was seen with the yes where it is: a press where it was
-      // not seen to move to is not that. A finger has no hover, and comes
-      // onto it by touching down.
-      if (at.press ? at.type !== 'touch' : !sameBox(before.box, box)) return;
+      // A mouse hovers, and comes onto the yes by moving, from where it was
+      // seen with the yes where it is: a press where it was not seen to
+      // move to is not that. A finger has no hover, nor has a pen that
+      // does not report it: they come onto it by touching down, from where
+      // they last touched off it. A pen that hovers is held to what a mouse
+      // is: touching down from where it hovered counts only when the yes
+      // stood still since.
+      if (at.press ? at.type === 'mouse' || (before.hover && !sameBox(before.box, box)) : !sameBox(before.box, box)) return;
       came.set(at.type, box);
       if (frame === 0) frame = requestAnimationFrame(watch);
     });
     return () => { stop(); cancelAnimationFrame(frame); onIt.current = () => false; };
   }, []);
   useEffect(() => {
-    settled.current = performance.now() + PRESS_SETTLES_MS;
+    const now = performance.now();
+    const opening = pressBeganAt();
+    settled.current = (opening !== undefined && now - opening < PRESS_SETTLES_MS ? opening : now) + PRESS_SETTLES_MS;
     cancel.current?.focus({ preventScroll: afterAPress() });
   }, []);
   const answer = (event: MouseEvent<HTMLButtonElement>) => {
@@ -147,8 +162,9 @@ export function UseOnItsOwnQuestion({ rule, describedBy, note, disabled, onConfi
     // presses; one that began with the pointer down on the yes, and no key
     // since, is the pointer's whatever it counts.
     const byPointer = event.detail > 0 || (pressed !== undefined && afterAPress());
-    const meant = pressed !== undefined && pressed.came && onIt.current(pressed.type) && event.detail <= 1 && pressed.began >= settled.current;
-    if (byPointer && !meant) {
+    const came = pressed !== undefined && pressed.came && onIt.current(pressed.type);
+    if (byPointer && (!came || event.detail > 1 || pressed.began < settled.current)) {
+      if (!came) setNotOnIt(pressed?.type ?? 'mouse');
       settled.current = now + PRESS_SETTLES_MS;
       cancel.current?.focus({ preventScroll: true });
       return;
@@ -165,11 +181,14 @@ export function UseOnItsOwnQuestion({ rule, describedBy, note, disabled, onConfi
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCancel(); }
   }}>
     <p id={describedBy}>{onItsOwnConsequence(rule)} Do this only if that is right for every one of them.{note ? <> {note}</> : null}</p>
-    <button ref={yes} type="button" className="primary" disabled={disabled}
+    <span className="rule-confirm-buttons"><button ref={yes} type="button" className="primary" disabled={disabled}
       onPointerDown={(event) => { press.current = { type: event.pointerType, began: performance.now(), came: onIt.current(event.pointerType) }; }}
       onMouseDown={(event) => event.preventDefault()}
       onClick={answer}>Use on its own</button>
-    <button ref={cancel} type="button" onClick={onCancel}>Cancel</button>
+    <button ref={cancel} type="button" onClick={onCancel}>Cancel</button></span>
+    <div className="rule-confirm-again" role="status">{notOnIt === undefined ? null : notOnIt === 'touch'
+      ? 'Tap the sentence, then Use on its own.'
+      : 'Move off Use on its own, then back.'}</div>
   </div>;
 }
 

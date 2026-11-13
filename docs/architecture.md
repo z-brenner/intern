@@ -750,8 +750,10 @@ the mouse is; and, for a mouse or a pen, which hover, when it moved there
 with the yes standing where it was when that pointer was last seen. A
 pointer that moved onto a yes that had moved since came there by the yes
 moving: a scroll that left the yes's edge a pixel from a still mouse, and a
-twitch of the hand across it. A finger, which has no hover, comes onto the
-yes by touching down on it. A report of a pointer where it already was is no
+twitch of the hand across it. A finger, which has no hover, and a pen that
+does not report hovering come onto the yes by touching down on it; a pen
+that hovers does so only with the yes standing where it was when it last
+hovered. A report of a pointer where it already was is no
 move; it says what is under the pointer now, and a pointer it finds off the
 yes is no longer on it. A pointer is off the yes once it is seen anywhere
 else, or once the yes moves at all, away and back included: the yes is
@@ -764,37 +766,46 @@ takes no press until the pointer has been seen off it where it is now and
 comes back onto it. A press never gives the yes the focus: a press with
 another button, or one let go off the yes, clicks nothing, and the focus
 Chromium gives a pressed button left on the yes made the next Enter or Space
-a yes from the keyboard. Earlier rounds kept the yes from coming under the
-pointer in each way found, and each time another way was found; this does
-not depend on how the yes got there. Two older rules stay behind it. Opened by a press, the question opens where the action was, sentence
-first, and nothing the press sets off moves what is under the pointer
-(`afterAPress`): Cancel takes the focus where it is, and neither the review
-panel nor Settings scrolls until a key is pressed. The review panel used to
-scroll the question clear of the decision stuck to its bottom, which brought
-the yes under the pointer that had pressed the action: a double-click a
-little slower than the system's, or a press again, used the spelling on its
-own with the sentence never read. The next press lands on the sentence and
-leaves the focus on Cancel. And a press on the yes that is part of a
-double-click or more, or that began within half a second of the question
-appearing or of a press the yes did not take, is no answer. A press the yes
-refuses checks nothing and puts the focus back on Cancel; a yes from the
-keyboard or from assistive technology is taken at once. Opened from the
-keyboard, the question is scrolled into sight, Cancel and all. The command
+a yes from the keyboard. A press refused because its pointer had not come
+onto the yes says what to do, beside the buttons, where the person is
+looking: "Move off Use on its own, then back." - for a finger, "Tap the
+sentence, then Use on its own." It takes no room until then and moves
+nothing under the pointer; a refusal that said nothing left a person who
+meant it pressing a yes that did nothing, after a scroll of their own wheel
+had brought it to rest under the pointer. Earlier rounds kept the yes from
+coming under the pointer in each way found, and each time another way was
+found; this does not depend on how the yes got there. Two older rules stay
+behind it. Opened by a press, the question opens where the action was,
+sentence first, and nothing the press sets off moves what is under the
+pointer (`afterAPress`): Cancel takes the focus where it is, and neither the
+review panel nor Settings scrolls until a key is pressed. The review panel
+used to scroll the question clear of the decision stuck to its bottom, which
+brought the yes under the pointer that had pressed the action: a
+double-click a little slower than the system's, or a press again, used the
+spelling on its own with the sentence never read. The next press lands on
+the sentence and leaves the focus on Cancel. And a press on the yes that is
+part of a double-click or more, or that began within half a second of the
+question appearing or of a press the yes did not take, is no answer; opened
+by a press, the half second runs from when that press began, as a
+double-click is timed from its first press to its second, so a person quick
+to move onto the yes and press it is answered. A press the yes refuses
+checks nothing and puts the focus back on Cancel; a yes from the keyboard or
+from assistive technology is taken at once. Opened from the keyboard, the
+question is scrolled into sight, Cancel and all. The command
 (`house_rule_check`) carries the rule's id and the spelling the person was
-shown - its kind, the document's word and
-the spelling - and the repository marks the rule checked, in one statement,
-only while it exists, is in force, and reads exactly that
-(`PipelineRepository::check_rule`): a rule forgotten is refused
-(`RULE_NOT_FOUND`), and one not in force, or respelled or learned from other
-words since it was shown, is refused (`RULE_CHANGED`) and shown again as it
-now reads. Checking a rule approves and files nothing. The documents still
-waiting are restyled as after any change to the rules (`restyle_waiting`):
-the rule is used where their names did not show it, and a name held for it
-loses `LEARNED_SPELLING_UNCONFIRMED` but stays in review, since what else
-held it is not known there; it is filed when a person approves it. One
-check is enough: from then on the names the rule changes are filed like any
-other reading. "Use now" is no check: it puts a rule seen once in force,
-unchecked.
+shown - its kind, the document's word and the spelling - and the repository
+marks the rule checked, in one statement, only while it exists, is in force,
+and reads exactly that (`PipelineRepository::check_rule`): a rule forgotten
+is refused (`RULE_NOT_FOUND`), and one not in force, or respelled or learned
+from other words since it was shown, is refused (`RULE_CHANGED`) and shown
+again as it now reads. Checking a rule approves and files nothing. The
+documents still waiting are restyled as after any change to the rules
+(`restyle_waiting`): the rule is used where their names did not show it, and
+a name held for it loses `LEARNED_SPELLING_UNCONFIRMED` but stays in review,
+since what else held it is not known there; it is filed when a person
+approves it. One check is enough: from then on the names the rule changes
+are filed like any other reading. "Use now" is no check: it puts a rule seen
+once in force, unchecked.
 
 A rule nobody has checked touches only what a person sees: it is used on a
 record only where the name shows it - the name composed with it gives its

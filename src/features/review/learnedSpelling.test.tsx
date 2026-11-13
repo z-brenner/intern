@@ -249,6 +249,70 @@ describe('using a held document\'s spelling on its own', () => {
       await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
     });
 
+    // A double-click is timed from its first press to its second. A
+    // question opened by a press timed its half second from when it
+    // appeared, after that press was let go, and refused a person quick to
+    // move onto the yes and press it.
+    it('times the half second from when the press that opened the question began', async () => {
+      const bridge = spellingBridge(spellings);
+      const clock = { now: 1000 };
+      vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
+      drawYes();
+      render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={bridge} />);
+      const label = 'Use on its own: Contoso Worldwide, Inc. written as Contoso';
+      const open = async (held = 150) => {
+        const began = clock.now;
+        const action = await screen.findByRole('button', { name: label });
+        fireEvent.pointerDown(action, { ...offTheYes, pointerType: 'mouse' });
+        // Held as a hand holds a press, and let go.
+        clock.now += held;
+        fireEvent.click(action, { ...offTheYes, detail: 1 });
+        moveTo(onTheYes);
+        const question = screen.getByRole('group', { name: label });
+        return { began, question, yes: within(question).getByRole('button', { name: 'Use on its own' }) };
+      };
+      // Within the half second of the press that opened it: no answer.
+      let asked = await open();
+      clock.now = asked.began + PRESS_SETTLES_MS - 50;
+      press(asked.yes, 1);
+      expect(asked.question).toBeInTheDocument();
+      fireEvent.keyDown(within(asked.question).getByRole('button', { name: 'Cancel' }), { key: 'Escape' });
+      // A press held longer than the half second is no double-click begun:
+      // the half second runs from when the question appeared.
+      clock.now += PRESS_SETTLES_MS * 4;
+      asked = await open(PRESS_SETTLES_MS * 2);
+      clock.now += 100;
+      press(asked.yes, 1);
+      expect(asked.question).toBeInTheDocument();
+      fireEvent.keyDown(within(asked.question).getByRole('button', { name: 'Cancel' }), { key: 'Escape' });
+      // After it, though less than half a second after the question appeared: a yes.
+      clock.now += PRESS_SETTLES_MS * 4;
+      asked = await open();
+      clock.now = asked.began + PRESS_SETTLES_MS + 50;
+      press(asked.yes, 1);
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
+
+    // A press refused because the pointer had not come onto the yes said
+    // nothing: a person who meant it pressed again and again a yes that did
+    // nothing. It says what to do, beside the buttons. A press refused for
+    // coming too soon needs nothing done but to press again.
+    it('says what to do when the pointer had not come onto the yes, and only then', async () => {
+      const bridge = spellingBridge(spellings);
+      const clock = { now: 1000 };
+      const { question, yes } = await ask(bridge, clock);
+      const again = within(question).getByRole('status');
+      press(yes, 1);
+      expect(question).toBeInTheDocument();
+      expect(again).toBeEmptyDOMElement();
+      clock.now += PRESS_SETTLES_MS * 2;
+      moveTo({ clientX: onTheYes.clientX + 1, clientY: onTheYes.clientY }, document.body);
+      press(yes, 1);
+      expect(question).toBeInTheDocument();
+      expect(again).toHaveTextContent('Move off Use on its own, then back.');
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+    });
+
     it('but a yes from the keyboard at once', async () => {
       const bridge = spellingBridge(spellings);
       const { yes } = await ask(bridge, { now: 1000 });
@@ -384,6 +448,50 @@ describe('using a held document\'s spelling on its own', () => {
       fireEvent.click(sentence, { detail: 1 });
       pressAt(yes, onTheYes, 'touch');
       await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
+
+    // A pen that does not report hovering is seen only where it touches
+    // down, as a finger is.
+    it('with a pen that does not hover, not a tap where the tap that opened it was, but a tap on it after a tap off it', async () => {
+      const bridge = spellingBridge(spellings);
+      const { clock, question, yes, cancel } = await ask(bridge, onTheYes, 'pen');
+      pressAt(yes, { clientX: onTheYes.clientX + 2, clientY: onTheYes.clientY + 1 }, 'pen');
+      expect(question).toBeInTheDocument();
+      expect(cancel).toHaveFocus();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+      clock.now += PRESS_SETTLES_MS * 2;
+      const sentence = question.querySelector('p')!;
+      fireEvent.pointerDown(sentence, { ...offTheYes, pointerType: 'pen' });
+      fireEvent.click(sentence, { detail: 1 });
+      pressAt(yes, onTheYes, 'pen');
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
+
+    // A pen that hovers is held to what a mouse is: a yes that came to rest
+    // a pixel from where it hovered, and a touch down across its edge, is
+    // the yes coming to the pen.
+    it('with a pen that hovers, not a touch down from where it hovered beside a yes that moved there since', async () => {
+      const bridge = spellingBridge(spellings);
+      const { box, clock, question, yes } = await ask(bridge, offTheYes);
+      const hover = (at: Point) => fireEvent.pointerMove(document.body, { ...at, pointerType: 'pen', buttons: 0 });
+      hover(offTheYes);
+      box.current = new DOMRect(100, offTheYes.clientY + 1, 120, 30);
+      const across = { clientX: offTheYes.clientX, clientY: offTheYes.clientY + 2 };
+      pressAt(yes, across, 'pen');
+      expect(question).toBeInTheDocument();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+      // Hovering off the yes where it is now, then touching down on it.
+      clock.now += PRESS_SETTLES_MS * 2;
+      hover(offTheYes);
+      pressAt(yes, across, 'pen');
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
+
+    it('says to a finger refused what to do', async () => {
+      const bridge = spellingBridge(spellings);
+      const { question, yes } = await ask(bridge, onTheYes, 'touch');
+      pressAt(yes, onTheYes, 'touch');
+      expect(within(question).getByRole('status')).toHaveTextContent('Tap the sentence, then Use on its own.');
     });
 
     it('but Enter on the yes it was moved to at once', async () => {

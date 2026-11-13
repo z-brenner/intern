@@ -25,8 +25,12 @@
   is now under a pointer that stayed put, which is not a move.
 */
 
-/** Where a pointer was seen, what kind it is, and whether it was seen by a press there rather than a move. */
-export type PointerSeen = { x: number; y: number; type: string; press: boolean };
+/**
+ * Where a pointer was seen, what kind it is, whether it was seen by a press
+ * there rather than a move, and whether it was hovering: moved with nothing
+ * pressed, as a mouse and some pens do and a finger never does.
+ */
+export type PointerSeen = { x: number; y: number; type: string; press: boolean; hover: boolean };
 
 let pressed = false;
 let pressBegan: number | undefined;
@@ -34,7 +38,7 @@ const pointers = new Map<string, PointerSeen>();
 const watchers = new Set<(seen: PointerSeen, under: EventTarget | null) => void>();
 
 const see = (event: PointerEvent, press: boolean) => {
-  const seen = { x: event.clientX, y: event.clientY, type: event.pointerType, press };
+  const seen = { x: event.clientX, y: event.clientY, type: event.pointerType, press, hover: !press && event.buttons === 0 };
   pointers.set(seen.type, seen);
   for (const watch of watchers) watch(seen, event.target);
 };
