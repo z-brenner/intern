@@ -106,8 +106,9 @@ describe('humanizeReason', () => {
   // out - approving it, or putting the document's word back.
   it('says a learned spelling waits for its first check, and how to give or refuse it', () => {
     const sentence = humanizeReason('LEARNED_SPELLING_UNCONFIRMED');
-    expect(sentence).toBe('Intern used a spelling it learned from your edits for the first time. Approve to let it use the spelling on its own, or change the name back to stop it.');
-    expect(shortReason(['LEARNED_SPELLING_UNCONFIRMED'])).toEqual({ text: 'New learned spelling', more: 0 });
+    expect(sentence).toBe('Intern used a spelling it learned from your edits that had not been checked yet. Approve to keep it and let Intern use it on its own, or put the document\'s own words back to stop it.');
+    expect(sentence).not.toMatch(/first time/);
+    expect(shortReason(['LEARNED_SPELLING_UNCONFIRMED'])).toEqual({ text: 'Unchecked spelling', more: 0 });
   });
 
   it('explains a bare duplicate flag once the filed name it referred to is gone', () => {

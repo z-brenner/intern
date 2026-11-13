@@ -122,8 +122,11 @@ const SENTENCES: Record<string, string> = {
   // pipeline.rs): an edit's wording cannot always tell a spelling from a
   // decision about one document, so a rule files nothing on its own until
   // it has been checked once. Approving keeps the spelling and checks it;
-  // putting the document's own word back retracts the rule.
-  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits for the first time. Approve to let it use the spelling on its own, or change the name back to stop it.',
+  // putting the document's own word back retracts the rule. Not "for the
+  // first time": a spelling an earlier release learned has been used
+  // before, and is unchecked after the update all the same; and one checked
+  // since this name was made needs no second check.
+  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits that had not been checked yet. Approve to keep it and let Intern use it on its own, or put the document\'s own words back to stop it.',
   // Set when a person undoes a rename. The file is back under its original
   // name and the proposal is still here, so the document waits for a decision
   // rather than being renamed again by the next automatic pass.
@@ -252,7 +255,7 @@ const SHORT: Record<string, string> = {
   MODEL_INPUT_TOO_LARGE: 'Too long for the model',
   DUPLICATE: 'Already filed',
   NEAR_DUPLICATE: 'Possible duplicate',
-  LEARNED_SPELLING_UNCONFIRMED: 'New learned spelling',
+  LEARNED_SPELLING_UNCONFIRMED: 'Unchecked spelling',
   EXACT_COPY: 'Exact copy',
   UNDONE: 'Rename undone',
   ALREADY_NAMED: 'Already had this name',
