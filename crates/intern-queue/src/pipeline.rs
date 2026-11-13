@@ -20,7 +20,7 @@ use intern_engine::{
     counterparty_view,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
-    is_own_name, lesson_from_edit, named_parties, party_and_more, party_as_named,
+    is_own_name, lesson_from_edit, named_parties, party_and_more, party_as_named, respelled_party,
     sanitize_folder_name,
     setup::{semantic_probes, validate_semantic_probe},
 };
@@ -925,17 +925,18 @@ impl ProposalRecord {
     ///
     /// Otherwise the party put in is read with the grammar that composed
     /// the proposed name: a respelled party, or side of a "between", as a
-    /// lesson reads it (see [`lesson_from_edit`]), or else the one party
-    /// after the type the name kept, whatever the connecting word (see
-    /// [`approved_party`]). It takes the place of the party such a lesson
-    /// respells, or else of the first, the one a name with a single party
-    /// gives. The choice is put in, as offered, where that grammar reads no
-    /// party or reads the choice itself, in any spelling, alone or with a
-    /// note or another party after it (see [`party_and_more`]): "Beacon
-    /// Staffing LLC" for "BEACON STAFFING LLC" typed, and for "Beacon
-    /// Staffing LLC re Merger"; "FDIC as Receiver for Acme Corporation"
-    /// chosen for "Acme Corporation", behind "with" or "for", which that
-    /// grammar reads as a type lengthened in front of the party it kept.
+    /// lesson reads it whether or not it teaches (see [`respelled_party`]),
+    /// or else the one party after the type the name kept, whatever the
+    /// connecting word (see [`approved_party`]). It takes the place of the
+    /// party so respelled, or else of the first, the one a name with a
+    /// single party gives. The choice is put in, as offered, where that
+    /// grammar reads no party or reads the choice itself, in any spelling,
+    /// alone or with a note or another party after it (see
+    /// [`party_and_more`]): "Beacon Staffing LLC" for "BEACON STAFFING LLC"
+    /// typed, and for "Beacon Staffing LLC re Merger"; "FDIC as Receiver
+    /// for Acme Corporation" chosen for "Acme Corporation", behind "with"
+    /// or "for", which that grammar reads as a type lengthened in front of
+    /// the party it kept.
     /// Where it reads a longer party typed around the choice's words, that
     /// party is put in, as typed: "Estate of John Smith", typed where "John
     /// Smith" is offered, is another party, and "Acme Corporation Holdings
@@ -952,7 +953,13 @@ impl ProposalRecord {
     /// offered and lengthens the type with words that begin with a
     /// connecting word reads those words as part of the party: "Notice to
     /// Tenants from City of Boston" for "Notice from Acme Property" gives
-    /// "Tenants from City of Boston".
+    /// "Tenants from City of Boston", and is filed in a folder of that
+    /// name. Such words teach nothing (see [`lesson_from_edit`]), so this
+    /// is the one document's folder, not a later one's name; and the words
+    /// are read as typed because a party typed with a connecting word of
+    /// its own is as often the party - "Trustee for Acme Corp", typed short
+    /// where "Trustee for Acme Corporation" is offered - and nothing here
+    /// tells the two apart.
     pub fn as_filed(&self, extension: &str, filename: &str) -> ValidatedProposal {
         let styled = self.styled_proposal();
         let mut filed = proposal_as_applied(&styled, filename);
@@ -990,8 +997,7 @@ impl ProposalRecord {
             filed.parties = parties;
             return filed;
         }
-        let lesson = lesson_from_edit(&styled, extension, &proposed, filename)
-            .filter(|edit| edit.kind == RuleKind::Party);
+        let lesson = respelled_party(&styled, extension, &proposed, filename);
         let read = match &lesson {
             Some(edit) => Some(edit.to.clone()),
             None => approved_party(&styled, extension, &proposed, filename),

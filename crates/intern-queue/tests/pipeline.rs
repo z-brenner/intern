@@ -5049,6 +5049,86 @@ fn a_party_kept_beside_a_connecting_word_and_more_teaches_nothing() {
     }
 }
 
+/// A party respelled into words holding a connecting word of the name's
+/// grammar, or a note's start, that its own name does not - a party the
+/// document names, typed short ("Trustee for Acme Corp" where "Trustee for
+/// Acme Corporation" is offered), or words the document never gives as a
+/// party ("Tenants from City of Boston") - is no spelling of it. Approved
+/// twice, each was learned as the named party's spelling ("Acme
+/// Corporation -> Trustee for Acme Corp"), and the third agreement, ready,
+/// was filed without review as "... for Trustee for Acme Corp.pdf". Now
+/// nothing is learned, and the third keeps the document's party. The two
+/// approved are still filed, and reported, under the words typed in the
+/// party's place: the trustee as typed, beside John Smith on a "between".
+#[test]
+fn a_party_respelled_into_words_with_a_connecting_word_teaches_nothing() {
+    let acme = "Acme Corporation";
+    let smith = "John Smith";
+    let trustee = "Trustee for Acme Corporation";
+    for (relation, named, other, approved, reported) in [
+        (
+            PartyRelation::For,
+            &[acme][..],
+            trustee,
+            "for Trustee for Acme Corp",
+            Some(&["Trustee for Acme Corp"][..]),
+        ),
+        (
+            PartyRelation::To,
+            &["Acme Property"],
+            "Beacon Staffing LLC",
+            "to Tenants from City of Boston",
+            None,
+        ),
+        (
+            PartyRelation::For,
+            &[acme],
+            "Beacon Staffing LLC",
+            "for Sales Staff from City of Boston",
+            None,
+        ),
+        (
+            PartyRelation::With,
+            &[acme],
+            "Beacon Staffing LLC",
+            "with Beacon Staffing re Placement",
+            None,
+        ),
+        (
+            PartyRelation::Between,
+            &[smith, acme],
+            trustee,
+            "between John Smith and Trustee for Acme Corp",
+            Some(&[smith, "Trustee for Acme Corp"]),
+        ),
+    ] {
+        let respelled = approved_twice(
+            relation,
+            named,
+            other,
+            &format!("Employment Agreement {approved}"),
+        );
+        assert!(
+            respelled.learned.is_empty(),
+            "{approved}: learned {:?}",
+            respelled.learned
+        );
+        assert_eq!(
+            respelled.third,
+            format!(
+                "2024-06-07 Employment Agreement {} {}.pdf",
+                relation.as_str(),
+                named.join(" and ")
+            ),
+            "{approved}"
+        );
+        if let Some(reported) = reported {
+            assert_eq!(respelled.folders, [reported[0]; 2], "{approved}");
+            assert_eq!(respelled.reported, [reported; 2], "{approved}");
+        }
+    }
+}
+
 /// A type lengthened in front of the party the name gave, now behind
 /// another connecting word - "Employment Agreement for Sales Staff from
 /// Acme Corporation" for "Employment Agreement for Acme Corporation" - is
