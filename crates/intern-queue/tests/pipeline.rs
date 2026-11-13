@@ -5910,6 +5910,38 @@ fn a_learned_spelling_waits_for_one_check_then_files_on_its_own() {
     );
 }
 
+/// A name a rule shortened, approved with the document's own word put back,
+/// here with the type changed too so that the edit teaches nothing and
+/// retracts nothing, checks nothing: the rule's spelling is in the name
+/// only as words of the document's own. The next name it changes still
+/// waits for a person. It was counted as a check, "Acme" being words of
+/// "Acme Corporation", and the next agreement was filed as "... and
+/// Acme.pdf" without review.
+#[test]
+fn the_documents_own_word_put_back_is_no_check_of_the_rule() {
+    let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
+    let first = rig.read_next();
+    let second = rig.read_next();
+    for id in [first, second] {
+        rig.approve(id, "Employment Agreement between John Smith and Acme");
+    }
+    rig.automatic(true);
+    let third = rig.read_next();
+    assert_eq!(rig.item(third).status, QueueStatus::NeedsReview);
+    rig.approve(
+        third,
+        "Employment Contract between John Smith and Acme Corporation",
+    );
+    assert_eq!(
+        rig.rule(),
+        rule_state("Acme Corporation", "Acme", 2, 0),
+        "no check, and nothing learned or retracted"
+    );
+    let fourth = rig.read_next();
+    assert_eq!(rig.item(fourth).status, QueueStatus::NeedsReview);
+    assert_eq!(rig.filed_as(fourth), None);
+}
+
 /// A rule learned wrong - the wording of an edit read as a respelling when
 /// it was another party joined to the named one, here "between John Smith,
 /// Jane Doe and Acme Corporation" teaching "John Smith -> John Smith, Jane

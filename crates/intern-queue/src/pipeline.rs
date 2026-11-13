@@ -1682,11 +1682,27 @@ const COMPANY_FORMS: [&str; 16] = [
 /// Whether the name `approved` keeps what `rule` writes: a party's spelling
 /// anywhere in it, a type's where the name starts after its date, each as a
 /// run of whole words as house style compares spellings
-/// ([`HouseRule::key`]). `extension` is the source file's.
+/// ([`HouseRule::key`]) - and not only as words of the document's own,
+/// which the rule respelled: "Acme" is not kept in "Acme Corporation" put
+/// back for a rule "Acme Corporation -> Acme", nor "Contract" in "Contract
+/// for Services" put back for "Contract for Services -> Contract".
+/// `extension` is the source file's.
 fn keeps_spelling(rule: &HouseRule, extension: &str, approved: &str) -> bool {
     let to = HouseRule::key(&rule.to);
     match rule.kind {
-        RuleKind::Party => holds_words(&name_words(approved, extension), &to),
+        RuleKind::Party => {
+            let words = name_words(approved, extension);
+            let words = words.split(' ').collect::<Vec<_>>();
+            let own = party_keys(&rule.from)
+                .iter()
+                .flat_map(|from| runs_of(&words, from))
+                .collect::<Vec<_>>();
+            runs_of(&words, &to).iter().any(|run| {
+                !own.iter().any(|from| {
+                    from.len() > run.len() && from.start <= run.start && run.end <= from.end
+                })
+            })
+        }
         RuleKind::DocumentType => {
             let name = approved.trim();
             let stem = name
@@ -1697,7 +1713,11 @@ fn keeps_spelling(rule: &HouseRule, extension: &str, approved: &str) -> bool {
                 .map_or(name, |(stem, _)| stem);
             let stem = leading_date(stem).map_or(stem, |date| stem[date.len()..].trim_start());
             let words = HouseRule::key(stem);
-            !to.is_empty() && (words == to || words.starts_with(&format!("{to} ")))
+            let starts = |with: &str| {
+                !with.is_empty() && (words == with || words.starts_with(&format!("{with} ")))
+            };
+            let from = rule.from_key();
+            starts(&to) && !(from.len() > to.len() && starts(&from))
         }
     }
 }
