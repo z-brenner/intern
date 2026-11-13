@@ -13,13 +13,15 @@
 
 use std::collections::HashSet;
 
-use intern_engine::{DocumentSource, HouseRule};
+use intern_engine::{DocumentSource, HouseRule, engine::barely_readable};
 use serde::{Deserialize, Serialize};
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 /// The words that end a company's name, as house style compares spellings
 /// ([`HouseRule::key`]): a note's start just in front of one is a word of
 /// the name ("Swiss Re Ltd", "Munich Re Group", "Munich Re Capital
-/// Limited"), not a note; and a spelling that adds one adds no one.
+/// Limited"), not a note; and a spelling that adds one of the legal forms
+/// among them adds no one (see [`is_legal_form`]).
 pub(crate) const COMPANY_FORMS: [&str; 19] = [
     "limited",
     "company",
@@ -63,10 +65,11 @@ const MIN_BITS: usize = 1 << 10;
 const MAX_BITS: usize = 1 << 17;
 
 /// Which words a document's text gives, as house style compares spellings
-/// (see [`HouseRule::key`]): each run of characters between spaces with its
-/// punctuation taken out ("Doe," is "doe", "O'Brien" is "obrien"), and each
-/// run of letters and digits in it ("Smith-Jones" gives "smith" and "jones"
-/// as well as "smithjones").
+/// (see [`HouseRule::key`]) once accents are taken out (see [`plain`]):
+/// each run of characters between spaces with its punctuation taken out
+/// ("Doe," is "doe", "O'Brien" is "obrien", "José" is "jose"), and each run
+/// of letters and digits in it ("Smith-Jones" gives "smith" and "jones" as
+/// well as "smithjones").
 ///
 /// Kept as a Bloom filter, about a byte and a quarter a word: it can answer
 /// that a word is given when it is not - and then counts no check, which
@@ -82,10 +85,19 @@ pub struct DocumentWords {
 
 impl DocumentWords {
     /// The words of everything the reader read from `source`. `None` when
-    /// it read no words, or a page could not be read as text at all, so
-    /// that what the document gives is not known.
+    /// it read no words, when a page could not be read as text at all
+    /// ([`barely_readable`]), or when OCR was unsure of what it read
+    /// (`LOW_OCR_CONFIDENCE`), so that what the document gives is not
+    /// known. A scan whose page came with an image of it is no less known
+    /// than its text: the image is not shown to the model, so the text is
+    /// all the reading had, as for every other page OCR read.
     pub fn of(source: &DocumentSource) -> Option<Self> {
-        if source.page_image.is_some() {
+        if barely_readable(source)
+            || source
+                .parser_warnings
+                .iter()
+                .any(|warning| warning.code == "LOW_OCR_CONFIDENCE")
+        {
             return None;
         }
         let mut words = HashSet::new();
@@ -177,21 +189,23 @@ impl From<String> for DocumentWords {
 /// The words a learned spelling writes that the document's own word does
 /// not hold, when it adds any: each way of reading the words of
 /// `rule.to` - as written between spaces, or split at punctuation as well -
-/// less the words of `rule.from` read either way, the company forms
-/// ([`COMPANY_FORMS`]) and the words that only join others
+/// less the words of `rule.from` read either way, the legal forms
+/// ([`is_legal_form`]) and the words that only join others
 /// ([`JOINING_WORDS`]). A document gives what the rule adds when it gives
 /// any of their words (see [`gives`]).
 ///
 /// `None` - nothing a document could give in its own words - where either
 /// reading leaves no word: a short form ("Acme" for "Acme Corporation"), a
-/// change of case or punctuation, a company form added or changed ("Acme
+/// change of case, accents or punctuation, a legal form added or changed ("Acme
 /// Corporation" for "Acme", "ACME Corp" for "ACME CORPORATION"); and for an
-/// acronym of the document's word or the word an acronym stands for ("DEQ"
-/// for "Department of Environmental Quality", or the other way round), which
-/// adds letters, not a party, and whose letters a document gives beside the
-/// name as often as not.
+/// acronym of the document's word ("DEQ" for "Department of Environmental
+/// Quality"), which adds letters, not a party, and whose letters a document
+/// gives beside the name as often as not. Not for the words an acronym
+/// stands for ("American Broadcasting Company" for "ABC"): they are words
+/// a document gives or does not, and one that spells them out itself says
+/// nothing about the next "ABC", which may be ABC Supply.
 pub fn added(rule: &HouseRule) -> Option<Vec<Vec<String>>> {
-    if is_acronym(&rule.from, &rule.to) || is_acronym(&rule.to, &rule.from) {
+    if is_acronym(&rule.from, &rule.to) {
         return None;
     }
     let own = words_of(&rule.from)
@@ -203,13 +217,21 @@ pub fn added(rule: &HouseRule) -> Option<Vec<Vec<String>>> {
             .into_iter()
             .filter(|word| {
                 !own.contains(word)
-                    && !COMPANY_FORMS.contains(&word.as_str())
+                    && !is_legal_form(word)
                     && !JOINING_WORDS.contains(&word.as_str())
             })
             .collect::<Vec<_>>()
     };
     let readings = [adds(words_of(&rule.to)), adds(pieces_of(&rule.to))];
     (!readings.iter().any(Vec::is_empty)).then(|| readings.into())
+}
+
+/// Whether `word` is a company's legal form ([`COMPANY_FORMS`]), which
+/// names no one the company's name does not: not "Group" or "Holdings",
+/// which end a company's name as surely but name another company of the
+/// same family - "Acme Holdings", the parent of Acme, is not Acme.
+fn is_legal_form(word: &str) -> bool {
+    COMPANY_FORMS.contains(&word) && !matches!(word, "group" | "holdings")
 }
 
 /// Whether a document gives what a rule adds (see [`added`]), or any part
@@ -243,7 +265,11 @@ pub fn gives(added: &[Vec<String>], text: Option<&DocumentWords>, named: &[&str]
 /// letters of `long`'s words - all of them, or leaving out the words that
 /// only join others or the company forms ("DEQ" for "Department of
 /// Environmental Quality", "IBM" for "International Business Machines
-/// Corporation"), each reading of the words (see [`added`]).
+/// Corporation"), each reading of the words (see [`added`]) - or of its
+/// last words, leaving out a prefix in front of them ("EPA" for "U.S.
+/// Environmental Protection Agency", "DEQ" for "Oregon Department of
+/// Environmental Quality"). The letters run to the last word: "DOE" is not
+/// "Department of Environmental Quality", nor its "Department of".
 fn is_acronym(long: &str, short: &str) -> bool {
     let short = words_of(short)
         .into_iter()
@@ -266,40 +292,58 @@ fn is_acronym(long: &str, short: &str) -> bool {
                         .filter(|word| !forms || !COMPANY_FORMS.contains(&word.as_str()))
                         .filter_map(|word| word.chars().next())
                         .collect::<String>();
-                    initials.chars().count() >= 2 && initials == *short
+                    initials.chars().count() >= 2 && initials.ends_with(short.as_str())
                 })
     })
 }
 
+/// `value` as a person reads it, whatever code points spell it: without
+/// its accents, ligatures and wide or compatibility forms. "José" typed
+/// one way, "Jose" with a combining accent as macOS and some PDFs write
+/// it, and "Jose" are one word to the person approving a name, so they
+/// are one word here: a document gives the word however it writes the
+/// accent, and a spelling that changes accents alone ("Société Générale"
+/// for "Societe Generale") adds no word, as one that changes case adds
+/// none.
+fn plain(value: &str) -> String {
+    value
+        .nfkd()
+        .filter(|character| !is_combining_mark(*character))
+        .collect()
+}
+
 /// The words of `value` as written between spaces, as house style compares
-/// spellings: "Smith-Jones, Inc." is "smithjones" and "inc".
+/// spellings, read [`plain`]: "Smith-Jones, Inc." is "smithjones" and "inc".
 fn words_of(value: &str) -> Vec<String> {
-    HouseRule::key(value)
+    HouseRule::key(&plain(value))
         .split(' ')
         .filter(|word| !word.is_empty())
         .map(str::to_owned)
         .collect()
 }
 
-/// The words of `value` split at punctuation as well: "Smith-Jones, Inc."
-/// is "smith", "jones" and "inc".
+/// The words of `value` split at punctuation as well, read [`plain`]:
+/// "Smith-Jones, Inc." is "smith", "jones" and "inc".
 fn pieces_of(value: &str) -> Vec<String> {
-    value
+    plain(value)
         .split(|character: char| !character.is_alphanumeric())
         .map(HouseRule::key)
         .filter(|word| !word.is_empty())
         .collect()
 }
 
-/// The words a run of characters between spaces gives, read both ways.
-fn word_keys(written: &str) -> impl Iterator<Item = String> + '_ {
-    std::iter::once(HouseRule::key(written))
+/// The words a run of characters between spaces gives, read both ways and
+/// [`plain`].
+fn word_keys(written: &str) -> Vec<String> {
+    let written = plain(written);
+    std::iter::once(HouseRule::key(&written))
         .chain(
             written
                 .split(|character: char| !character.is_alphanumeric())
                 .map(HouseRule::key),
         )
         .filter(|word| !word.is_empty())
+        .collect()
 }
 
 /// FNV-1a, spelled out so a stored filter reads the same in every build.
@@ -321,7 +365,9 @@ fn mix(mut value: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use intern_engine::{DocumentSource, HouseRule, PageImage, PageOrigin, RuleKind, SourcePage};
+    use intern_engine::{
+        DocumentSource, HouseRule, PageImage, PageOrigin, ParserWarning, RuleKind, SourcePage,
+    };
 
     use super::{DocumentWords, added, gives};
 
@@ -399,8 +445,10 @@ mod tests {
     }
 
     /// What each kind of spelling adds: nothing for a short form, a change
-    /// of case or punctuation, a company form, or an acronym either way;
-    /// the new words, read both ways, for a party or a name added.
+    /// of case, accents or punctuation, a legal form, or an acronym of the
+    /// document's word, a prefix in front of it left out or not; the new
+    /// words, read both ways, for a party or a name added, another company
+    /// of the same family, or the words an acronym stands for.
     #[test]
     fn a_spelling_adds_only_words_of_its_own() {
         for (from, to) in [
@@ -414,8 +462,10 @@ mod tests {
             ("Bank America", "Bank of America"),
             ("Department of Environmental Quality", "DEQ"),
             ("Department of Environmental Quality", "D.E.Q."),
-            ("DEQ", "Department of Environmental Quality"),
             ("International Business Machines Corporation", "IBM Corp"),
+            ("U.S. Environmental Protection Agency", "EPA"),
+            ("Oregon Department of Environmental Quality", "DEQ"),
+            ("Societe Generale", "Soci\u{e9}t\u{e9} G\u{e9}n\u{e9}rale"),
         ] {
             assert_eq!(added(&party(from, to)), None, "{from} -> {to}");
         }
@@ -437,11 +487,114 @@ mod tests {
         );
         assert_eq!(
             words(added(&party("Acme", "Acme Holdings Trust"))),
-            Some(vec!["trust".into(), "trust".into()])
+            Some(vec![
+                "holdings".into(),
+                "trust".into(),
+                "holdings".into(),
+                "trust".into()
+            ])
+        );
+        assert_eq!(
+            words(added(&party("Acme", "Acme Holdings"))),
+            Some(vec!["holdings".into(), "holdings".into()]),
+            "the parent of Acme is not Acme"
+        );
+        assert_eq!(
+            words(added(&party("Acme", "Acme Group, Inc."))),
+            Some(vec!["group".into(), "group".into()])
+        );
+        assert_eq!(
+            words(added(&party("ABC", "American Broadcasting Company"))),
+            Some(vec![
+                "american".into(),
+                "broadcasting".into(),
+                "american".into(),
+                "broadcasting".into()
+            ]),
+            "the words an acronym stands for"
         );
         assert!(
             added(&party("Department of Environmental Quality", "DOE")).is_some(),
             "not its initials"
+        );
+        assert!(
+            added(&party("Department of Environmental Quality", "DE")).is_some(),
+            "nor the initials of its first words"
+        );
+    }
+
+    /// A word is given however its accents are written: "José" in the text
+    /// gives "Jose" typed without the accent, and "Jose" with a combining
+    /// accent - as macOS and some PDFs write it - gives "José" typed with
+    /// one; a ligature gives the letters it joins. Each of them counted no
+    /// word given, so an approval of a document giving the name was taken
+    /// as the check of a spelling adding it.
+    #[test]
+    fn a_word_is_given_whatever_code_points_write_its_accents() {
+        let jose = added(&party("Smith", "Jose Smith")).unwrap();
+        let accented = added(&party("Smith", "Jos\u{e9} Smith")).unwrap();
+        let composed = text("Agreement between Jos\u{e9} Smith and Acme Corporation.");
+        let decomposed = text("Agreement between Jose\u{301} Smith and Acme Corporation.");
+        for (adds, document) in [
+            (&jose, &composed),
+            (&jose, &decomposed),
+            (&accented, &composed),
+            (&accented, &decomposed),
+        ] {
+            assert!(gives(adds, Some(document), &[]), "{adds:?}");
+        }
+        assert!(gives(
+            &jose,
+            Some(&text("Agreement.")),
+            &["Jos\u{e9} Smith"]
+        ));
+        assert!(gives(
+            &added(&party("Acme", "Acme Fire Insurance")).unwrap(),
+            Some(&text("Agreement with Acme \u{fb01}re Insurance.")),
+            &[]
+        ));
+        assert!(!gives(
+            &accented,
+            Some(&text("Agreement between Mr. Smith and Acme Corporation.")),
+            &[]
+        ));
+    }
+
+    /// A scanned page that came with an image of it gives the words its OCR
+    /// read: the image is not shown to the model, so the text is everything
+    /// the reading had. Not a page that could not be read as text, nor a
+    /// reading OCR was unsure of. Every scan's first page used to give no
+    /// words, so no approval of a scan ever checked a spelling adding one.
+    #[test]
+    fn a_scan_gives_the_words_its_ocr_read_with_confidence() {
+        let scan = |text: &str, unsure: bool| {
+            let mut page = SourcePage::new(1, text, PageOrigin::Ocr);
+            page.ocr_confidence = Some(if unsure { 41 } else { 91 });
+            let mut source = DocumentSource::from_pages(vec![page]);
+            source.page_image = Some(PageImage {
+                page_number: 1,
+                media_type: "image/png".into(),
+                bytes: vec![1, 2, 3],
+            });
+            if unsure {
+                source
+                    .parser_warnings
+                    .push(ParserWarning::new("LOW_OCR_CONFIDENCE", true));
+            }
+            source
+        };
+        let read = "Employment Agreement signed May 3, 2024. This agreement is made by Mr. \
+                    Smith and Acme Corporation. The employee shall serve as warehouse \
+                    supervisor and report to the operations manager. Either party may end \
+                    this agreement with thirty days written notice.";
+        let words = DocumentWords::of(&scan(read, false)).unwrap();
+        assert!(words.gives("smith") && words.gives("warehouse"));
+        assert!(!words.gives("john"));
+        assert_eq!(DocumentWords::of(&scan(read, true)), None, "OCR unsure");
+        assert_eq!(
+            DocumentWords::of(&scan("l1 ll I Smith", false)),
+            None,
+            "not read as text"
         );
     }
 

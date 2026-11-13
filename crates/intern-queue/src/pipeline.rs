@@ -724,8 +724,9 @@ pub struct ProposalRecord {
     /// document gives in its own words what the spelling adds - in which
     /// case the approval is no check of the spelling (see
     /// [`Self::gives_what_it_adds`]). Absent from readings stored before it
-    /// was kept, and where the reader read no text: no check counts from
-    /// those where a spelling adds words.
+    /// was kept, where the reader read no text, a page could not be read as
+    /// text, or OCR was unsure of what it read (see [`DocumentWords::of`]):
+    /// no check counts from those where a spelling adds words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document_words: Option<DocumentWords>,
 }
@@ -886,7 +887,9 @@ impl ProposalRecord {
     /// "John Smith, Jane Doe", learned for "John Smith", approved on an
     /// agreement between John Smith, Jane Doe and Acme. Never for a
     /// spelling that adds no word of its own - a short form, a change of
-    /// case or punctuation, a company form, an acronym. Always, for one that
+    /// case or punctuation, a legal form, an acronym of the document's word
+    /// (not the words an acronym stands for, nor a "Group" or "Holdings",
+    /// which name another company of the family). Always, for one that
     /// does, where the text's words were not kept (see
     /// [`Self::document_words`]): in doubt, no check.
     pub fn gives_what_it_adds(&self, rule: &HouseRule) -> bool {
