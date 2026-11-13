@@ -164,11 +164,13 @@ describe('using a held document\'s spelling on its own', () => {
     await waitFor(() => expect(screen.getByRole('group', { name: 'Use a learned spelling on its own' })).toHaveFocus());
   });
 
-  // The question opens where its action was, and the panel scrolls it clear
-  // of the decision, which can bring its yes under the pointer that pressed
-  // the action. The second press of a double-click, or a press straight
-  // after the first, used the spelling on its own with the sentence never
-  // read: from then on a wrong spelling's names were filed without review.
+  // The panel used to scroll the question clear of the decision, which
+  // brought its yes under the pointer that pressed the action. The second
+  // press of a double-click, or a press straight after the first, used the
+  // spelling on its own with the sentence never read: from then on a wrong
+  // spelling's names were filed without review. Nothing moves under the
+  // pointer now (below), and a press on the yes itself still counts only
+  // when it is meant for it.
   describe('takes as a yes only a press meant for it', () => {
     afterEach(() => vi.restoreAllMocks());
 
@@ -216,6 +218,28 @@ describe('using a held document\'s spelling on its own', () => {
       expect(await screen.findByRole('status')).toHaveTextContent('Intern will use \u201cContoso\u201d on its own from now on.');
     });
 
+    it('not a press begun straight after the question appeared, however long it was held', async () => {
+      const bridge = spellingBridge(spellings);
+      const clock = { now: 1000 };
+      const { question, yes, cancel } = await ask(bridge, clock);
+      clock.now += 100;
+      fireEvent.pointerDown(yes);
+      yes.focus();
+      // Let go well after the half second.
+      clock.now += PRESS_SETTLES_MS + 100;
+      fireEvent.click(yes, { detail: 1 });
+      expect(question).toBeInTheDocument();
+      expect(cancel).toHaveFocus();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+
+      // One begun once the sentence had time to be read is a yes.
+      clock.now += PRESS_SETTLES_MS;
+      fireEvent.pointerDown(yes);
+      yes.focus();
+      fireEvent.click(yes, { detail: 1 });
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
+
     it('but a yes from the keyboard at once', async () => {
       const bridge = spellingBridge(spellings);
       const { yes } = await ask(bridge, { now: 1000 });
@@ -223,6 +247,58 @@ describe('using a held document\'s spelling on its own', () => {
       yes.focus();
       fireEvent.click(yes, { detail: 0 });
       await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
+  });
+
+  // Opened by a press, the question opens where its action was, sentence
+  // first, and nothing moves under the pointer: the panel used to scroll its
+  // Cancel clear of the decision, which brought its yes under the pointer
+  // for the next press. The next press lands on the sentence, and the focus
+  // stays on Cancel, where Escape takes back the question only.
+  describe('opened by a press, moves nothing under the pointer', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    /** The options each focus of `element` was given. */
+    const spyOnFocus = () => vi.spyOn(HTMLElement.prototype, 'focus');
+    const focusesOf = (focus: ReturnType<typeof spyOnFocus>, element: HTMLElement) => focus.mock.calls.filter((_, index) => focus.mock.contexts[index] === element).map((call) => call[0]);
+
+    it('takes the focus without scrolling when a press opened it, and may scroll when a key did', async () => {
+      const focus = spyOnFocus();
+      render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={spellingBridge(spellings)} />);
+      const action = await screen.findByRole('button', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' });
+      fireEvent.pointerDown(action);
+      fireEvent.click(action, { detail: 1 });
+      const cancel = within(screen.getByRole('group', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' })).getByRole('button', { name: 'Cancel' });
+      expect(cancel).toHaveFocus();
+      expect(focusesOf(focus, cancel)).toEqual([{ preventScroll: true }]);
+      fireEvent.keyDown(cancel, { key: 'Escape' });
+
+      const again = await screen.findByRole('button', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' });
+      fireEvent.keyDown(again, { key: 'Enter' });
+      fireEvent.click(again, { detail: 0 });
+      const fromKey = within(screen.getByRole('group', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' })).getByRole('button', { name: 'Cancel' });
+      expect(fromKey).toHaveFocus();
+      expect(focusesOf(focus, fromKey)).toEqual([{ preventScroll: false }]);
+    });
+
+    it('leaves the focus on Cancel after a press on the sentence, where Escape takes back the question and not the drawer', async () => {
+      const bridge = spellingBridge(spellings);
+      const actions = handlers();
+      render(<ReviewInspector item={held} drawer {...actions} spellings={bridge} />);
+      const action = await screen.findByRole('button', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' });
+      fireEvent.pointerDown(action);
+      fireEvent.click(action, { detail: 1 });
+      const question = screen.getByRole('group', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' });
+      const sentence = question.querySelector('p')!;
+      // A press on the sentence focuses the group around the question, as it does in Chromium.
+      fireEvent.pointerDown(sentence);
+      screen.getByRole('group', { name: 'Use a learned spelling on its own' }).focus();
+      fireEvent.click(sentence, { detail: 1 });
+      expect(within(question).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+      expect(question).not.toBeInTheDocument();
+      expect(actions.onClose).not.toHaveBeenCalled();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
     });
   });
 

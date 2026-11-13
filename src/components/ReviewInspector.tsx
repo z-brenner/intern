@@ -13,6 +13,7 @@ import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFi
 import type { DesktopBridge } from '../lib/bridge';
 import type { HouseRule, LearnedRule, ModelReading, QueueItem } from '../types';
 import { UseOnItsOwnQuestion, failureCode, spellingLabel } from './UseOnItsOwn';
+import { afterAPress } from '../lib/lastInput';
 
 /**
  * Below this the model's own figure already says it was unsure, and is by
@@ -271,23 +272,18 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // none of it is in the panel, under the buttons or not. A control focused
   // under them, or half under them, stayed there: "Analysis details" reached
   // by Tab, the Cancel of "Use on its own" with the sentence it answers cut
-  // off. A control focused from the keyboard or from code is scrolled clear
-  // of the buttons, however tall they are now, never so far that its top
-  // leaves the panel. One focused by a press is left where it is, so that
-  // the press lands on what was pressed.
-  const pressing = useRef(false);
-  const press = () => {
-    pressing.current = true;
-    const released = new AbortController();
-    const release = () => { pressing.current = false; released.abort(); };
-    window.addEventListener('pointerup', release, { capture: true, signal: released.signal });
-    window.addEventListener('pointercancel', release, { capture: true, signal: released.signal });
-  };
+  // off. A control focused from the keyboard is scrolled clear of the
+  // buttons, however tall they are now, never so far that its top leaves
+  // the panel. After a press nothing is scrolled until a key is pressed
+  // (`afterAPress`): not the control the press focused, so that the press
+  // lands on what was pressed, and not the Cancel of the question the press
+  // opened, whose scroll brought the question's yes under the pointer for
+  // the press that came next.
   const keepFocusInSight = (event: FocusEvent<HTMLElement>) => {
     const panel = inspectorRef.current;
     const decision = actionsRef.current;
     const focused = event.target;
-    if (pressing.current || !panel || !decision || decision.offsetHeight === 0 || decision.contains(focused)) return;
+    if (afterAPress() || !panel || !decision || decision.offsetHeight === 0 || decision.contains(focused)) return;
     const box = focused.getBoundingClientRect();
     const under = box.bottom + 12 - decision.getBoundingClientRect().top;
     const room = box.top - 12 - panel.getBoundingClientRect().top;
@@ -500,7 +496,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // The parts of the name being edited that the review is about, as they now read.
   const nameFlags = editable ? flaggedNameParts(joinFilename(stem, extension), flagged) : [];
   const reviewNote = item.reason && (item.status === 'review' || item.status === 'failed');
-  return <aside ref={inspectorRef} id={id} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown} onFocus={keepFocusInSight} onPointerDown={press}>
+  return <aside ref={inspectorRef} id={id} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown} onFocus={keepFocusInSight}>
     {/* A filed document's name is no longer its "current" one; it said so anyway (FRONTEND_UX-8). */}
     {/* Focusable so selecting a row can bring a keyboard user here, past the rest of the queue. */}
     <div className="inspector-title"><h2 ref={headingRef} tabIndex={-1}>{completed ? 'Filed document' : 'Review item'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close review"><Icon icon={X} /></button></div>

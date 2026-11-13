@@ -227,6 +227,43 @@ describe('the spellings Intern has learned', () => {
     }
   });
 
+  // Opened by a press, the question takes the focus where it is: the
+  // browser scrolled its Cancel into view when it opened past the bottom of
+  // the dialog's body, and brought whatever the scroll brought under the
+  // pointer for the next press. A press on its sentence leaves the focus on
+  // Cancel, not on the row, where Escape closed Settings.
+  it('moves nothing under the pointer that opened the question, and keeps Escape for the question', async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      const unchecked: LearnedRule = { ...learned[1], confirmed: 0 };
+      const base = createInMemoryBridge({ learnedRules: [unchecked] });
+      const houseRuleCheck = vi.fn(base.houseRuleCheck);
+      render(<App bridge={{ ...base, houseRuleCheck }} />);
+      const dialog = await openSettings();
+      const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+      const action = within(list).getByRole('button', { name: /Use on its own/ });
+      fireEvent.pointerDown(action);
+      fireEvent.click(action, { detail: 1 });
+      const question = within(list).getByRole('group');
+      const cancel = within(question).getByRole('button', { name: 'Cancel' });
+      expect(cancel).toHaveFocus();
+      expect(focus.mock.calls.filter((_, index) => focus.mock.contexts[index] === cancel).map((call) => call[0])).toEqual([{ preventScroll: true }]);
+
+      const sentence = question.querySelector('p')!;
+      // A press on the sentence focuses the row, as it does in Chromium.
+      fireEvent.pointerDown(sentence);
+      within(list).getByRole('listitem').focus();
+      fireEvent.click(sentence, { detail: 1 });
+      expect(cancel).toHaveFocus();
+      fireEvent.keyDown(cancel, { key: 'Escape' });
+      expect(within(list).queryByRole('group')).not.toBeInTheDocument();
+      expect(dialog).toBeInTheDocument();
+      expect(houseRuleCheck).not.toHaveBeenCalled();
+    } finally {
+      focus.mockRestore();
+    }
+  });
+
   it('says a document type spelling renames every later document of that type, in its own words', async () => {
     const type: LearnedRule = { ...learned[1], confirmed: 0 };
     render(<App bridge={createInMemoryBridge({ learnedRules: [type] })} />);

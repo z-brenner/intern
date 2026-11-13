@@ -732,13 +732,20 @@ exactly as they are, that every later document Intern reads as naming the
 word (for a type: reads as that type) will be named with the spelling, and
 may be filed under that name without the person's check; Cancel and Escape
 take the question back. Its yes takes only a press meant for it
-(`UseOnItsOwnQuestion`): the question opens where the action was, and the
-review panel then scrolls it clear of the decision stuck to its bottom,
-which can bring the yes under the pointer that pressed the action. A press
-that is part of a double-click or more, or that comes within half a second
-of the question appearing or of a press the yes did not take, is no answer
-and puts the focus back on Cancel; a yes from the keyboard is taken at
-once. The command (`house_rule_check`) carries the rule's
+(`UseOnItsOwnQuestion`). Opened by a press, the question opens where the
+action was, sentence first, and nothing the press sets off moves what is
+under the pointer (`afterAPress`): Cancel takes the focus where it is, and
+neither the review panel nor Settings scrolls until a key is pressed. The
+review panel used to scroll the question clear of the decision stuck to its
+bottom, which brought the yes under the pointer that had pressed the
+action: a double-click a little slower than the system's, or a press again,
+used the spelling on its own with the sentence never read. The next press
+lands on the sentence and leaves the focus on Cancel. A press on the yes
+itself that is part of a double-click or more, or that began within half a
+second of the question appearing or of a press the yes did not take, is no
+answer either and puts the focus back on Cancel; a yes from the keyboard is
+taken at once. Opened from the keyboard, the question is scrolled into
+sight, Cancel and all. The command (`house_rule_check`) carries the rule's
 id and the spelling the person was shown - its kind, the document's word and
 the spelling - and the repository marks the rule checked, in one statement,
 only while it exists, is in force, and reads exactly that
