@@ -147,7 +147,18 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     setAnalysisOpen(open);
     try { window.localStorage.setItem(ANALYSIS_DETAILS_KEY, open ? 'open' : 'closed'); } catch { /* Not remembered; it still opens now. */ }
   };
+  const filenameRef = useRef<HTMLTextAreaElement>(null);
+  // The name's field is one item's, and one revision's: it is keyed by the
+  // draft (below), so the browser's undo steps go with the field they were
+  // made in. One field served every item, and an undo step could outlive its
+  // item: once the field's whole text had been replaced - by a party chip, or
+  // by Ctrl+A and Delete - Ctrl+Z in the next document's name put the last
+  // one's old name after its own, one Enter from filing (Chromium; WebView2
+  // is Chromium). A caret in the old field moves to the new one, at the end,
+  // where the reused field had it.
+  const nameHadFocus = useRef(false);
   if (draft.for !== draftFor) {
+    nameHadFocus.current = filenameRef.current !== null && document.activeElement === filenameRef.current;
     const kept = draft.edited ? new Map(setAside).set(draft.for, draft) : setAside;
     if (kept !== setAside) setSetAside(kept);
     setDraft(kept.get(draftFor) ?? { for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false });
@@ -162,7 +173,6 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   const setStem = (value: string) => setDraft((current) => ({ ...current, stem: value, edited: true }));
   const setDescription = (value: string) => setDraft((current) => ({ ...current, description: value, edited: true }));
   const inspectorRef = useRef<HTMLElement>(null);
-  const filenameRef = useRef<HTMLTextAreaElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
@@ -191,7 +201,14 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     if (!field || typeof CSS === 'undefined' || CSS.supports?.('field-sizing', 'content')) return;
     field.style.height = 'auto';
     field.style.height = `${field.scrollHeight}px`;
-  }, [stem]);
+  }, [stem, draft.for]);
+  useLayoutEffect(() => {
+    const field = filenameRef.current;
+    if (!nameHadFocus.current || !field) return;
+    nameHadFocus.current = false;
+    field.focus();
+    field.setSelectionRange(field.value.length, field.value.length);
+  }, [draft.for]);
   useEffect(() => {
     if (!drawer) return;
     const filenameInput = filenameRef.current;
@@ -230,12 +247,17 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // one: a click puts one in place of the party the name gives - which
   // used to mean retyping fifteen to forty characters - and the caret stays
   // in the name, where Enter files it. The one the name now gives is
-  // pressed. The new name goes in as typing would, through the browser's
+  // pressed. The new party goes in as typing would, through the browser's
   // own editing command, so one Ctrl+Z in the name gives back what the
   // click replaced. A value set from code empties the field's undo
   // history, and a party the reviewer had corrected by hand, once a chip
-  // replaced it, could only be typed again. Where the command is missing
-  // or refused (jsdom has none), the value is set from code.
+  // replaced it, could only be typed again. Only the words that differ are
+  // replaced, not the whole text: Chromium's undo of a whole-text
+  // replacement puts the old text back after whatever the field holds by
+  // then, so after a date chip set the name from code, Ctrl+Z gave the name
+  // with its old self after it. Where the command is missing or refused
+  // (jsdom has none), or leaves anything but the new name, the value is set
+  // from code.
   const partyChoices = item.partyChoices ?? [];
   const partyOffer = { proposed: proposedStem, nameParties: item.nameParties ?? [], choices: partyChoices };
   const chooseParty = (party: string) => {
@@ -243,9 +265,12 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     const field = filenameRef.current;
     field?.focus();
     if (next === stem) return;
-    field?.select();
-    const typed = field !== null && document.activeElement === field && typeof document.execCommand === 'function' && document.execCommand('insertText', false, next);
-    if (!typed) editStem(next);
+    const { start, end, text } = changedWords(stem, next);
+    field?.setSelectionRange(start, end);
+    const typed = field !== null && document.activeElement === field && typeof document.execCommand === 'function' && document.execCommand('insertText', false, text);
+    if (!typed || field.value !== next) editStem(next);
+    // At the end, where it was when the whole name went in.
+    else field.setSelectionRange(next.length, next.length);
   };
   const partyInName = partyChoices.length > 0 ? partyGiven(stem, partyOffer) : undefined;
   // Enter files the name, as it does in any one-line field; the IME's Enter
@@ -388,7 +413,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       <h3>{unreadable ? 'Name it yourself' : 'Proposed rename'}</h3>
       <label className="filename-label">Filename
         <span className="filename-field">
-          <textarea ref={filenameRef} aria-label="Filename" className="filename-input" rows={1} spellCheck={false} autoComplete="off" value={stem}
+          <textarea key={draft.for} ref={filenameRef} aria-label="Filename" className="filename-input" rows={1} spellCheck={false} autoComplete="off" value={stem}
             onChange={(event) => editStem(withoutLineBreaks(event.target.value))} onKeyDown={onFilenameKeyDown}
             aria-invalid={Boolean(error)} aria-describedby={[extension !== undefined ? `${fieldId}-extension` : '', error ? `${fieldId}-error` : ''].filter(Boolean).join(' ') || undefined} />
           {extension !== undefined && <span className="filename-extension" title="The extension stays as it is" aria-hidden="true">.{extension}</span>}
@@ -578,4 +603,24 @@ function listOf(words: string[]): string {
 /** The flagged parts of a name, one per field, in the order the name reads. */
 function flaggedNameParts(name: string, flagged: readonly ReasonField[]): Array<{ field: ReasonField; text: string }> {
   return nameParts(name, flagged).flatMap((part) => part.flagged && part.field && part.text.trim() ? [{ field: part.field, text: part.text }] : []);
+}
+
+/**
+ * Where two names differ: the span of `from`, `start` to `end`, that `text`
+ * takes the place of to make `to`. The words both share at the start and at
+ * the end are left out, whole: the span begins and ends at a space or at an
+ * end of `from`, so it splits no character - a letter and its accent, or a
+ * character of two code units. Chromium's editing never splits one, and
+ * given a span that does, edits another span than the one meant.
+ */
+function changedWords(from: string, to: string): { start: number; end: number; text: string } {
+  let start = 0;
+  while (start < from.length && start < to.length && from[start] === to[start]) start += 1;
+  // `end` is where the shared ending begins in `from`; `to.length - (from.length - end)` is where it begins in `to`.
+  let end = from.length;
+  while (end > start && to.length - (from.length - end) > start && from[end - 1] === to[to.length - (from.length - end) - 1]) end -= 1;
+  const boundary = (at: number) => at === 0 || at === from.length || from[at - 1] === ' ' || from[at] === ' ';
+  while (!boundary(start)) start -= 1;
+  while (!boundary(end)) end += 1;
+  return { start, end, text: to.slice(start, to.length - (from.length - end)) };
 }

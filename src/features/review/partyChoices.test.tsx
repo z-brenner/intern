@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
+import { ReviewInspector } from '../../components/ReviewInspector';
 import { openRow } from '../queue/gridTesting';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { QueueItem } from '../../types';
@@ -78,13 +79,21 @@ describe('other parties the document names', () => {
     });
     afterEach(() => { Reflect.deleteProperty(document, 'execCommand'); });
 
-    it('replaces the whole name with the editing command, keeping what was typed after the party', async () => {
+    /*
+      Only the words that differ - here the party's - not the whole name.
+      Chromium's undo of a replacement of the field's whole text puts the
+      old text back after whatever the field holds by then: after a date
+      chip had set the name from code, Ctrl+Z gave the name with its old
+      self after it.
+    */
+    it('replaces only the words that differ with the editing command, keeping what was typed after the party', async () => {
       const baseBridge = createInMemoryBridge({ items: [letter] });
       const approve = vi.fn(baseBridge.approve);
       render(<App bridge={{ ...baseBridge, approve }} />);
       await selectRow(await screen.findByRole('row', { name: /Scan 0201.pdf/i }));
       const filename = screen.getByLabelText<HTMLTextAreaElement>('Filename');
-      fireEvent.change(filename, { target: { value: '2012-06-19 Request Letter to U.S. Department of Justice re Merger' } });
+      const typed = '2012-06-19 Request Letter to U.S. Department of Justice re Merger';
+      fireEvent.change(filename, { target: { value: typed } });
 
       let selected: [number | null, number | null, boolean] | undefined;
       insertText.mockImplementationOnce((command, ui, text) => {
@@ -94,11 +103,13 @@ describe('other parties the document names', () => {
       fireEvent.click(within(choicesGroup()).getByRole('button', { name: 'Morgan, Lewis & Bockius LLP' }));
 
       expect(insertText).toHaveBeenCalledTimes(1);
-      expect(insertText).toHaveBeenCalledWith('insertText', false, '2012-06-19 Request Letter to Morgan, Lewis & Bockius LLP re Merger');
-      // The whole name was selected in the field, so the one command replaced all of it.
-      expect(selected).toEqual([0, '2012-06-19 Request Letter to U.S. Department of Justice re Merger'.length, true]);
+      expect(insertText).toHaveBeenCalledWith('insertText', false, 'Morgan, Lewis & Bockius LLP');
+      // The party's words were selected in the field, and nothing either side of them.
+      expect(selected).toEqual([typed.indexOf('U.S.'), typed.indexOf(' re Merger'), true]);
       expect(filename).toHaveValue('2012-06-19 Request Letter to Morgan, Lewis & Bockius LLP re Merger');
       expect(filename).toHaveFocus();
+      // The caret is at the end, where it was when the whole name went in.
+      expect([filename.selectionStart, filename.selectionEnd]).toEqual([filename.value.length, filename.value.length]);
       expect(within(choicesGroup()).getByRole('button', { name: 'Morgan, Lewis & Bockius LLP' })).toHaveAttribute('aria-pressed', 'true');
 
       fireEvent.keyDown(filename, { key: 'Enter' });
@@ -122,6 +133,107 @@ describe('other parties the document names', () => {
       expect(insertText).toHaveBeenCalledTimes(1);
       expect(filename).toHaveValue('2012-06-19 Request Letter to STARS Alliance LLC');
       expect(filename).toHaveFocus();
+    });
+
+    it('replaces whole words, so a letter is never split from its accent', async () => {
+      // The name writes the accent as a letter and a combining mark; the party chosen has none.
+      const accented: QueueItem = { ...letter, proposedFilename: '2012-06-19 Request Letter to Rene\u0301 Dupont.pdf', partyChoices: ['Rene Dupont'], nameParties: ['Rene\u0301 Dupont'] };
+      render(<App bridge={createInMemoryBridge({ items: [accented] })} />);
+      await selectRow(await screen.findByRole('row', { name: /Scan 0201.pdf/i }));
+      const filename = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      const before = filename.value;
+
+      let selected: [number | null, number | null] | undefined;
+      insertText.mockImplementationOnce((command, ui, text) => {
+        selected = [filename.selectionStart, filename.selectionEnd];
+        return browserInsertText(command, ui, text);
+      });
+      fireEvent.click(within(choicesGroup()).getByRole('button', { name: 'Rene Dupont' }));
+      expect(insertText).toHaveBeenCalledWith('insertText', false, 'Rene');
+      expect(selected).toEqual([before.indexOf('Rene\u0301'), before.indexOf(' Dupont')]);
+      expect(filename).toHaveValue('2012-06-19 Request Letter to Rene Dupont');
+    });
+
+    it('sets the name from code when the command leaves anything else in the field', async () => {
+      render(<App bridge={createInMemoryBridge({ items: [letter] })} />);
+      await selectRow(await screen.findByRole('row', { name: /Scan 0201.pdf/i }));
+      const filename = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+
+      // As a browser that moved the selection's start to the start of the name would.
+      insertText.mockImplementationOnce((command, ui, text) => {
+        filename.setSelectionRange(0, filename.selectionEnd);
+        return browserInsertText(command, ui, text);
+      });
+      fireEvent.click(within(choicesGroup()).getByRole('button', { name: 'Morgan, Lewis & Bockius LLP' }));
+      expect(insertText).toHaveBeenCalledTimes(1);
+      expect(filename).toHaveValue('2012-06-19 Request Letter to Morgan, Lewis & Bockius LLP');
+      expect(within(choicesGroup()).getByRole('button', { name: 'Morgan, Lewis & Bockius LLP' })).toHaveAttribute('aria-pressed', 'true');
+    });
+  });
+
+  /*
+    One field served every item, and the browser's undo steps outlived the
+    item they were made in: after a party chip, Ctrl+Z in the next
+    document's name (Alt+N, or another row) put the last document's old name
+    after its own, one Enter from filing. Each item, and each revision of
+    its proposal, has a field of its own, and a caret in the old one moves
+    to the new one.
+  */
+  describe('a name field of its own for each item and revision', () => {
+    const second: QueueItem = {
+      ...letter,
+      id: 'invoice',
+      originalFilename: 'Scan 0202.pdf',
+      proposedFilename: '2013-01-05 Invoice from Acme Corp.pdf',
+      description: 'An invoice.',
+      partyChoices: ['Beta LLC'],
+      nameParties: ['Acme Corp'],
+    };
+
+    it('gives the next item a new field, with the caret moved to it, and the chip kept for the item left', async () => {
+      render(<App bridge={createInMemoryBridge({ items: [letter, second] })} />);
+      await selectRow(await screen.findByRole('row', { name: /Scan 0201.pdf/i }));
+      const first = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      fireEvent.click(within(choicesGroup()).getByRole('button', { name: 'Morgan, Lewis & Bockius LLP' }));
+      expect(first).toHaveFocus();
+
+      // Alt+N, from inside the name.
+      fireEvent.keyDown(first, { key: 'n', code: 'KeyN', altKey: true });
+      const next = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      expect(next).toHaveValue('2013-01-05 Invoice from Acme Corp');
+      expect(next).not.toBe(first);
+      expect(first).not.toBeInTheDocument();
+      expect(next).toHaveFocus();
+      expect([next.selectionStart, next.selectionEnd]).toEqual([next.value.length, next.value.length]);
+
+      // Back to the first, the chip's name is there, in a field of its own again.
+      fireEvent.keyDown(next, { key: 'n', code: 'KeyN', altKey: true });
+      const again = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      expect(again).toHaveValue('2012-06-19 Request Letter to Morgan, Lewis & Bockius LLP');
+      expect(again).not.toBe(first);
+      expect(again).toHaveFocus();
+    });
+
+    it('gives a new revision a new field, moving the caret only if it was in the old one', () => {
+      const calls = { onClose: vi.fn(), onApprove: vi.fn(), onKeep: vi.fn(), onCancel: vi.fn(), onRetry: vi.fn(), onReanalyze: vi.fn(), onRemove: vi.fn(), onUndo: vi.fn(), onOpen: vi.fn(), onReveal: vi.fn() };
+      const read = { ...letter, proposalRevision: '1' };
+      const view = render(<ReviewInspector item={read} drawer={false} {...calls} />);
+      const first = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      first.focus();
+
+      view.rerender(<ReviewInspector item={{ ...read, proposedFilename: '2012-06-19 Request Letter to STARS Alliance LLC.pdf', proposalRevision: '2' }} drawer={false} {...calls} />);
+      const reread = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      expect(reread).toHaveValue('2012-06-19 Request Letter to STARS Alliance LLC');
+      expect(reread).not.toBe(first);
+      expect(reread).toHaveFocus();
+      expect([reread.selectionStart, reread.selectionEnd]).toEqual([reread.value.length, reread.value.length]);
+
+      // A caret elsewhere stays where it is.
+      const description = screen.getByLabelText('Description');
+      description.focus();
+      view.rerender(<ReviewInspector item={{ ...read, proposedFilename: '2012-06-19 Request Letter to Morgan, Lewis & Bockius LLP.pdf', proposalRevision: '3' }} drawer={false} {...calls} />);
+      expect(screen.getByLabelText('Filename')).not.toBe(reread);
+      expect(description).toHaveFocus();
     });
   });
 
