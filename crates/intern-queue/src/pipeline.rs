@@ -993,12 +993,15 @@ impl ProposalRecord {
     /// beside its department, is learned, as is "Acme Corp", which is no run
     /// of the parent's words.
     ///
-    /// The price falls on a party the reading spells one way in the name
-    /// and another, a suffix longer or shorter, in its facts: a new spelling
-    /// over to the facts' one - "Beacon Staffing" for a name's "Beacon
-    /// Staffing LLC" when the facts give "Beacon Staffing", or the reverse -
-    /// is not learned either, which costs the reviewer only that edit made
-    /// again.
+    /// The price is two kinds of respelling not learned, each costing the
+    /// reviewer only that edit made again. One crosses over to the
+    /// reading's other spelling of the named party, a suffix longer or
+    /// shorter in its facts, and names it: "Beacon Staffing" for a name's
+    /// "Beacon Staffing LLC" when the facts give "Beacon Staffing", or the
+    /// reverse. The other shortens the longer party of a pair, named, into
+    /// a run of its own words that still holds the shorter one's name and
+    /// more: "Acme Corporation Holdings" for a name's "Acme Corporation
+    /// Holdings LLC" in a document that also names Acme Corporation.
     fn names_another_party(&self, lesson: &HouseRule) -> bool {
         let to = HouseRule::key(&lesson.to);
         let from = lesson.from_key();
@@ -6324,7 +6327,8 @@ mod party_choice_tests {
     /// way, the longer one's short form included when it leaves out the
     /// named party's words. A respelling of the named party that does not
     /// cross over to the other is still a spelling, a short form of both
-    /// included.
+    /// included; the longer one, named, shortened to a run of its words
+    /// that still holds the shorter's name, is the price, not learned.
     #[test]
     fn a_party_whose_name_holds_the_named_ones_or_is_held_by_it_is_another_party() {
         let edit = |named: &str, other: &str, to: &str| {
@@ -6391,6 +6395,15 @@ mod party_choice_tests {
             "Beacon Staffing",
             "Beacon Staffing LLC",
             "Beacon Staffing LLC"
+        ));
+
+        // The other price: the longer party of a pair, named, shortened to
+        // a run of its own words that still holds the shorter one's name
+        // crosses over to the shorter one, and is not learned.
+        assert!(edit(
+            parent,
+            "Acme Corporation",
+            "Acme Corporation Holdings"
         ));
     }
 }
