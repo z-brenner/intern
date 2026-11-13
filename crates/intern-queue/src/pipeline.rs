@@ -6589,7 +6589,9 @@ impl PipelineRepository {
     /// of a teacher's and of its date (see [`same_document`]), or all but
     /// identical whatever its date: a second scan; or, for a text too short
     /// to fingerprint, the very words a teacher gave (see
-    /// [`DocumentWords::digest`]) under the same date.
+    /// [`DocumentWords::digest`]) under the same date; or, where neither a
+    /// fingerprint nor the words of both are kept to compare them, any
+    /// document under the teacher's date.
     fn confirm(&self, rule: &HouseRule, checker: &Checker) -> PipelineResult<bool> {
         let connection = self.lock()?;
         let filed = connection
@@ -6635,10 +6637,9 @@ impl PipelineRepository {
                 return Ok(false);
             }
             let dated = leading_date(&filed_name);
-            if words.is_some()
-                && words == checker.words
-                && (dated.is_none() || checker.date.is_none() || dated == checker.date.as_deref())
-            {
+            let same_date =
+                dated.is_none() || checker.date.is_none() || dated == checker.date.as_deref();
+            if words.is_some() && words == checker.words && same_date {
                 return Ok(false);
             }
             let distance = fingerprint
@@ -6649,6 +6650,14 @@ impl PipelineRepository {
             if distance.is_some_and(|distance| {
                 distance <= 1 || same_document(distance, &filed_name, checker.date.as_deref())
             }) {
+                return Ok(false);
+            }
+            // Nothing of the two texts to compare - a teacher an earlier
+            // release learned from, which kept no words, too short to
+            // fingerprint or read from a page image, or a checker the same -
+            // and no date to tell them apart: in doubt, the same document.
+            let comparable = distance.is_some() || (words.is_some() && checker.words.is_some());
+            if !comparable && same_date {
                 return Ok(false);
             }
         }
@@ -7222,14 +7231,17 @@ fn table_exists(connection: &Connection, table: &str) -> PipelineResult<bool> {
 /// `house_rule_teacher_content`, and [`PipelineRepository::confirm`]), once,
 /// when that table is first made: the documents `house_rule_teachers` names
 /// by item and, for a spelling it names none of - one an earlier release
-/// learned, which kept no teachers - every document filed, or approved by a
-/// person, under a name that gives the spelling (see [`keeps_spelling`]):
-/// its teachers are among them (one whose filing failed is still waiting,
-/// approved), as is every name it wrote then that nobody checked. Kept by
+/// learned, which kept no teachers - every document the queue holds whose
+/// name gives the spelling (see [`keeps_spelling`]) or whose reading the
+/// spelling respells, filed or waiting, approved or not: its teachers are
+/// among them, even one whose filing failed and that was read again before
+/// the update, which keeps no trace of the approval that taught, as is
+/// every name it wrote then that nobody checked. Approving one of them
+/// after the update checks nothing; a document added since does. Kept by
 /// what they hold, the same file added again after it left the queue is
 /// still a teacher. Nothing where the queue keeps no documents.
 fn remember_teachers_by_content(connection: &Connection) -> PipelineResult<()> {
-    for table in ["queue_items", "proposals", "operation_receipts"] {
+    for table in ["queue_items", "proposals"] {
         if !table_exists(connection, table)? {
             return Ok(());
         }
@@ -7260,12 +7272,7 @@ fn remember_teachers_by_content(connection: &Connection) -> PipelineResult<()> {
     let documents = {
         let mut statement = connection
             .prepare(
-                "SELECT items.source_hash, items.source_path, proposals.proposal_json,
-                   EXISTS (
-                     SELECT 1 FROM operation_receipts receipts
-                     WHERE receipts.queue_item_id = items.id
-                       AND receipts.direction = 'apply' AND receipts.stage = 'complete'
-                   )
+                "SELECT items.source_hash, items.source_path, proposals.proposal_json
                  FROM queue_items items
                  JOIN proposals ON proposals.queue_item_id = items.id",
             )
@@ -7276,7 +7283,6 @@ fn remember_teachers_by_content(connection: &Connection) -> PipelineResult<()> {
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, bool>(3)?,
                 ))
             })
             .map_err(database_error)?
@@ -7309,15 +7315,18 @@ fn remember_teachers_by_content(connection: &Connection) -> PipelineResult<()> {
         let teachers = if taught.is_empty() {
             documents
                 .iter()
-                .filter_map(|(hash, path, json, filed)| {
+                .filter_map(|(hash, path, json)| {
                     let record = read(Some(json.clone()))?;
                     let extension = Path::new(path)
                         .extension()
                         .and_then(|value| value.to_str())
                         .unwrap_or_default();
-                    ((*filed || record.approved || record.reviewed)
-                        && !record.is_synthetic()
-                        && keeps_spelling(&rule, extension, &record.filename))
+                    let respells = !HouseStyle::new(vec![rule.clone()])
+                        .apply(&record.analysis.proposal)
+                        .1
+                        .is_empty();
+                    (!record.is_synthetic()
+                        && (respells || keeps_spelling(&rule, extension, &record.filename)))
                     .then(|| (hash.clone(), Some(record)))
                 })
                 .collect::<Vec<_>>()

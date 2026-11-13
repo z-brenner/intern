@@ -7177,6 +7177,193 @@ fn add_teacher_again(pipeline: &Pipeline, inbox: &Path, second: i64) -> i64 {
     again
 }
 
+/// Makes the queue database at `database` what alpha.17 left: no teacher
+/// kept of any spelling, by item or by what it held, and no reading
+/// keeping the words its text gave.
+fn as_alpha17(database: &Path) {
+    let database = Connection::open(database).unwrap();
+    database
+        .execute("DELETE FROM house_rule_teachers", [])
+        .unwrap();
+    database
+        .execute("DROP TABLE house_rule_teacher_content", [])
+        .unwrap();
+    database
+        .execute(
+            "UPDATE proposals SET proposal_json = json_remove(proposal_json, '$.documentWords')",
+            [],
+        )
+        .unwrap();
+}
+
+/// The queue, as [`Probation`], opened again on what `rig` left after
+/// [`as_alpha17`]: the update to this release, reading `later` in turn.
+fn updated_from_alpha17(rig: Probation, later: Vec<(DocumentSource, ModelProposal)>) -> Probation {
+    let Probation {
+        temp,
+        pipeline,
+        read,
+        ..
+    } = rig;
+    drop(pipeline);
+    as_alpha17(&temp.path().join("queue.sqlite3"));
+    let (texts, replies) = later.into_iter().unzip();
+    let (pipeline, filing) = reading_pipeline(
+        temp.path(),
+        texts,
+        replies,
+        &SMITH_AND_ACME,
+        DestinationLayout::Party,
+    );
+    Probation {
+        temp,
+        pipeline,
+        filing,
+        read,
+    }
+}
+
+/// A spelling alpha.17 learned from two agreements too short for a text
+/// fingerprint, which kept no words of their text either: one of them
+/// scanned again after the update, and approved as Intern named it. It is
+/// the reviewer's own words approved again, and checks nothing, though
+/// nothing it holds can be told from what the teacher held but its date.
+/// It counted as the check, with neither a fingerprint nor the words to
+/// compare, and the next agreement was filed without review under "John
+/// Smith, Jane Doe". An agreement of another date still checks the
+/// spelling.
+#[test]
+fn a_short_teacher_of_a_spelling_from_an_earlier_release_scanned_again_is_no_check() {
+    let short = |index| {
+        agreement(
+            index,
+            EMPLOYMENT,
+            PartyRelation::Between,
+            &SMITH_AND_ACME,
+            "This agreement is made by John Smith and Acme Corporation.",
+        )
+    };
+    let mut rig = Probation::reading(&SMITH_AND_ACME, vec![short(0), short(1)]);
+    let first = rig.read_next();
+    let second = rig.read_next();
+    for id in [first, second] {
+        rig.approve(id, JOINED);
+    }
+    let teacher = rig.item(second).proposal.unwrap();
+    assert!(teacher.analysis.text_fingerprint.is_none());
+    let mut rig = updated_from_alpha17(rig, vec![short(1), short(3)]);
+
+    let rescan = rig.read_next();
+    let record = rig.item(rescan).proposal.unwrap();
+    assert!(
+        record.filename.starts_with(&format!("2024-05-03 {JOINED}")),
+        "{}",
+        record.filename
+    );
+    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
+    rig.approve_as_proposed(rescan);
+    assert_eq!(
+        rig.rule(),
+        rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
+    );
+
+    let next = rig.read_next();
+    let held = rig.item(next);
+    assert_eq!(held.status, QueueStatus::NeedsReview);
+    assert_eq!(
+        held.proposal.unwrap().reasons,
+        vec![LEARNED_SPELLING_UNCONFIRMED]
+    );
+    rig.approve_as_proposed(next);
+    assert_eq!(
+        rig.rule(),
+        rule_state("John Smith", "John Smith, Jane Doe", 2, 1),
+        "an agreement of another date"
+    );
+}
+
+/// A long agreement whose words share little with [`long_agreement`]'s.
+fn other_long_agreement(index: usize) -> (DocumentSource, ModelProposal) {
+    agreement(
+        index,
+        EMPLOYMENT,
+        PartyRelation::Between,
+        &SMITH_AND_ACME,
+        "This agreement is made by John Smith and Acme Corporation. Duties: warehouse \
+         logistics across three regional depots, overnight shifts, forklift certification \
+         required within ninety days, uniform allowance paid quarterly, relocation stipend \
+         available, non-solicitation for twelve months after departure, arbitration in Ohio.",
+    )
+}
+
+/// A spelling alpha.17 learned, one of whose teachers failed to file and
+/// was read again (Re-analyze) before the update: a fresh reading nobody
+/// had approved, never filed, with nothing left of the approval that
+/// taught. After the update it is read again, as revalidation reads every
+/// waiting document, and approved as Intern named it - the reviewer's own
+/// words again. It checks nothing: every document waiting when the update
+/// came whose reading the spelling respells is taken as a teacher. It
+/// counted as the check, and the next agreement was filed without review
+/// under "John Smith, Jane Doe".
+#[test]
+fn a_teacher_of_a_spelling_from_an_earlier_release_whose_filing_failed_and_was_read_again_is_no_check()
+ {
+    let mut rig = Probation::reading(
+        &SMITH_AND_ACME,
+        vec![
+            long_agreement(0, "chief engineer"),
+            other_long_agreement(1),
+            other_long_agreement(1),
+        ],
+    );
+    let first = rig.read_next();
+    let second = rig.read_next();
+    rig.approve(first, JOINED);
+    // The folder the second goes to cannot be made: a file has its name.
+    let filed = rig.temp.path().join("filed");
+    let folder = filed.join("John Smith, Jane Doe");
+    std::fs::rename(&folder, filed.join("moved")).unwrap();
+    std::fs::write(&folder, b"in the way").unwrap();
+    let date = PROBATION_DATES[1].0;
+    assert!(
+        rig.pipeline
+            .approve(
+                second,
+                &format!("{date} {JOINED}.pdf"),
+                "An employment agreement."
+            )
+            .is_err()
+    );
+    std::fs::remove_file(&folder).unwrap();
+    rig.pipeline.reanalyze(second).unwrap();
+    rig.pipeline.run_until_idle().unwrap();
+    let again = rig.item(second);
+    let record = again.proposal.as_ref().unwrap();
+    assert!(!record.approved && !record.reviewed, "{again:?}");
+    rig.read = 3;
+    let rig = updated_from_alpha17(
+        rig,
+        vec![other_long_agreement(1), long_agreement(3, "head of sales")],
+    );
+
+    rig.pipeline.reanalyze(second).unwrap();
+    rig.pipeline.run_until_idle().unwrap();
+    let record = rig.item(second).proposal.unwrap();
+    assert!(record.document_words.is_some());
+    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
+    rig.approve_as_proposed(second);
+    assert_eq!(
+        rig.rule(),
+        rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
+    );
+
+    rig.automatic(true);
+    let mut rig = rig;
+    let next = rig.read_next();
+    assert_eq!(rig.item(next).status, QueueStatus::NeedsReview);
+    assert_eq!(rig.filed_as(next), None);
+}
+
 /// A document a spelling was learned from, taken back, removed from the
 /// queue and added again, is a new item for the same file, and its approval
 /// checks nothing: the teachers are kept by what they hold as well as by
