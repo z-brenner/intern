@@ -1,6 +1,6 @@
 import { Ban, CalendarPlus, CircleAlert, ChevronRight, ClipboardCopy, Ellipsis, ExternalLink, FileCheck2, FileText, FolderOpen, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
 import { useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
-import type { KeyboardEvent, MouseEvent, Ref } from 'react';
+import type { FocusEvent, KeyboardEvent, MouseEvent, Ref } from 'react';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
@@ -210,6 +210,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   const headingRef = useRef<HTMLHeadingElement>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
   const fieldId = useId();
   useEffect(() => { if (confirmingRemove) confirmRef.current?.focus(); }, [confirmingRemove]);
   // Text with a line break - a cell copied from a spreadsheet, a line from a
@@ -265,6 +266,33 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     field.focus();
     field.setSelectionRange(field.value.length, field.value.length);
   }, [draft.for]);
+  // The decision sticks to the bottom of the panel over whatever scrolls
+  // under it, and the browser scrolls a focused control into view only when
+  // none of it is in the panel, under the buttons or not. A control focused
+  // under them, or half under them, stayed there: "Analysis details" reached
+  // by Tab, the Cancel of "Use on its own" with the sentence it answers cut
+  // off. A control focused from the keyboard or from code is scrolled clear
+  // of the buttons, however tall they are now, never so far that its top
+  // leaves the panel. One focused by a press is left where it is, so that
+  // the press lands on what was pressed.
+  const pressing = useRef(false);
+  const press = () => {
+    pressing.current = true;
+    const released = new AbortController();
+    const release = () => { pressing.current = false; released.abort(); };
+    window.addEventListener('pointerup', release, { capture: true, signal: released.signal });
+    window.addEventListener('pointercancel', release, { capture: true, signal: released.signal });
+  };
+  const keepFocusInSight = (event: FocusEvent<HTMLElement>) => {
+    const panel = inspectorRef.current;
+    const decision = actionsRef.current;
+    const focused = event.target;
+    if (pressing.current || !panel || !decision || decision.offsetHeight === 0 || decision.contains(focused)) return;
+    const box = focused.getBoundingClientRect();
+    const under = box.bottom + 12 - decision.getBoundingClientRect().top;
+    const room = box.top - 12 - panel.getBoundingClientRect().top;
+    if (under > 0 && room > 0) panel.scrollTop += Math.min(under, room);
+  };
   useEffect(() => {
     if (!drawer) return;
     const filenameInput = filenameRef.current;
@@ -472,7 +500,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // The parts of the name being edited that the review is about, as they now read.
   const nameFlags = editable ? flaggedNameParts(joinFilename(stem, extension), flagged) : [];
   const reviewNote = item.reason && (item.status === 'review' || item.status === 'failed');
-  return <aside ref={inspectorRef} id={id} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown}>
+  return <aside ref={inspectorRef} id={id} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown} onFocus={keepFocusInSight} onPointerDown={press}>
     {/* A filed document's name is no longer its "current" one; it said so anyway (FRONTEND_UX-8). */}
     {/* Focusable so selecting a row can bring a keyboard user here, past the rest of the queue. */}
     <div className="inspector-title"><h2 ref={headingRef} tabIndex={-1}>{completed ? 'Filed document' : 'Review item'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close review"><Icon icon={X} /></button></div>
@@ -655,7 +683,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       */}
       {item.nearDuplicateOf && <p className="near-duplicate" aria-label="Filed already as">Filed already as <q>{item.nearDuplicateOf}</q>.</p>}
     </section>}
-    <div className="inspector-actions">
+    <div ref={actionsRef} className="inspector-actions">
       {confirmingRemove && remove ? <div className="remove-confirm" role="group" aria-label="Confirm removal" onKeyDown={(event) => {
         // Escape takes back the question, not the whole drawer.
         if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelRemove(); }

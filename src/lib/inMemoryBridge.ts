@@ -1015,6 +1015,34 @@ export function createReviewBatchBridge(options: InMemoryBridgeOptions = {}): De
   return createBridge({ items: reviewBatchItems, ...options }, false);
 }
 
+/**
+ * A statement of work held because two of the learned spellings its name
+ * used have not been checked, ahead of the demo's queue, for walking "Use on
+ * its own" in the review panel: the browser build's `?learnedSpellings=held`.
+ */
+const heldForSpelling: QueueItem = {
+  id: 'sow', originalFilename: 'SOW final v3.pdf', status: 'review', confidence: 0.93,
+  proposedFilename: '2026-04-01 SOW between Ridgeline Cartography and Contoso.pdf',
+  description: 'Statement of work between Ridgeline Cartography LLC and Contoso Worldwide, Inc. for the 2026 member-map engagement.',
+  evidence: { date: 'effective as of April 1, 2026', type: 'STATEMENT OF WORK', parties: 'Ridgeline Cartography LLC; Contoso Worldwide, Inc.' },
+  errorCode: 'LEARNED_SPELLING_UNCONFIRMED', reasonCodes: ['LEARNED_SPELLING_UNCONFIRMED'], reason: humanizeReason('LEARNED_SPELLING_UNCONFIRMED'),
+  houseRules: [
+    { kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' },
+    { kind: 'party', from: 'Ridgeline Cartography LLC', to: 'Ridgeline Cartography' },
+    { kind: 'document_type', from: 'Statement of Work', to: 'SOW' },
+  ],
+};
+
+const heldForSpellingRules: LearnedRule[] = [
+  { id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso', seen: 2, active: true, confirmed: 0, learnedAt: 1775001600 },
+  { id: '2', kind: 'party', from: 'Ridgeline Cartography LLC', to: 'Ridgeline Cartography', seen: 2, active: true, confirmed: 0, learnedAt: 1775001700 },
+  { id: '3', kind: 'document_type', from: 'Statement of Work', to: 'SOW', seen: 2, active: true, confirmed: 1, learnedAt: 1775001800 },
+];
+
+export function createLearnedSpellingBridge(): DesktopBridge {
+  return createBridge({ items: [heldForSpelling, ...seedItems], learnedRules: heldForSpellingRules }, false);
+}
+
 type BrowserFile = File & { webkitRelativePath?: string };
 
 function browserFileSelection(file: BrowserFile): FileSelection {
