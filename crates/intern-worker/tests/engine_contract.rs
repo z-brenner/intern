@@ -225,6 +225,15 @@ fn the_host_doubts_a_page_read_as_nothing_only_if_it_is_not_blank() {
         doubted
     );
     assert_eq!(warnings_of(Some(0.0), Vec::new()), doubted);
+    // A page kept without a reading Intern trusts reaches the host by name,
+    // as no doubt about the facts the text gives.
+    assert_eq!(
+        warnings_of(None, vec![ExtractionWarning::TextUnread]),
+        vec![intern_engine::domain::ParserWarning::new(
+            "TEXT_UNREAD",
+            false
+        )]
+    );
 }
 
 /// A page the engine has no layout for - stored before layouts existed, or

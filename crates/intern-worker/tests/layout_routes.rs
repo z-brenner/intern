@@ -662,6 +662,8 @@ fn a_bad_prior_ocr_layer_is_read_again_and_replaced_only_when_the_reading_is_bet
     let kept = read(&StandInPdf::new(vec![bad_prior_ocr()]), &NoBetter);
     assert_eq!(kept.pages[0].source, PageSource::Native);
     assert_eq!(kept.pages[0].text, bad_prior_ocr().native_text);
+    // The layer is the best text there is, and not what the page shows.
+    assert_eq!(kept.warnings, [ExtractionWarning::TextUnread]);
     // The layer has text enough not to want the page image on its own, but
     // a reading that came back unsure says the page is hard to read either
     // way, so its image goes with the layer's text.
@@ -673,9 +675,13 @@ fn a_bad_prior_ocr_layer_is_read_again_and_replaced_only_when_the_reading_is_bet
 
     // And OCR that cannot run leaves it too, rather than failing a page
     // that had text.
+    // The document says the page was not read, though no image goes with
+    // it: nothing else would tell a learned spelling's check that the
+    // page's words are not known.
     let unread = read(&StandInPdf::new(vec![bad_prior_ocr()]), &MissingOcr);
     assert_eq!(unread.pages[0].text, bad_prior_ocr().native_text);
-    assert!(unread.warnings.is_empty());
+    assert_eq!(unread.warnings, [ExtractionWarning::TextUnread]);
+    assert!(unread.optional_image.is_none());
 }
 
 /// A page whose text layer is one bad-OCR token over an image covering
@@ -991,7 +997,9 @@ fn a_sparse_prior_ocr_layer_read_unsurely_reads_as_its_region_did() {
     assert_eq!(noise.pages[0].source, PageSource::Native);
     assert_eq!(noise.pages[0].text, sparse_prior_ocr().native_text);
     assert_eq!(noise.pages[0].ocr_confidence, None);
-    assert!(noise.warnings.is_empty());
+    // What the scan holds beyond the layer is not in the text, and the
+    // document says so.
+    assert_eq!(noise.warnings, [ExtractionWarning::TextUnread]);
     assert!(noise.optional_image.is_none());
 }
 
@@ -1078,7 +1086,9 @@ fn an_image_region_on_a_text_page_is_read_and_merged_in_reading_order() {
     );
     assert_eq!(noise.pages[0].text, page_with_an_image_region().native_text);
     assert_eq!(noise.pages[0].ocr_confidence, None);
-    // So does one OCR cannot read.
+    // So does one OCR cannot read. Neither region is in the page's text,
+    // though a person sees it on the page, and the document says so.
+    assert_eq!(noise.warnings, [ExtractionWarning::TextUnread]);
     let unread = read(
         &StandInPdf::new(vec![page_with_an_image_region()]),
         &MissingOcr,
@@ -1087,6 +1097,7 @@ fn an_image_region_on_a_text_page_is_read_and_merged_in_reading_order() {
         unread.pages[0].text,
         page_with_an_image_region().native_text
     );
+    assert_eq!(unread.warnings, [ExtractionWarning::TextUnread]);
 }
 
 /// Pages routed with no geometry from their backend - every stand-in that

@@ -104,7 +104,15 @@ choice, marked where it applies, so it is reported as `CONTENT_ELIDED`, which
 the host treats as a note rather than a reason for review: a ledger whose
 facts sit in its first rows can be Ready however long it runs. Text that was
 actually lost — a page cut at the size cap, TIFF frames it could not read — is still
-`TEXT_TRUNCATED` and still forces review. A `.xlsx` is streamed cell by cell;
+`TEXT_TRUNCATED` and still forces review. A PDF page kept without a reading
+Intern trusts — a text layer that reads as bad OCR kept because a fresh
+reading did no better or could not be had, a page or an image on it that OCR
+was to read and could not render, could not read, or read too unsurely to
+merge in, a page with so little text and so much image that the image is the
+page — is reported as `TEXT_UNREAD`. Its text is the best there is and is
+read as it always was, so the host treats this as a note too: it says only
+that the text is not all a person sees on the page, which is what a learned
+spelling's check asks (see House style). A `.xlsx` is streamed cell by cell;
 calamine reads a binary `.xls` whole as it opens it, so its record stream is
 first surveyed for what that would allocate (dense ranges spanning a sheet's
 corners, forged `Dimensions` claims, shared strings copied into every cell

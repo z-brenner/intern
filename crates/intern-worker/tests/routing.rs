@@ -321,6 +321,8 @@ fn large_non_text_page_under_one_hundred_characters_routes_first_page_to_vision(
     assert_eq!(document.pages[0].source, PageSource::Native);
     assert!(document.pages[0].vision_escalated);
     assert_eq!(document.optional_image.as_ref().unwrap().page_number, 1);
+    // Its image is the page, and its text not what a person reads on it.
+    assert_eq!(document.warnings, [ExtractionWarning::TextUnread]);
 }
 
 /// Only the first page that wants the page image is rendered for it: a
@@ -338,6 +340,7 @@ fn pages_after_the_one_that_brings_the_page_image_are_not_rendered_for_it() {
 
     assert_eq!(renders, 1);
     assert_eq!(document.optional_image.as_ref().unwrap().page_number, 1);
+    assert_eq!(document.warnings, [ExtractionWarning::TextUnread]);
     let escalated = document
         .pages
         .iter()

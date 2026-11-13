@@ -261,6 +261,10 @@ that reads as plain text is kept. The fresh reading replaces the layer only
 if it is confident (mean ≥ 75): these layers' words show no more OCR errors
 than a fresh reading does, so having fewer of them proves nothing
 (`route_page_at`, `reread_is_better`). A layer kept reads as it did before.
+A layer of bad OCR kept, and a sparse layer whose scan's reading could not
+be merged in, are reported as `TEXT_UNREAD`, a note the host does not send
+to review: their text is not all the page shows, so a learned spelling is
+not checked on the document (architecture.md, House style).
 One whose scan would have been read as a region has the fresh reading
 merged in as that region's was, and is only as sure as it, so an unsure
 reading (60-74) still raises `LOW_OCR_CONFIDENCE` and sends the document to
