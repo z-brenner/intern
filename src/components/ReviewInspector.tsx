@@ -148,17 +148,23 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     try { window.localStorage.setItem(ANALYSIS_DETAILS_KEY, open ? 'open' : 'closed'); } catch { /* Not remembered; it still opens now. */ }
   };
   const filenameRef = useRef<HTMLTextAreaElement>(null);
-  // The name's field is one item's, and one revision's: it is keyed by the
-  // draft (below), so the browser's undo steps go with the field they were
-  // made in. One field served every item, and an undo step could outlive its
-  // item: once the field's whole text had been replaced - by a party chip, or
-  // by Ctrl+A and Delete - Ctrl+Z in the next document's name put the last
-  // one's old name after its own, one Enter from filing (Chromium; WebView2
-  // is Chromium). A caret in the old field moves to the new one, at the end,
+  const descriptionRef = useRef<HTMLTextAreaElement>(null);
+  // The name's field and the description's are one item's, and one
+  // revision's: each is keyed by the draft (below), so the browser's undo
+  // steps go with the field they were made in. One field served every item,
+  // and an undo step could outlive its item: once the field's whole text
+  // had been replaced - by a party chip, or by Ctrl+A and typing or Delete -
+  // Ctrl+Z in the next document's field put the last one's old text after
+  // its own (Chromium; WebView2 is Chromium). In the name that was one
+  // Enter from filing; in the description, another matter's sentence went
+  // into this document's record, the description ledger and the shared
+  // filed index. A caret in the old field moves to the new one, at the end,
   // where the reused field had it.
   const nameHadFocus = useRef(false);
+  const descriptionHadFocus = useRef(false);
   if (draft.for !== draftFor) {
     nameHadFocus.current = filenameRef.current !== null && document.activeElement === filenameRef.current;
+    descriptionHadFocus.current = descriptionRef.current !== null && document.activeElement === descriptionRef.current;
     const kept = draft.edited ? new Map(setAside).set(draft.for, draft) : setAside;
     if (kept !== setAside) setSetAside(kept);
     setDraft(kept.get(draftFor) ?? { for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false });
@@ -203,9 +209,10 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     field.style.height = `${field.scrollHeight}px`;
   }, [stem, draft.for]);
   useLayoutEffect(() => {
-    const field = filenameRef.current;
-    if (!nameHadFocus.current || !field) return;
+    const field = nameHadFocus.current ? filenameRef.current : descriptionHadFocus.current ? descriptionRef.current : null;
     nameHadFocus.current = false;
+    descriptionHadFocus.current = false;
+    if (!field) return;
     field.focus();
     field.setSelectionRange(field.value.length, field.value.length);
   }, [draft.for]);
@@ -228,6 +235,28 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   };
   const approve = () => submit(stem);
   const editStem = (value: string) => { setStem(value); setError(stemProblem(value, extension, sourceExtension) ?? ''); };
+  // A name a click puts in - a party chip, a date - goes in as typing would,
+  // through the browser's own editing command, so one Ctrl+Z in the name
+  // gives back what the click replaced. A value set from code empties the
+  // field's undo history, and a party the reviewer had corrected by hand
+  // could only be typed again. Only the words that differ are replaced, not
+  // the whole text: Chromium's undo of a whole-text replacement puts the
+  // old text back after whatever the field holds by then, so after a click
+  // that set the name from code - a date chip did, until it came here too -
+  // Ctrl+Z gave the name with its old self after it, one Enter from filing.
+  // Where the command is missing or refused (jsdom has none), or leaves
+  // anything but the new name, the value is set from code. The caret stays
+  // in the name, at the end, where Enter files it.
+  const typeName = (next: string) => {
+    const field = filenameRef.current;
+    field?.focus();
+    if (next === stem) return;
+    const { start, end, text } = changedWords(stem, next);
+    field?.setSelectionRange(start, end);
+    const typed = field !== null && document.activeElement === field && typeof document.execCommand === 'function' && document.execCommand('insertText', false, text);
+    if (!typed || field.value !== next) editStem(next);
+    else field.setSelectionRange(next.length, next.length);
+  };
   // The model's date, when Intern could not find it written in the document
   // and so left it out of the name. Offered until the name carries a date.
   const suggestedDate = item.suggestedDate && !dated ? item.suggestedDate : undefined;
@@ -235,7 +264,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // was pressed with it: focus fell to nothing, and a keyboard user had to
   // find the panel again to file the name they had just completed. It goes
   // to the name, which now starts with that date; Enter there files it.
-  const putDate = (date: string) => { editStem(withLeadingDate(stem, date)); filenameRef.current?.focus(); };
+  const putDate = (date: string) => typeName(withLeadingDate(stem, date));
   const useSuggestedDate = () => putDate(suggestedDate!);
   const acceptSuggestedDate = () => submit(withLeadingDate(stem, suggestedDate!));
   // When the name has no date and the model offered none worth showing, the
@@ -245,33 +274,12 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   const chooseDate = putDate;
   // The other parties the document names, when the name gives the wrong
   // one: a click puts one in place of the party the name gives - which
-  // used to mean retyping fifteen to forty characters - and the caret stays
-  // in the name, where Enter files it. The one the name now gives is
-  // pressed. The new party goes in as typing would, through the browser's
-  // own editing command, so one Ctrl+Z in the name gives back what the
-  // click replaced. A value set from code empties the field's undo
-  // history, and a party the reviewer had corrected by hand, once a chip
-  // replaced it, could only be typed again. Only the words that differ are
-  // replaced, not the whole text: Chromium's undo of a whole-text
-  // replacement puts the old text back after whatever the field holds by
-  // then, so after a date chip set the name from code, Ctrl+Z gave the name
-  // with its old self after it. Where the command is missing or refused
-  // (jsdom has none), or leaves anything but the new name, the value is set
-  // from code.
+  // used to mean retyping fifteen to forty characters - as typed (see
+  // typeName), and the caret stays in the name, where Enter files it. The
+  // one the name now gives is pressed.
   const partyChoices = item.partyChoices ?? [];
   const partyOffer = { proposed: proposedStem, nameParties: item.nameParties ?? [], choices: partyChoices };
-  const chooseParty = (party: string) => {
-    const next = withParty(stem, party, partyOffer);
-    const field = filenameRef.current;
-    field?.focus();
-    if (next === stem) return;
-    const { start, end, text } = changedWords(stem, next);
-    field?.setSelectionRange(start, end);
-    const typed = field !== null && document.activeElement === field && typeof document.execCommand === 'function' && document.execCommand('insertText', false, text);
-    if (!typed || field.value !== next) editStem(next);
-    // At the end, where it was when the whole name went in.
-    else field.setSelectionRange(next.length, next.length);
-  };
+  const chooseParty = (party: string) => typeName(withParty(stem, party, partyOffer));
   const partyInName = partyChoices.length > 0 ? partyGiven(stem, partyOffer) : undefined;
   // Enter files the name, as it does in any one-line field; the IME's Enter
   // that ends a composition is left to the IME. A held Enter repeats, and
@@ -470,7 +478,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
           <button type="button" className="primary" disabled={busy} onClick={decides(acceptSuggestedDate)}>Use date &amp; rename</button>
         </div>
       </div>}
-      <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+      <label>Description<textarea key={draft.for} ref={descriptionRef} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
       {flagged.includes('description') && <p className="flag-line" role="note" aria-label="Part of the name to check">Check the description against the document.</p>}
     </section>}
     {/*
