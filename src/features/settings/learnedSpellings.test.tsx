@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import { PRESS_SETTLES_MS } from '../../components/UseOnItsOwn';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
+import { drawYes, moveTo, offTheYes, onTheYes, pressAt, yesAt } from '../review/pointerTesting';
+import type { Point } from '../review/pointerTesting';
 import type { HouseRule, LearnedRule } from '../../types';
 
 async function openSettings() {
@@ -192,11 +194,12 @@ describe('the spellings Intern has learned', () => {
 
   // The same question as in the review window, with the same yes: a press
   // that is part of a double-click, or comes straight after the question
-  // appeared, is no answer. Only a press meant for it uses a spelling on
-  // its own.
+  // appeared, is no answer, even from a pointer that came onto it. Only a
+  // press meant for it uses a spelling on its own.
   it('takes as a yes only a press meant for it', async () => {
     const clock = { now: 1000 };
-    const now = vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
+    vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
+    drawYes();
     try {
       const unchecked: LearnedRule = { ...learned[1], confirmed: 0 };
       const base = createInMemoryBridge({ learnedRules: [unchecked] });
@@ -204,8 +207,9 @@ describe('the spellings Intern has learned', () => {
       render(<App bridge={{ ...base, houseRuleCheck }} />);
       const dialog = await openSettings();
       const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-      fireEvent.click(within(list).getByRole('button', { name: /Use on its own/ }), { detail: 1 });
+      pressAt(within(list).getByRole('button', { name: /Use on its own/ }), offTheYes);
       const yes = within(list).getByRole('button', { name: 'Use on its own' });
+      moveTo(onTheYes);
       // A press with the pointer focuses the button, as it does in Chromium.
       const press = (presses: number) => { yes.focus(); fireEvent.click(yes, { detail: presses }); };
       // Straight after the question appeared; the second press of a slow
@@ -223,7 +227,104 @@ describe('the spellings Intern has learned', () => {
       await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledOnce());
       await waitFor(() => expect(within(list).getAllByRole('listitem')[0]).not.toHaveTextContent('asks before filing'));
     } finally {
-      now.mockRestore();
+      vi.restoreAllMocks();
+    }
+  });
+
+  // The yes takes a press of the pointer only once the pointer came onto it
+  // after the question appeared. In Settings a press on another spelling's
+  // "Use on its own" closed the question above it, its row moved up, and
+  // the new question opened with its yes under the pointer: a press there
+  // again used the spelling on its own with its sentence never read.
+  it('takes a press only from a pointer that came onto the yes', async () => {
+    const clock = { now: 1000 };
+    vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
+    const box = drawYes();
+    try {
+      const base = createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] });
+      const houseRuleCheck = vi.fn(base.houseRuleCheck);
+      render(<App bridge={{ ...base, houseRuleCheck }} />);
+      const dialog = await openSettings();
+      const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+      const ask = (at: Point, pointerType = 'mouse') => {
+        pressAt(within(list).getByRole('button', { name: /^Use on its own:/ }), at, pointerType);
+        clock.now += PRESS_SETTLES_MS * 2;
+        const question = within(list).getByRole('group');
+        return { question, yes: within(question).getByRole('button', { name: 'Use on its own' }), cancel: within(question).getByRole('button', { name: 'Cancel' }) };
+      };
+      const refused = ({ question, cancel }: ReturnType<typeof ask>) => {
+        expect(question).toBeInTheDocument();
+        expect(cancel).toHaveFocus();
+        expect(houseRuleCheck).not.toHaveBeenCalled();
+      };
+
+      // Opened under a pointer that has not moved since.
+      let asked = ask(onTheYes);
+      pressAt(asked.yes, onTheYes);
+      refused(asked);
+      fireEvent.keyDown(asked.cancel, { key: 'Escape' });
+
+      // The yes moved under a pointer that stayed put: no move, the move a
+      // browser sends to where the pointer was, a pixel's move on the yes.
+      asked = ask(offTheYes);
+      box.current = new DOMRect(100, 160, 120, 30);
+      pressAt(asked.yes, offTheYes);
+      refused(asked);
+      clock.now += PRESS_SETTLES_MS * 2;
+      moveTo(offTheYes);
+      pressAt(asked.yes, offTheYes);
+      refused(asked);
+      clock.now += PRESS_SETTLES_MS * 2;
+      moveTo({ clientX: offTheYes.clientX, clientY: offTheYes.clientY + 1 });
+      pressAt(asked.yes, { clientX: offTheYes.clientX, clientY: offTheYes.clientY + 1 });
+      refused(asked);
+      fireEvent.keyDown(asked.cancel, { key: 'Escape' });
+      box.current = yesAt;
+
+      // A finger: a tap where the tap that opened it was.
+      asked = ask(onTheYes, 'touch');
+      pressAt(asked.yes, { clientX: onTheYes.clientX + 2, clientY: onTheYes.clientY }, 'touch');
+      refused(asked);
+      // A tap on the sentence, then on the yes.
+      clock.now += PRESS_SETTLES_MS * 2;
+      fireEvent.pointerDown(asked.question.querySelector('p')!, { ...offTheYes, pointerType: 'touch' });
+      pressAt(asked.yes, onTheYes, 'touch');
+      await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledOnce());
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('takes a yes from the pointer moved onto it, or from the keyboard at once', async () => {
+    const clock = { now: 1000 };
+    vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
+    drawYes();
+    try {
+      const base = createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }, { id: '3', kind: 'party', from: 'Northwind Traders', to: 'Northwind', seen: 2, active: true, confirmed: 0, learnedAt: 1716369300 }] });
+      const houseRuleCheck = vi.fn(base.houseRuleCheck);
+      render(<App bridge={{ ...base, houseRuleCheck }} />);
+      const dialog = await openSettings();
+      const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+
+      pressAt(within(list).getByRole('button', { name: /^Use on its own: Quarterly/ }), offTheYes);
+      clock.now += PRESS_SETTLES_MS * 2;
+      moveTo(onTheYes);
+      pressAt(within(list).getByRole('button', { name: 'Use on its own' }), onTheYes);
+      await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledWith('2', { kind: 'document_type', from: 'Quarterly Operations Review', to: 'Meeting Minutes' }));
+
+      // From the keyboard, straight after the question appeared.
+      const action = await within(list).findByRole('button', { name: /^Use on its own: Northwind/ });
+      action.focus();
+      fireEvent.keyDown(action, { key: 'Enter' });
+      fireEvent.click(action, { detail: 0 });
+      const yes = within(list).getByRole('button', { name: 'Use on its own' });
+      fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey: true });
+      yes.focus();
+      fireEvent.keyDown(yes, { key: 'Enter' });
+      fireEvent.click(yes, { detail: 0 });
+      await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledWith('3', { kind: 'party', from: 'Northwind Traders', to: 'Northwind' }));
+    } finally {
+      vi.restoreAllMocks();
     }
   });
 
