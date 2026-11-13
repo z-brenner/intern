@@ -24,8 +24,9 @@ use intern_engine::{
 use intern_queue::{
     AdmissionEvidence, AdmissionGuard, AdmissionStage,
     pipeline::{
-        AnalyzerBoundary, ModelFailure, Pipeline, PipelineError, PipelineEventSink, PipelineItem,
-        PipelineProgress, Revalidation, RevalidationOutlook, WorkerBoundary, WorkerFailure,
+        AnalyzerBoundary, LEARNED_SPELLING_UNCONFIRMED, ModelFailure, Pipeline, PipelineError,
+        PipelineEventSink, PipelineItem, PipelineProgress, Revalidation, RevalidationOutlook,
+        WorkerBoundary, WorkerFailure,
     },
     settings::{AppSettings, SettingsStore},
 };
@@ -848,4 +849,39 @@ fn a_reading_that_becomes_ready_follows_the_automatic_rename_setting() {
         }
         assert_eq!(rig.runtime.readings.load(Ordering::SeqCst), 1);
     }
+}
+
+/// A spelling in force that no person has checked - as every rule an
+/// earlier release learned is after the update - renames a document waiting
+/// one click from filing when the update validates it again, and the
+/// document waits for a person: it is never left ready under a name the
+/// rule wrote.
+#[test]
+fn a_waiting_reading_an_unchecked_spelling_renames_when_validated_again_waits_for_a_person() {
+    let rig = Rig::new(None, false);
+    let first = rig.release("0.1.0-alpha.18");
+    let waiting = rig.add(&first, "waiting.pdf");
+    first.run_until_idle().unwrap();
+    let read = item(&first, waiting);
+    assert_eq!(read.status, QueueStatus::Ready, "{:?}", read.proposal);
+    assert!(read.proposal.unwrap().house_rules.is_empty());
+    drop(first);
+
+    Connection::open(rig.database())
+        .unwrap()
+        .execute(
+            "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, created_at, updated_at)
+             VALUES ('party', 'acme corporation', 'Acme Corporation', 'Acme', 2, 1, 1)",
+            [],
+        )
+        .unwrap();
+    let next = rig.release("0.1.0-alpha.19");
+    next.run_until_idle().unwrap();
+
+    assert!(rig.revalidated(waiting));
+    let again = item(&next, waiting);
+    assert_eq!(again.status, QueueStatus::NeedsReview);
+    let again = again.proposal.unwrap();
+    assert!(again.filename.ends_with(" Acme.pdf"), "{}", again.filename);
+    assert_eq!(again.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
 }

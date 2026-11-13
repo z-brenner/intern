@@ -6047,6 +6047,43 @@ fn a_rule_from_an_earlier_release_is_unchecked_and_holds_the_next_name_it_change
     assert_eq!(rig.filed_as(first), None);
 }
 
+/// A document left ready under a name a rule wrote, the rule unchecked by
+/// the time the queue would file it - as a ready row an earlier release
+/// left is once the update leaves every rule it learned unchecked - is not
+/// filed when automatic renaming is on: the scheduler puts it in review.
+#[test]
+fn a_ready_document_whose_rule_is_unchecked_by_the_time_it_is_filed_waits_for_a_person() {
+    let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
+    let database = Connection::open(rig.temp.path().join("queue.sqlite3")).unwrap();
+    database
+        .execute(
+            "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, confirmed, created_at, updated_at)
+             VALUES ('party', 'acme corporation', 'Acme Corporation', 'Acme', 2, 1, 1, 1)",
+            [],
+        )
+        .unwrap();
+    let first = rig.read_next();
+    let ready = rig.item(first);
+    assert_eq!(ready.status, QueueStatus::Ready, "checked");
+    assert_eq!(
+        ready.proposal.unwrap().filename,
+        "2024-04-12 Employment Agreement between John Smith and Acme.pdf"
+    );
+
+    database
+        .execute("UPDATE house_rules SET confirmed = 0", [])
+        .unwrap();
+    rig.automatic(true);
+    rig.pipeline.run_until_idle().unwrap();
+    let held = rig.item(first);
+    assert_eq!(held.status, QueueStatus::NeedsReview);
+    assert_eq!(
+        held.proposal.unwrap().reasons,
+        vec![LEARNED_SPELLING_UNCONFIRMED]
+    );
+    assert_eq!(rig.filed_as(first), None);
+}
+
 /// "Use now" in the list of learned spellings - where the person sees what
 /// the rule writes - puts it in force checked: the next name it changes is
 /// filed without review.
