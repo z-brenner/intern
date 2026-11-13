@@ -64,15 +64,21 @@ const sameBox = (a: DOMRect, b: DOMRect) => a.left === b.left && a.top === b.top
  * Where each pointer was last seen is lastInput's (`lastPointers`,
  * `watchPointer`). A report of a pointer where it already was is no move:
  * it says what is under it now, and when that is not the yes, the pointer
- * is no longer on it. A pointer that came onto the yes stops being on it
- * when it is seen anywhere else, or when the yes moves - it is watched
- * every frame while a pointer is on it - away and back included. A press
- * of the pointer is one that began on the yes, by a pointer that had come
- * onto it then and still has. A press refused because its pointer had not
- * says, beside the buttons, to move the pointer off the yes and back - or
- * for a finger, to tap the sentence first - so that a person who means it
- * is not left pressing a yes that does nothing; nothing moves under the
- * pointer for it.
+ * is no longer on it. A pointer the page lost sight of - it left the page,
+ * the window lost the focus, the system's menu opened, a press ended where
+ * the page could not see, the window moved on the screen - is forgotten: it
+ * may have moved anywhere, over another window lying over the yes, and
+ * where it is next seen is where it was found, not a move onto the yes. A
+ * pointer that came onto the yes stops being on it when it is seen anywhere
+ * else, when it is lost, or when the yes moves - it is watched every frame
+ * while a pointer is on it - away and back included. A press of the
+ * pointer is the last press anywhere, one that began on the yes, by a
+ * pointer that had come onto it then and still has: a click on the yes is
+ * the end of no press that began elsewhere, by whatever pointer. A press
+ * refused because its pointer had not says, beside the buttons, to move
+ * the pointer off the yes and back - or for a finger, to tap the sentence
+ * first - so that a person who means it is not left pressing a yes that
+ * does nothing; nothing moves under the pointer for it.
  *
  * A press never gives the yes the focus: a press with another button, or
  * one let go off the yes, clicks nothing, and the focus it would have left
@@ -127,24 +133,34 @@ export function UseOnItsOwnQuestion({ rule, describedBy, note, disabled, onConfi
     let frame = 0;
     const watch = () => { frame = 0; stood(); if (came.size > 0) frame = requestAnimationFrame(watch); };
     onIt.current = (type) => { stood(); return came.has(type); };
-    const stop = watchPointer((at, under) => {
-      const box = drawn();
-      const before = seen.get(at.type);
-      const onTheYes = inside(at, box) && under instanceof Node && yes.current?.contains(under) === true;
-      if (!onTheYes) came.delete(at.type);
-      if (before !== undefined && before.x === at.x && before.y === at.y) return;
-      seen.set(at.type, { x: at.x, y: at.y, hover: at.hover, box });
-      if (!onTheYes || before === undefined || inside(before, box)) return;
-      // A mouse hovers, and comes onto the yes by moving, from where it was
-      // seen with the yes where it is: a press where it was not seen to
-      // move to is not that. A finger has no hover, nor has a pen that
-      // does not report it: they come onto it by touching down, from where
-      // they last touched off it. A pen that hovers is held to what a mouse
-      // is: touching down from where it hovered counts only when the yes
-      // stood still since.
-      if (at.press ? at.type === 'mouse' || (before.hover && !sameBox(before.box, box)) : !sameBox(before.box, box)) return;
-      came.set(at.type, box);
-      if (frame === 0) frame = requestAnimationFrame(watch);
+    const stop = watchPointer({
+      lost(type) {
+        seen.delete(type);
+        came.delete(type);
+      },
+      seen(at, under) {
+        // A press anywhere is the press now: a click on the yes is the end
+        // of a press only when that press began on the yes, and the yes's
+        // own handler takes it after this one.
+        if (at.press) press.current = undefined;
+        const box = drawn();
+        const before = seen.get(at.type);
+        const onTheYes = inside(at, box) && under instanceof Node && yes.current?.contains(under) === true;
+        if (!onTheYes) came.delete(at.type);
+        if (before !== undefined && before.x === at.x && before.y === at.y) return;
+        seen.set(at.type, { x: at.x, y: at.y, hover: at.hover, box });
+        if (!onTheYes || before === undefined || inside(before, box)) return;
+        // A mouse hovers, and comes onto the yes by moving, from where it was
+        // seen with the yes where it is: a press where it was not seen to
+        // move to is not that. A finger has no hover, nor has a pen that
+        // does not report it: they come onto it by touching down, from where
+        // they last touched off it. A pen that hovers is held to what a mouse
+        // is: touching down from where it hovered counts only when the yes
+        // stood still since.
+        if (at.press ? at.type === 'mouse' || (before.hover && !sameBox(before.box, box)) : !sameBox(before.box, box)) return;
+        came.set(at.type, box);
+        if (frame === 0) frame = requestAnimationFrame(watch);
+      },
     });
     return () => { stop(); cancelAnimationFrame(frame); onIt.current = () => false; };
   }, []);

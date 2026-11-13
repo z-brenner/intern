@@ -214,6 +214,7 @@ describe('the spellings Intern has learned', () => {
       const press = (presses: number) => {
         fireEvent.pointerDown(yes, { ...onTheYes, pointerType: 'mouse' });
         if (fireEvent.mouseDown(yes, onTheYes)) yes.focus();
+        fireEvent.pointerUp(yes, { ...onTheYes, pointerType: 'mouse' });
         fireEvent.click(yes, { ...onTheYes, detail: presses });
       };
       // Straight after the question appeared; the second press of a slow

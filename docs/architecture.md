@@ -755,20 +755,37 @@ does not report hovering come onto the yes by touching down on it; a pen
 that hovers does so only with the yes standing where it was when it last
 hovered. A report of a pointer where it already was is no
 move; it says what is under the pointer now, and a pointer it finds off the
-yes is no longer on it. A pointer is off the yes once it is seen anywhere
-else, or once the yes moves at all, away and back included: the yes is
-watched every frame while a pointer is on it, and measured again at the
-press. So a yes that came under a pointer that did not move to it - the
-question opening under the pointer that pressed its action, the row below a
-closed question moving up, a scroll, a question opened from the keyboard
-scrolled under a resting mouse, a menu or a dialog over it going away -
-takes no press until the pointer has been seen off it where it is now and
-comes back onto it. A press never gives the yes the focus: a press with
-another button, or one let go off the yes, clicks nothing, and the focus
-Chromium gives a pressed button left on the yes made the next Enter or Space
-a yes from the keyboard. A press refused because its pointer had not come
-onto the yes says what to do, beside the buttons, where the person is
-looking: "Move off Use on its own, then back." - for a finger, "Tap the
+yes is no longer on it. A pointer the page loses sight of is forgotten
+(`lastInput`): the page sees a mouse, or a pen that hovers, only while it
+is over the page with nothing of the system's over it, and over another
+window lying over the panel - the document the spelling is checked against
+- a notification, or the system's menu, or with Intern behind another
+window, it moves where the page cannot see. When that goes away it rests
+where the page did not see it go, on the yes, and a nudge was taken as a
+move onto it. So a pointer that leaves the page, the window losing the
+focus, a `contextmenu` the page does not take for itself, a
+`pointercancel`, a press seen to begin and not to end, and the window
+moving on the screen - snapped by a key, the page moving under a mouse
+that stays put - lose the pointer: where it is next seen is where it was
+found, and a pointer that had come onto the yes is no longer on it. A finger is seen only where it touches
+down, and nothing of it is lost between touches. A pointer is off the yes
+once it is seen anywhere else, once it is lost, or once the yes moves at
+all, away and back included: the yes is watched every frame while a
+pointer is on it, and measured again at the press. So a yes that came under
+a pointer that did not move to it - the question opening under the pointer
+that pressed its action, the row below a closed question moving up, a
+scroll, a question opened from the keyboard scrolled under a resting mouse,
+a menu, a dialog or another window over it going away - takes no press
+until the pointer has been seen off it where it is now and comes back
+onto it. The press on the yes is the last press anywhere, and only one
+that began on the yes: a press with the middle button on the yes clicks
+nothing, and a finger's tap that began on Keep original over the yes, whose
+click landed on the yes, was taken as the end of it. A press never gives
+the yes the focus: a press with another button, or one let go off the yes,
+clicks nothing, and the focus Chromium gives a pressed button left on the
+yes made the next Enter or Space a yes from the keyboard. A press refused
+because its pointer had not come onto the yes says what to do, beside the
+buttons, where the person is looking: "Move off Use on its own, then back." - for a finger, "Tap the
 sentence, then Use on its own." It takes no room until then and moves
 nothing under the pointer; a refusal that said nothing left a person who
 meant it pressing a yes that did nothing, after a scroll of their own wheel

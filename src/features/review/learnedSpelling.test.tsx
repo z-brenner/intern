@@ -67,6 +67,7 @@ function handlers() {
 const press = (button: HTMLElement, presses: number) => {
   fireEvent.pointerDown(button, { ...onTheYes, pointerType: 'mouse' });
   if (fireEvent.mouseDown(button, onTheYes)) button.focus();
+  fireEvent.pointerUp(button, { ...onTheYes, pointerType: 'mouse' });
   fireEvent.click(button, { ...onTheYes, detail: presses });
 };
 
@@ -236,6 +237,7 @@ describe('using a held document\'s spelling on its own', () => {
       yes.focus();
       // Let go well after the half second.
       clock.now += PRESS_SETTLES_MS + 100;
+      fireEvent.pointerUp(yes, { ...onTheYes, pointerType: 'mouse' });
       fireEvent.click(yes, { detail: 1 });
       expect(question).toBeInTheDocument();
       expect(cancel).toHaveFocus();
@@ -245,6 +247,7 @@ describe('using a held document\'s spelling on its own', () => {
       clock.now += PRESS_SETTLES_MS;
       fireEvent.pointerDown(yes, { ...onTheYes, pointerType: 'mouse' });
       yes.focus();
+      fireEvent.pointerUp(yes, { ...onTheYes, pointerType: 'mouse' });
       fireEvent.click(yes, { detail: 1 });
       await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
     });
@@ -266,6 +269,7 @@ describe('using a held document\'s spelling on its own', () => {
         fireEvent.pointerDown(action, { ...offTheYes, pointerType: 'mouse' });
         // Held as a hand holds a press, and let go.
         clock.now += held;
+        fireEvent.pointerUp(action, { ...offTheYes, pointerType: 'mouse' });
         fireEvent.click(action, { ...offTheYes, detail: 1 });
         moveTo(onTheYes);
         const question = screen.getByRole('group', { name: label });
@@ -426,6 +430,7 @@ describe('using a held document\'s spelling on its own', () => {
       const { question, yes, cancel } = await ask(bridge, onTheYes);
       fireEvent.pointerDown(yes, { ...onTheYes, pointerType: 'mouse' });
       yes.focus();
+      fireEvent.pointerUp(yes, { ...onTheYes, pointerType: 'mouse' });
       fireEvent.click(yes, { detail: 0 });
       expect(question).toBeInTheDocument();
       expect(cancel).toHaveFocus();
@@ -639,6 +644,7 @@ describe('using a held document\'s spelling on its own', () => {
       for (const button of [2, 1, 0]) {
         fireEvent.pointerDown(yes, { ...onTheYes, pointerType: 'mouse', button });
         if (fireEvent.mouseDown(yes, { ...onTheYes, button })) yes.focus();
+        fireEvent.pointerUp(document.body, { pointerType: 'mouse', button });
         fireEvent.mouseUp(document.body, { button });
         expect(cancel).toHaveFocus();
       }
@@ -647,6 +653,102 @@ describe('using a held document\'s spelling on its own', () => {
       expect(question).not.toBeInTheDocument();
       expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
     });
+
+    // A press that clicks nothing - with the middle button, or the right -
+    // left the press on the yes standing, under a mouse that had come onto
+    // it and stayed. A finger's tap that began on Keep original, over the
+    // yes, closed the More menu, and its click landed on the yes: it was
+    // taken as the end of the mouse's press. The press on the yes is the
+    // last press anywhere, and only when it began on the yes.
+    it('not a click on it that ends a press begun elsewhere, after a press on it that clicked nothing', async () => {
+      const bridge = spellingBridge(spellings);
+      const { question, yes } = await ask(bridge, offTheYes);
+      moveTo(onTheYes);
+      fireEvent.pointerDown(yes, { ...onTheYes, pointerType: 'mouse', button: 1, buttons: 4 });
+      fireEvent.mouseDown(yes, { ...onTheYes, button: 1 });
+      fireEvent.pointerUp(yes, { ...onTheYes, pointerType: 'mouse', button: 1 });
+      fireEvent.mouseUp(yes, { ...onTheYes, button: 1 });
+      const keep = document.createElement('button');
+      document.body.append(keep);
+      fireEvent.pointerDown(keep, { ...onTheYes, pointerType: 'touch' });
+      keep.remove();
+      fireEvent.pointerUp(yes, { ...onTheYes, pointerType: 'touch' });
+      fireEvent.click(yes, { ...onTheYes, detail: 1 });
+      expect(question).toBeInTheDocument();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+    });
+
+    // The page sees a mouse only while it is over the page with nothing of
+    // the system's over it. Over another window lying over the panel - the
+    // document the spelling is checked against - a menu of the system's or
+    // a notification, or with Intern behind another window, it moves where
+    // the page cannot see; when that goes away, it is where the page did not
+    // see it go, the yes maybe. A window snapped by a key moves the page
+    // under a mouse that stays put. Where it is next seen is where it was
+    // found, not a move onto the yes, and a mouse that had come onto the yes
+    // is no longer known to be on it. Off the yes and back, where the page
+    // sees it, it is answered.
+    it.each([
+      ['it left the page', () => { fireEvent.pointerOut(document.body, { pointerType: 'mouse', relatedTarget: null }); }],
+      ['the window lost the focus', () => { fireEvent.blur(window); }],
+      ['the system\'s menu opened', () => { fireEvent.contextMenu(document.body); }],
+      ['the browser took it for a drag', () => { fireEvent.pointerCancel(document.body, { pointerType: 'mouse' }); }],
+      ['a press began that the page did not see end', () => { fireEvent.pointerDown(document.body, { pointerType: 'mouse', buttons: 1 }); }],
+      ['the window moved on the screen under it', () => { vi.spyOn(window, 'screenX', 'get').mockReturnValue(window.screenX + 300); }],
+    ])('not from a mouse found on it once the page lost sight of it: %s', async (_how, lose) => {
+      const bridge = spellingBridge(spellings);
+      const { clock, question, yes } = await ask(bridge, offTheYes);
+      // Seen off it, lost, and found on it.
+      lose();
+      moveTo(onTheYes);
+      pressAt(yes, onTheYes);
+      expect(question).toBeInTheDocument();
+      // Come onto it, lost, and found on it a pixel over.
+      clock.now += PRESS_SETTLES_MS * 2;
+      moveTo(offTheYes);
+      moveTo(onTheYes);
+      lose();
+      const nudged = { clientX: onTheYes.clientX + 1, clientY: onTheYes.clientY };
+      moveTo(nudged);
+      pressAt(yes, nudged);
+      expect(question).toBeInTheDocument();
+      expect(within(question).getByRole('status')).toHaveTextContent('Move off Use on its own, then back.');
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+      // Off it, seen, and back onto it, and it is answered.
+      clock.now += PRESS_SETTLES_MS * 2;
+      moveTo(offTheYes);
+      moveTo(onTheYes);
+      pressAt(yes, onTheYes);
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
+
+    it('but a menu the page shows for itself, not the system\'s, loses nothing', async () => {
+      const bridge = spellingBridge(spellings);
+      const { yes } = await ask(bridge, offTheYes);
+      const itsOwn = (event: Event) => event.preventDefault();
+      document.addEventListener('contextmenu', itsOwn);
+      fireEvent.contextMenu(document.body);
+      document.removeEventListener('contextmenu', itsOwn);
+      moveTo(onTheYes);
+      pressAt(yes, onTheYes);
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
+
+    // A finger leaves the page's sight each time it lifts, as a mouse
+    // leaving the page does, but each touch is where it was aimed: nothing
+    // of a finger is lost.
+    it('with a finger, a tap on it after a tap away from it, the finger lifting between', async () => {
+      const bridge = spellingBridge(spellings);
+      const { question, yes } = await ask(bridge, onTheYes, 'touch');
+      const sentence = question.querySelector('p')!;
+      fireEvent.pointerDown(sentence, { ...offTheYes, pointerType: 'touch' });
+      fireEvent.pointerUp(sentence, { ...offTheYes, pointerType: 'touch' });
+      fireEvent.pointerOut(sentence, { ...offTheYes, pointerType: 'touch', relatedTarget: null });
+      fireEvent.click(sentence, { detail: 1 });
+      pressAt(yes, onTheYes, 'touch');
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
+
   });
 
   // Opened by a press, the question opens where its action was, sentence

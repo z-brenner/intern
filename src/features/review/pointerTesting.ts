@@ -44,11 +44,13 @@ export const nextFrame = () => new Promise<void>((resolve) => { requestAnimation
 
 /**
  * A press at `at` on `button`, as Chromium makes one: the pointer down, the
- * mouse down, which focuses the button unless that is prevented, and a
- * click counting one press.
+ * mouse down, which focuses the button unless that is prevented, the
+ * pointer and the mouse up, and a click counting one press.
  */
 export function pressAt(button: HTMLElement, at: Point, pointerType = 'mouse') {
-  fireEvent.pointerDown(button, { ...at, pointerType });
+  fireEvent.pointerDown(button, { ...at, pointerType, buttons: 1 });
   if (fireEvent.mouseDown(button, { ...at })) button.focus();
+  fireEvent.pointerUp(button, { ...at, pointerType });
+  fireEvent.mouseUp(button, { ...at });
   fireEvent.click(button, { ...at, detail: 1 });
 }

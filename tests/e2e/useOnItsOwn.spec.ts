@@ -490,6 +490,73 @@ test('a twitch across the edge of a yes that scrolled beside a still mouse check
   await expect(panel.locator('.spelling-checked')).toHaveCount(0);
 });
 
+/** Open the review panel, or Settings, with Contoso's action in sight and clear of the review panel's decision. */
+async function host(page: Page, surface: 'review panel' | 'Settings') {
+  if (surface === 'Settings') return learnedSpellings(page);
+  await page.goto('/?learnedSpellings=held');
+  const panel = await openDetails(page, 'SOW final v3.pdf');
+  await panel.getByRole('button', { name: CONTOSO }).scrollIntoViewIfNeeded();
+  await panel.evaluate((element, label) => {
+    const button = [...element.querySelectorAll('button')].find((candidate) => candidate.getAttribute('aria-label') === label)!;
+    element.scrollTop += button.getBoundingClientRect().top - element.getBoundingClientRect().top - 80;
+  }, CONTOSO);
+  return panel;
+}
+
+/** Whether a press checked Contoso's spelling. */
+const checked = async (root: Locator, surface: 'review panel' | 'Settings') => surface === 'Settings'
+  ? (await states(root))[0] === 'In use'
+  : (await root.locator('.spelling-checked').count()) > 0;
+
+/*
+  The page sees the mouse only while it is over the page with nothing of
+  the system's over it. Moved over another window lying over the panel -
+  the document the spelling is checked against - or over the system's menu,
+  or with Intern behind another window, it moves where the page cannot see;
+  when that goes away, the mouse rests where the page did not see it go, on
+  the yes. Where it is next seen is where it was found, not a move onto the
+  yes: a press there checks nothing until the mouse is moved off and back.
+*/
+const losses: [string, (page: Page, beyond: Point) => Promise<void>][] = [
+  ['the mouse left the page', async (page, beyond) => { await page.mouse.move(beyond.x, beyond.y); }],
+  ['Intern lost the focus', async (page) => { await page.evaluate(() => window.dispatchEvent(new FocusEvent('blur'))); }],
+  ['the system\'s menu opened', async (page) => { await page.mouse.down({ button: 'right' }); await page.mouse.up({ button: 'right' }); }],
+];
+for (const surface of ['review panel', 'Settings'] as const) {
+  for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) {
+    test(`a mouse found on the yes after the page lost sight of it checks nothing until it is moved off and back, in the ${surface} at ${size.width}x${size.height}`, async ({ page }) => {
+      await page.setViewportSize(size);
+      const root = await host(page, surface);
+      const opening = await centre(root.getByRole('button', { name: CONTOSO }));
+      await page.mouse.move(opening.x, opening.y, { steps: 4 });
+      await pressHere(page);
+      const question = root.getByRole('group', { name: CONTOSO });
+      await expect(question).toBeVisible();
+      const at = await centre(question.getByRole('button', { name: 'Use on its own' }));
+      expect(await under(page, at)).toBe(`the yes of ${CONTOSO}`);
+      const sentence = await centre(question.locator('p'));
+      for (const [how, lose] of losses) {
+        await page.mouse.move(sentence.x, sentence.y, { steps: 5 });
+        await lose(page, { x: size.width + 40, y: sentence.y });
+        await page.waitForTimeout(300);
+        // Found on the yes: one report there, then a press.
+        await page.mouse.move(at.x, at.y);
+        await page.waitForTimeout(700);
+        await pressHere(page);
+        await page.waitForTimeout(250);
+        await expect(question, how).toBeVisible();
+        expect(await noteInSight(question, MOVE_OFF_AND_BACK), how).toBe(true);
+        expect(await checked(root, surface), how).toBe(false);
+      }
+      await page.waitForTimeout(600);
+      await page.mouse.move(sentence.x, sentence.y, { steps: 4 });
+      await page.mouse.move(at.x, at.y, { steps: 4 });
+      await pressHere(page);
+      await expect.poll(() => checked(root, surface)).toBe(true);
+    });
+  }
+}
+
 /*
   A touch screen: a finger has no hover, and comes onto the yes by
   touching down on it, from where it last touched off it. Each pointer is
@@ -540,6 +607,48 @@ test.describe('with a touch screen', () => {
       await page.touchscreen.tap(at.x, at.y);
       await expect(question).toHaveCount(0);
       expect((await states(dialog))[0]).toBe('In use');
+    });
+  }
+
+  /*
+    A press with the middle button on the yes clicks nothing, and it left
+    the press on the yes standing, under the mouse that had come onto it
+    and rested there. A finger tapped Keep original where it lay over the
+    yes: its press closed the More menu, and its click landed on the yes,
+    taken as the end of the mouse's press. A click on the yes ends only a
+    press that began on the yes.
+  */
+  for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) {
+    test(`a finger's tap on Keep original over the yes, after a middle press on the yes, checks nothing, at ${size.width}x${size.height}`, async ({ page }) => {
+      await page.setViewportSize(size);
+      const { panel, question, yes } = await questionAboveTheDecision(page);
+      await page.waitForTimeout(700);
+      const box = (await yes.boundingBox())!;
+      const more = await centre(panel.getByRole('button', { name: 'More review actions' }));
+      const menu = panel.getByRole('group', { name: 'More review actions' });
+      await page.touchscreen.tap(more.x, more.y);
+      await expect(menu).toBeVisible();
+      const at = over((await panel.getByRole('button', { name: /Keep original/ }).boundingBox())!, box)!;
+      expect(at, 'Keep original lies over the yes').toBeDefined();
+      await page.keyboard.press('Escape');
+      await expect(menu).toHaveCount(0);
+      // The mouse comes onto the yes from the sentence, beside where the finger will tap, and rests.
+      const sentence = await centre(question.locator('p'));
+      const rest = { x: Math.min(box.x + box.width - 6, at.x + 20), y: box.y + box.height / 2 };
+      await page.mouse.move(sentence.x, sentence.y, { steps: 4 });
+      await page.mouse.move(rest.x, rest.y, { steps: 6 });
+      expect(await under(page, rest)).toBe(`the yes of ${CONTOSO}`);
+      await page.mouse.down({ button: 'middle' }); await page.waitForTimeout(80); await page.mouse.up({ button: 'middle' });
+      await page.waitForTimeout(300);
+      await page.touchscreen.tap(more.x, more.y);
+      await expect(menu).toBeVisible();
+      expect(await under(page, at)).not.toBe(`the yes of ${CONTOSO}`);
+      await page.waitForTimeout(600);
+      await page.touchscreen.tap(at.x, at.y);
+      await page.waitForTimeout(300);
+      await expect(menu).toHaveCount(0);
+      await expect(question).toBeVisible();
+      await expect(panel.locator('.spelling-checked')).toHaveCount(0);
     });
   }
 });
