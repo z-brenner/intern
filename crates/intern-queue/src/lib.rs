@@ -13,6 +13,7 @@ pub mod memo;
 pub mod paths;
 pub mod pipeline;
 pub mod settings;
+pub mod words;
 
 pub use pipeline::{
     AnalyzerBoundary, DATE_REQUIRED, DuplicateOracle, EDITS_TO_LEARN, EnqueueReport, FileActions,

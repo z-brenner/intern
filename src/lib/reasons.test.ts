@@ -101,13 +101,16 @@ describe('humanizeReason', () => {
     expect(humanizeReason('LOW_CONFIDENCE, NEAR_DUPLICATE')).toContain('filed already');
   });
 
-  // A name a learned spelling changed waits for a person until one has
-  // approved what the spelling writes: the sentence says why, and both ways
-  // out - approving it, or putting the document's word back.
-  it('says a learned spelling waits for its first check, and how to give or refuse it', () => {
+  // A name a learned spelling changed waits for a person until the spelling
+  // is checked: the sentence says why, and what to do either way - approve a
+  // right name, or put the document's word back. It promises no check: an
+  // approval is one only on a document new to Intern that does not already
+  // give what the spelling adds.
+  it('says a learned spelling is unchecked, and what to do if the name is right or not', () => {
     const sentence = humanizeReason('LEARNED_SPELLING_UNCONFIRMED');
-    expect(sentence).toBe('Intern used a spelling it learned from your edits that had not been checked yet. Approve to keep it and let Intern use it on its own, or put the document\'s own words back to stop it.');
+    expect(sentence).toBe('Intern used a spelling it learned from your edits that has not been checked yet. If the name is right, approve it; if not, put the document\'s own words back and Intern stops using that spelling.');
     expect(sentence).not.toMatch(/first time/);
+    expect(sentence).not.toMatch(/on its own/);
     expect(shortReason(['LEARNED_SPELLING_UNCONFIRMED'])).toEqual({ text: 'Unchecked spelling', more: 0 });
   });
 

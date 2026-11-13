@@ -707,19 +707,57 @@ learned, renamed every later document giving the word, ready ones filed
 without review. So every name a rule changes - or the type and parties the
 folder and the filing report are read from, which a name can leave out (a
 first party shed for length, the third of a "between") - waits in review
-with `LEARNED_SPELLING_UNCONFIRMED`, never ready, until a person approves a
-name the rule changed keeping its spelling (`LearnedRule::confirmed`,
-counted in `house_rules.confirmed` for the spelling in
-`house_rules.confirmed_to`). Only such an approval counts. It is of a
-document the rule was not learned from: the documents whose edits taught a
-rule are kept in `house_rule_teachers`, and one of them approved again -
-read again after an undo, a failed filing or a Re-analyze - is the
-reviewer's own words approved twice. And it leaves the rule's words where
-the rule wrote them: the name as proposed, or one other part of it
-respelled; an edit of two parts can keep the rule's words only inside words
-of its own ("John Smith, Jane Doe Trust"). "Use now" in Settings is no
-check either: it shows the words, not a name they made. One check is
-enough: from then on the names it changes are filed like any other reading.
+with `LEARNED_SPELLING_UNCONFIRMED`, never ready, until a person has checked
+the rule (`LearnedRule::confirmed`, counted in `house_rules.confirmed` for
+the spelling in `house_rules.confirmed_to`).
+
+A check is evidence that the rule is a spelling, and an approval is that
+evidence only where the rule's words could have been wrong. So an approval
+of a name the rule changed counts as the check only when all of this holds:
+
+- It leaves the rule's words where the rule wrote them: the name as
+  proposed (its date or a collision suffix aside), or one other part of it
+  respelled. An edit of two parts can keep the rule's words only inside
+  words of its own ("John Smith, Jane Doe Trust").
+- The document is new to Intern. Not a near duplicate of a filing
+  (`near_duplicate_of`); never filed itself (a completed apply receipt);
+  not one whose edit taught the rule (`house_rule_teachers`, by queue
+  item); and not holding what a teacher held (`house_rule_teacher_content`,
+  kept when a teacher leaves the queue): the same file by its SHA-256, or a
+  text fingerprint within the near-duplicate distance of a teacher's with
+  the same date, or all but identical whatever its date. A teacher read
+  again after an undo, a failed filing or a Re-analyze, scanned again, or
+  removed from the queue and added again is the reviewer's own words
+  approved twice. Rules learned before alpha.18 kept no teachers; when the
+  queue first opens after the update, every document filed under a name
+  giving such a rule's spelling is taken as its teacher by what it holds.
+- The document does not give, in its own words, what the rule adds
+  (`ProposalRecord::gives_what_it_adds`). The words a rule adds are the
+  words of its spelling that are not words of the document's word, compared
+  as house style compares them, read as written and split at punctuation,
+  leaving out company forms (Ltd, Inc, LLC, Corporation, Limited, Company,
+  ...) and words that only join others (of, the, and, for, ...). A rule
+  that adds none - a short form, a change of case or punctuation, a company
+  form added or changed - or that is an acronym of the document's word, or
+  the word an acronym stands for, asks nothing more. Otherwise the
+  document's text, and every name its reading gives (the proposal's
+  parties, the validated facts, the model's reply, the type), must lack at
+  least one added word, in any order: "John Smith, Jane Doe" approved on an
+  agreement that names Jane Doe is the right name for that agreement and
+  says nothing about the next, which names John Smith alone. The text's
+  words are kept with each reading (`ProposalRecord::document_words`, a
+  Bloom filter of every word the extractor read: it can say a word is there
+  when it is not, which counts no check, but never the reverse). A reading
+  stored before they were kept, or read from a page image, counts no check
+  for a rule that adds words: in doubt the next document waits again.
+
+"Use now" in Settings is no check either: it shows the words, not a name
+they made. One check is enough: from then on the names the rule changes
+are filed like any other reading. A short form, a company form or an
+acronym is checked by the first approval of any new document; a spelling
+that adds a word ("John Smith" for "Smith") by the first of one that does
+not give the word itself, so an approval may leave it waiting, and the
+review panel says only that the spelling has not been checked yet.
 Putting the document's own word back instead retracts the rule, and a third
 spelling for the same word starts the count and the checks over; a release
 that does not know the checks respells without starting them over, so they

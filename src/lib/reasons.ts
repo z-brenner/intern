@@ -117,16 +117,18 @@ const SENTENCES: Record<string, string> = {
   // already filed - a second scan, a re-export, a copy saved again. The
   // inspector names that filing beside this sentence.
   NEAR_DUPLICATE: 'This looks like a document that was filed already. Approve to file it as well, keep the original, or remove it.',
-  // Set on a name a spelling learned from review edits changed before any
-  // person approved a name it changed (LearnedRule::confirmed in
-  // pipeline.rs): an edit's wording cannot always tell a spelling from a
-  // decision about one document, so a rule files nothing on its own until
-  // it has been checked once. Approving keeps the spelling and checks it;
-  // putting the document's own word back retracts the rule. Not "for the
-  // first time": a spelling an earlier release learned has been used
-  // before, and is unchecked after the update all the same; and one checked
-  // since this name was made needs no second check.
-  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits that had not been checked yet. Approve to keep it and let Intern use it on its own, or put the document\'s own words back to stop it.',
+  // Set on a name a spelling learned from review edits changed before a
+  // person checked it (LearnedRule::confirmed in pipeline.rs): an edit's
+  // wording cannot always tell a spelling from a decision about one
+  // document, so a rule files nothing on its own until it has been checked.
+  // An approval is the check only on a document new to Intern that does not
+  // already give, in its own words, what the spelling adds - "John Smith,
+  // Jane Doe" approved on an agreement naming Jane Doe shows nothing - so
+  // the sentence promises no check: it says what to do if the name is right
+  // and if it is not. Putting the document's own word back retracts the
+  // rule. Not "for the first time": a spelling an earlier release learned
+  // has been used before, and is unchecked after the update all the same.
+  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits that has not been checked yet. If the name is right, approve it; if not, put the document\'s own words back and Intern stops using that spelling.',
   // Set when a person undoes a rename. The file is back under its original
   // name and the proposal is still here, so the document waits for a decision
   // rather than being renamed again by the next automatic pass.

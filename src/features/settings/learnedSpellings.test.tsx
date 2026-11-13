@@ -53,20 +53,22 @@ describe('the spellings Intern has learned', () => {
   });
 
   // A spelling learned from two edits is in use, but no name it changes is
-  // filed until a person has approved one: the list says it waits for that.
+  // filed until it is checked: the list says it is not checked yet. (It
+  // does not say an approval checks it: one on a document that already
+  // gives what the spelling adds does not.)
   // "Use now" puts a spelling in use, no more checked than one learned from
   // two edits: the list shows the words, not a name it wrote. It counted as
   // the check, and one click on a wrong spelling filed the next name it
   // changed without review.
-  it('says a spelling in use waits for your check until a name it changed is approved', async () => {
+  it('says a spelling in use is not checked yet until it is', async () => {
     const unchecked: LearnedRule = { ...learned[1], confirmed: 0 };
     render(<App bridge={createInMemoryBridge({ learnedRules: [learned[0], unchecked] })} />);
     const dialog = await openSettings();
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-    expect(within(list).getAllByRole('listitem')[1]).toHaveTextContent('In use · waits for your check');
+    expect(within(list).getAllByRole('listitem')[1]).toHaveTextContent('In use · not checked yet');
 
     fireEvent.click(within(within(list).getAllByRole('listitem')[0]).getByRole('button', { name: /Use now:/ }));
-    await waitFor(() => expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('In use · waits for your check'));
+    await waitFor(() => expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('In use · not checked yet'));
   });
 
   // Forgetting is instant and the row disappears, so a second click landing
