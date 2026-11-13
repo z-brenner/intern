@@ -1818,13 +1818,16 @@ pub struct LearnedRule {
     /// Whether Intern applies it: made often enough, or told to use it now.
     pub active: bool,
     /// How many times a person has approved a name Intern composed with
-    /// this spelling in it - on a document it was not learned from - and
-    /// kept the spelling, or told Intern to use it in the list of learned
-    /// spellings. Until then a name the rule changes waits for a person
-    /// ([`LEARNED_SPELLING_UNCONFIRMED`]); one check is enough. A different
-    /// spelling for the same word starts over at none, as `seen` does, and
-    /// every rule learned before alpha.18 counted none, so each waits for one
-    /// check after the update too.
+    /// this spelling in it - on a document it was not learned from, with
+    /// the rule's words left where it wrote them - and kept the spelling.
+    /// Until then a name the rule changes, or where the document is filed
+    /// and reported, waits for a person ([`LEARNED_SPELLING_UNCONFIRMED`]);
+    /// one check is enough. "Use now" in the list of learned spellings is
+    /// no check. A different spelling for the same word starts over at
+    /// none, as `seen` does, and the checks count for the spelling checked
+    /// alone, whichever release respelled it since; every rule learned
+    /// before alpha.18 counted none, so each waits for one check after the
+    /// update too.
     pub confirmed: u32,
     /// Unix seconds of the latest edit that taught it.
     pub learned_at: i64,
@@ -3473,10 +3476,13 @@ impl Pipeline {
     }
 
     /// Apply a learned spelling from now on without waiting for a second
-    /// edit, including to documents still waiting. The person chose it in
-    /// the list that shows what it writes, so it counts as checked (see
-    /// [`LearnedRule::confirmed`]): the names it changes are filed as any
-    /// other reading is.
+    /// edit, including to documents still waiting. Like a spelling learned
+    /// from two edits, it is not checked: the list shows the words it puts
+    /// in place of others, not a name it wrote, so the first name it changes
+    /// waits for a person (see [`LearnedRule::confirmed`]). Counting this
+    /// as the check let one click on "John Smith written as John Smith,
+    /// Jane Doe" file every later agreement with John Smith under both
+    /// names, without review.
     pub fn use_rule(&self, id: i64) -> PipelineResult<()> {
         if !self.repository.use_rule(id)? {
             return Err(PipelineError::new(
@@ -3642,9 +3648,11 @@ impl Pipeline {
     ///
     /// An approval of a name a rule changed that keeps the rule's spelling
     /// is a person's check of that rule's work (see
-    /// [`Self::confirm_kept_spellings`]); the edits that taught it are not.
+    /// [`Self::confirm_kept_spellings`]); the edits that taught it are not,
+    /// and the document `id` is remembered as one that taught it.
     fn learn_from_edit(
         &self,
+        id: i64,
         record: &ProposalRecord,
         extension: &str,
         approved: &str,
@@ -3663,7 +3671,7 @@ impl Pipeline {
                 None => lesson,
             }
         });
-        self.confirm_kept_spellings(record, extension, approved, lesson.as_ref())?;
+        self.confirm_kept_spellings(id, record, extension, approved, lesson.as_ref())?;
         let Some(lesson) = lesson else {
             return Ok(());
         };
@@ -3683,7 +3691,7 @@ impl Pipeline {
             // that type, documents that never mention it included.
             return Ok(());
         } else if lesson.is_meaningful() {
-            self.repository.learn(&lesson)?;
+            self.repository.learn(&lesson, id)?;
         }
         self.restyle_waiting()
     }
@@ -3701,14 +3709,30 @@ impl Pipeline {
     /// spelling, which starts it over ([`PipelineRepository::learn`]) - or
     /// takes back by putting the document's own word in the name, which
     /// retracts it ([`Self::learn_from_edit`]). The edits that taught a
-    /// rule never count: none of their names was composed with it.
+    /// rule never count, nor does item `id` approved again when it is one
+    /// whose edit taught the rule (see [`PipelineRepository::confirm`]).
+    ///
+    /// Only an approval that leaves the rule's words where it wrote them
+    /// counts: the name as proposed (its date or a collision suffix aside),
+    /// or one with a single other part of it respelled (a lesson about
+    /// that part). An edit of two parts, or one no lesson is read from,
+    /// can have typed over the rule's words and kept them inside words of
+    /// its own: "Employment Contract between John Smith, Jane Doe Trust
+    /// and Acme Corporation" for a wrong rule's "John Smith, Jane Doe", or
+    /// "Employment Contract with Jane Smith" for "John Smith -> Smith",
+    /// each counted as a check, and the next name the rule changed was
+    /// filed without review.
     fn confirm_kept_spellings(
         &self,
+        id: i64,
         record: &ProposalRecord,
         extension: &str,
         approved: &str,
         lesson: Option<&HouseRule>,
     ) -> PipelineResult<()> {
+        if lesson.is_none() && !same_stem(extension, &record.filename, approved) {
+            return Ok(());
+        }
         for rule in &record.house_rules {
             let respelled = lesson.is_some_and(|lesson| {
                 lesson.kind == rule.kind && lesson.from_key() == rule.from_key()
@@ -3717,7 +3741,7 @@ impl Pipeline {
                 && keeps_spelling(rule, extension, approved)
                 && record.holds_unchecked_spelling(extension, |other| other != rule)
             {
-                self.repository.confirm(rule)?;
+                self.repository.confirm(rule, id)?;
             }
         }
         Ok(())
@@ -5226,7 +5250,7 @@ impl Pipeline {
         // written must not stop the rename that was just approved. A name
         // with no reading behind it corrects nothing.
         if let Some(record) = proposed.as_ref().filter(|record| !record.is_synthetic()) {
-            let _ = self.learn_from_edit(record, source_extension, &filename);
+            let _ = self.learn_from_edit(id, record, source_extension, &filename);
         }
         let ready = self.store.get(id)?.ok_or_else(|| {
             PipelineError::new("ITEM_NOT_FOUND", "queue item disappeared during approval")
@@ -5690,9 +5714,19 @@ impl PipelineRepository {
                    to_value TEXT NOT NULL,
                    seen INTEGER NOT NULL DEFAULT 1,
                    confirmed INTEGER NOT NULL DEFAULT 0,
+                   confirmed_to TEXT,
                    created_at INTEGER NOT NULL,
                    updated_at INTEGER NOT NULL,
                    UNIQUE(kind, from_key)
+                 );
+                 -- The documents whose approved edits taught a spelling: an
+                 -- approval of one of them is never a check of what the
+                 -- spelling writes (see `PipelineRepository::confirm`).
+                 CREATE TABLE IF NOT EXISTS house_rule_teachers (
+                   kind TEXT NOT NULL,
+                   from_key TEXT NOT NULL,
+                   queue_item_id INTEGER NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
+                   PRIMARY KEY(kind, from_key, queue_item_id)
                  );
                  CREATE TABLE IF NOT EXISTS fingerprints (
                    queue_item_id INTEGER PRIMARY KEY REFERENCES queue_items(id) ON DELETE CASCADE,
@@ -5719,6 +5753,14 @@ impl PipelineRepository {
                     "ALTER TABLE house_rules ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0",
                     [],
                 )
+                .map_err(database_error)?;
+        }
+        // The spelling those checks were of. A release that does not know
+        // the checks respells a rule without starting them over, so they
+        // count only while the rule writes what was checked.
+        if !has_column(&connection, "house_rules", "confirmed_to")? {
+            connection
+                .execute("ALTER TABLE house_rules ADD COLUMN confirmed_to TEXT", [])
                 .map_err(database_error)?;
         }
         let legacy_exists = connection.query_row(
@@ -5936,7 +5978,11 @@ impl PipelineRepository {
         let connection = self.lock()?;
         let mut statement = connection
             .prepare(
-                "SELECT id, kind, from_value, to_value, seen, confirmed, updated_at FROM house_rules
+                // The checks count for the spelling they were of only (see
+                // `confirmed_to`).
+                "SELECT id, kind, from_value, to_value, seen,
+                   CASE WHEN confirmed_to = to_value THEN confirmed ELSE 0 END, updated_at
+                 FROM house_rules
                  ORDER BY updated_at DESC, id DESC",
             )
             .map_err(database_error)?;
@@ -5981,12 +6027,21 @@ impl PipelineRepository {
         })
     }
 
-    /// Records one respelling. The same change again counts it up; a
-    /// different spelling for the same word starts the count over, and the
-    /// checks of the spelling it replaces with it (see
-    /// [`LearnedRule::confirmed`]): a person checked what that one wrote.
-    fn learn(&self, rule: &HouseRule) -> PipelineResult<LearnedRule> {
+    /// Records one respelling, taught by the approval of item `teacher`.
+    /// The same change again counts it up; a different spelling for the
+    /// same word starts the count over, and the checks of the spelling it
+    /// replaces with it (see [`LearnedRule::confirmed`]): a person checked
+    /// what that one wrote. The teacher is remembered, so that approving it
+    /// again is never a check (see [`Self::confirm`]).
+    fn learn(&self, rule: &HouseRule, teacher: i64) -> PipelineResult<LearnedRule> {
         let connection = self.lock()?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO house_rule_teachers(kind, from_key, queue_item_id)
+                 SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM queue_items WHERE id = ?3)",
+                params![rule.kind.as_str(), rule.from_key(), teacher],
+            )
+            .map_err(database_error)?;
         connection
             .execute(
                 "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, created_at, updated_at)
@@ -6002,7 +6057,9 @@ impl PipelineRepository {
             .map_err(database_error)?;
         connection
             .query_row(
-                "SELECT id, from_value, to_value, seen, confirmed, updated_at FROM house_rules
+                "SELECT id, from_value, to_value, seen,
+                   CASE WHEN confirmed_to = to_value THEN confirmed ELSE 0 END, updated_at
+                 FROM house_rules
                  WHERE kind = ?1 AND from_key = ?2",
                 params![rule.kind.as_str(), rule.from_key()],
                 |row| {
@@ -6022,15 +6079,33 @@ impl PipelineRepository {
     }
 
     /// Counts one check of `rule`'s work (see [`LearnedRule::confirmed`]):
-    /// a person approved a name it changed, spelling and all. Nothing for a
-    /// rule forgotten, respelled or no longer in force since the name was
-    /// composed.
-    fn confirm(&self, rule: &HouseRule) -> PipelineResult<()> {
+    /// a person approved, for item `checker`, a name it changed, spelling
+    /// and all. Nothing for a rule forgotten, respelled or no longer in
+    /// force since the name was composed, and nothing where `checker` is a
+    /// document whose edit taught the rule (see [`Self::learn`]): its
+    /// approval, read again after an undo, a failed filing or a
+    /// Re-analyze, is the reviewer's own words approved twice, not a look
+    /// at what the rule writes on a document it was not learned from. The
+    /// checks are of this spelling, and count for it alone (see
+    /// `confirmed_to`).
+    fn confirm(&self, rule: &HouseRule, checker: i64) -> PipelineResult<()> {
         self.lock()?
             .execute(
-                "UPDATE house_rules SET confirmed = confirmed + 1
-                 WHERE kind = ?1 AND from_key = ?2 AND to_value = ?3 AND seen >= ?4",
-                params![rule.kind.as_str(), rule.from_key(), rule.to, EDITS_TO_LEARN],
+                "UPDATE house_rules SET
+                   confirmed = CASE WHEN confirmed_to = to_value THEN confirmed + 1 ELSE 1 END,
+                   confirmed_to = to_value
+                 WHERE kind = ?1 AND from_key = ?2 AND to_value = ?3 AND seen >= ?4
+                   AND NOT EXISTS (
+                     SELECT 1 FROM house_rule_teachers taught
+                     WHERE taught.kind = ?1 AND taught.from_key = ?2 AND taught.queue_item_id = ?5
+                   )",
+                params![
+                    rule.kind.as_str(),
+                    rule.from_key(),
+                    rule.to,
+                    EDITS_TO_LEARN,
+                    checker
+                ],
             )
             .map_err(database_error)?;
         Ok(())
@@ -6126,15 +6201,14 @@ impl PipelineRepository {
         Ok(removed == 1)
     }
 
-    /// Puts a rule in force at once, checked: a person told Intern to use
-    /// it, in the list where its spelling is shown (see
-    /// [`LearnedRule::confirmed`]).
+    /// Puts a rule in force at once. Not checked: the list shows the
+    /// spelling, not what it writes in a name, so the first name it changes
+    /// still waits for a person (see [`LearnedRule::confirmed`]).
     fn use_rule(&self, id: i64) -> PipelineResult<bool> {
         let changed = self
             .lock()?
             .execute(
-                "UPDATE house_rules SET seen = MAX(seen, ?2), confirmed = MAX(confirmed, 1),
-                     updated_at = unixepoch()
+                "UPDATE house_rules SET seen = MAX(seen, ?2), updated_at = unixepoch()
                  WHERE id = ?1",
                 params![id, EDITS_TO_LEARN],
             )

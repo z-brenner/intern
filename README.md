@@ -466,7 +466,8 @@ spelling changes waits for you in review, even with automatic renaming on -
 approve it to let Intern use the spelling on its own, or put the document's
 word back to make it forget the spelling. Spellings learned before alpha.18
 wait for that one check too. Settings lists everything learned, with "Use
-now" for a spelling you want at once and "Forget" for one you do not, and
+now" for a spelling you want at once (the first name it changes still waits
+for your check) and "Forget" for one you do not, and
 the review panel says "Uses your spelling" whenever a name differs from the
 evidence under it. The evidence itself always keeps the document's own
 words: a learned spelling changes what Intern calls a thing, never what it

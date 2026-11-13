@@ -983,7 +983,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     },
     houseRuleUse: async (id) => {
       if (!learnedRules.some((rule) => rule.id === id)) throw { code: 'RULE_NOT_FOUND', message: 'learned spelling does not exist' };
-      learnedRules = learnedRules.map((rule) => rule.id === id ? { ...rule, seen: Math.max(rule.seen, 2), active: true, confirmed: Math.max(rule.confirmed, 1) } : rule);
+      // In use, not checked: the first name it changes still waits for a person.
+      learnedRules = learnedRules.map((rule) => rule.id === id ? { ...rule, seen: Math.max(rule.seen, 2), active: true } : rule);
     },
     ...(options.liveEvents ? {
       subscribeQueue: async (listener: (event: QueueBridgeEvent) => void) => {

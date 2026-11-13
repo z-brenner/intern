@@ -54,7 +54,10 @@ describe('the spellings Intern has learned', () => {
 
   // A spelling learned from two edits is in use, but no name it changes is
   // filed until a person has approved one: the list says it waits for that.
-  // "Use now" here counts as the check, as the person sees what it writes.
+  // "Use now" puts a spelling in use, no more checked than one learned from
+  // two edits: the list shows the words, not a name it wrote. It counted as
+  // the check, and one click on a wrong spelling filed the next name it
+  // changed without review.
   it('says a spelling in use waits for your check until a name it changed is approved', async () => {
     const unchecked: LearnedRule = { ...learned[1], confirmed: 0 };
     render(<App bridge={createInMemoryBridge({ learnedRules: [learned[0], unchecked] })} />);
@@ -63,8 +66,7 @@ describe('the spellings Intern has learned', () => {
     expect(within(list).getAllByRole('listitem')[1]).toHaveTextContent('In use · waits for your check');
 
     fireEvent.click(within(within(list).getAllByRole('listitem')[0]).getByRole('button', { name: /Use now:/ }));
-    await waitFor(() => expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('In use'));
-    expect(within(list).getAllByRole('listitem')[0]).not.toHaveTextContent('waits for your check');
+    await waitFor(() => expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('In use · waits for your check'));
   });
 
   // Forgetting is instant and the row disappears, so a second click landing
