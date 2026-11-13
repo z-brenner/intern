@@ -120,17 +120,16 @@ const SENTENCES: Record<string, string> = {
   // Set on a name a spelling learned from review edits changed before a
   // person checked it (LearnedRule::confirmed in pipeline.rs): an edit's
   // wording cannot always tell a spelling from a decision about one
-  // document, so a rule files nothing on its own until it has been checked.
-  // An approval is the check only on a document new to Intern that does not
-  // already give, in its own words, what the spelling adds - "John Smith,
-  // Jane Doe" approved on an agreement naming Jane Doe shows nothing - so
-  // the sentence promises no check: it says what to do if the name is right
-  // and if it is not. Putting the document's own word back retracts the
-  // rule when nothing else in the name changed; an approval that changes
-  // another part too teaches nothing, so the sentence says when. Not "for
-  // the first time": a spelling an earlier release learned has been used
-  // before, and is unchecked after the update all the same.
-  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits that has not been checked yet. If the name is right, approve it. If not, put the document\'s own words back; when that is the only change, Intern stops using that spelling.',
+  // document, so a rule files nothing on its own until a person chooses
+  // "Use on its own" for it - in the review window beside this sentence, or
+  // in Settings. Approving the name checks nothing, so the sentence says
+  // both: approve a right name, and choose Use on its own to stop being
+  // asked. Putting the document's own word back retracts the rule when
+  // nothing else in the name changed; an approval that changes another part
+  // too teaches nothing, so the sentence says when. Not "for the first
+  // time": a spelling an earlier release learned has been used before, and
+  // is unchecked after the update all the same.
+  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits. Until you tell it to use that spelling on its own, a name it changes waits for you. If the name is right, approve it, and choose Use on its own if Intern should stop asking; if not, put the document\'s own words back - when that is the only change, Intern stops using that spelling.',
   // Set when a person undoes a rename. The file is back under its original
   // name and the proposal is still here, so the document waits for a decision
   // rather than being renamed again by the next automatic pass.
@@ -259,7 +258,7 @@ const SHORT: Record<string, string> = {
   MODEL_INPUT_TOO_LARGE: 'Too long for the model',
   DUPLICATE: 'Already filed',
   NEAR_DUPLICATE: 'Possible duplicate',
-  LEARNED_SPELLING_UNCONFIRMED: 'Unchecked spelling',
+  LEARNED_SPELLING_UNCONFIRMED: 'Learned spelling',
   EXACT_COPY: 'Exact copy',
   UNDONE: 'Rename undone',
   ALREADY_NAMED: 'Already had this name',
