@@ -821,13 +821,19 @@ impl ProposalRecord {
     }
 
     /// Whether a learned spelling no person has checked yet changed this
-    /// record's name: the name composed from the reading with every rule in
-    /// [`Self::house_rules`] is not the name composed with only those that
-    /// `checked` says a person has approved the work of (see
-    /// [`LearnedRule::confirmed`]). A rule that fired but changes nothing in
-    /// the name - a respelling of a party the name leaves out as the
-    /// person's own organization - holds nothing. `extension` is the source
-    /// file's.
+    /// record's name, or where it is filed and reported: the name composed
+    /// from the reading with every rule in [`Self::house_rules`], or the
+    /// type and parties it is composed from, are not those composed with
+    /// only the rules that `checked` says a person has approved the work of
+    /// (see [`LearnedRule::confirmed`]). The type and the parties count as
+    /// well as the name because the folder and the filing report are read
+    /// from them, and a name can leave out a party a rule respelled - the
+    /// first, shed for length, whose folder the document still goes in, or
+    /// the third of a "between" - and was filed without review into the
+    /// folder, and under the report, an unchecked rule wrote. A rule that
+    /// fired but changes none of it - a respelling of a party the name
+    /// leaves out as the person's own organization - holds nothing.
+    /// `extension` is the source file's.
     ///
     /// The wording of an edit cannot tell every spelling from a decision
     /// about one document, so this is what keeps a wrong rule from filing a
@@ -841,10 +847,11 @@ impl ProposalRecord {
         if self.is_synthetic() || self.house_rules.iter().all(&checked) {
             return false;
         }
-        let name = |rules: Vec<HouseRule>| {
+        let named = |rules: Vec<HouseRule>| {
             let (styled, applied) = HouseStyle::new(rules).apply(&self.analysis.proposal);
             let (named, _) = counterparty_view(&styled, &self.own_names);
-            compose_styled_filename(&named, &applied, extension, &[]).value
+            let name = compose_styled_filename(&named, &applied, extension, &[]).value;
+            (name, named.document_type, named.parties)
         };
         let kept = self
             .house_rules
@@ -852,7 +859,7 @@ impl ProposalRecord {
             .filter(|rule| checked(rule))
             .cloned()
             .collect();
-        name(self.house_rules.clone()) != name(kept)
+        named(self.house_rules.clone()) != named(kept)
     }
 
     /// The other parties the document names, offered to a reviewer to put
@@ -2093,7 +2100,7 @@ impl Pipeline {
         let database = database.as_ref();
         let store = Arc::new(QueueStore::open(database)?);
         let repository = PipelineRepository::open(database)?;
-        Ok(Self::assemble(
+        let pipeline = Self::assemble(
             store,
             repository,
             worker,
@@ -2102,7 +2109,9 @@ impl Pipeline {
             events,
             settings,
             database.parent().unwrap_or(Path::new(".")).to_path_buf(),
-        ))
+        );
+        pipeline.hold_ready_under_unchecked_spellings();
+        Ok(pipeline)
     }
 
     pub fn with_local_files(
@@ -2142,7 +2151,7 @@ impl Pipeline {
             Arc::clone(&store),
             filesystem,
         ));
-        Ok(Self::assemble(
+        let pipeline = Self::assemble(
             store,
             repository,
             worker,
@@ -2151,7 +2160,35 @@ impl Pipeline {
             events,
             settings,
             database.parent().unwrap_or(Path::new(".")).to_path_buf(),
-        ))
+        );
+        pipeline.hold_ready_under_unchecked_spellings();
+        Ok(pipeline)
+    }
+
+    /// Puts in review every ready document whose name, or where it is filed,
+    /// a learned spelling no person has checked changed (see
+    /// [`Self::held_for_unchecked_spelling`]): when the queue opens, and on
+    /// every recovery pass. Such a row is one an earlier release left ready,
+    /// since after the update every rule it learned is unchecked and a name
+    /// composed now is held as it is composed. The scheduler's pass holds
+    /// them too, but only once the model is ready and the queue is not
+    /// paused: minutes after an update, or never while the model fails.
+    /// Until then they were listed ready, and "Rename all ready" filed them
+    /// and counted the click as the rule's check. Needs no model, and
+    /// holds whether or not the queue is paused; a row that cannot be
+    /// looked at now is looked at on the next pass.
+    fn hold_ready_under_unchecked_spellings(&self) {
+        let Ok(items) = self.store.list() else {
+            return;
+        };
+        for item in items
+            .iter()
+            .filter(|item| item.status == QueueStatus::Ready)
+        {
+            if let Ok(Some(record)) = self.repository.load_proposal(item.id) {
+                let _ = self.held_for_unchecked_spelling(item, &record);
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3970,6 +4007,13 @@ impl Pipeline {
     /// [`LEARNED_SPELLING_UNCONFIRMED`]. A row that could not be put in
     /// review - no longer ready, or the database refused - is not filed
     /// either.
+    ///
+    /// `record` was read a moment ago, and a person can approve the
+    /// document in between: whether it is held is decided again on the
+    /// record as stored, in the transaction that puts it in review, so such
+    /// an approval is never taken back. Putting the record read earlier in
+    /// review turned the approval back into review, and the window said the
+    /// rename was applied while the document waited.
     fn held_for_unchecked_spelling(
         &self,
         item: &QueueItem,
@@ -3984,12 +4028,16 @@ impl Pipeline {
             .extension()
             .and_then(|value| value.to_str())
             .unwrap_or_default();
-        if !record.holds_unchecked_spelling(extension, |rule| spellings.checked(rule)) {
+        let held = |record: &ProposalRecord| {
+            !record.approved
+                && record.holds_unchecked_spelling(extension, |rule| spellings.checked(rule))
+        };
+        if !held(record) {
             return Ok(false);
         }
         let _ = self
             .repository
-            .mark_needs_review(item.id, LEARNED_SPELLING_UNCONFIRMED);
+            .hold_ready_if(item.id, LEARNED_SPELLING_UNCONFIRMED, held);
         self.events.queue_changed();
         Ok(true)
     }
@@ -5619,6 +5667,7 @@ impl Pipeline {
     }
 
     pub fn recover(&self) -> PipelineResult<()> {
+        self.hold_ready_under_unchecked_spellings();
         {
             // Renames in place for documents that could not be read: one a
             // crash left between the rename and its record, and one that
@@ -6545,29 +6594,58 @@ impl PipelineRepository {
         row_status: QueueStatus,
         error_code: Option<&str>,
     ) -> PipelineResult<()> {
-        let mut record = record.clone();
-        record.status = ProposalStatus::NeedsReview;
-        // A document waiting for a person is no longer a document waiting to
-        // be filed, whatever was approved before.
-        record.approved = false;
         let mut connection = self.lock()?;
         let transaction = connection.transaction().map_err(database_error)?;
-        let changed = transaction.execute(
-            "UPDATE queue_items SET status = 'needs_review', error_code = COALESCE(?3, error_code),
-                 updated_at = unixepoch()
-             WHERE id = ?1 AND status = ?2",
-            params![id, queue_status_text(row_status), error_code],
-        ).map_err(database_error)?;
-        if changed != 1 {
-            return Err(PipelineError::new(
-                "STATE_CONFLICT",
-                "item changed before review",
-            ));
-        }
-        let json = serde_json::to_string(&record)
-            .map_err(|_| PipelineError::new("INVALID_DATA", "proposal could not be stored"))?;
-        transaction.execute("UPDATE proposals SET proposal_json = ?1, created_at = unixepoch() WHERE queue_item_id = ?2", params![json, id]).map_err(database_error)?;
+        store_in_review_on(&transaction, id, record, row_status, error_code)?;
         transaction.commit().map_err(database_error)
+    }
+
+    /// Puts item `id` in review from ready with `reason` among its record's
+    /// reasons - where its record, read in the same transaction, is one
+    /// `held` says waits for a person - and says whether it did. A record
+    /// that changed since the caller looked, approved by a person most of
+    /// all, is decided on as it is now.
+    fn hold_ready_if(
+        &self,
+        id: i64,
+        reason: &str,
+        held: impl Fn(&ProposalRecord) -> bool,
+    ) -> PipelineResult<bool> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
+        let json = transaction
+            .query_row(
+                "SELECT proposal_json FROM proposals WHERE queue_item_id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(database_error)?;
+        let Some(mut record) = json
+            .map(|json| {
+                serde_json::from_str::<ProposalRecord>(&json)
+                    .map_err(|_| PipelineError::new("INVALID_DATA", "stored proposal is invalid"))
+            })
+            .transpose()?
+        else {
+            return Ok(false);
+        };
+        if !held(&record) {
+            return Ok(false);
+        }
+        if !record.reasons.iter().any(|entry| entry == reason) {
+            record.reasons.push(reason.to_owned());
+        }
+        record.revision += 1;
+        match store_in_review_on(&transaction, id, &record, QueueStatus::Ready, None) {
+            Ok(()) => {}
+            Err(error) if error.code == "STATE_CONFLICT" => return Ok(false),
+            Err(error) => return Err(error),
+        }
+        transaction.commit().map_err(database_error)?;
+        Ok(true)
     }
 
     /// Returns a document denied at admission to the queue, for the person
@@ -6729,6 +6807,45 @@ fn mark_release(connection: &Connection, id: i64, release: &str) -> PipelineResu
              SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM queue_items WHERE id = ?1)
              ON CONFLICT(queue_item_id) DO UPDATE SET release = excluded.release",
             params![id, release],
+        )
+        .map_err(database_error)?;
+    Ok(())
+}
+
+/// [`PipelineRepository::store_in_review`], on `transaction`, which the
+/// caller commits.
+fn store_in_review_on(
+    transaction: &rusqlite::Transaction<'_>,
+    id: i64,
+    record: &ProposalRecord,
+    row_status: QueueStatus,
+    error_code: Option<&str>,
+) -> PipelineResult<()> {
+    let mut record = record.clone();
+    record.status = ProposalStatus::NeedsReview;
+    // A document waiting for a person is no longer a document waiting to be
+    // filed, whatever was approved before.
+    record.approved = false;
+    let changed = transaction
+        .execute(
+            "UPDATE queue_items SET status = 'needs_review', error_code = COALESCE(?3, error_code),
+                 updated_at = unixepoch()
+             WHERE id = ?1 AND status = ?2",
+            params![id, queue_status_text(row_status), error_code],
+        )
+        .map_err(database_error)?;
+    if changed != 1 {
+        return Err(PipelineError::new(
+            "STATE_CONFLICT",
+            "item changed before review",
+        ));
+    }
+    let json = serde_json::to_string(&record)
+        .map_err(|_| PipelineError::new("INVALID_DATA", "proposal could not be stored"))?;
+    transaction
+        .execute(
+            "UPDATE proposals SET proposal_json = ?1, created_at = unixepoch() WHERE queue_item_id = ?2",
+            params![json, id],
         )
         .map_err(database_error)?;
     Ok(())
@@ -8211,6 +8328,41 @@ mod as_filed_tests {
         assert!(failed.is_empty(), "{failed:#?}");
     }
 
+    /// A learned spelling that changes no word of the name still holds the
+    /// record where nobody has checked it, when it changes a party the name
+    /// leaves out - the third of a "between", here - since the filing
+    /// report gives that party in the spelling (see
+    /// [`ProposalRecord::holds_unchecked_spelling`]). One that changes
+    /// nothing at all - a respelling of the person's own organization, left
+    /// out - holds nothing.
+    #[test]
+    fn a_spelling_of_a_party_the_name_leaves_out_holds_the_record_unless_it_changes_nothing() {
+        let third = record(
+            "Employment Agreement",
+            (
+                PartyRelation::Between,
+                &["John Smith", "Acme Corporation", "Beacon Staffing LLC"],
+            ),
+            &[],
+            &[("Beacon Staffing LLC", "Beacon Staffing LLC and Jane Doe")],
+        );
+        assert!(
+            !third.filename.contains("Jane Doe"),
+            "the name leaves it out: {}",
+            third.filename
+        );
+        assert!(third.holds_unchecked_spelling("pdf", |_| false));
+        assert!(!third.holds_unchecked_spelling("pdf", |_| true));
+
+        let mut own = record(
+            "Employment Agreement",
+            (PartyRelation::Between, &["John Smith", "Acme Corporation"]),
+            &[],
+            &[("Acme Corporation", "ACME CORPORATION")],
+        );
+        own.own_names = vec!["Acme Corporation".into()];
+        assert!(!own.holds_unchecked_spelling("pdf", |_| false));
+    }
 }
 
 #[cfg(test)]
@@ -8697,6 +8849,144 @@ mod failure_policy_tests {
         assert_eq!(
             pause_reason_code("MODEL_REPLY_TRUNCATED", ErrorCode::ModelOutputInvalid),
             "MODEL_OUTPUT_INVALID"
+        );
+    }
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use std::{path::Path, sync::Arc};
+
+    use intern_core::QueueStatus;
+    use intern_engine::{
+        DocumentAnalysis, DocumentSource, Evidence, ExtractProgress, HouseRule, PartyRelation,
+        RuleKind, ValidatedProposal, compose_styled_filename,
+    };
+    use rusqlite::{Connection, params};
+
+    use super::{
+        AnalyzerBoundary, ModelFailure, Pipeline, PipelineEventSink, PipelineProgress,
+        ProposalRecord, WorkerBoundary, WorkerFailure,
+    };
+    use crate::settings::SettingsStore;
+
+    /// Nothing is read here: the rows are written as a reading leaves them.
+    struct Unread;
+
+    impl WorkerBoundary for Unread {
+        fn extract(
+            &self,
+            _request_id: &str,
+            _path: &Path,
+            _progress: &mut dyn FnMut(ExtractProgress),
+        ) -> Result<DocumentSource, WorkerFailure> {
+            unreachable!("nothing is read")
+        }
+        fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+        fn restart(&self) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+    }
+
+    impl AnalyzerBoundary for Unread {
+        fn analyze(
+            &self,
+            _source: &DocumentSource,
+            _extension: &str,
+            _existing_names: &[&str],
+        ) -> Result<DocumentAnalysis, ModelFailure> {
+            unreachable!("nothing is read")
+        }
+    }
+
+    impl PipelineEventSink for Unread {
+        fn queue_changed(&self) {}
+        fn progress(&self, _progress: PipelineProgress) {}
+    }
+
+    /// A person approves a ready agreement in the moment between the
+    /// scheduler reading its record - unapproved, its name written by a
+    /// learned spelling nobody had checked - and putting it in review. The
+    /// approval stands: the row stays ready and approved, for the approval
+    /// to file. The scheduler put the record it had read in review, which
+    /// turned the approval back, and the window said the rename was applied
+    /// while the document waited in review.
+    #[test]
+    fn an_approval_made_while_the_scheduler_holds_the_row_stands() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join("queue.sqlite3");
+        let pipeline = Pipeline::with_local_files(
+            &database,
+            Arc::new(Unread),
+            Arc::new(Unread),
+            Arc::new(Unread),
+            SettingsStore::new(temp.path().join("settings.json")),
+        )
+        .unwrap();
+        let source = temp.path().join("a.pdf");
+        std::fs::write(&source, b"a.pdf").unwrap();
+        let id = pipeline.store.enqueue(&source, "hash").unwrap().id;
+
+        let mut record = ProposalRecord::synthetic(String::new(), String::new());
+        record.manual = false;
+        record.analysis.proposal = ValidatedProposal {
+            document_type: Some("Employment Agreement".into()),
+            document_date: Some("2024-04-12".into()),
+            date_role: None,
+            parties: vec!["John Smith".into(), "Acme Corporation".into()],
+            party_relation: PartyRelation::Between,
+            description: "An agreement.".into(),
+            confidence: 0.9,
+            evidence: Evidence::default(),
+        };
+        record.house_rules = vec![HouseRule::new(RuleKind::Party, "Acme Corporation", "Acme")];
+        record.filename =
+            compose_styled_filename(&record.styled_proposal(), &record.house_rules, "pdf", &[])
+                .value;
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, created_at, updated_at)
+                 VALUES ('party', 'acme corporation', 'Acme Corporation', 'Acme', 2, 1, 1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE queue_items SET status = 'ready' WHERE id = ?1",
+                params![id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO proposals(queue_item_id, proposal_json, created_at) VALUES (?1, ?2, 1)",
+                params![id, serde_json::to_string(&record).unwrap()],
+            )
+            .unwrap();
+
+        let item = pipeline.store.get(id).unwrap().unwrap();
+        let read = pipeline.repository.load_proposal(id).unwrap().unwrap();
+        pipeline
+            .repository
+            .approve_user_edit(
+                id,
+                QueueStatus::Ready,
+                &read.filename,
+                "Approved.",
+                Vec::new(),
+            )
+            .unwrap();
+        // Not filed by the scheduler's pass, which read it unapproved...
+        assert!(pipeline.held_for_unchecked_spelling(&item, &read).unwrap());
+        // ... but left to the approval that is filing it.
+        let stored = pipeline.repository.load_proposal(id).unwrap().unwrap();
+        assert!(stored.approved);
+        assert_eq!(stored.description, "Approved.");
+        assert_eq!(
+            pipeline.store.get(id).unwrap().unwrap().status,
+            QueueStatus::Ready
         );
     }
 }

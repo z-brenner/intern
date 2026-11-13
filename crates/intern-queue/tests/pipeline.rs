@@ -17,7 +17,7 @@ use intern_core::{
 };
 use intern_engine::{
     AnalysisTelemetry, DateRole, DigestBudget, DocumentAnalysis, DocumentSource, Evidence,
-    ExtractProgress, ModelProposal, ModelReading, ModelTier, PageOrigin, ParserWarning,
+    ExtractProgress, HouseRule, ModelProposal, ModelReading, ModelTier, PageOrigin, ParserWarning,
     PartyRelation, ProposalStatus, SourcePage, Support, ValidatedFacts, ValidatedParty, distill,
     engine::finish, fingerprint, validate,
 };
@@ -6367,6 +6367,173 @@ fn a_check_counts_only_for_the_spelling_checked() {
     );
     assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
     assert_eq!(rig.filed_as(fourth), None);
+}
+
+/// A checked rule that writes a ready agreement's name, the rule then
+/// unchecked - as the update leaves every rule an earlier release learned -
+/// with a Probation rig: the database's rule and the ready row.
+fn ready_under_a_rule_no_longer_checked() -> (Probation, i64) {
+    let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
+    let database = Connection::open(rig.temp.path().join("queue.sqlite3")).unwrap();
+    database
+        .execute(
+            "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, confirmed, confirmed_to, created_at, updated_at)
+             VALUES ('party', 'acme corporation', 'Acme Corporation', 'Acme', 2, 1, 'Acme', 1, 1)",
+            [],
+        )
+        .unwrap();
+    let first = rig.read_next();
+    let ready = rig.item(first);
+    assert_eq!(ready.status, QueueStatus::Ready, "checked");
+    assert_eq!(
+        ready.proposal.unwrap().filename,
+        "2024-04-12 Employment Agreement between John Smith and Acme.pdf"
+    );
+    database
+        .execute("UPDATE house_rules SET confirmed = 0", [])
+        .unwrap();
+    (rig, first)
+}
+
+/// A ready row an earlier release left under a learned spelling - which is
+/// unchecked after the update - waits for a person from the moment the
+/// queue opens, before any document is read: the app reads none until the
+/// model is ready, minutes after an update or never while it fails. It was
+/// listed ready until then, and "Rename all ready" filed it and counted the
+/// click as the spelling's check.
+#[test]
+fn a_ready_row_under_an_unchecked_spelling_waits_for_a_person_once_the_queue_opens() {
+    let (rig, first) = ready_under_a_rule_no_longer_checked();
+    let Probation { temp, pipeline, .. } = rig;
+    drop(pipeline);
+    let (pipeline, filing) = reading_pipeline(
+        temp.path(),
+        Vec::new(),
+        Vec::new(),
+        &["John Smith", "Acme Corporation"],
+        DestinationLayout::Party,
+    );
+    let item = pipeline
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == first)
+        .unwrap();
+    assert_eq!(item.status, QueueStatus::NeedsReview);
+    assert_eq!(
+        item.proposal.unwrap().reasons,
+        vec![LEARNED_SPELLING_UNCONFIRMED]
+    );
+    assert!(filing.filed.lock().unwrap().is_empty());
+}
+
+/// The same row, on a recovery pass while the queue is paused: the app's
+/// recovery runs at start and on a timer, whatever the model is doing.
+#[test]
+fn a_ready_row_under_an_unchecked_spelling_waits_for_a_person_after_recovery() {
+    let (rig, first) = ready_under_a_rule_no_longer_checked();
+    rig.pipeline.pause();
+    rig.pipeline.recover().unwrap();
+    let item = rig.item(first);
+    assert_eq!(item.status, QueueStatus::NeedsReview);
+    assert_eq!(
+        item.proposal.unwrap().reasons,
+        vec![LEARNED_SPELLING_UNCONFIRMED]
+    );
+    assert_eq!(rig.filed_as(first), None);
+}
+
+/// A reading of `kind` signed `written` (as `iso`) `relation` `parties`, as
+/// the model answers it, and its text.
+fn party_reading(
+    kind: &str,
+    (iso, written): (&str, &str),
+    relation: PartyRelation,
+    parties: &[&str],
+) -> (DocumentSource, ModelProposal) {
+    let named = parties.join(" and ");
+    let text = parsed(&format!("{kind} signed {written} by {named}."));
+    let reply = ModelProposal {
+        document_type: Some(kind.into()),
+        document_date: Some(iso.into()),
+        parties: parties.iter().map(|party| (*party).to_owned()).collect(),
+        party_relation: relation,
+        description: format!("{kind} {} {named}.", relation.as_str()),
+        evidence: Evidence {
+            date: Some(format!("signed {written}")),
+            document_type: Some(kind.into()),
+            parties: vec![format!("by {named}")],
+        },
+        ..proposal(0.94, false)
+    };
+    (text, reply)
+}
+
+/// A learned spelling no person has checked that changes no word of the
+/// name still changes where the document goes and what its filing reports:
+/// here of the only party, which the name sheds for length but whose folder
+/// the document goes in. Such a document waits for a person like any other
+/// the spelling touched. It was filed without review into "Federal Deposit
+/// Insurance Corporation and JPMorgan Chase Bank National Associati/", and
+/// reported under that spelling. (The third party of a "between", which a
+/// name leaves out too, is in `holds_unchecked_spelling`'s unit test: the
+/// readings here give two.)
+#[test]
+fn a_spelling_that_changes_only_the_folder_or_the_report_waits_for_a_person() {
+    let receiver = "Federal Deposit Insurance Corporation as Receiver for Washington Mutual Bank";
+    let spelled =
+        "Federal Deposit Insurance Corporation and JPMorgan Chase Bank National Association";
+    let temp = tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join("inbox")).unwrap();
+    let (text, reply) = party_reading(
+        "Purchase and Assumption Agreement",
+        ("2024-04-12", "April 12, 2024"),
+        PartyRelation::With,
+        &[receiver],
+    );
+    let (pipeline, filing) = reading_pipeline(
+        temp.path(),
+        vec![text],
+        vec![reply],
+        &[receiver],
+        DestinationLayout::Party,
+    );
+    Connection::open(temp.path().join("queue.sqlite3"))
+        .unwrap()
+        .execute(
+            "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, created_at, updated_at)
+             VALUES ('party', ?1, ?2, ?3, 2, 1, 1)",
+            rusqlite::params![HouseRule::key(receiver), receiver, spelled],
+        )
+        .unwrap();
+    SettingsStore::new(temp.path().join("settings.json"))
+        .save(&AppSettings {
+            destination: temp.path().join("filed").to_string_lossy().into_owned(),
+            destination_layout: DestinationLayout::Party,
+            automatic_rename: true,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let id = pipeline
+        .enqueue_files(&[source(&temp.path().join("inbox"), "a.pdf")])
+        .unwrap()
+        .remove(0)
+        .id;
+    pipeline.run_until_idle().unwrap();
+    let item = pipeline
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == id)
+        .unwrap();
+    let record = item.proposal.unwrap();
+    assert_eq!(
+        record.filename, "2024-04-12 Purchase and Assumption Agreement.pdf",
+        "the name gives no party, in either spelling"
+    );
+    assert_eq!(item.status, QueueStatus::NeedsReview);
+    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
+    assert!(filing.filed.lock().unwrap().is_empty());
 }
 
 /// A held agreement whose wrong spelling the reviewer takes out, putting
