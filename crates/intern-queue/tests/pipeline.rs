@@ -6369,6 +6369,47 @@ fn a_check_counts_only_for_the_spelling_checked() {
     assert_eq!(rig.filed_as(fourth), None);
 }
 
+/// A held agreement whose wrong spelling the reviewer takes out, putting
+/// the document's own word back with a note after it, is filed in the
+/// folder of the document's word, and reported under it: the spelling
+/// taken out was nobody's. It went to "John Smith, Jane Doe/". A checked
+/// spelling's folder is the party's whatever words a reviewer types for it.
+#[test]
+fn a_spelling_taken_out_before_anyone_checked_it_is_not_where_the_document_is_filed() {
+    let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
+    let joined = "Employment Agreement between John Smith, Jane Doe and Acme Corporation";
+    let first = rig.read_next();
+    let second = rig.read_next();
+    for id in [first, second] {
+        rig.approve(id, joined);
+    }
+    rig.automatic(true);
+    let third = rig.read_next();
+    assert_eq!(rig.item(third).status, QueueStatus::NeedsReview);
+    rig.approve(
+        third,
+        "Employment Agreement between John Smith and Acme Corporation re Probate",
+    );
+    assert_eq!(
+        rig.filed_as(third),
+        Some((
+            "John Smith".into(),
+            "2024-06-07 Employment Agreement between John Smith and Acme Corporation re Probate.pdf"
+                .into()
+        ))
+    );
+    let reported = rig
+        .filing
+        .filed
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|document| document.item_id == third)
+        .map(|document| document.proposal.parties.clone())
+        .unwrap();
+    assert_eq!(reported, vec!["John Smith", "Acme Corporation"]);
+}
+
 /// A statement of work the firm signed with a supplier, dated `written`.
 fn statement_of_work(written: &str) -> DocumentSource {
     parsed(&format!(

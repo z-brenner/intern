@@ -708,6 +708,15 @@ pub struct ProposalRecord {
     /// [`CopyOf`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copy_of: Option<CopyOf>,
+    /// The learned spellings among [`Self::house_rules`] that no person had
+    /// checked (see [`LearnedRule::confirmed`]) and that the name a person
+    /// approved took out (see [`keeps_spelling`]): their no to each on this
+    /// document. Where the approved name gives the document's own words
+    /// instead, the document is filed and reported under those, never
+    /// under the spelling taken out (see [`Self::as_filed`]). Set by each
+    /// approval, as the spellings stood when it was made.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected_rules: Vec<HouseRule>,
 }
 
 /// What an exact duplicate is a copy of, and where its copy goes.
@@ -782,6 +791,7 @@ impl ProposalRecord {
             reviewed: false,
             manual: false,
             copy_of: None,
+            rejected_rules: Vec::new(),
         }
     }
 
@@ -1062,6 +1072,7 @@ impl ProposalRecord {
             filename,
         ) {
             filed.parties = parties;
+            self.put_back_rejected(&mut filed, extension, filename);
             return filed;
         }
         let (chosen, chosen_spellings) = match chosen.as_slice() {
@@ -1141,7 +1152,78 @@ impl ProposalRecord {
         } else if let Some(party) = chosen.or(read) {
             put_first(&mut filed.parties, party);
         }
+        self.put_back_rejected(&mut filed, extension, filename);
         filed
+    }
+
+    /// The document's own words, in `filed`, for each spelling the person
+    /// who approved the name `filename` took out while nobody had checked it
+    /// ([`Self::rejected_rules`]), where the name gives those words: a
+    /// party's anywhere in it, a type's where it starts. Such a spelling can
+    /// be a wrong one - "John Smith, Jane Doe" learned for "John Smith" -
+    /// and a reviewer who put the document's word back with a note or
+    /// another party after it ("between John Smith and Acme Corporation re
+    /// Probate") had the document filed in "John Smith, Jane Doe/" and
+    /// reported under it all the same, the grammar reading the document's
+    /// word kept as the spelling's party (see the rule's spelling in
+    /// [`Self::as_filed`]). A spelling a person has checked is the house's
+    /// own, and its folder stays the party's whatever words a reviewer
+    /// types for it. A party given twice is filed once. `extension` is the
+    /// source file's.
+    fn put_back_rejected(&self, filed: &mut ValidatedProposal, extension: &str, filename: &str) {
+        if self.rejected_rules.is_empty() {
+            return;
+        }
+        let words = name_words(filename, extension);
+        let words = words.split(' ').collect::<Vec<_>>();
+        for rule in &self.rejected_rules {
+            match rule.kind {
+                RuleKind::Party => {
+                    let Some(own) = self
+                        .analysis
+                        .proposal
+                        .parties
+                        .iter()
+                        .find(|party| rule.matches(party))
+                    else {
+                        continue;
+                    };
+                    if party_keys(own)
+                        .iter()
+                        .all(|key| runs_of(&words, key).is_empty())
+                    {
+                        continue;
+                    }
+                    for party in &mut filed.parties {
+                        if HouseRule::key(party) == HouseRule::key(&rule.to) {
+                            party.clone_from(own);
+                        }
+                    }
+                }
+                RuleKind::DocumentType => {
+                    let Some(own) = self.analysis.proposal.document_type.as_ref() else {
+                        continue;
+                    };
+                    let undone =
+                        HouseRule::new(RuleKind::DocumentType, rule.to.clone(), own.clone());
+                    if filed
+                        .document_type
+                        .as_deref()
+                        .is_some_and(|spelled| HouseRule::key(spelled) == HouseRule::key(&rule.to))
+                        && keeps_spelling(&undone, extension, filename)
+                    {
+                        filed.document_type = Some(own.clone());
+                    }
+                }
+            }
+        }
+        let mut seen = Vec::new();
+        filed.parties.retain(|party| {
+            let key = HouseRule::key(party);
+            let first = !seen.contains(&key);
+            seen.push(key);
+            first
+        });
     }
 
     /// Whether the edit `lesson` was read from puts in the name a party the
@@ -3256,6 +3338,7 @@ impl Pipeline {
             reviewed: false,
             manual: false,
             copy_of: None,
+            rejected_rules: Vec::new(),
         };
         hold_unchecked_spelling(&mut record, extension, &spellings);
         Ok(record)
@@ -5244,8 +5327,31 @@ impl Pipeline {
             // other filing.
             self.repository.release_copy(id)?;
         }
+        // The spellings the name takes out that nobody had checked: the
+        // person's no to them on this document (see
+        // `ProposalRecord::rejected_rules`), as the spellings stand now -
+        // before what this approval teaches or retracts. Spellings that
+        // cannot be read count as unchecked, which files the document
+        // under its own words, and stop no rename.
+        let rejected = match proposed.as_ref().filter(|record| !record.is_synthetic()) {
+            Some(record) if !record.house_rules.is_empty() => {
+                let spellings = self.repository.spellings().ok();
+                record
+                    .house_rules
+                    .iter()
+                    .filter(|rule| {
+                        !spellings
+                            .as_ref()
+                            .is_some_and(|spellings| spellings.checked(rule))
+                            && !keeps_spelling(rule, source_extension, &filename)
+                    })
+                    .cloned()
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
         self.repository
-            .approve_user_edit(id, item.status, &filename, description)?;
+            .approve_user_edit(id, item.status, &filename, description, rejected)?;
         // A preference store, not a filing step: a lesson that cannot be
         // written must not stop the rename that was just approved. A name
         // with no reading behind it corrects nothing.
@@ -6550,10 +6656,12 @@ impl PipelineRepository {
         expected: QueueStatus,
         filename: &str,
         description: &str,
+        rejected_rules: Vec<HouseRule>,
     ) -> PipelineResult<()> {
         let mut record = self
             .load_proposal(id)?
             .ok_or_else(|| PipelineError::new("INVALID_DATA", "proposal is missing"))?;
+        record.rejected_rules = rejected_rules;
         record.filename = filename.to_owned();
         record.description = description.trim().to_owned();
         record.status = ProposalStatus::Ready;
@@ -8017,6 +8125,92 @@ mod as_filed_tests {
         }
         assert!(failed.is_empty(), "{failed:#?}");
     }
+
+    /// A spelling nobody had checked, taken out of the name by the person
+    /// who approved it ([`ProposalRecord::rejected_rules`]), is no party or
+    /// type the document is filed or reported under where the name gives
+    /// the document's own words instead, whatever follows them: a note,
+    /// another party, a parenthesis. A wrong "John Smith, Jane Doe" learned
+    /// for "John Smith" put every such correction in "John Smith, Jane
+    /// Doe/"; a type "Employment Agreement - Jane Doe" in a type folder of
+    /// that name. The same spellings checked stay the house's folder (see
+    /// the rows for "ACME CORP" above).
+    #[test]
+    fn a_spelling_taken_out_before_anyone_checked_it_is_not_what_is_filed() {
+        let agreement = "Employment Agreement";
+        let acme = "Acme Corporation";
+        let beacon = "Beacon Staffing LLC";
+        let smith = "John Smith";
+        let wrong = (smith, "John Smith, Jane Doe");
+        let between = (PartyRelation::Between, &[smith, acme][..]);
+        let with_smith = (PartyRelation::With, &[smith][..]);
+        let mut failed = Vec::new();
+        for (relation, rule, approved, parties) in [
+            (
+                between,
+                wrong,
+                "Employment Agreement between John Smith and Acme Corporation re Probate",
+                &[smith, acme][..],
+            ),
+            (
+                with_smith,
+                wrong,
+                "Employment Agreement with John Smith re Probate",
+                &[smith],
+            ),
+            (
+                with_smith,
+                wrong,
+                "Employment Agreement with John Smith from Jane Doe",
+                &[smith],
+            ),
+            (
+                with_smith,
+                wrong,
+                "Employment Agreement with John Smith (Executor)",
+                &[smith],
+            ),
+            (
+                with_smith,
+                wrong,
+                "Employment Agreement with John Smith and Beacon Staffing LLC",
+                &[smith, beacon],
+            ),
+            (
+                (PartyRelation::With, &[acme]),
+                (acme, "Acme Corporation aka Acme Holdings"),
+                "Employment Agreement with Acme Corporation re Merger",
+                &[acme],
+            ),
+        ] {
+            let mut record = record(agreement, relation, &[beacon], &[rule]);
+            record.rejected_rules = record.house_rules.clone();
+            let filed = filed(&record, approved);
+            if filed != parties {
+                failed.push(format!("{approved}: filed {filed:?}, not {parties:?}"));
+            }
+        }
+        // A type.
+        let mut record = record(agreement, with_smith, &[], &[]);
+        record.house_rules = vec![HouseRule::new(
+            RuleKind::DocumentType,
+            agreement,
+            "Employment Agreement - Jane Doe",
+        )];
+        record.filename =
+            compose_styled_filename(&record.styled_proposal(), &record.house_rules, "pdf", &[])
+                .value;
+        record.rejected_rules = record.house_rules.clone();
+        let filed = record.as_filed(
+            "pdf",
+            "2024-04-12 Employment Agreement with John Smith re Probate.pdf",
+        );
+        if filed.document_type.as_deref() != Some(agreement) {
+            failed.push(format!("type filed as {:?}", filed.document_type));
+        }
+        assert!(failed.is_empty(), "{failed:#?}");
+    }
+
 }
 
 #[cfg(test)]
