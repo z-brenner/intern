@@ -1,5 +1,7 @@
 use std::{
+    collections::BTreeSet,
     fs,
+    ops::Range,
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
@@ -18,7 +20,8 @@ use intern_engine::{
     counterparty_view,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
-    is_own_name, lesson_from_edit, named_parties, party_as_named, sanitize_folder_name,
+    is_own_name, lesson_from_edit, named_parties, party_and_more, party_as_named,
+    sanitize_folder_name,
     setup::{semantic_probes, validate_semantic_probe},
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -899,41 +902,57 @@ impl ProposalRecord {
 
     /// The validated facts as the name `filename` the document is filed
     /// under gives them: its date (see [`proposal_as_applied`]), and the
-    /// party a reviewer put in place of one the proposed name gave - another
-    /// party the document names, chosen in review, or their own spelling.
-    /// The layout folder, which is the first party's, and the filing report
-    /// are read from this. `extension` is the source file's.
+    /// parties as the reviewer left them - another party the document
+    /// names, chosen in review and put in place of one the proposed name
+    /// gave or beside it, or their own spelling of one. The layout folder,
+    /// which is the first party's, and the filing report are read from
+    /// this. `extension` is the source file's.
     ///
-    /// The party put in is the one party offered in review (see
+    /// A choice is the one party offered in review (see
     /// [`Self::party_choices`]) that the name names and the proposed name
     /// did not, written whole (see `newly_named`), where there is exactly
-    /// one: the reviewer chose it, with one click or typed, and it is filed
-    /// as offered, wherever in the name they wrote it - "Beacon Staffing
-    /// LLC" for "BEACON STAFFING LLC" typed, for "Beacon Staffing LLC re
-    /// Merger", and for "Employment Agreement for Beacon Staffing LLC with
-    /// Acme Corporation". Otherwise it is the words the grammar that
-    /// composed the proposed name reads as a party: a respelled party, or
-    /// side of a "between", as a lesson reads it (see [`lesson_from_edit`]),
-    /// or else the one party after the type the name kept, whatever the
-    /// connecting word (see [`approved_party`]). It takes the place of the
-    /// party such a lesson respells, or else of the first, the one a name
-    /// with a single party gives.
+    /// one: the reviewer chose it, with one click or typed. Where the name
+    /// still gives the party the proposed name gave first, outside the
+    /// choice's words (see `added_beside`), the choice was added beside that
+    /// party, not put in its place - in front of it, in the type or as the
+    /// first side of a new "between", or after it - and the document is
+    /// filed with both, in the order the name gives them, under the first:
+    /// "Employment Agreement between Acme Corporation and John Smith" for
+    /// "Employment Agreement with Acme Corporation" under Acme, as the name
+    /// Intern composes for those two parties is, and "Employment Agreement
+    /// for Beacon Staffing LLC with Acme Corporation" under Beacon Staffing
+    /// LLC, each reporting both.
     ///
-    /// So a choice is the party filed under where that grammar misreads it:
-    /// "FDIC as Receiver for Acme Corporation" chosen for "Acme
-    /// Corporation", behind "with" or "for", reads as a type lengthened in
-    /// front of the party it kept. Where neither gives a party, the parties
-    /// are as proposed: a type lengthened in front of the party it kept,
-    /// behind the same connecting word or another, with no party offered
-    /// among its words ("Notice to Tenants from Acme Property", or "...
-    /// from ACME PROPERTY", for "Notice from Acme Property" or for "Notice
-    /// to Acme Property"); that party kept with another not offered, or a
-    /// note, after it ("Notice to Acme Property from Jane Doe"); and another
-    /// type with another party that is not offered. A name that changes the
-    /// party to one not offered and lengthens the type with words that
-    /// begin with a connecting word reads those words as part of the party:
-    /// "Notice to Tenants from City of Boston" for "Notice from Acme
-    /// Property" gives "Tenants from City of Boston".
+    /// Otherwise the party put in is read with the grammar that composed
+    /// the proposed name: a respelled party, or side of a "between", as a
+    /// lesson reads it (see [`lesson_from_edit`]), or else the one party
+    /// after the type the name kept, whatever the connecting word (see
+    /// [`approved_party`]). It takes the place of the party such a lesson
+    /// respells, or else of the first, the one a name with a single party
+    /// gives. The choice is put in, as offered, where that grammar reads no
+    /// party or reads the choice itself, in any spelling, alone or with a
+    /// note or another party after it (see [`party_and_more`]): "Beacon
+    /// Staffing LLC" for "BEACON STAFFING LLC" typed, and for "Beacon
+    /// Staffing LLC re Merger"; "FDIC as Receiver for Acme Corporation"
+    /// chosen for "Acme Corporation", behind "with" or "for", which that
+    /// grammar reads as a type lengthened in front of the party it kept.
+    /// Where it reads a longer party typed around the choice's words, that
+    /// party is put in, as typed: "Estate of John Smith", typed where "John
+    /// Smith" is offered, is another party, and "Acme Corporation Holdings
+    /// LLC" another than "Acme Corporation".
+    ///
+    /// Where neither gives a party, the parties are as proposed: a type
+    /// lengthened in front of the party it kept, behind the same connecting
+    /// word or another, with no party offered among its words ("Notice to
+    /// Tenants from Acme Property", or "... from ACME PROPERTY", for
+    /// "Notice from Acme Property" or for "Notice to Acme Property"); that
+    /// party kept with another not offered, or a note, after it ("Notice to
+    /// Acme Property from Jane Doe"); and another type with another party
+    /// that is not offered. A name that changes the party to one not
+    /// offered and lengthens the type with words that begin with a
+    /// connecting word reads those words as part of the party: "Notice to
+    /// Tenants from City of Boston" for "Notice from Acme Property" gives
+    /// "Tenants from City of Boston".
     pub fn as_filed(&self, extension: &str, filename: &str) -> ValidatedProposal {
         let styled = self.styled_proposal();
         let mut filed = proposal_as_applied(&styled, filename);
@@ -954,17 +973,46 @@ impl ProposalRecord {
             [party] => Some((*party).to_owned()),
             _ => None,
         };
-        if let Some(edit) = lesson_from_edit(&styled, extension, &proposed, filename)
-            .filter(|edit| edit.kind == RuleKind::Party)
+        let chosen_spellings = chosen
+            .as_deref()
+            .map(|chosen| spellings(chosen, &self.house_rules))
+            .unwrap_or_default();
+        if let Some(chosen) = chosen.as_deref()
+            && let Some(parties) = added_beside(
+                &filed.parties,
+                chosen,
+                &chosen_spellings,
+                extension,
+                &proposed,
+                filename,
+            )
         {
+            filed.parties = parties;
+            return filed;
+        }
+        let lesson = lesson_from_edit(&styled, extension, &proposed, filename)
+            .filter(|edit| edit.kind == RuleKind::Party);
+        let read = match &lesson {
+            Some(edit) => Some(edit.to.clone()),
+            None => approved_party(&styled, extension, &proposed, filename),
+        };
+        // The choice, where the grammar reads no party or reads it; not
+        // where it reads a longer party typed around the choice's words.
+        let chosen = chosen.filter(|_| {
+            read.as_deref().is_none_or(|read| {
+                chosen_spellings
+                    .iter()
+                    .any(|key| HouseRule::key(read) == *key || party_and_more(read, key))
+            })
+        });
+        if let Some(edit) = lesson {
             let to = chosen.unwrap_or_else(|| edit.to.clone());
             for party in &mut filed.parties {
                 if edit.matches(party) {
                     party.clone_from(&to);
                 }
             }
-        } else if let Some(party) =
-            chosen.or_else(|| approved_party(&styled, extension, &proposed, filename))
+        } else if let Some(party) = chosen.or(read)
             && filed
                 .parties
                 .first()
@@ -1126,16 +1174,110 @@ fn newly_named<'a>(
     parties
         .into_iter()
         .filter(|party| {
-            let keys = rules
-                .iter()
-                .filter(|rule| rule.kind == RuleKind::Party && rule.matches(party))
-                .map(|rule| rule.to.as_str())
-                .chain([*party])
-                .flat_map(party_keys)
-                .collect::<Vec<_>>();
+            let keys = spellings(party, rules);
             let names = |name: &str| keys.iter().any(|key| holds_words(name, key));
             names(&after) && !names(&before)
         })
+        .collect()
+}
+
+/// Every spelling a name gives `party`, as house style compares spellings:
+/// the reading's, the one a composed name writes and a party choice offers
+/// (see [`party_keys`]), and one a party rule among `rules` respells it to.
+fn spellings(party: &str, rules: &[HouseRule]) -> Vec<String> {
+    let mut keys = Vec::new();
+    for key in rules
+        .iter()
+        .filter(|rule| rule.kind == RuleKind::Party && rule.matches(party))
+        .map(|rule| rule.to.as_str())
+        .chain([party])
+        .flat_map(party_keys)
+    {
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+/// The parties of `parties` that the name `approved` still gives, with the
+/// party `chosen` it newly names, in the order the name gives them - where
+/// the first of `parties`, the party the name `proposed` gave first, is
+/// among them: the choice was added beside that party rather than put in
+/// its place. `None` where it is not. `chosen_spellings` are the choice's
+/// spellings (see [`spellings`]), and `extension` is the source file's.
+///
+/// A party is still given where `approved` holds it as a run of whole
+/// words, in any spelling (see [`party_keys`]), outside the words of the
+/// choice - so not "Acme Corporation" in a chosen "Trustee for Acme
+/// Corporation" - as many times as `proposed` does, so not a party a type
+/// holds as well ("Acme Lease with Acme") that the reviewer took out of the
+/// name's end. One of `parties` it no longer gives is left out.
+fn added_beside(
+    parties: &[String],
+    chosen: &str,
+    chosen_spellings: &[String],
+    extension: &str,
+    proposed: &str,
+    approved: &str,
+) -> Option<Vec<String>> {
+    let before = name_words(proposed, extension);
+    let before = before.split(' ').collect::<Vec<_>>();
+    let after = name_words(approved, extension);
+    let after = after.split(' ').collect::<Vec<_>>();
+    let choice = chosen_spellings
+        .iter()
+        .flat_map(|key| runs_of(&after, key))
+        .min_by_key(|run| run.start)?;
+    let given = |party: &str| {
+        let keys = party_keys(party);
+        let starts = |words: &[&str], outside: Option<&Range<usize>>| {
+            keys.iter()
+                .flat_map(|key| runs_of(words, key))
+                .filter(|run| {
+                    outside.is_none_or(|choice| run.end <= choice.start || run.start >= choice.end)
+                })
+                .map(|run| run.start)
+                .collect::<BTreeSet<_>>()
+        };
+        let now = starts(&after, Some(&choice));
+        (now.len() >= starts(&before, None).len())
+            .then(|| now.first().copied())
+            .flatten()
+    };
+    given(parties.first()?)?;
+    let mut named = parties
+        .iter()
+        .filter_map(|party| given(party).map(|at| (at, party.clone())))
+        .chain([(choice.start, chosen.to_owned())])
+        .collect::<Vec<_>>();
+    named.sort_by_key(|(at, _)| *at);
+    let mut given_parties: Vec<String> = Vec::with_capacity(named.len());
+    for (_, party) in named {
+        if !given_parties
+            .iter()
+            .any(|other| HouseRule::key(other) == HouseRule::key(&party))
+        {
+            given_parties.push(party);
+        }
+    }
+    Some(given_parties)
+}
+
+/// Each run of `words` that is the key `party`, as word ranges: where a
+/// name written as house style compares spellings (see [`name_words`])
+/// holds the party whole.
+fn runs_of(words: &[&str], party: &str) -> Vec<Range<usize>> {
+    let party = party
+        .split(' ')
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    if party.is_empty() || party.len() > words.len() {
+        return Vec::new();
+    }
+    (0..=words.len() - party.len())
+        .filter(|&at| words[at..at + party.len()] == party[..])
+        .map(|at| at..at + party.len())
         .collect()
 }
 
@@ -6532,6 +6674,75 @@ mod party_choice_tests {
             "Acme Corporation",
             "Acme Corporation Holdings"
         ));
+    }
+}
+
+#[cfg(test)]
+mod added_beside_tests {
+    use super::{added_beside, spellings};
+
+    fn beside(chosen: &str, proposed: &str, approved: &str) -> Option<Vec<String>> {
+        added_beside(
+            &["Acme".to_owned()],
+            chosen,
+            &spellings(chosen, &[]),
+            "pdf",
+            &format!("2024-04-12 {proposed}.pdf"),
+            &format!("2024-04-12 {approved}.pdf"),
+        )
+    }
+
+    /// A choice written beside the party the name gave first, which the
+    /// name still gives whole outside the choice's words, is filed with it,
+    /// in the order the name gives them; a choice that holds that party's
+    /// words, or a name that took the party out of its end while its type
+    /// still holds the same words, is no such choice.
+    #[test]
+    fn a_choice_beside_the_party_the_name_still_gives_is_filed_with_it() {
+        assert_eq!(
+            beside(
+                "John Smith",
+                "Lease with Acme",
+                "Lease between ACME and John Smith"
+            ),
+            Some(vec!["Acme".to_owned(), "John Smith".to_owned()])
+        );
+        assert_eq!(
+            beside(
+                "John Smith",
+                "Lease with Acme",
+                "John Smith Lease with Acme"
+            ),
+            Some(vec!["John Smith".to_owned(), "Acme".to_owned()])
+        );
+        assert_eq!(
+            beside(
+                "Trustee for Acme",
+                "Lease with Acme",
+                "Lease with Trustee for Acme"
+            ),
+            None
+        );
+        assert_eq!(
+            beside(
+                "John Smith",
+                "Acme Lease with Acme",
+                "Acme Lease with John Smith"
+            ),
+            None
+        );
+        assert_eq!(
+            beside(
+                "John Smith",
+                "Acme Lease with Acme",
+                "Acme Lease between Acme and John Smith"
+            ),
+            Some(vec!["Acme".to_owned(), "John Smith".to_owned()])
+        );
+        assert_eq!(
+            beside("John Smith", "Lease with Acme", "Lease with John Smith"),
+            None
+        );
     }
 }
 

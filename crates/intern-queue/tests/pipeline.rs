@@ -4838,13 +4838,20 @@ fn a_party_chosen_in_review_that_ends_with_the_named_one_is_the_party_filed_unde
 /// capitals, with a note after it as a click keeps one, or in front of the
 /// party the name gave - is filed as it was offered: the reviewer chose
 /// that party. It was filed under what they typed, the note too, and in
-/// front of the party kept, under the party they had chosen against.
+/// front of the party kept, under the party they had chosen against. The
+/// party kept is still the name's, and is reported after the choice.
 #[test]
 fn a_party_offered_in_review_and_written_another_way_is_filed_as_offered() {
-    for approved in [
-        "with BEACON STAFFING LLC",
-        "with Beacon Staffing LLC re Merger",
-        "for Beacon Staffing LLC with Acme Corporation",
+    for (approved, reported) in [
+        ("with BEACON STAFFING LLC", &["Beacon Staffing LLC"][..]),
+        (
+            "with Beacon Staffing LLC re Merger",
+            &["Beacon Staffing LLC"],
+        ),
+        (
+            "for Beacon Staffing LLC with Acme Corporation",
+            &["Beacon Staffing LLC", "Acme Corporation"],
+        ),
     ] {
         let chosen = chosen_twice(
             PartyRelation::With,
@@ -4858,9 +4865,95 @@ fn a_party_offered_in_review_and_written_another_way_is_filed_as_offered() {
             chosen.learned
         );
         assert_eq!(chosen.folders, ["Beacon Staffing LLC"; 2], "{approved}");
+        assert_eq!(chosen.reported, [reported; 2], "{approved}");
+    }
+}
+
+/// A party offered in review, written beside the party the name gave
+/// rather than in its place - after it, as the second side of a new
+/// "between" or with "and", or in front of it, in the type or as the first
+/// side - is filed with that party, both reported in the order the name
+/// gives them, under the first, as a name Intern composes for the two is.
+/// The choice took the kept party's place in the folder and the report:
+/// "between Acme Corporation and John Smith" was filed under John Smith,
+/// and Acme was reported nowhere.
+#[test]
+fn a_party_offered_in_review_and_added_beside_the_named_one_is_filed_with_it() {
+    let acme = "Acme Corporation";
+    for (other, approved, reported) in [
+        (
+            "John Smith",
+            "Employment Agreement between Acme Corporation and John Smith",
+            [acme, "John Smith"],
+        ),
+        (
+            "John Smith",
+            "Employment Agreement between John Smith and Acme Corporation",
+            ["John Smith", acme],
+        ),
+        (
+            "Beacon Staffing LLC",
+            "Employment Agreement with Acme Corporation and Beacon Staffing LLC",
+            [acme, "Beacon Staffing LLC"],
+        ),
+        (
+            "Beacon Staffing LLC",
+            "Employment Agreement with Acme Corporation from Beacon Staffing LLC",
+            [acme, "Beacon Staffing LLC"],
+        ),
+        (
+            "Beacon Staffing LLC",
+            "Beacon Staffing LLC Placement Agreement with Acme Corporation",
+            ["Beacon Staffing LLC", acme],
+        ),
+    ] {
+        let chosen = approved_twice(PartyRelation::With, &[acme], other, approved);
+        assert!(
+            chosen.learned.is_empty(),
+            "{approved}: learned {:?}",
+            chosen.learned
+        );
+        assert_eq!(chosen.folders, [reported[0]; 2], "{approved}");
+        assert_eq!(chosen.reported, [reported; 2], "{approved}");
         assert_eq!(
-            chosen.reported,
-            [["Beacon Staffing LLC"], ["Beacon Staffing LLC"]],
+            chosen.third, "2024-06-07 Employment Agreement with Acme Corporation.pdf",
+            "{approved}"
+        );
+    }
+}
+
+/// A party typed around the words of one offered in review is that longer
+/// party, not the one offered: "Estate of John Smith" where "John Smith" is
+/// offered, a parent "Acme Corporation Holdings LLC" where its subsidiary
+/// "Acme Corporation" is. The document is filed, and reported, under what
+/// was typed. It was filed under the party offered, which the reviewer had
+/// not named.
+#[test]
+fn a_longer_party_typed_around_an_offered_one_is_filed_under_what_was_typed() {
+    for (named, other, approved) in [
+        (
+            "Acme Corporation",
+            "John Smith",
+            "with Estate of John Smith",
+        ),
+        (
+            "Beacon Staffing LLC",
+            "Acme Corporation",
+            "with Acme Corporation Holdings LLC",
+        ),
+    ] {
+        let typed = approved.trim_start_matches("with ");
+        let chosen = chosen_twice(PartyRelation::With, named, other, approved);
+        assert!(
+            chosen.learned.is_empty(),
+            "{approved}: learned {:?}",
+            chosen.learned
+        );
+        assert_eq!(chosen.folders, [typed; 2], "{approved}");
+        assert_eq!(chosen.reported, [[typed]; 2], "{approved}");
+        assert_eq!(
+            chosen.third,
+            format!("2024-06-07 Employment Agreement with {named}.pdf"),
             "{approved}"
         );
     }
