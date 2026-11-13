@@ -49,6 +49,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .history-actions button,
 .folder-row button,
 .intake-status button,
+.spelling-checks button,
 .copy-description,
 .setup-screen button {
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text);
@@ -63,6 +64,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .history-actions button:hover:not(:disabled),
 .folder-row button:hover:not(:disabled),
 .intake-status button:hover:not(:disabled),
+.spelling-checks button:hover:not(:disabled),
 .copy-description:hover:not(:disabled),
 .setup-screen button:hover:not(:disabled) { background: var(--surface-subtle); border-color: var(--text-muted); }
 .header-actions button:disabled,
@@ -70,7 +72,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .queue-actions button:disabled,
 .update-actions button:disabled,
 .history-actions button:disabled,
-.intake-status button:disabled { opacity: .5; cursor: default; }
+.intake-status button:disabled,
+.spelling-checks button:disabled { opacity: .5; cursor: default; }
 .icon-button { padding: 0 !important; min-width: 38px; }
 /* Close is a dismissal, not an action to be weighed: quiet until reached for.
    These were unstyled UA buttons, so a browser-default bevelled box sat beside
@@ -80,11 +83,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 
 .queue-actions .primary,
 .inspector-actions .primary,
+.spelling-checks .primary,
 .settings-dialog .primary,
 .setup-screen .primary,
 .history-actions .primary { background: var(--primary); color: var(--on-primary); border-color: var(--primary); font-weight: 600; }
 .queue-actions .primary:hover:not(:disabled),
 .inspector-actions .primary:hover:not(:disabled),
+.spelling-checks .primary:hover:not(:disabled),
 .settings-dialog .primary:hover:not(:disabled),
 .setup-screen .primary:hover:not(:disabled),
 .history-actions .primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
@@ -678,10 +683,10 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .rule-confirm button { min-height: 30px; padding: 0 10px; }
 .learned-rules li:focus-visible, .spelling-checks:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* "Use on its own" beside a held document's spelling, in the review window. */
-.spelling-checks { display: grid; gap: 6px; margin: -6px 0 12px; }
+.spelling-checks { display: grid; gap: 8px; margin: 8px 0 14px; }
 .spelling-checks .spelling-check { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; color: var(--text-muted); }
 .spelling-checks .spelling-check q { font-style: normal; }
-.spelling-checks .spelling-check > button { min-height: 28px; padding: 0 10px; }
+.spelling-checks button { min-height: 30px; padding: 0 10px; font-size: 12.5px; }
 .spelling-checks .rule-confirm { display: flex; flex-wrap: wrap; gap: 6px; }
 .spelling-checks .spelling-checked, .spelling-checks .form-error { margin: 0; font-size: 12px; }
 
