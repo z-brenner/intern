@@ -1027,6 +1027,98 @@ impl ProposalRecord {
                     .any(|key| holds_words(&to, key) || holds_words(key, &to))
         })
     }
+
+    /// Whether the name `approved` names a party the reading names that
+    /// the name Intern proposed did not: one validation found in the
+    /// document, or one the proposal gives, written whole in any spelling
+    /// a name can give it (see [`newly_named`]) - house style's among them,
+    /// by a rule in `style` or one this name applied. `extension` is the
+    /// source file's.
+    ///
+    /// Putting another party in the name decides who the document is with,
+    /// whatever the name's grammar reads the edit as (see
+    /// [`lesson_from_edit`]): a respelled party, a type lengthened in front
+    /// of the party it kept, or a type a party is added to after " - ". So
+    /// such an edit teaches nothing, the party chosen with one click or
+    /// typed whole. "Employment Agreement for Trustee for Acme Corporation"
+    /// for "Employment Agreement for Acme Corporation" reads as the type
+    /// "Employment Agreement for Trustee", the trustee's name ending with
+    /// the connecting word and the party the name kept, and where the
+    /// document names "Trustee for Acme Corporation" it teaches no type;
+    /// nor does "for the Trustee for Acme Corporation" typed, "FDIC as
+    /// Receiver for Acme Corporation" behind "for" or "with", or "Estate of
+    /// John Smith" for "John Smith". Two kinds of choice are found by
+    /// [`Self::names_another_party`] instead: a party typed short, as a run
+    /// of its words but not all of them, and a party whose words the
+    /// proposed name already held inside a longer one's - "Acme
+    /// Corporation" for its parent "Acme Corporation Holdings LLC".
+    ///
+    /// It finds parties, not spellings, so one edit that grammar misreads
+    /// is still learned: the party the name gave, kept but respelled in
+    /// case or punctuation, behind a type lengthened with words that begin
+    /// with another connecting word - "Notice to Tenants from ACME
+    /// PROPERTY" for "Notice to Acme Property", in a document that does not
+    /// name the tenants. It names no party anew, and [`lesson_from_edit`],
+    /// which compares the kept words exactly, reads it as the party
+    /// "Tenants from ACME PROPERTY": made twice, that spelling is learned.
+    fn names_a_party_anew(&self, style: &HouseStyle, extension: &str, approved: &str) -> bool {
+        let rules = self
+            .house_rules
+            .iter()
+            .chain(style.rules())
+            .cloned()
+            .collect::<Vec<_>>();
+        let found = self
+            .analysis
+            .facts
+            .iter()
+            .flat_map(|facts| facts.parties.iter().map(|party| party.name.as_str()))
+            .chain(self.analysis.proposal.parties.iter().map(String::as_str));
+        !newly_named(found, &rules, extension, &self.filename, approved).is_empty()
+    }
+}
+
+/// Those of `parties` the name `approved` names and the name `proposed`
+/// does not, each written whole: held as a run of whole words, as house
+/// style compares spellings ([`HouseRule::key`]), in any spelling a name
+/// gives it - the reading's, the one a composed name writes and a party
+/// choice offers (see [`party_keys`]), or one a party rule among `rules`
+/// respells it to. In the order given. `extension` is the source file's.
+fn newly_named<'a>(
+    parties: impl IntoIterator<Item = &'a str>,
+    rules: &[HouseRule],
+    extension: &str,
+    proposed: &str,
+    approved: &str,
+) -> Vec<&'a str> {
+    let before = name_words(proposed, extension);
+    let after = name_words(approved, extension);
+    parties
+        .into_iter()
+        .filter(|party| {
+            let keys = rules
+                .iter()
+                .filter(|rule| rule.kind == RuleKind::Party && rule.matches(party))
+                .map(|rule| rule.to.as_str())
+                .chain([*party])
+                .flat_map(party_keys)
+                .collect::<Vec<_>>();
+            let names = |name: &str| keys.iter().any(|key| holds_words(name, key));
+            names(&after) && !names(&before)
+        })
+        .collect()
+}
+
+/// The words of `filename` as house style compares spellings, without its
+/// extension: "2024-04-12 Letter to Acme Corp.pdf" is "20240412 letter to
+/// acme corp". `extension` is the source file's.
+fn name_words(filename: &str, extension: &str) -> String {
+    let name = filename.trim();
+    let stem = name
+        .rsplit_once('.')
+        .filter(|(_, suffix)| !extension.is_empty() && suffix.eq_ignore_ascii_case(extension))
+        .map_or(name, |(stem, _)| stem);
+    HouseRule::key(stem)
 }
 
 /// Whether the key `spelling` holds the key `words` as a run of whole
@@ -2807,12 +2899,15 @@ impl Pipeline {
         };
         if HouseRule::key(&lesson.to) == lesson.from_key() {
             self.repository.forget_rule_for(lesson.kind, &lesson.from)?;
-        } else if record.names_another_party(&lesson) {
+        } else if record.names_a_party_anew(&self.repository.active_style()?, extension, approved)
+            || record.names_another_party(&lesson)
+        {
             // Another party the document names is no spelling of the words
-            // it took the place of: putting it in the name - one click on
-            // the party choices - decides who this document is with.
-            // Learned, it would put that party in every later name giving
-            // those words, documents that never mention it included.
+            // it took the place of, nor any part of a type: putting it in
+            // the name - one click on the party choices, or typed, whole or
+            // short - decides who this document is with. Learned, it would
+            // put that party in every later name giving those words, or of
+            // that type, documents that never mention it included.
             return Ok(());
         } else if lesson.is_meaningful() {
             self.repository.learn(&lesson)?;

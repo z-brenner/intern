@@ -4352,6 +4352,190 @@ fn a_party_whose_name_holds_the_named_ones_typed_as_its_own_words_teaches_no_spe
     }
 }
 
+/// What became of agreements whose name gives `named` alone, behind
+/// `relation`, in readings that also name `other`, once the reviewer
+/// approved two of them as "{date} Employment Agreement {approved}" and a
+/// third, naming `named` alone, was read with automatic renaming on. Filed
+/// by party.
+struct ChosenTwice {
+    /// The rules learned, as "from -> to".
+    learned: Vec<String>,
+    /// The name the third was filed under, without review.
+    third: String,
+}
+
+fn chosen_twice(
+    relation: PartyRelation,
+    named: &'static str,
+    other: &'static str,
+    approved: &str,
+) -> ChosenTwice {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let dates = [
+        ("2024-04-12", "April 12, 2024"),
+        ("2024-05-03", "May 3, 2024"),
+        ("2024-06-07", "June 7, 2024"),
+    ];
+    let mut texts = dates
+        .iter()
+        .take(2)
+        .map(|(_, written)| {
+            parsed(&format!(
+                "Employment Agreement signed {written} by {named}, which is related to {other}."
+            ))
+        })
+        .collect::<Vec<_>>();
+    texts.push(parsed(&format!(
+        "Employment Agreement signed June 7, 2024 by {named}."
+    )));
+    let replies = dates
+        .iter()
+        .map(|(iso, written)| ModelProposal {
+            parties: vec![named.into()],
+            party_relation: relation,
+            description: format!(
+                "Employment agreement {} {named} covering duties, salary, and term.",
+                relation.as_str()
+            ),
+            evidence: Evidence {
+                parties: vec![format!("by {named}")],
+                ..dated_proposal(iso, written).evidence
+            },
+            ..dated_proposal(iso, written)
+        })
+        .collect();
+    let (pipeline, filing) = reading_pipeline(
+        temp.path(),
+        texts,
+        replies,
+        &[named, other],
+        DestinationLayout::Party,
+    );
+    let queued = pipeline
+        .enqueue_files(&[source(&inbox, "a.pdf"), source(&inbox, "b.pdf")])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let first = record_of(&pipeline, queued[0]);
+    assert_eq!(
+        first.filename,
+        format!(
+            "2024-04-12 Employment Agreement {} {named}.pdf",
+            relation.as_str()
+        )
+    );
+    assert_eq!(first.party_choices(), vec![other]);
+    for (index, (date, _)) in dates.iter().take(2).enumerate() {
+        pipeline
+            .approve(
+                queued[index],
+                &format!("{date} Employment Agreement {approved}.pdf"),
+                "An agreement.",
+            )
+            .unwrap();
+    }
+    let learned = pipeline
+        .learned_rules()
+        .unwrap()
+        .into_iter()
+        .map(|rule| format!("{} -> {}", rule.from, rule.to))
+        .collect();
+
+    let filed = temp.path().join("filed");
+    SettingsStore::new(temp.path().join("settings.json"))
+        .save(&AppSettings {
+            destination: filed.to_string_lossy().into_owned(),
+            destination_layout: DestinationLayout::Party,
+            automatic_rename: true,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let third = pipeline
+        .enqueue_files(&[source(&inbox, "c.pdf")])
+        .unwrap()
+        .remove(0)
+        .id;
+    pipeline.run_until_idle().unwrap();
+    let third = filing
+        .filed
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|document| document.item_id == third)
+        .expect("the third is ready, and filed without review")
+        .destination
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    ChosenTwice { learned, third }
+}
+
+/// Another party the document names, written in the name whole - one
+/// click on the party choices, or typed - is a decision about who this
+/// document is with, whatever the name's grammar reads the edit as. A
+/// party whose name ends with a connecting word and the named party
+/// ("Trustee for Acme Corporation" in place of "Acme Corporation", behind
+/// "for") was read as a lengthened type: chosen twice, it taught the type
+/// "Employment Agreement for Trustee", and every later employment
+/// agreement, ready ones filed without review, was named for the trustee.
+/// Behind another connecting word, and the estate of a named person, the
+/// same choice teaches nothing either.
+#[test]
+fn another_party_the_document_names_written_in_the_name_teaches_nothing() {
+    for (relation, named, other, approved) in [
+        (
+            PartyRelation::For,
+            "Acme Corporation",
+            "Trustee for Acme Corporation",
+            "for Trustee for Acme Corporation",
+        ),
+        (
+            PartyRelation::For,
+            "Acme Corporation",
+            "Trustee for Acme Corporation",
+            "for the Trustee for Acme Corporation",
+        ),
+        (
+            PartyRelation::For,
+            "Acme Corporation",
+            "FDIC as Receiver for Acme Corporation",
+            "for FDIC as Receiver for Acme Corporation",
+        ),
+        (
+            PartyRelation::With,
+            "Acme Corporation",
+            "FDIC as Receiver for Acme Corporation",
+            "with FDIC as Receiver for Acme Corporation",
+        ),
+        (
+            PartyRelation::To,
+            "John Smith",
+            "Estate of John Smith",
+            "to Estate of John Smith",
+        ),
+    ] {
+        let chosen = chosen_twice(relation, named, other, approved);
+        assert!(
+            chosen.learned.is_empty(),
+            "{approved}: learned {:?}",
+            chosen.learned
+        );
+        assert_eq!(
+            chosen.third,
+            format!(
+                "2024-06-07 Employment Agreement {} {named}.pdf",
+                relation.as_str()
+            ),
+            "{approved}"
+        );
+    }
+}
+
 /// A party put in a name that gave none - one click on the party choices,
 /// which writes it after " - " - is read as a new type, since the name has
 /// no party clause to hold it. Made twice, it used to become a rule, and
