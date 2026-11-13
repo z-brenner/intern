@@ -5005,6 +5005,55 @@ fn a_party_offered_in_review_and_added_beside_the_named_one_is_filed_with_it() {
     }
 }
 
+/// A party offered in review joined by "&" or a comma to the party the
+/// name gave is filed, and reported, as two parties, under the first the
+/// name gives: it was taken for one longer party typed around the choice,
+/// and filed in "Acme Corporation, Beacon Staffing LLC/" or "John Smith &
+/// Acme Corporation/". A party offered in review whose name holds a note's
+/// start - "Swiss Re Ltd", "Munich Re Group" - is filed under its whole
+/// name, a note typed after it left out: it was cut at the "Re", and filed
+/// in "Swiss/" and "Munich/".
+#[test]
+fn a_party_offered_in_review_is_filed_whole_and_apart_from_the_party_kept() {
+    let acme = "Acme Corporation";
+    let beacon = "Beacon Staffing LLC";
+    for (named, other, approved, reported) in [
+        (
+            beacon,
+            acme,
+            "with Acme Corporation, Beacon Staffing LLC",
+            &[acme, beacon][..],
+        ),
+        (
+            acme,
+            "John Smith",
+            "between John Smith & Acme Corporation",
+            &["John Smith", acme],
+        ),
+        (acme, "Swiss Re Ltd", "with Swiss Re Ltd", &["Swiss Re Ltd"]),
+        (
+            acme,
+            "Munich Re Group",
+            "with Munich Re Group re Reinsurance",
+            &["Munich Re Group"],
+        ),
+    ] {
+        let chosen = chosen_twice(PartyRelation::With, named, other, approved);
+        assert!(
+            chosen.learned.is_empty(),
+            "{approved}: learned {:?}",
+            chosen.learned
+        );
+        assert_eq!(chosen.folders, [reported[0]; 2], "{approved}");
+        assert_eq!(chosen.reported, [reported; 2], "{approved}");
+        assert_eq!(
+            chosen.third,
+            format!("2024-06-07 Employment Agreement with {named}.pdf"),
+            "{approved}"
+        );
+    }
+}
+
 /// A party typed around the words of one offered in review is that longer
 /// party, not the one offered: "Estate of John Smith" where "John Smith" is
 /// offered, a parent "Acme Corporation Holdings LLC" where its subsidiary

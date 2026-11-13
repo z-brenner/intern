@@ -1090,7 +1090,29 @@ impl ProposalRecord {
         }) {
             (lesson, read) = (None, None);
         }
-        let read = read.map(|read| without_note(&read));
+        // The spellings of every party the reading knows of, which a note
+        // is never cut out of (see `without_note`).
+        let known = self
+            .analysis
+            .proposal
+            .parties
+            .iter()
+            .chain(
+                self.analysis
+                    .facts
+                    .iter()
+                    .flat_map(|facts| facts.parties.iter().map(|party| &party.name)),
+            )
+            .chain(&choices)
+            .chain(
+                self.house_rules
+                    .iter()
+                    .filter(|rule| rule.kind == RuleKind::Party)
+                    .map(|rule| &rule.to),
+            )
+            .flat_map(|party| party_keys(party))
+            .collect::<Vec<_>>();
+        let read = read.map(|read| without_note(&read, &known));
         // The choice, where the grammar reads no party or reads it; not
         // where it reads a longer party typed around the choice's words.
         let chosen = chosen.filter(|_| {
@@ -1396,9 +1418,9 @@ fn added_beside(
             .iter()
             .all(|(_, _, choice)| run.end <= choice.start || run.start >= choice.end)
     };
-    // Where the name gives `party` now, if as many times as the proposed
-    // name did, and whether the proposed name gave it at all.
-    let given = |party: &str| {
+    // Every spelling a name gives `party` in: its own, and the document's
+    // word for it where a rule respelled it.
+    let keys_of = |party: &str| {
         let mut keys = party_keys(party);
         for rule in rules.iter().filter(|rule| {
             rule.kind == RuleKind::Party && HouseRule::key(&rule.to) == HouseRule::key(party)
@@ -1409,6 +1431,12 @@ fn added_beside(
                 }
             }
         }
+        keys
+    };
+    // Where the name gives `party` now, if as many times as the proposed
+    // name did, and whether the proposed name gave it at all.
+    let given = |party: &str| {
+        let keys = keys_of(party);
         let starts = |words: &[&str], outside: bool| {
             keys.iter()
                 .flat_map(|key| runs_of(words, key))
@@ -1430,13 +1458,36 @@ fn added_beside(
     if chosen.len() < 2 && given.iter().all(|(_, (at, _))| at.is_none()) {
         return None;
     }
+    // The spellings of the parties the name still gives, which a longer
+    // party typed around a choice never holds (see `typed_around`).
+    let kept = given
+        .iter()
+        .filter(|(_, (at, _))| at.is_some())
+        .flat_map(|(party, _)| keys_of(party))
+        .collect::<Vec<_>>();
     let mut named = given
         .iter()
         .filter_map(|(party, (at, _))| at.map(|at| (at, (*party).clone())))
-        .chain(chosen.iter().map(|(party, spellings, run)| {
-            let typed = typed_around(approved, extension, spellings);
-            (run.start, typed.unwrap_or_else(|| party.clone()))
-        }))
+        .chain(
+            chosen
+                .iter()
+                .enumerate()
+                .map(|(index, (party, spellings, run))| {
+                    let others = kept
+                        .iter()
+                        .chain(
+                            chosen
+                                .iter()
+                                .enumerate()
+                                .filter(|(other, _)| *other != index)
+                                .flat_map(|(_, (_, spellings, _))| spellings),
+                        )
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let typed = typed_around(approved, extension, spellings, &others);
+                    (run.start, typed.unwrap_or_else(|| party.clone()))
+                }),
+        )
         .collect::<Vec<_>>();
     named.sort_by_key(|(at, _)| *at);
     let never_named = given
@@ -1489,9 +1540,18 @@ const NOTE_STARTS: [&str; 6] = [
 /// "John Smith" is offered, "Acme Corporation Holdings LLC" where its
 /// subsidiary "Acme Corporation" is, "John Smith Family Trust". `None`
 /// where the first such words are the choice in some spelling, or the
-/// type, before the first divider, or a note, after a note's start.
-/// `extension` is the source file's.
-fn typed_around(approved: &str, extension: &str, chosen_spellings: &[String]) -> Option<String> {
+/// type, before the first divider, or a note, after a note's start; and
+/// where they also hold, outside the choice's words, one of `others` - the
+/// spellings of a party the name still gives, or of another choice -
+/// joined to it by words that divide nothing here ("&", a comma): "Acme
+/// Corporation, Beacon Staffing LLC" or "John Smith & Acme Corporation" is
+/// two parties, not one longer one. `extension` is the source file's.
+fn typed_around(
+    approved: &str,
+    extension: &str,
+    chosen_spellings: &[String],
+    others: &[String],
+) -> Option<String> {
     let name = approved.trim();
     let stem = name
         .rsplit_once('.')
@@ -1528,7 +1588,19 @@ fn typed_around(approved: &str, extension: &str, chosen_spellings: &[String]) ->
                 .any(|choice| holds_words(&key, choice))
         })?;
     let key = HouseRule::key(segment);
-    (index > 0 && !after_note && !chosen_spellings.contains(&key))
+    let words = key.split(' ').collect::<Vec<_>>();
+    let choice = chosen_spellings
+        .iter()
+        .flat_map(|spelling| runs_of(&words, spelling))
+        .collect::<Vec<_>>();
+    let holds_another = others.iter().any(|other| {
+        runs_of(&words, other).iter().any(|run| {
+            choice
+                .iter()
+                .all(|mine| run.end <= mine.start || run.start >= mine.end)
+        })
+    });
+    (index > 0 && !after_note && !holds_another && !chosen_spellings.contains(&key))
         .then(|| segment.trim().to_owned())
 }
 
@@ -1537,17 +1609,75 @@ fn typed_around(approved: &str, extension: &str, chosen_spellings: &[String]) ->
 /// a party: the note is about the document, no part of the party or its
 /// folder. " about " is left, as a business's name may hold it ("All About
 /// Pets LLC").
-fn without_note(party: &str) -> String {
+///
+/// Nor is a party cut at a note's start that is a word of its own name:
+/// never inside a run of words that is one of `known` - the spellings of
+/// the parties the proposal, the reading's facts and the choices offered
+/// give, and of a rule's spelling ("Citizens Concerning the Environment",
+/// "Swiss Re Ltd" where the document names it) - and never where the words
+/// after the note's start, up to the next one, end in a word that ends a
+/// company's name ([`COMPANY_FORMS`]): "Munich Re Group", "Everest Re
+/// Group Ltd" typed. "Beacon Staffing re Lease" is "Beacon Staffing" still.
+fn without_note(party: &str, known: &[String]) -> String {
     let lower = party.to_ascii_lowercase();
-    [" re ", " re: ", " regarding ", " concerning "]
+    let mut cuts = [" re ", " re: ", " regarding ", " concerning "]
         .iter()
-        .filter_map(|note| lower.find(note))
-        .min()
-        .map(|at| party[..at].trim())
-        .filter(|kept| !kept.is_empty())
-        .unwrap_or_else(|| party.trim())
-        .to_owned()
+        .flat_map(|note| {
+            lower
+                .match_indices(note)
+                .map(move |(at, _)| (at, at + note.len()))
+        })
+        .collect::<Vec<_>>();
+    cuts.sort_unstable();
+    let whole = HouseRule::key(party);
+    for &(at, end) in &cuts {
+        let kept = party[..at].trim();
+        if kept.is_empty() {
+            continue;
+        }
+        let rest = &party[end..];
+        let next = cuts
+            .iter()
+            .map(|(start, _)| *start)
+            .find(|start| *start >= end)
+            .unwrap_or(party.len());
+        let ends_a_company = HouseRule::key(&party[end..next])
+            .rsplit(' ')
+            .next()
+            .is_some_and(|word| COMPANY_FORMS.contains(&word));
+        let inside_a_party = known.iter().any(|key| {
+            holds_words(&whole, key)
+                && !holds_words(&HouseRule::key(kept), key)
+                && !holds_words(&HouseRule::key(rest), key)
+        });
+        if !ends_a_company && !inside_a_party {
+            return kept.to_owned();
+        }
+    }
+    party.trim().to_owned()
 }
+
+/// The words that end a company's name, as house style compares spellings
+/// ([`HouseRule::key`]): a note's start just in front of one is a word of
+/// the name ("Swiss Re Ltd", "Munich Re Group"), not a note.
+const COMPANY_FORMS: [&str; 16] = [
+    "ltd",
+    "inc",
+    "llc",
+    "llp",
+    "lp",
+    "plc",
+    "group",
+    "holdings",
+    "corporation",
+    "corp",
+    "co",
+    "ag",
+    "se",
+    "sa",
+    "nv",
+    "gmbh",
+];
 
 /// Whether the name `approved` keeps what `rule` writes: a party's spelling
 /// anywhere in it, a type's where the name starts after its date, each as a
@@ -7684,6 +7814,90 @@ mod as_filed_tests {
                 record(agreement, with_acme, &[], &[(acme, "ACME CORP")]),
                 "Employment Agreement with Acme Corporation re Merger",
                 &["ACME CORP"],
+            ),
+            // A choice joined to a party the name still gives, or to
+            // another choice, by "&" or a comma is two parties, each filed
+            // as offered, not one longer party typed around the choice: it
+            // was filed in "Acme Corporation, Beacon Staffing LLC/", and
+            // reported beside Beacon Staffing LLC again.
+            (
+                record(agreement, (PartyRelation::With, &[beacon]), &[acme], &[]),
+                "Employment Agreement with Acme Corporation, Beacon Staffing LLC",
+                &[acme, beacon],
+            ),
+            (
+                record(agreement, (PartyRelation::With, &[beacon]), &[acme], &[]),
+                "Employment Agreement with Beacon Staffing LLC & Acme Corporation",
+                &[beacon, acme],
+            ),
+            (
+                record(agreement, with_acme, &[smith], &[]),
+                "Employment Agreement between John Smith & Acme Corporation",
+                &[smith, acme],
+            ),
+            (
+                record(
+                    agreement,
+                    (PartyRelation::With, &[beacon]),
+                    &[acme, smith],
+                    &[],
+                ),
+                "Employment Agreement between Acme Corporation & John Smith and Beacon Staffing LLC",
+                &[acme, smith, beacon],
+            ),
+            // A note's start that is a word of the party's own name - the
+            // reading knows the party, or a word that ends a company's name
+            // follows - is no note: these were filed in "Swiss/",
+            // "Munich/", "Everest/" and "Citizens/".
+            (
+                record(
+                    "Letter",
+                    (PartyRelation::To, &[acme]),
+                    &["Swiss Re Ltd"],
+                    &[],
+                ),
+                "Letter to Swiss Re Ltd",
+                &["Swiss Re Ltd"],
+            ),
+            (
+                record(
+                    "Letter",
+                    (PartyRelation::To, &[acme]),
+                    &["Swiss Re Ltd"],
+                    &[],
+                ),
+                "Letter to Swiss Re Ltd re Merger",
+                &["Swiss Re Ltd"],
+            ),
+            (
+                record("Letter", (PartyRelation::To, &[acme]), &[], &[]),
+                "Letter to Munich Re Group",
+                &["Munich Re Group"],
+            ),
+            (
+                record("Letter", (PartyRelation::To, &[acme]), &[], &[]),
+                "Letter to Everest Re Group Ltd re the Lease",
+                &["Everest Re Group Ltd"],
+            ),
+            (
+                record(
+                    "Letter",
+                    (PartyRelation::To, &[acme]),
+                    &["Citizens Concerning the Environment"],
+                    &[],
+                ),
+                "Letter to Citizens Concerning the Environment",
+                &["Citizens Concerning the Environment"],
+            ),
+            (
+                record(
+                    agreement,
+                    (PartyRelation::With, &["Swiss Reinsurance Company Ltd"]),
+                    &[],
+                    &[("Swiss Reinsurance Company Ltd", "Swiss Re")],
+                ),
+                "Employment Agreement with Swiss Re Ltd",
+                &["Swiss Re Ltd"],
             ),
             // As before: the choice beside the party kept, or in its place.
             (
