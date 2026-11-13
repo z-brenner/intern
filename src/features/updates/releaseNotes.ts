@@ -4,8 +4,9 @@ export interface ReleaseNotes { version: string; changes: readonly string[] }
 export const releaseNotes: readonly ReleaseNotes[] = [
   {
     version: '0.1.0-alpha.18',
-    // Shown whole in a dialog that must not scroll at the smallest window it
-    // is tested in: short lines, the rest in docs/releases/v0.1.0-alpha.18.md.
+    // Shown whole in a dialog that must not scroll at the app's smallest
+    // window, 800 by 600 (tests/e2e/updates.spec.ts): eight lines of two
+    // lines each at most, the rest in docs/releases/v0.1.0-alpha.18.md.
     changes: [
       'The quicker model holds about 1.3 GB less memory and reads a little faster.',
       'In review, another party the document names is one click from the name.',

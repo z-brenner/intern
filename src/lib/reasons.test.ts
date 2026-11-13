@@ -105,10 +105,13 @@ describe('humanizeReason', () => {
   // is checked: the sentence says why, and what to do either way - approve a
   // right name, or put the document's word back. It promises no check: an
   // approval is one only on a document new to Intern that does not already
-  // give what the spelling adds.
+  // give what the spelling adds. Nor does it promise a put-back forgets the
+  // spelling whatever else changed: one made with another part of the name
+  // changed teaches nothing (tests/pipeline.rs
+  // the_documents_own_word_put_back_is_no_check_of_the_rule).
   it('says a learned spelling is unchecked, and what to do if the name is right or not', () => {
     const sentence = humanizeReason('LEARNED_SPELLING_UNCONFIRMED');
-    expect(sentence).toBe('Intern used a spelling it learned from your edits that has not been checked yet. If the name is right, approve it; if not, put the document\'s own words back and Intern stops using that spelling.');
+    expect(sentence).toBe('Intern used a spelling it learned from your edits that has not been checked yet. If the name is right, approve it. If not, put the document\'s own words back; when that is the only change, Intern stops using that spelling.');
     expect(sentence).not.toMatch(/first time/);
     expect(sentence).not.toMatch(/on its own/);
     expect(shortReason(['LEARNED_SPELLING_UNCONFIRMED'])).toEqual({ text: 'Unchecked spelling', more: 0 });

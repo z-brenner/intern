@@ -31,6 +31,19 @@ describe('a name in the reviewer\'s own spelling', () => {
     expect(within(evidence).getByText('Contoso Worldwide, Inc.')).toBeVisible();
   });
 
+  // A spelling ending in its own period ("Inc.") is the end of the list:
+  // the sentence takes no second one. It read "Receiver, Inc.. Change or
+  // forget it under Settings."
+  it('ends the note with one period after a spelling that ends in one', async () => {
+    const abbreviated: QueueItem = { ...respelled, houseRules: [{ kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso, Inc.' }] };
+    render(<App bridge={createInMemoryBridge({ items: [abbreviated] })} />);
+    await selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
+
+    const note = screen.getByRole('note', { name: 'Learned spellings applied' });
+    expect(note).toHaveTextContent('Uses your spelling: Contoso Worldwide, Inc. written as Contoso, Inc. Change or forget it under Settings.');
+    expect(note.textContent).not.toContain('..');
+  });
+
   it('shows no note for a name in the document\'s own words', async () => {
     render(<App bridge={createInMemoryBridge()} />);
     await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));

@@ -459,10 +459,11 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         A name that differs from the evidence under it looks like a mistake
         unless the reason is on screen: the reviewer's own spelling, learned
         from their edits, was applied. Said here, beside the name, with the
-        document's words kept in the evidence below.
+        document's words kept in the evidence below. A spelling ending in
+        its own period ("Inc.") ends the list without a second one.
       */}
       {item.houseRules && item.houseRules.length > 0 && <p className="check-hint house-style-hint" role="note" aria-label="Learned spellings applied">
-        Uses your spelling: {item.houseRules.map((rule, index) => <span key={`${rule.kind}-${rule.from}`}>{index > 0 ? '; ' : ''}<q>{rule.from}</q> written as <strong>{rule.to}</strong></span>)}. Change or forget it under Settings.
+        Uses your spelling: {item.houseRules.map((rule, index) => <span key={`${rule.kind}-${rule.from}`}>{index > 0 ? '; ' : ''}<q>{rule.from}</q> written as <strong>{rule.to}</strong></span>)}{item.houseRules[item.houseRules.length - 1].to.trimEnd().endsWith('.') ? '' : '.'} Change or forget it under Settings.
       </p>}
       {/*
         The same for a party the evidence names and the name does not: the

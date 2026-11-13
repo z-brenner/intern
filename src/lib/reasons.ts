@@ -126,9 +126,11 @@ const SENTENCES: Record<string, string> = {
   // Jane Doe" approved on an agreement naming Jane Doe shows nothing - so
   // the sentence promises no check: it says what to do if the name is right
   // and if it is not. Putting the document's own word back retracts the
-  // rule. Not "for the first time": a spelling an earlier release learned
-  // has been used before, and is unchecked after the update all the same.
-  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits that has not been checked yet. If the name is right, approve it; if not, put the document\'s own words back and Intern stops using that spelling.',
+  // rule when nothing else in the name changed; an approval that changes
+  // another part too teaches nothing, so the sentence says when. Not "for
+  // the first time": a spelling an earlier release learned has been used
+  // before, and is unchecked after the update all the same.
+  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits that has not been checked yet. If the name is right, approve it. If not, put the document\'s own words back; when that is the only change, Intern stops using that spelling.',
   // Set when a person undoes a rename. The file is back under its original
   // name and the proposal is still here, so the document waits for a decision
   // rather than being renamed again by the next automatic pass.
