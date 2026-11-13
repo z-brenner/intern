@@ -4356,7 +4356,8 @@ fn a_party_whose_name_holds_the_named_ones_typed_as_its_own_words_teaches_no_spe
 /// `relation`, in readings that also name `other`, once the reviewer
 /// approved two of them as "{date} Employment Agreement {approved}" and a
 /// third, naming `named` alone, was read with automatic renaming on. Filed
-/// by party.
+/// by party. [`approved_twice`] gives the same for any parties the name
+/// gives and any approved name.
 struct ChosenTwice {
     /// The rules learned, as "from -> to".
     learned: Vec<String>,
@@ -4374,6 +4375,22 @@ fn chosen_twice(
     other: &'static str,
     approved: &str,
 ) -> ChosenTwice {
+    approved_twice(
+        relation,
+        &[named],
+        other,
+        &format!("Employment Agreement {approved}"),
+    )
+}
+
+/// As [`chosen_twice`], for agreements whose name gives the parties
+/// `named`, behind `relation`, approved twice as "{date} {approved}".
+fn approved_twice(
+    relation: PartyRelation,
+    named: &[&'static str],
+    other: &'static str,
+    approved: &str,
+) -> ChosenTwice {
     let temp = tempdir().unwrap();
     let inbox = temp.path().join("inbox");
     std::fs::create_dir_all(&inbox).unwrap();
@@ -4382,29 +4399,30 @@ fn chosen_twice(
         ("2024-05-03", "May 3, 2024"),
         ("2024-06-07", "June 7, 2024"),
     ];
+    let parties = named.join(" and ");
     let mut texts = dates
         .iter()
         .take(2)
         .map(|(_, written)| {
             parsed(&format!(
-                "Employment Agreement signed {written} by {named}, which is related to {other}."
+                "Employment Agreement signed {written} by {parties}, which is related to {other}."
             ))
         })
         .collect::<Vec<_>>();
     texts.push(parsed(&format!(
-        "Employment Agreement signed June 7, 2024 by {named}."
+        "Employment Agreement signed June 7, 2024 by {parties}."
     )));
     let replies = dates
         .iter()
         .map(|(iso, written)| ModelProposal {
-            parties: vec![named.into()],
+            parties: named.iter().map(|party| (*party).to_owned()).collect(),
             party_relation: relation,
             description: format!(
-                "Employment agreement {} {named} covering duties, salary, and term.",
+                "Employment agreement {} {parties} covering duties, salary, and term.",
                 relation.as_str()
             ),
             evidence: Evidence {
-                parties: vec![format!("by {named}")],
+                parties: vec![format!("by {parties}")],
                 ..dated_proposal(iso, written).evidence
             },
             ..dated_proposal(iso, written)
@@ -4414,7 +4432,7 @@ fn chosen_twice(
         temp.path(),
         texts,
         replies,
-        &[named, other],
+        &named.iter().copied().chain([other]).collect::<Vec<_>>(),
         DestinationLayout::Party,
     );
     let queued = pipeline
@@ -4428,7 +4446,7 @@ fn chosen_twice(
     assert_eq!(
         first.filename,
         format!(
-            "2024-04-12 Employment Agreement {} {named}.pdf",
+            "2024-04-12 Employment Agreement {} {parties}.pdf",
             relation.as_str()
         )
     );
@@ -4437,7 +4455,7 @@ fn chosen_twice(
         pipeline
             .approve(
                 queued[index],
-                &format!("{date} Employment Agreement {approved}.pdf"),
+                &format!("{date} {approved}.pdf"),
                 "An agreement.",
             )
             .unwrap();
@@ -4843,6 +4861,96 @@ fn a_party_offered_in_review_and_written_another_way_is_filed_as_offered() {
         assert_eq!(
             chosen.reported,
             [["Beacon Staffing LLC"], ["Beacon Staffing LLC"]],
+            "{approved}"
+        );
+    }
+}
+
+/// A party the name gave, kept beside a connecting word and more words -
+/// behind a type lengthened in front of it, in capitals, with its
+/// punctuation changed or a suffix added, or behind the same connecting
+/// word as the name's own, or with another party or a note after it, on
+/// either side of a "between" too - names that party and something else. Approved twice, it
+/// teaches nothing, and each is filed under the party kept. Each was
+/// learned as that party's spelling: "Acme Corporation -> Sales Staff from
+/// ACME CORPORATION", and the third agreement, ready, was filed without
+/// review as "... for Sales Staff from ACME CORPORATION.pdf".
+#[test]
+fn a_party_kept_beside_a_connecting_word_and_more_teaches_nothing() {
+    let acme = "Acme Corporation";
+    let smith = "John Smith";
+    for (relation, named, approved) in [
+        (
+            PartyRelation::For,
+            &[acme][..],
+            "for Sales Staff from ACME CORPORATION",
+        ),
+        (
+            PartyRelation::For,
+            &[acme],
+            "for Sales Staff for ACME CORPORATION",
+        ),
+        (
+            PartyRelation::For,
+            &[acme],
+            "for Sales Staff from Acme Corporation.",
+        ),
+        (
+            PartyRelation::For,
+            &[acme],
+            "for Sales Staff from Acme Corporation Inc",
+        ),
+        (
+            PartyRelation::To,
+            &["Acme Property LLC"],
+            "to Tenants from Acme Property, LLC",
+        ),
+        (
+            PartyRelation::With,
+            &[acme],
+            "with Acme Corporation from Jane Doe",
+        ),
+        (
+            PartyRelation::To,
+            &[acme],
+            "to Acme Corporation for Jane Doe",
+        ),
+        (
+            PartyRelation::With,
+            &[acme],
+            "with Acme Corporation re Merger",
+        ),
+        (
+            PartyRelation::Between,
+            &[smith, acme],
+            "between John Smith and Sales Staff from ACME CORPORATION",
+        ),
+        (
+            PartyRelation::Between,
+            &[smith, acme],
+            "between John Smith and Acme Corporation from Jane Doe",
+        ),
+    ] {
+        let kept = approved_twice(
+            relation,
+            named,
+            "Beacon Staffing LLC",
+            &format!("Employment Agreement {approved}"),
+        );
+        assert!(
+            kept.learned.is_empty(),
+            "{approved}: learned {:?}",
+            kept.learned
+        );
+        assert_eq!(kept.folders, [named[0]; 2], "{approved}");
+        assert_eq!(kept.reported, [named; 2], "{approved}");
+        assert_eq!(
+            kept.third,
+            format!(
+                "2024-06-07 Employment Agreement {} {}.pdf",
+                relation.as_str(),
+                named.join(" and ")
+            ),
             "{approved}"
         );
     }

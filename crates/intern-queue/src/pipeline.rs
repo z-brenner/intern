@@ -925,17 +925,15 @@ impl ProposalRecord {
     /// front of the party it kept. Where neither gives a party, the parties
     /// are as proposed: a type lengthened in front of the party it kept,
     /// behind the same connecting word or another, with no party offered
-    /// among its words ("Notice to Tenants from Acme Property" for "Notice
-    /// from Acme Property" or for "Notice to Acme Property"), and another
-    /// type with another party that is not offered. The grammar compares
-    /// the words it keeps exactly. A name that changes the party to one not
-    /// offered and lengthens the type with words that begin with a
-    /// connecting word reads those words as part of the party - "Notice to
-    /// Tenants from City of Boston" for "Notice from Acme Property" gives
-    /// "Tenants from City of Boston" - and so does one that keeps the party
-    /// but respells it in case or punctuation: "Notice to Tenants from ACME
-    /// PROPERTY" for "Notice to Acme Property" gives "Tenants from ACME
-    /// PROPERTY".
+    /// among its words ("Notice to Tenants from Acme Property", or "...
+    /// from ACME PROPERTY", for "Notice from Acme Property" or for "Notice
+    /// to Acme Property"); that party kept with another not offered, or a
+    /// note, after it ("Notice to Acme Property from Jane Doe"); and another
+    /// type with another party that is not offered. A name that changes the
+    /// party to one not offered and lengthens the type with words that
+    /// begin with a connecting word reads those words as part of the party:
+    /// "Notice to Tenants from City of Boston" for "Notice from Acme
+    /// Property" gives "Tenants from City of Boston".
     pub fn as_filed(&self, extension: &str, filename: &str) -> ValidatedProposal {
         let styled = self.styled_proposal();
         let mut filed = proposal_as_applied(&styled, filename);
@@ -1086,14 +1084,13 @@ impl ProposalRecord {
     /// proposed name already held inside a longer one's - "Acme
     /// Corporation" for its parent "Acme Corporation Holdings LLC".
     ///
-    /// It finds parties, not spellings, so one edit that grammar misreads
-    /// is still learned: the party the name gave, kept but respelled in
-    /// case or punctuation, behind a type lengthened with words that begin
-    /// with another connecting word - "Notice to Tenants from ACME
-    /// PROPERTY" for "Notice to Acme Property", in a document that does not
-    /// name the tenants. It names no party anew, and [`lesson_from_edit`],
-    /// which compares the kept words exactly, reads it as the party
-    /// "Tenants from ACME PROPERTY": made twice, that spelling is learned.
+    /// It finds parties, not spellings. The party the name gave, kept
+    /// beside a connecting word and words the document does not give as a
+    /// party - behind a type lengthened in front of it, or with another
+    /// party or a note after it: "Notice to Tenants from ACME PROPERTY" or
+    /// "Letter to Carl Malamud from Jane Doe" - names no party anew, and
+    /// [`lesson_from_edit`] reads no spelling from it, in any case or
+    /// punctuation and whatever the connecting word.
     fn names_a_party_anew(&self, style: &HouseStyle, extension: &str, approved: &str) -> bool {
         let rules = self
             .house_rules
