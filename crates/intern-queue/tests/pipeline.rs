@@ -4931,7 +4931,8 @@ fn a_party_offered_in_review_and_written_another_way_is_filed_as_offered() {
 /// rather than in its place - after it, as the second side of a new
 /// "between" or with "and", or in front of it, in the type or as the first
 /// side - is filed with that party, both reported in the order the name
-/// gives them, under the first, as a name Intern composes for the two is.
+/// gives them, under the first, as a name Intern composes for the two is;
+/// typed as part of a longer party, as that party.
 /// The choice took the kept party's place in the folder and the report:
 /// "between Acme Corporation and John Smith" was filed under John Smith,
 /// and Acme was reported nowhere.
@@ -4963,6 +4964,24 @@ fn a_party_offered_in_review_and_added_beside_the_named_one_is_filed_with_it() {
             "Beacon Staffing LLC",
             "Beacon Staffing LLC Placement Agreement with Acme Corporation",
             ["Beacon Staffing LLC", acme],
+        ),
+        // A longer party typed around the one offered, beside the party
+        // kept, is filed as typed: it was filed, and reported, as the
+        // party offered.
+        (
+            "John Smith",
+            "Employment Agreement between Estate of John Smith and Acme Corporation",
+            ["Estate of John Smith", acme],
+        ),
+        (
+            "John Smith",
+            "Employment Agreement between Acme Corporation and Estate of John Smith",
+            [acme, "Estate of John Smith"],
+        ),
+        (
+            "John Smith",
+            "Employment Agreement with Estate of John Smith and Acme Corporation",
+            ["Estate of John Smith", acme],
         ),
     ] {
         let chosen = approved_twice(PartyRelation::With, &[acme], other, approved);
