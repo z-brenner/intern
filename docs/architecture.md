@@ -743,43 +743,67 @@ of a name the rule changed counts as the check only when all of this holds:
   text fingerprint within the near-duplicate distance of a teacher's with
   the same date, or all but identical whatever its date, or - for a text
   too short to fingerprint - the very words a teacher gave, under the same
-  date (a digest of `DocumentWords`). A teacher read
+  date (a digest of `DocumentWords`), or - where neither a fingerprint nor
+  the words of both are kept to compare - any document under the teacher's
+  date. A teacher read
   again after an undo, a failed filing or a Re-analyze, scanned again, or
   removed from the queue and added again is the reviewer's own words
-  approved twice. Rules learned before alpha.18 kept no teachers; when the
-  queue first opens after the update, every document filed or approved
-  under a name giving such a rule's spelling is taken as its teacher by
-  what it holds.
+  approved twice. Rules learned before alpha.18 kept no teachers, and their
+  readings kept no words; when the queue first opens after the update,
+  every document the queue holds whose name gives such a rule's spelling,
+  or whose reading the rule respells, is taken as its teacher by what it
+  holds - filed or waiting, approved or not, since a teacher whose filing
+  failed and that was read again keeps no trace of the approval that
+  taught.
 - The document does not give, in its own words, what the rule adds
   (`ProposalRecord::gives_what_it_adds`). The words a rule adds are the
   words of its spelling that are not words of the document's word, compared
-  as house style compares them, read as written and split at punctuation,
-  leaving out company forms (Ltd, Inc, LLC, Corporation, Limited, Company,
-  ...) and words that only join others (of, the, and, for, ...). A rule
-  that adds none - a short form, a change of case or punctuation, a company
-  form added or changed - or that is an acronym of the document's word, or
-  the word an acronym stands for, asks nothing more. Otherwise the
-  document's text, and every name its reading gives (the proposal's
-  parties, the validated facts, the model's reply, the type), must give
-  none of the added words, in any order or part: "John Smith, Jane Doe"
-  approved on an agreement that names Jane Doe - or "Doe, Jane", or "J.
-  Doe" - is the right name for that agreement and says nothing about the
-  next, which names John Smith alone. A spelling that adds two words, one
-  of which a document gives, waits for another document's approval. The text's
-  words are kept with each reading (`ProposalRecord::document_words`, a
-  Bloom filter of every word the extractor read: it can say a word is there
-  when it is not, which counts no check, but never the reverse). A reading
-  stored before they were kept, or read from a page image, counts no check
-  for a rule that adds words: in doubt the next document waits again.
+  as house style compares them with accents, ligatures and compatibility
+  forms folded ("José", "Jose" and "Jose" with a combining accent are one
+  word), read as written and split at punctuation, leaving out legal forms
+  (Ltd, Inc, LLC, Corporation, Limited, Company, ...; not Group or Holdings,
+  which name another company of the same family) and words that only join
+  others (of, the, and, for, ...). A rule that adds none - a short form, a
+  change of case, accents or punctuation, a legal form added or changed - or
+  that is an acronym of the document's word, a leading prefix such as "U.S."
+  left out or not, asks nothing more. The words an acronym stands for
+  ("American Broadcasting Company" for "ABC") are words like any other: a
+  letter that spells them out shows nothing about the next "ABC". Otherwise
+  the document's text, and every name its reading gives (the proposal's
+  parties, the validated facts, the model's reply, the type), must give none
+  of the added words, in any order or part: "John Smith, Jane Doe" approved
+  on an agreement that names Jane Doe - or "Doe, Jane", or "J. Doe" - is the
+  right name for that agreement and says nothing about the next, which names
+  John Smith alone. A spelling that adds two words, one of which a document
+  gives, waits for another document's approval. The text's words are kept
+  with each reading (`ProposalRecord::document_words`, a Bloom filter of
+  every word the extractor read: it can say a word is there when it is not,
+  which counts no check, but never the reverse). A reading stored before
+  they were kept, one with a page that could not be read as text
+  (`barely_readable`), or one OCR was unsure of (`LOW_OCR_CONFIDENCE`)
+  counts no check for a rule that adds words: in doubt the next document
+  waits again. A scanned page that came with an image of it but was read
+  gives the words OCR read, as any other OCR page does: the image is not
+  shown to the model, so the text is everything the reading had.
 
 "Use now" in Settings is no check either: it shows the words, not a name
 they made. One check is enough: from then on the names the rule changes
-are filed like any other reading. A short form, a company form or an
+are filed like any other reading. A short form, a legal form or an
 acronym is checked by the first approval of any new document; a spelling
 that adds a word ("John Smith" for "Smith") by the first of one that does
 not give the word itself, so an approval may leave it waiting, and the
-review panel says only that the spelling has not been checked yet.
-Putting the document's own word back instead retracts the rule, and a third
+review panel says only that the spelling has not been checked yet. A
+spelling whose added words every document gives itself - a legal name
+each contract defines before it shortens it ("Acme Widgets
+International, Inc." for "Acme"), a first name each agreement is signed
+with, a type each document is titled with - is never checked: every name
+it changes waits for a person for as long as the spelling is kept, and
+nothing beside the name says which words keep it waiting. That is the
+price of the guard: a run of words, or a count of approvals, would take
+the "John Smith, Jane Doe" agreement that names both as a check.
+Putting the document's own word back instead, with nothing else in the name
+changed, retracts the rule (one that changes another part too teaches
+nothing, and the rule stays unchecked), and a third
 spelling for the same word starts the count and the checks over; a release
 that does not know the checks respells without starting them over, so they
 count only while the rule writes the spelling checked. A document whose

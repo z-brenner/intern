@@ -457,26 +457,39 @@ what was left on the table.
 ### Spellings Intern learns from you
 
 The document says "Contoso Worldwide, Inc."; you call it "Contoso". Respell a
-party or a document type in review and Intern remembers it. The second time
-you make the same change it becomes the spelling Intern uses, in the name, the
-layout folder, and the description record, for every later document that
-names the same thing. One edit is a decision about one document; two are a
-preference. Until a new spelling is checked, every name it changes waits for
-you in review, even with automatic renaming on: approve the name if it is
-right, or put the document's word back to make Intern forget the spelling.
-Your approval checks the spelling when the document is new to Intern - not
-one you taught it with, not one filed before or a second scan of one - and
-does not already say, in its own words, any of what the spelling adds.
-Approving "John Smith, Jane Doe" on an agreement that names Jane Doe shows
-nothing about whether every "John Smith" is "John Smith, Jane Doe", so the
-next name it changes waits again. A short form, a company form, a change of case or an
-acronym is checked by the first approval. Spellings learned before alpha.18
-wait for a check too. Settings lists everything learned, with "Use now" for
-a spelling you want at once (the names it changes still wait until it is
-checked) and "Forget" for one you do not, and
-the review panel says "Uses your spelling" whenever a name differs from the
-evidence under it. The evidence itself always keeps the document's own
-words: a learned spelling changes what Intern calls a thing, never what it
+party or a document type in review and Intern remembers it. The second time you
+make the same change it becomes the spelling Intern uses. One edit is a
+decision about one document; two are a preference. Until a new spelling is
+checked, every name it changes waits for you in review, even with automatic
+renaming on: approve the name if it is right, or put the document's word back,
+changing nothing else, to make Intern forget the spelling. Until it is checked,
+a spelling is used only where the name shows it: a document whose name leaves
+out the party it respells (a long party left out for length, the third party of
+a "between") is filed and reported under the document's own words, and does not
+wait for it. Once checked, the spelling is used in the name, the layout folder,
+and the description record, for every later document that names the same thing.
+
+Your approval checks the spelling when the document is new to Intern - not one
+you taught it with, not one filed before or a second scan of one - and does
+not already say, in its own words, any of what the spelling adds. Approving
+"John Smith, Jane Doe" on an agreement that names Jane Doe shows nothing about
+whether every "John Smith" is "John Smith, Jane Doe", so the next name it
+changes waits again. The same goes for "Acme Holdings" on an agreement that
+names Acme Holdings, the parent of Acme, and for "American Broadcasting
+Company" on a letter that spells out ABC. A short form, a legal form (Inc.,
+Corporation, Ltd), a change of case or accents, or an acronym of the
+document's words ("EPA" for "U.S. Environmental Protection Agency") is checked
+by the first approval. A scan counts by the text Intern read from it; a page
+it could not read, or read without confidence, checks nothing. Some spellings
+are never checked: one whose words every document gives itself - a full legal
+name each contract defines before it shortens it, a first name each agreement
+is signed with - leaves every name it changes waiting for you for as long as
+you keep it. Spellings learned before alpha.18 wait for a check too. Settings
+lists everything learned, with "Use now" for a spelling you want at once (the
+names it changes still wait until it is checked) and "Forget" for one you do
+not, and the review panel says "Uses your spelling" whenever a name differs
+from the evidence under it. The evidence itself always keeps the document's
+own words: a learned spelling changes what Intern calls a thing, never what it
 found.
 
 ## Development
