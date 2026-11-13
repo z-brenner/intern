@@ -11,12 +11,12 @@ use intern_core::{
     HISTORY_LIMIT, HistoryEntry, OperationDirection, OperationKind, OperationStage, QueueStatus,
     QueueStore,
 };
-use intern_engine::HouseRule;
 use intern_engine::{
     DocumentAnalysis, DocumentSource, Engine, EngineErrorCode, LlamaServer, ModelClient, ModelFile,
     ModelManifest, ModelPreference, ModelReading, ModelTier, SupervisedWorker, TierPlan,
     prepare_worker_temp_root, tiers,
 };
+use intern_engine::{HouseRule, RuleKind};
 use intern_queue::{LearnedRule, ModelSource};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -206,8 +206,8 @@ pub struct LearnedRuleDto {
     to: String,
     seen: u32,
     active: bool,
-    /// How many times a person checked what it writes: none, and a name it
-    /// changes waits for a person (see `LearnedRule::confirmed`).
+    /// How many times a person chose "Use on its own" for it: none, and a
+    /// name it changes waits for a person (see `LearnedRule::confirmed`).
     confirmed: u32,
     learned_at: i64,
 }
@@ -5533,23 +5533,36 @@ pub async fn house_rule_use(id: String, state: State<'_, AppState>) -> Result<()
     Ok(())
 }
 
-/// Use a learned spelling on its own: the person, told that every later
-/// document Intern reads as naming its word will be named by it and may be
-/// filed without their check, checks it for the spelling they were shown
-/// (`to`). Refused as `RULE_CHANGED` for a spelling not in use or respelled
-/// since; a spelling for the same word learned later starts over
-/// unchecked.
+/// Use a learned spelling on its own: the person, told in plain words that
+/// every later document Intern reads as naming its word will be named by it
+/// and may be filed without their check, checks it - in the review window
+/// or Settings - for the spelling exactly as they were shown it (`kind`,
+/// `from`, `to`). The only way a spelling is checked; an approval never is.
+/// Refused as `RULE_NOT_FOUND` for a spelling forgotten, and as
+/// `RULE_CHANGED` for one not in use or that reads otherwise now; a
+/// spelling for the same word learned later starts over unchecked.
 ///
 /// Blocking, as forgetting one is.
 #[tauri::command]
 pub async fn house_rule_check(
     id: String,
+    kind: String,
+    from: String,
     to: String,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
     let pipeline = Arc::clone(&state.pipeline);
     let id = parse_item_id(&id)?;
-    tauri::async_runtime::spawn_blocking(move || pipeline.check_rule(id, &to))
+    // A kind this build does not know is no spelling the person was shown.
+    let Some(kind) = RuleKind::parse(&kind) else {
+        return Err(PipelineError::new(
+            "RULE_CHANGED",
+            "learned spelling is not in use as it was shown",
+        )
+        .into());
+    };
+    let shown = HouseRule { kind, from, to };
+    tauri::async_runtime::spawn_blocking(move || pipeline.check_rule(id, &shown))
         .await
         .map_err(|_| background_task_failed("spelling change"))??;
     Ok(())
@@ -8766,6 +8779,18 @@ mod ipc_thread_tests {
     fn leaves_the_ipc_thread<A, R: std::future::Future, F: FnOnce(A) -> R>(_: F) {}
     fn leaves_the_ipc_thread_2<A, B, R: std::future::Future, F: FnOnce(A, B) -> R>(_: F) {}
     fn leaves_the_ipc_thread_3<A, B, C, R: std::future::Future, F: FnOnce(A, B, C) -> R>(_: F) {}
+    fn leaves_the_ipc_thread_5<
+        A,
+        B,
+        C,
+        D,
+        E,
+        R: std::future::Future,
+        F: FnOnce(A, B, C, D, E) -> R,
+    >(
+        _: F,
+    ) {
+    }
 
     #[test]
     fn commands_that_can_block_for_seconds_do_not_run_on_the_ipc_thread() {
@@ -8801,7 +8826,7 @@ mod ipc_thread_tests {
         // Renames every waiting document again, listing each target folder.
         leaves_the_ipc_thread_2(house_rule_forget);
         leaves_the_ipc_thread_2(house_rule_use);
-        leaves_the_ipc_thread_3(house_rule_check);
+        leaves_the_ipc_thread_5(house_rule_check);
     }
 
     #[test]

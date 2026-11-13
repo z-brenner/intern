@@ -986,11 +986,11 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       // In use, not checked: the first name it changes still waits for a person.
       learnedRules = learnedRules.map((rule) => rule.id === id ? { ...rule, seen: Math.max(rule.seen, 2), active: true } : rule);
     },
-    houseRuleCheck: async (id, to) => {
+    houseRuleCheck: async (id, shown) => {
       const rule = learnedRules.find((candidate) => candidate.id === id);
       if (!rule) throw { code: 'RULE_NOT_FOUND', message: 'learned spelling does not exist' };
-      // Only the spelling the person was shown, in use.
-      if (!rule.active || rule.to !== to) throw { code: 'RULE_CHANGED', message: 'learned spelling is not in use as it was shown' };
+      // Only the spelling the person was shown, exactly, in use.
+      if (!rule.active || rule.kind !== shown.kind || rule.from !== shown.from || rule.to !== shown.to) throw { code: 'RULE_CHANGED', message: 'learned spelling is not in use as it was shown' };
       learnedRules = learnedRules.map((candidate) => candidate.id === id ? { ...candidate, confirmed: candidate.confirmed + 1 } : candidate);
     },
     ...(options.liveEvents ? {

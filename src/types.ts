@@ -396,11 +396,11 @@ export interface LearnedRule extends HouseRule {
   /** Whether Intern applies it: made twice, or told to use it now. */
   active: boolean;
   /**
-   * How many times a person checked it: approved a name it changed, keeping
-   * its spelling, on a document new to Intern that does not already give
-   * what the spelling adds, or said "Use on its own" for it in Settings
-   * ("Use now" is no check). Until then every name it changes waits in
-   * review (LEARNED_SPELLING_UNCONFIRMED); once is enough.
+   * How many times a person checked it: chose "Use on its own" for it, in
+   * the review window or Settings, as it reads now. Nothing else checks it:
+   * not an approval of a name it changed, and not "Use now". Until then
+   * every name it changes waits in review (LEARNED_SPELLING_UNCONFIRMED);
+   * once is enough, and a new spelling for the same word starts over.
    */
   confirmed: number;
   /** Unix seconds of the latest edit that taught it. */

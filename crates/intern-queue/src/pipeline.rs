@@ -31,7 +31,6 @@ use crate::admission::{AdmissionEvidence, AdmissionGuard, AdmissionStage, LocalA
 use crate::memo::ExtractionMemo;
 use crate::paths::display_path;
 use crate::settings::{AppSettings, DestinationLayout, SettingsStore, normalize_own_names};
-use crate::words::{self, COMPANY_FORMS, DocumentWords};
 
 const LEASE_RENEWAL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
 const LEASE_RENEWAL_ATTEMPTS: usize = 3;
@@ -718,20 +717,6 @@ pub struct ProposalRecord {
     /// approval, as the spellings stood when it was made.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rejected_rules: Vec<HouseRule>,
-    /// Which words the text this reading was made from gives (see
-    /// [`DocumentWords`]), so that an approval of a name a learned spelling
-    /// wrote can be read, long after the text is gone, for whether the
-    /// document gives in its own words what the spelling adds - in which
-    /// case the approval is no check of the spelling (see
-    /// [`Self::gives_what_it_adds`]). Absent from readings stored before it
-    /// was kept, and where the reader read no text or did not read every
-    /// word of the document surely - a page it could not read, an image no
-    /// OCR reading stands for, a page or an image on one kept without a
-    /// reading it trusts, OCR unsure, text cut or left out, characters it
-    /// could not decode (see [`DocumentWords::of`]): no check counts from
-    /// those where a spelling adds words.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub document_words: Option<DocumentWords>,
 }
 
 /// What an exact duplicate is a copy of, and where its copy goes.
@@ -759,10 +744,10 @@ pub const NEAR_DUPLICATE: &str = "NEAR_DUPLICATE";
 /// The review reason for a name a learned spelling changed before any person
 /// has checked that spelling (see [`LearnedRule::confirmed`]): the document
 /// waits for a person, whatever its reading says, and is never filed on its
-/// own. Approving the name with the spelling in it is the check only on a
-/// document new to Intern that does not already give what the spelling adds,
-/// so it may leave the spelling unchecked; putting the document's own word
-/// back retracts it.
+/// own. Approving the name, with the spelling in it or not, checks nothing;
+/// only "Use on its own" for that spelling does (see
+/// [`Pipeline::check_rule`]). Putting the document's own word back, as the
+/// approval's only change, retracts the spelling.
 pub const LEARNED_SPELLING_UNCONFIRMED: &str = "LEARNED_SPELLING_UNCONFIRMED";
 
 /// The note on an exact duplicate filed as a copy of the document it
@@ -808,7 +793,6 @@ impl ProposalRecord {
             manual: false,
             copy_of: None,
             rejected_rules: Vec::new(),
-            document_words: None,
         }
     }
 
@@ -841,8 +825,8 @@ impl ProposalRecord {
     /// record's name, or where it is filed and reported: the name composed
     /// from the reading with every rule in [`Self::house_rules`], or the
     /// type and parties it is composed from, are not those composed with
-    /// only the rules that `checked` says a person has approved the work of
-    /// (see [`LearnedRule::confirmed`]). A record composed now holds an
+    /// only the rules that `checked` says a person has checked (see
+    /// [`LearnedRule::confirmed`]). A record composed now holds an
     /// unchecked rule only where its name shows it (see [`shown_rules`]),
     /// so for one the name is what differs; the type and the parties count
     /// as well for a record an earlier build composed with such a rule where
@@ -855,8 +839,8 @@ impl ProposalRecord {
     ///
     /// The wording of an edit cannot tell every spelling from a decision
     /// about one document, so this is what keeps a wrong rule from filing a
-    /// name: a name it changed waits for a person until one has approved
-    /// what the rule writes, on a document it was not learned from.
+    /// name: a name it changed waits for a person until one has said, of
+    /// that spelling and no document, to use it on its own.
     pub fn holds_unchecked_spelling(
         &self,
         extension: &str,
@@ -878,55 +862,6 @@ impl ProposalRecord {
             .cloned()
             .collect();
         named(self.house_rules.clone()) != named(kept)
-    }
-
-    /// Whether the document gives, in its own words, what the learned
-    /// spelling `rule` adds to the document's word, or any part of it (see
-    /// [`words::added`] and [`words::gives`]): its text does, or a name its
-    /// reading gives - a party the proposal,
-    /// the validated facts or the model's reply names, or its type. Such a
-    /// document's name is right with the spelling's words in it whatever
-    /// the spelling is worth, so approving it is no check of the spelling:
-    /// "John Smith, Jane Doe", learned for "John Smith", approved on an
-    /// agreement between John Smith, Jane Doe and Acme. Never for a
-    /// spelling that adds no word of its own - a short form, a change of
-    /// case or punctuation, a legal form, an acronym of the document's word
-    /// (not the words an acronym stands for, nor a "Group" or "Holdings",
-    /// which name another company of the family). Always, for one that
-    /// does, where the text's words were not kept (see
-    /// [`Self::document_words`]): in doubt, no check.
-    pub fn gives_what_it_adds(&self, rule: &HouseRule) -> bool {
-        let Some(added) = words::added(rule) else {
-            return false;
-        };
-        let reply = self.analysis.model_proposal.as_ref();
-        let named = self
-            .analysis
-            .proposal
-            .parties
-            .iter()
-            .chain(self.analysis.proposal.document_type.iter())
-            .chain(
-                self.analysis
-                    .facts
-                    .iter()
-                    .flat_map(|facts| facts.parties.iter().map(|party| &party.name)),
-            )
-            .chain(reply.into_iter().flat_map(|reply| {
-                reply
-                    .parties
-                    .iter()
-                    .chain(reply.document_type.iter())
-                    .chain(
-                        reply
-                            .facts
-                            .iter()
-                            .flat_map(|facts| facts.parties.iter().map(|party| &party.name)),
-                    )
-            }))
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-        words::gives(&added, self.document_words.as_ref(), &named)
     }
 
     /// The other parties the document names, offered to a reviewer to put
@@ -1838,6 +1773,32 @@ fn without_note(party: &str, known: &[String]) -> String {
     party.trim().to_owned()
 }
 
+/// The words that end a company's name, as house style compares spellings
+/// ([`HouseRule::key`]): a note's start just in front of one is a word of
+/// the name ("Swiss Re Ltd", "Munich Re Group", "Munich Re Capital
+/// Limited"), not a note.
+const COMPANY_FORMS: [&str; 19] = [
+    "limited",
+    "company",
+    "incorporated",
+    "ltd",
+    "inc",
+    "llc",
+    "llp",
+    "lp",
+    "plc",
+    "group",
+    "holdings",
+    "corporation",
+    "corp",
+    "co",
+    "ag",
+    "se",
+    "sa",
+    "nv",
+    "gmbh",
+];
+
 /// Whether the name `approved` keeps what `rule` writes: a party's spelling
 /// anywhere in it, a type's where the name starts after its date, each as a
 /// run of whole words as house style compares spellings
@@ -1976,20 +1937,22 @@ pub struct LearnedRule {
     pub seen: u32,
     /// Whether Intern applies it: made often enough, or told to use it now.
     pub active: bool,
-    /// How many times a person has checked this spelling: approved a name
-    /// Intern composed with it, the rule's words left where it wrote them,
-    /// on a document new to Intern that does not give in its own words what
-    /// the spelling adds (see [`Pipeline::confirm_kept_spellings`]) - the
-    /// only approval that shows the spelling is one. Until then a name the
+    /// How many times a person has checked this spelling: chosen "Use on
+    /// its own" for it, in the review window or in the list of learned
+    /// spellings, after Intern said in plain words what that does, for the
+    /// spelling exactly as they were shown it (see [`Pipeline::check_rule`]).
+    /// Nothing else checks it. An approval of a name the spelling changed
+    /// does not, on any document: whether a document gives in its own
+    /// words what a spelling adds - so that the name is right there
+    /// whatever the spelling is worth - cannot be read surely from its
+    /// text. "Use now" does not either. Until it is checked, a name the
     /// rule changes waits for a person ([`LEARNED_SPELLING_UNCONFIRMED`]),
     /// and where it does not show in the name it is not used (see
-    /// [`shown_rules`]); one check is enough. "Use on its own" in the list
-    /// of learned spellings is one too (see [`Pipeline::check_rule`]); "Use
-    /// now" is not. A different spelling for the same
-    /// word starts over at none, as `seen` does, and the checks count for
-    /// the spelling checked alone, whichever release respelled it since;
-    /// every rule learned before alpha.18 counted none, so each waits for
-    /// one check after the update too.
+    /// [`shown_rules`]); one check is enough. A different spelling for the
+    /// same word starts over at none, as `seen` does, and the checks count
+    /// for the spelling checked alone, whichever release respelled it
+    /// since; every rule learned before alpha.18 counted none, so each
+    /// waits for its check after the update too.
     pub confirmed: u32,
     /// Unix seconds of the latest edit that taught it.
     pub learned_at: i64,
@@ -2043,10 +2006,10 @@ impl Spellings {
         HouseStyle::new(rules).apply(proposal)
     }
 
-    /// Whether a person has checked the work of `rule`, as a name applied
-    /// it: learned for the same word, with exactly this spelling, and
-    /// approved once (see [`LearnedRule::confirmed`]). A rule forgotten or
-    /// respelled since the name was composed is not.
+    /// Whether a person has checked `rule`, as a name applied it: learned
+    /// for the same word, with exactly this spelling, and checked once (see
+    /// [`LearnedRule::confirmed`]). A rule forgotten or respelled since the
+    /// name was composed is not.
     fn checked(&self, rule: &HouseRule) -> bool {
         self.learned.iter().any(|learned| {
             learned.kind == rule.kind
@@ -2072,9 +2035,9 @@ impl Spellings {
 /// does not show. Such records used to wait for a person
 /// ([`LEARNED_SPELLING_UNCONFIRMED`]) under a name that gave no word of
 /// the spelling, and a rule that never shows in a name was left with every
-/// document it touched waiting and no name a person could check it by. So
+/// document it touched waiting and no name a person could see it in. So
 /// every name held for an unchecked rule shows that rule's spelling; once
-/// a person has checked it on another document, it is used here too (see
+/// a person has checked it, it is used here too (see
 /// [`Pipeline::restyle_waiting`]).
 ///
 /// Taking one rule out can change what another shows - a shorter party
@@ -2337,8 +2300,8 @@ impl Pipeline {
     /// composed now is held as it is composed. The scheduler's pass holds
     /// them too, but only once the model is ready and the queue is not
     /// paused: minutes after an update, or never while the model fails.
-    /// Until then they were listed ready, and "Rename all ready" filed them
-    /// and counted the click as the rule's check. Needs no model, and
+    /// Until then they were listed ready, and "Rename all ready" filed them.
+    /// Needs no model, and
     /// holds whether or not the queue is paused; a row that cannot be
     /// looked at now is looked at on the next pass.
     fn hold_ready_under_unchecked_spellings(&self) {
@@ -3461,7 +3424,7 @@ impl Pipeline {
             return Ok(true);
         }
         self.ensure_lease(&lease)?;
-        let record = self.record_for(&item, analysis, &source, &extension, &existing)?;
+        let record = self.record_for(&item, analysis, &extension, &existing)?;
         let next = queue_status_for(record.status);
         lease.stop_and_check()?;
         self.repository.save_initial_and_transition(
@@ -3483,14 +3446,12 @@ impl Pipeline {
     /// them and by the other side where the person's own organization is
     /// named, collision-free where the document is going, and held for a
     /// person when its text nearly repeats a filing's, or when a learned
-    /// spelling no person has checked yet changed its name; with the words
-    /// the text it was read from, `source`, gives, for telling whether an
-    /// approval of it can check a spelling. Nobody has acted on it yet.
+    /// spelling no person has checked yet changed its name. Nobody has
+    /// acted on it yet.
     fn record_for(
         &self,
         item: &QueueItem,
         analysis: DocumentAnalysis,
-        source: &DocumentSource,
         extension: &str,
         existing: &[String],
     ) -> PipelineResult<ProposalRecord> {
@@ -3543,7 +3504,6 @@ impl Pipeline {
             manual: false,
             copy_of: None,
             rejected_rules: Vec::new(),
-            document_words: DocumentWords::of(source),
         };
         hold_unchecked_spelling(&mut record, extension, &spellings);
         Ok(record)
@@ -3765,12 +3725,12 @@ impl Pipeline {
 
     /// Apply a learned spelling from now on without waiting for a second
     /// edit, including to documents still waiting. Like a spelling learned
-    /// from two edits, it is not checked: the list shows the words it puts
-    /// in place of others, not a name it wrote, so the first name it changes
-    /// waits for a person (see [`LearnedRule::confirmed`]). Counting this
-    /// as the check let one click on "John Smith written as John Smith,
-    /// Jane Doe" file every later agreement with John Smith under both
-    /// names, without review.
+    /// from two edits, it is not checked: "Use now" says nothing of filing
+    /// on its own, so every name it changes waits for a person until they
+    /// choose "Use on its own" (see [`LearnedRule::confirmed`]). Counting
+    /// this as the check let one click on "John Smith written as John
+    /// Smith, Jane Doe" file every later agreement with John Smith under
+    /// both names, without review.
     pub fn use_rule(&self, id: i64) -> PipelineResult<()> {
         if !self.repository.use_rule(id)? {
             return Err(PipelineError::new(
@@ -3781,25 +3741,30 @@ impl Pipeline {
         self.restyle_waiting()
     }
 
-    /// Check a learned spelling in use on a person's word in Settings, for
-    /// the spelling `to` they were shown: the way out for a spelling no
-    /// approval can check - one whose added words every document gives
-    /// itself, a legal name each contract spells out before it shortens it -
-    /// and for one they would rather not wait on. They are told first that
-    /// every later document Intern reads as naming the word will be named
-    /// by the spelling, and may be filed without their check. Counted as an
-    /// approval's check is (see [`LearnedRule::confirmed`]), with nothing
-    /// asked of a document, there being none: from then on the names the
-    /// rule changes are filed like any other reading, and the documents
-    /// still waiting are restyled as after a check on a document, a name
-    /// held for the spelling losing the reason. A spelling for the same word
-    /// learned later starts over unchecked, as after any check.
+    /// Check the learned spelling `id` on a person's explicit word: "Use on
+    /// its own", chosen in the review window or the list of learned
+    /// spellings after Intern has said in plain words that every later
+    /// document it reads as naming the word will be named by the spelling,
+    /// and may be filed under that name without their check. The only way
+    /// a spelling is checked (see [`LearnedRule::confirmed`]): from then on
+    /// the names it changes are filed like any other reading.
     ///
-    /// Only a spelling in force, as `to` spells it: one respelled since the
-    /// list was shown is not the one the person agreed to, and is refused
-    /// (`RULE_CHANGED`) rather than checked.
-    pub fn check_rule(&self, id: i64, to: &str) -> PipelineResult<()> {
-        match self.repository.check_rule(id, to)? {
+    /// Only the spelling `shown` - its kind, the document's word and the
+    /// spelling, exactly as the person was shown them - and only while it
+    /// is in force: one forgotten is refused (`RULE_NOT_FOUND`), and one
+    /// not in use, or respelled or learned for other words since it was
+    /// shown, is not the one the person agreed to and is refused
+    /// (`RULE_CHANGED`) rather than checked. A spelling for the same word
+    /// learned later starts over unchecked.
+    ///
+    /// The documents still waiting are restyled (see
+    /// [`Self::restyle_waiting`]): the spelling is used now where a name
+    /// does not show it, and a name held for it loses
+    /// [`LEARNED_SPELLING_UNCONFIRMED`] but stays in review, whatever else
+    /// it was held for not being known there. Checking approves and files
+    /// nothing.
+    pub fn check_rule(&self, id: i64, shown: &HouseRule) -> PipelineResult<()> {
+        match self.repository.check_rule(id, shown)? {
             None => Err(PipelineError::new(
                 "RULE_NOT_FOUND",
                 "learned spelling does not exist",
@@ -3881,7 +3846,7 @@ impl Pipeline {
     /// that renames it, so no scheduler pass files the new name in between,
     /// and its revision moves as any document's sent to review does. One
     /// renamed back - the rule forgotten - or held for a rule a person has
-    /// checked since, on another document, loses the reason but stays in
+    /// checked since ("Use on its own") loses the reason but stays in
     /// review: what else held it is not known here. A rule nobody has
     /// checked is used only where the name shows it (see [`shown_rules`]),
     /// so one checked since can change the rules of a name it does not
@@ -3923,7 +3888,7 @@ impl Pipeline {
             .to_owned();
         let (styled, house_rules) =
             spellings.styled(&record.analysis.proposal, &own_names, &extension);
-        // A name held for a spelling checked since - on another document -
+        // A name held for a spelling checked since - "Use on its own" -
         // says the spelling has not been checked: the reason is taken back,
         // though the name is as it was.
         let checked_since = record
@@ -3976,18 +3941,16 @@ impl Pipeline {
     /// changed, one this build would not learn, is retracted. Such words
     /// used to take the rule's place, to be learned on the next such edit.
     ///
-    /// An approval of a name a rule changed that keeps the rule's spelling
-    /// is a person's check of that rule's work (see
-    /// [`Self::confirm_kept_spellings`]); the edits that taught it are not,
-    /// and the document `id` is remembered as one that taught it.
+    /// An approval checks no spelling, whatever it keeps of one and on
+    /// whatever document (see [`LearnedRule::confirmed`]): only "Use on its
+    /// own" does ([`Self::check_rule`]).
     fn learn_from_edit(
         &self,
-        id: i64,
         record: &ProposalRecord,
         extension: &str,
         approved: &str,
     ) -> PipelineResult<()> {
-        let lesson = lesson_from_edit(
+        let Some(lesson) = lesson_from_edit(
             &record.styled_proposal(),
             extension,
             &record.filename,
@@ -4000,18 +3963,8 @@ impl Pipeline {
                 Some(applied) => HouseRule::new(lesson.kind, applied.from.clone(), lesson.to),
                 None => lesson,
             }
-        });
-        // A rule checked now is used on the waiting documents whose names
-        // do not show it as well (see `shown_rules`), and a name held for
-        // it says so no more: they are restyled.
-        let checked =
-            self.confirm_kept_spellings(id, record, extension, approved, lesson.as_ref())?;
-        let Some(lesson) = lesson else {
-            return if checked {
-                self.restyle_waiting()
-            } else {
-                Ok(())
-            };
+        }) else {
+            return Ok(());
         };
         if HouseRule::key(&lesson.to) == lesson.from_key() || !is_a_spelling(&lesson) {
             self.repository.forget_rule_for(lesson.kind, &lesson.from)?;
@@ -4027,98 +3980,11 @@ impl Pipeline {
             // short - decides who this document is with. Learned, it would
             // put that party in every later name giving those words, or of
             // that type, documents that never mention it included.
-            return if checked {
-                self.restyle_waiting()
-            } else {
-                Ok(())
-            };
+            return Ok(());
         } else if lesson.is_meaningful() {
-            self.repository.learn(
-                &lesson,
-                &Teacher {
-                    item: id,
-                    fingerprint: record.analysis.text_fingerprint.clone(),
-                    words: record.document_words.as_ref().map(DocumentWords::digest),
-                    filed_name: approved.to_owned(),
-                },
-            )?;
+            self.repository.learn(&lesson)?;
         }
         self.restyle_waiting()
-    }
-
-    /// Counts a person's check of each learned spelling that changed the
-    /// name of `record` and that the name `approved` keeps (see
-    /// [`keeps_spelling`]), where the edit, read as `lesson` traced back to
-    /// the document's word, does not respell that word again: the person saw
-    /// what the rule writes on a document new to Intern, where it is not the
-    /// document's own words, and approved it. One check is enough for Intern
-    /// to file the names the rule changes on its own (see
-    /// [`LearnedRule::confirmed`]). Says whether one counted.
-    ///
-    /// A rule that fired but changes nothing in the name is not checked by
-    /// an approval of it. Nor is one the edit respells - into a third
-    /// spelling, which starts it over ([`PipelineRepository::learn`]) - or
-    /// takes back by putting the document's own word in the name, which
-    /// retracts it ([`Self::learn_from_edit`]).
-    ///
-    /// Only an approval that leaves the rule's words where it wrote them
-    /// counts: the name as proposed (its date or a collision suffix aside),
-    /// or one with a single other part of it respelled (a lesson about
-    /// that part). An edit of two parts, or one no lesson is read from,
-    /// can have typed over the rule's words and kept them inside words of
-    /// its own: "Employment Contract between John Smith, Jane Doe Trust
-    /// and Acme Corporation" for a wrong rule's "John Smith, Jane Doe", or
-    /// "Employment Contract with Jane Smith" for "John Smith -> Smith",
-    /// each counted as a check, and the next name the rule changed was
-    /// filed without review.
-    ///
-    /// And only on a document that does not give, in its own words, what
-    /// the rule adds to the document's word (see
-    /// [`ProposalRecord::gives_what_it_adds`]): "John Smith, Jane Doe" for
-    /// "John Smith" is the right name for an agreement that names Jane Doe
-    /// itself, whatever the rule is worth, and approving it there counted
-    /// as the check; the next agreement, naming John Smith alone, was filed
-    /// without review in "John Smith, Jane Doe/". Nor on a document Intern
-    /// has seen before: a near duplicate of a filing, or one the rule was
-    /// learned from, was filed, or that holds what a teacher held (see
-    /// [`PipelineRepository::confirm`]).
-    fn confirm_kept_spellings(
-        &self,
-        id: i64,
-        record: &ProposalRecord,
-        extension: &str,
-        approved: &str,
-        lesson: Option<&HouseRule>,
-    ) -> PipelineResult<bool> {
-        if (lesson.is_none() && !same_stem(extension, &record.filename, approved))
-            || record.near_duplicate_of.is_some()
-        {
-            return Ok(false);
-        }
-        let checker = Checker {
-            item: id,
-            fingerprint: record
-                .analysis
-                .text_fingerprint
-                .as_deref()
-                .and_then(fingerprint::decode),
-            words: record.document_words.as_ref().map(DocumentWords::digest),
-            date: leading_date(approved).map(str::to_owned),
-        };
-        let mut checked = false;
-        for rule in &record.house_rules {
-            let respelled = lesson.is_some_and(|lesson| {
-                lesson.kind == rule.kind && lesson.from_key() == rule.from_key()
-            });
-            if !respelled
-                && keeps_spelling(rule, extension, approved)
-                && record.holds_unchecked_spelling(extension, |other| other != rule)
-                && !record.gives_what_it_adds(rule)
-            {
-                checked |= self.repository.confirm(rule, &checker)?;
-            }
-        }
-        Ok(checked)
     }
 
     fn analyze_with_deadline(
@@ -5448,7 +5314,7 @@ impl Pipeline {
             self.admission
                 .processed(&item.source_path, &item.source_hash);
         };
-        let mut again = self.record_for(&item, analysis, &source, &extension, &existing)?;
+        let mut again = self.record_for(&item, analysis, &extension, &existing)?;
         if same_reading(&record, &again) {
             read_through();
             return left();
@@ -5658,7 +5524,7 @@ impl Pipeline {
         // written must not stop the rename that was just approved. A name
         // with no reading behind it corrects nothing.
         if let Some(record) = proposed.as_ref().filter(|record| !record.is_synthetic()) {
-            let _ = self.learn_from_edit(id, record, source_extension, &filename);
+            let _ = self.learn_from_edit(record, source_extension, &filename);
         }
         let ready = self.store.get(id)?.ok_or_else(|| {
             PipelineError::new("ITEM_NOT_FOUND", "queue item disappeared during approval")
@@ -6128,15 +5994,6 @@ impl PipelineRepository {
                    updated_at INTEGER NOT NULL,
                    UNIQUE(kind, from_key)
                  );
-                 -- The documents whose approved edits taught a spelling: an
-                 -- approval of one of them is never a check of what the
-                 -- spelling writes (see `PipelineRepository::confirm`).
-                 CREATE TABLE IF NOT EXISTS house_rule_teachers (
-                   kind TEXT NOT NULL,
-                   from_key TEXT NOT NULL,
-                   queue_item_id INTEGER NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
-                   PRIMARY KEY(kind, from_key, queue_item_id)
-                 );
                  CREATE TABLE IF NOT EXISTS fingerprints (
                    queue_item_id INTEGER PRIMARY KEY REFERENCES queue_items(id) ON DELETE CASCADE,
                    fingerprint INTEGER NOT NULL,
@@ -6172,36 +6029,25 @@ impl PipelineRepository {
                 .execute("ALTER TABLE house_rules ADD COLUMN confirmed_to TEXT", [])
                 .map_err(database_error)?;
         }
-        // The same documents by what they hold, kept when they leave the
-        // queue: the SHA-256 of the file, the fingerprint of its text, and
-        // the words it gives (`DocumentWords::digest`), with the name it was
-        // approved under (see `PipelineRepository::confirm`). Made once; a database that had
-        // none takes its teachers from what it kept (see
-        // `remember_teachers_by_content`).
-        let had_teacher_content = table_exists(&connection, "house_rule_teacher_content")?;
-        connection
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS house_rule_teacher_content (
-                   kind TEXT NOT NULL,
-                   from_key TEXT NOT NULL,
-                   source_hash TEXT NOT NULL,
-                   fingerprint TEXT,
-                   words TEXT,
-                   filed_name TEXT NOT NULL,
-                   PRIMARY KEY(kind, from_key, source_hash)
-                 );",
-            )
-            .map_err(database_error)?;
-        if !has_column(&connection, "house_rule_teacher_content", "words")? {
-            connection
-                .execute(
-                    "ALTER TABLE house_rule_teacher_content ADD COLUMN words TEXT",
-                    [],
+        // A development build of alpha.18 counted a person's approval of a
+        // name a spelling changed as the spelling's check, and kept the
+        // documents spellings were learned from to tell which approvals
+        // counted. No approval checks a spelling now (see
+        // `LearnedRule::confirmed`), so a database such a build used starts
+        // every spelling over unchecked, as one from alpha.17 does, and
+        // loses those tables. No release made them.
+        if table_exists(&connection, "house_rule_teachers")?
+            || table_exists(&connection, "house_rule_teacher_content")?
+        {
+            let transaction = connection.transaction().map_err(database_error)?;
+            transaction
+                .execute_batch(
+                    "UPDATE house_rules SET confirmed = 0, confirmed_to = NULL;
+                     DROP TABLE IF EXISTS house_rule_teacher_content;
+                     DROP TABLE IF EXISTS house_rule_teachers;",
                 )
                 .map_err(database_error)?;
-        }
-        if !had_teacher_content {
-            remember_teachers_by_content(&connection)?;
+            transaction.commit().map_err(database_error)?;
         }
         let legacy_exists = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_proposals')",
@@ -6536,40 +6382,13 @@ impl PipelineRepository {
         })
     }
 
-    /// Records one respelling, taught by the approval of `teacher`. The
-    /// same change again counts it up; a different spelling for the same
-    /// word starts the count over, and the checks of the spelling it
-    /// replaces with it (see [`LearnedRule::confirmed`]): a person checked
-    /// what that one wrote. The teacher is remembered, by item and by what
-    /// it holds, so that approving it again - read again, scanned again, or
-    /// removed and added again - is never a check (see [`Self::confirm`]).
-    fn learn(&self, rule: &HouseRule, teacher: &Teacher) -> PipelineResult<LearnedRule> {
+    /// Records one respelling, taught by an approved edit. The same change
+    /// again counts it up; a different spelling for the same word starts
+    /// the count over, and the checks of the spelling it replaces with it
+    /// (see [`LearnedRule::confirmed`]): a person checked what that one
+    /// wrote.
+    fn learn(&self, rule: &HouseRule) -> PipelineResult<LearnedRule> {
         let connection = self.lock()?;
-        connection
-            .execute(
-                "INSERT OR IGNORE INTO house_rule_teachers(kind, from_key, queue_item_id)
-                 SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM queue_items WHERE id = ?3)",
-                params![rule.kind.as_str(), rule.from_key(), teacher.item],
-            )
-            .map_err(database_error)?;
-        connection
-            .execute(
-                "INSERT INTO house_rule_teacher_content(kind, from_key, source_hash, fingerprint, words, filed_name)
-                 SELECT ?1, ?2, source_hash, ?4, ?5, ?6 FROM queue_items WHERE id = ?3
-                 ON CONFLICT(kind, from_key, source_hash) DO UPDATE SET
-                   fingerprint = COALESCE(excluded.fingerprint, fingerprint),
-                   words = COALESCE(excluded.words, words),
-                   filed_name = excluded.filed_name",
-                params![
-                    rule.kind.as_str(),
-                    rule.from_key(),
-                    teacher.item,
-                    teacher.fingerprint,
-                    teacher.words,
-                    teacher.filed_name
-                ],
-            )
-            .map_err(database_error)?;
         connection
             .execute(
                 "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, created_at, updated_at)
@@ -6604,119 +6423,6 @@ impl PipelineRepository {
                 },
             )
             .map_err(database_error)
-    }
-
-    /// Counts one check of `rule`'s work (see [`LearnedRule::confirmed`]):
-    /// a person approved, for the document `checker`, a name it changed,
-    /// spelling and all; says whether it counted. Nothing for a rule
-    /// forgotten, respelled or no longer in force since the name was
-    /// composed. The checks are of this spelling, and count for it alone
-    /// (see `confirmed_to`).
-    ///
-    /// Nor for a document that is not new to Intern, whose approval is the
-    /// reviewer's own words approved again, not a look at what the rule
-    /// writes on a document it was not learned from: one whose edit taught
-    /// the rule (see [`Self::learn`]), read again after an undo, a failed
-    /// filing or a Re-analyze; one ever filed - a teacher of a rule an
-    /// earlier release learned, which kept no teachers, most of all; and
-    /// one that holds what a teacher held - the same file, removed from the
-    /// queue and added again, or a text within the near-duplicate distance
-    /// of a teacher's and of its date (see [`same_document`]), or all but
-    /// identical whatever its date: a second scan; or, for a text too short
-    /// to fingerprint, the very words a teacher gave (see
-    /// [`DocumentWords::digest`]) under the same date; or, where neither a
-    /// fingerprint nor the words of both are kept to compare them, any
-    /// document under the teacher's date.
-    fn confirm(&self, rule: &HouseRule, checker: &Checker) -> PipelineResult<bool> {
-        let connection = self.lock()?;
-        let filed = connection
-            .query_row(
-                "SELECT EXISTS(
-                   SELECT 1 FROM operation_receipts
-                   WHERE queue_item_id = ?1 AND direction = 'apply' AND stage = 'complete'
-                 )",
-                params![checker.item],
-                |row| row.get::<_, bool>(0),
-            )
-            .map_err(database_error)?;
-        if filed {
-            return Ok(false);
-        }
-        let source_hash = connection
-            .query_row(
-                "SELECT source_hash FROM queue_items WHERE id = ?1",
-                params![checker.item],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(database_error)?;
-        let mut statement = connection
-            .prepare(
-                "SELECT source_hash, fingerprint, words, filed_name FROM house_rule_teacher_content
-                 WHERE kind = ?1 AND from_key = ?2",
-            )
-            .map_err(database_error)?;
-        let teachers = statement
-            .query_map(params![rule.kind.as_str(), rule.from_key()], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
-            })
-            .map_err(database_error)?;
-        for teacher in teachers {
-            let (hash, fingerprint, words, filed_name) = teacher.map_err(database_error)?;
-            if source_hash.as_deref() == Some(hash.as_str()) {
-                return Ok(false);
-            }
-            let dated = leading_date(&filed_name);
-            let same_date =
-                dated.is_none() || checker.date.is_none() || dated == checker.date.as_deref();
-            if words.is_some() && words == checker.words && same_date {
-                return Ok(false);
-            }
-            let distance = fingerprint
-                .as_deref()
-                .and_then(fingerprint::decode)
-                .zip(checker.fingerprint)
-                .map(|(taught, checked)| fingerprint::hamming(taught, checked));
-            if distance.is_some_and(|distance| {
-                distance <= 1 || same_document(distance, &filed_name, checker.date.as_deref())
-            }) {
-                return Ok(false);
-            }
-            // Nothing of the two texts to compare - a teacher an earlier
-            // release learned from, which kept no words, too short to
-            // fingerprint or read from a page image, or a checker the same -
-            // and no date to tell them apart: in doubt, the same document.
-            let comparable = distance.is_some() || (words.is_some() && checker.words.is_some());
-            if !comparable && same_date {
-                return Ok(false);
-            }
-        }
-        drop(statement);
-        let changed = connection
-            .execute(
-                "UPDATE house_rules SET
-                   confirmed = CASE WHEN confirmed_to = to_value THEN confirmed + 1 ELSE 1 END,
-                   confirmed_to = to_value
-                 WHERE kind = ?1 AND from_key = ?2 AND to_value = ?3 AND seen >= ?4
-                   AND NOT EXISTS (
-                     SELECT 1 FROM house_rule_teachers taught
-                     WHERE taught.kind = ?1 AND taught.from_key = ?2 AND taught.queue_item_id = ?5
-                   )",
-                params![
-                    rule.kind.as_str(),
-                    rule.from_key(),
-                    rule.to,
-                    EDITS_TO_LEARN,
-                    checker.item
-                ],
-            )
-            .map_err(database_error)?;
-        Ok(changed == 1)
     }
 
     /// Keeps the text fingerprint of a document just filed, under the name
@@ -6809,20 +6515,27 @@ impl PipelineRepository {
         Ok(removed == 1)
     }
 
-    /// Counts a person's check of rule `id` given in Settings, for the
-    /// spelling `to` they were shown, as [`Self::confirm`] counts one given
-    /// by an approval, without asking anything of a document: there is
-    /// none. `None` for a rule that does not exist, `Some(false)` for one
-    /// not in force or no longer spelled `to`.
-    fn check_rule(&self, id: i64, to: &str) -> PipelineResult<Option<bool>> {
+    /// Marks rule `id` checked (see [`LearnedRule::confirmed`]) for its
+    /// spelling as it stands - `shown`, the kind, the document's word and
+    /// the spelling the person was shown, exactly - and only while it is in
+    /// force. `None` for a rule that does not exist, `Some(false)` for one
+    /// not in force or no longer what was shown. The check is of this
+    /// spelling, and counts for it alone (see `confirmed_to`).
+    fn check_rule(&self, id: i64, shown: &HouseRule) -> PipelineResult<Option<bool>> {
         let connection = self.lock()?;
         let changed = connection
             .execute(
                 "UPDATE house_rules SET
                    confirmed = CASE WHEN confirmed_to = to_value THEN confirmed + 1 ELSE 1 END,
                    confirmed_to = to_value
-                 WHERE id = ?1 AND to_value = ?2 AND seen >= ?3",
-                params![id, to, EDITS_TO_LEARN],
+                 WHERE id = ?1 AND kind = ?2 AND from_value = ?3 AND to_value = ?4 AND seen >= ?5",
+                params![
+                    id,
+                    shown.kind.as_str(),
+                    shown.from,
+                    shown.to,
+                    EDITS_TO_LEARN
+                ],
             )
             .map_err(database_error)?;
         if changed == 1 {
@@ -6838,9 +6551,9 @@ impl PipelineRepository {
         Ok(exists.then_some(false))
     }
 
-    /// Puts a rule in force at once. Not checked: the list shows the
-    /// spelling, not what it writes in a name, so the first name it changes
-    /// still waits for a person (see [`LearnedRule::confirmed`]).
+    /// Puts a rule in force at once. Not checked: every name it changes
+    /// still waits for a person until they choose "Use on its own" for it
+    /// (see [`LearnedRule::confirmed`]).
     fn use_rule(&self, id: i64) -> PipelineResult<bool> {
         let changed = self
             .lock()?
@@ -7289,165 +7002,6 @@ fn table_exists(connection: &Connection, table: &str) -> PipelineResult<bool> {
             |row| row.get::<_, bool>(0),
         )
         .map_err(database_error)
-}
-
-/// Takes the teachers of every learned spelling by what they hold (see
-/// `house_rule_teacher_content`, and [`PipelineRepository::confirm`]), once,
-/// when that table is first made: the documents `house_rule_teachers` names
-/// by item and, for a spelling it names none of - one an earlier release
-/// learned, which kept no teachers - every document the queue holds whose
-/// name gives the spelling (see [`keeps_spelling`]) or whose reading the
-/// spelling respells, filed or waiting, approved or not: its teachers are
-/// among them, even one whose filing failed and that was read again before
-/// the update, which keeps no trace of the approval that taught, as is
-/// every name it wrote then that nobody checked. Approving one of them
-/// after the update checks nothing; a document added since does. Kept by
-/// what they hold, the same file added again after it left the queue is
-/// still a teacher. Nothing where the queue keeps no documents.
-fn remember_teachers_by_content(connection: &Connection) -> PipelineResult<()> {
-    for table in ["queue_items", "proposals"] {
-        if !table_exists(connection, table)? {
-            return Ok(());
-        }
-    }
-    let rules = {
-        let mut statement = connection
-            .prepare("SELECT kind, from_key, from_value, to_value FROM house_rules")
-            .map_err(database_error)?;
-        statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
-            })
-            .map_err(database_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(database_error)?
-    };
-    if rules.is_empty() {
-        return Ok(());
-    }
-    let read = |json: Option<String>| {
-        json.and_then(|json| serde_json::from_str::<ProposalRecord>(&json).ok())
-    };
-    let documents = {
-        let mut statement = connection
-            .prepare(
-                "SELECT items.source_hash, items.source_path, proposals.proposal_json
-                 FROM queue_items items
-                 JOIN proposals ON proposals.queue_item_id = items.id",
-            )
-            .map_err(database_error)?;
-        statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
-            .map_err(database_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(database_error)?
-    };
-    for (kind, from_key, from, to) in rules {
-        let Some(parsed) = RuleKind::parse(&kind) else {
-            continue;
-        };
-        let rule = HouseRule::new(parsed, from, to);
-        let taught = {
-            let mut statement = connection
-                .prepare(
-                    "SELECT items.source_hash, proposals.proposal_json
-                     FROM house_rule_teachers taught
-                     JOIN queue_items items ON items.id = taught.queue_item_id
-                     LEFT JOIN proposals ON proposals.queue_item_id = taught.queue_item_id
-                     WHERE taught.kind = ?1 AND taught.from_key = ?2",
-                )
-                .map_err(database_error)?;
-            statement
-                .query_map(params![kind, from_key], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-                })
-                .map_err(database_error)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(database_error)?
-        };
-        let teachers = if taught.is_empty() {
-            documents
-                .iter()
-                .filter_map(|(hash, path, json)| {
-                    let record = read(Some(json.clone()))?;
-                    let extension = Path::new(path)
-                        .extension()
-                        .and_then(|value| value.to_str())
-                        .unwrap_or_default();
-                    let respells = !HouseStyle::new(vec![rule.clone()])
-                        .apply(&record.analysis.proposal)
-                        .1
-                        .is_empty();
-                    (!record.is_synthetic()
-                        && (respells || keeps_spelling(&rule, extension, &record.filename)))
-                    .then(|| (hash.clone(), Some(record)))
-                })
-                .collect::<Vec<_>>()
-        } else {
-            taught
-                .into_iter()
-                .map(|(hash, json)| (hash, read(json)))
-                .collect()
-        };
-        for (hash, record) in teachers {
-            connection
-                .execute(
-                    "INSERT OR IGNORE INTO house_rule_teacher_content(kind, from_key, source_hash, fingerprint, words, filed_name)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![
-                        kind,
-                        from_key,
-                        hash,
-                        record
-                            .as_ref()
-                            .and_then(|record| record.analysis.text_fingerprint.clone()),
-                        record
-                            .as_ref()
-                            .and_then(|record| record.document_words.as_ref())
-                            .map(DocumentWords::digest),
-                        record
-                            .as_ref()
-                            .map(|record| record.filename.clone())
-                            .unwrap_or_default()
-                    ],
-                )
-                .map_err(database_error)?;
-        }
-    }
-    Ok(())
-}
-
-/// A document whose approved edit taught a spelling: its queue item, the
-/// fingerprint of its text where it has one (see
-/// [`intern_engine::fingerprint`]), the digest of the words it gives (see
-/// [`DocumentWords::digest`]), and the name it was approved under.
-struct Teacher {
-    item: i64,
-    fingerprint: Option<String>,
-    words: Option<String>,
-    filed_name: String,
-}
-
-/// A document whose approval may check a spelling: its queue item, the
-/// fingerprint of its text where it has one, the digest of the words it
-/// gives (see [`DocumentWords::digest`]), and the date the name approved
-/// for it gives.
-struct Checker {
-    item: i64,
-    fingerprint: Option<u64>,
-    words: Option<String>,
-    date: Option<String>,
 }
 
 /// Records on `connection` that `release` read or considered item `id`.

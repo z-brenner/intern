@@ -3866,7 +3866,8 @@ fn record_of(pipeline: &Pipeline, id: i64) -> intern_queue::ProposalRecord {
 /// the document still waiting is renamed in the queue, the one processed
 /// afterwards is proposed with it, and what is filed under it reports the
 /// reviewer's word while the analysis keeps the document's. Until a person
-/// has approved a name the spelling changed, each such name waits for one.
+/// chooses to use the spelling on its own, each such name waits for one:
+/// approving one checks nothing.
 #[test]
 fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
     let temp = tempdir().unwrap();
@@ -3974,7 +3975,7 @@ fn a_respelling_made_twice_in_review_becomes_interns_own_spelling() {
         rule.seen, 2,
         "approving the spelling Intern applied teaches nothing new"
     );
-    assert_eq!(rule.confirmed, 1, "but checks it");
+    assert_eq!(rule.confirmed, 0, "and checks nothing");
 }
 
 /// A model whose readings carry the evidence pipeline's validated facts:
@@ -5782,7 +5783,7 @@ impl Probation {
 
     /// Adds the next agreement and lets the queue run: its item.
     fn read_next(&mut self) -> i64 {
-        let name = format!("{}.pdf", ["a", "b", "c", "d", "e"][self.read]);
+        let name = format!("{}.pdf", ["a", "b", "c", "d", "e", "f", "g"][self.read]);
         self.read += 1;
         let id = self
             .pipeline
@@ -5853,13 +5854,18 @@ fn rule_state(from: &str, to: &str, seen: u32, confirmed: u32) -> (String, Strin
 }
 
 /// A spelling learned from two edits changes the next name, and that name
-/// waits for a person even with automatic renaming on: nobody has seen
-/// what the rule writes on a document it was not learned from. Approved as
-/// it is, the rule is checked, and the next name it changes is filed on its
-/// own like any other reading. The third agreement used to be filed without
-/// review the moment it was read, under a spelling nobody had looked at.
+/// waits for a person even with automatic renaming on: nobody has said to
+/// use it on its own. Approved as Intern named it, on an agreement new to
+/// Intern, the name is filed and the spelling is still unchecked: the next
+/// name it changes waits again. Once a person chooses "Use on its own" for
+/// the spelling as they were shown it, the name held for it loses its
+/// reason but stays in review - the choice files nothing - and the
+/// agreement after it is filed on its own like any other reading, under
+/// the spelling. An approval used to count as the check, and a document
+/// that gave the spelling's words in a way the comparison missed checked a
+/// wrong spelling, and the next name it changed was filed without review.
 #[test]
-fn a_learned_spelling_waits_for_one_check_then_files_on_its_own() {
+fn a_learned_spelling_waits_until_a_person_says_to_use_it_on_its_own() {
     let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
     let first = rig.read_next();
     let second = rig.read_next();
@@ -5876,15 +5882,13 @@ fn a_learned_spelling_waits_for_one_check_then_files_on_its_own() {
     let record = held.proposal.unwrap();
     assert_eq!(
         record.filename, "2024-06-07 Employment Agreement between John Smith and Acme.pdf",
-        "the rule's spelling is in the name, for the reviewer to check"
+        "the rule's spelling is in the name, for the reviewer to see"
     );
     assert_eq!(record.status, ProposalStatus::NeedsReview);
     assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
     assert_eq!(rig.filed_as(third), None, "not filed without review");
 
-    rig.pipeline
-        .approve(third, &record.filename, &record.description)
-        .unwrap();
+    rig.approve_as_proposed(third);
     assert_eq!(
         rig.filed_as(third),
         Some((
@@ -5894,17 +5898,39 @@ fn a_learned_spelling_waits_for_one_check_then_files_on_its_own() {
     );
     assert_eq!(
         rig.rule(),
-        rule_state("Acme Corporation", "Acme", 2, 1),
-        "approving the rule's spelling checks it, and teaches nothing new"
+        rule_state("Acme Corporation", "Acme", 2, 0),
+        "an approval checks nothing, and teaches nothing new"
     );
 
     let fourth = rig.read_next();
-    assert_eq!(rig.item(fourth).status, QueueStatus::Completed);
+    let held = rig.item(fourth);
+    assert_eq!(held.status, QueueStatus::NeedsReview, "held again");
     assert_eq!(
-        rig.filed_as(fourth),
+        held.proposal.unwrap().reasons,
+        vec![LEARNED_SPELLING_UNCONFIRMED]
+    );
+    assert_eq!(rig.filed_as(fourth), None);
+
+    rig.use_on_its_own();
+    assert_eq!(rig.rule(), rule_state("Acme Corporation", "Acme", 2, 1));
+    let waiting = rig.item(fourth);
+    assert_eq!(
+        waiting.status,
+        QueueStatus::NeedsReview,
+        "the choice files nothing"
+    );
+    let record = waiting.proposal.unwrap();
+    assert_eq!(record.reasons, Vec::<String>::new());
+    assert!(!record.approved);
+    assert_eq!(rig.filed_as(fourth), None);
+
+    let fifth = rig.read_next();
+    assert_eq!(rig.item(fifth).status, QueueStatus::Completed);
+    assert_eq!(
+        rig.filed_as(fifth),
         Some((
             "John Smith".into(),
-            "2024-07-01 Employment Agreement between John Smith and Acme.pdf".into()
+            "2024-08-02 Employment Agreement between John Smith and Acme.pdf".into()
         )),
         "filed without review, in the spelling checked"
     );
@@ -6117,14 +6143,15 @@ fn a_ready_document_whose_rule_is_unchecked_by_the_time_it_is_filed_waits_for_a_
 }
 
 /// "Use now" in the list of learned spellings puts a spelling in force,
-/// but no more checked than one learned from two edits: the list shows the
-/// words it puts in place of others, not a name it wrote. The next name it
-/// changes waits for a person; approved as it is, the spelling is checked,
-/// and the name after it is filed without review. "Use now" counted as the
-/// check, and one click on a wrong spelling - "John Smith written as John
-/// Smith, Jane Doe" - filed every later name it changed without review.
+/// but no more checked than one learned from two edits: it says nothing of
+/// filing on its own. The next name it changes waits for a person;
+/// approved as it is, the spelling is still unchecked and the name after
+/// it waits too. Only "Use on its own" lets the one after that be filed
+/// without review. "Use now" counted as the check, and one click on a
+/// wrong spelling - "John Smith written as John Smith, Jane Doe" - filed
+/// every later name it changed without review.
 #[test]
-fn a_spelling_put_in_use_from_the_list_still_waits_for_one_check() {
+fn a_spelling_put_in_use_from_the_list_waits_until_it_is_used_on_its_own() {
     let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
     let first = rig.read_next();
     rig.approve(first, "Employment Agreement between John Smith and Acme");
@@ -6146,23 +6173,28 @@ fn a_spelling_put_in_use_from_the_list_still_waits_for_one_check() {
     assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
     assert_eq!(rig.filed_as(second), None, "not filed without review");
 
-    rig.pipeline
-        .approve(second, &record.filename, &record.description)
-        .unwrap();
-    assert_eq!(rig.rule(), rule_state("Acme Corporation", "Acme", 2, 1));
+    rig.approve_as_proposed(second);
+    assert_eq!(rig.rule(), rule_state("Acme Corporation", "Acme", 2, 0));
     let third = rig.read_next();
+    assert_eq!(rig.item(third).status, QueueStatus::NeedsReview);
+    assert_eq!(rig.filed_as(third), None, "held again");
+
+    rig.use_on_its_own();
+    let fourth = rig.read_next();
     assert_eq!(
-        rig.filed_as(third),
+        rig.filed_as(fourth),
         Some((
             "John Smith".into(),
-            "2024-06-07 Employment Agreement between John Smith and Acme.pdf".into()
+            "2024-07-01 Employment Agreement between John Smith and Acme.pdf".into()
         ))
     );
 }
 
-/// A checked rule respelled in review into a third spelling starts over:
-/// learned again, the new spelling waits for a check of its own. The check
-/// was of what the old spelling wrote.
+/// A spelling a person chose to use on its own, respelled in review into a
+/// third spelling, starts over: learned again, the new spelling waits for
+/// a choice of its own. The choice was of the old spelling: asked for again
+/// as it was, it is refused, and the new one held its name until it is
+/// made for the new spelling.
 #[test]
 fn a_new_spelling_for_a_checked_rule_waits_for_a_check_of_its_own() {
     let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
@@ -6176,9 +6208,9 @@ fn a_new_spelling_for_a_checked_rule_waits_for_a_check_of_its_own() {
         record.filename,
         "2024-05-03 Employment Agreement between John Smith and Acme.pdf"
     );
-    rig.pipeline
-        .approve(second, &record.filename, &record.description)
-        .unwrap();
+    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
+    rig.use_on_its_own();
+    rig.approve_as_proposed(second);
     assert_eq!(rig.rule(), rule_state("Acme Corporation", "Acme", 2, 1));
 
     let third = rig.read_next();
@@ -6217,59 +6249,26 @@ fn a_new_spelling_for_a_checked_rule_waits_for_a_check_of_its_own() {
     );
     assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
     assert_eq!(rig.filed_as(fifth), None);
-}
 
-/// The agreements a wrong rule was learned from - "between John Smith,
-/// Jane Doe and Acme Corporation" teaching "John Smith -> John Smith, Jane
-/// Doe" - are never a check of it: one of them taken back and read again,
-/// so that its name is now the rule's, approved as the reviewer typed it
-/// before is their own words approved twice, not a look at what the rule
-/// writes on a document it was not learned from. The next agreement naming
-/// only John Smith and Acme still waits for a person. It counted as the
-/// check, and that agreement was filed without review as "... between John
-/// Smith, Jane Doe and Acme Corporation" in "John Smith, Jane Doe/".
-#[test]
-fn the_document_a_spelling_was_learned_from_is_no_check_of_it() {
-    let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
-    let joined = "Employment Agreement between John Smith, Jane Doe and Acme Corporation";
-    let first = rig.read_next();
-    let second = rig.read_next();
-    for id in [first, second] {
-        rig.approve(id, joined);
-    }
+    let old = HouseRule::new(RuleKind::Party, "Acme Corporation", "Acme");
     assert_eq!(
-        rig.rule(),
-        rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
+        rig.pipeline.check_rule(id, &old).unwrap_err().code,
+        "RULE_CHANGED",
+        "the old spelling's choice"
     );
-
-    // Taken back, scanned again over itself, and read again.
-    rig.pipeline.undo(second).unwrap();
-    std::fs::write(rig.temp.path().join("inbox").join("b.pdf"), b"b.pdf again").unwrap();
-    rig.pipeline.reanalyze(second).unwrap();
-    rig.pipeline.run_until_idle().unwrap();
-    let again = rig.item(second);
-    assert_eq!(again.status, QueueStatus::NeedsReview);
-    let record = again.proposal.unwrap();
-    assert!(record.filename.ends_with(&format!("{joined}.pdf")));
-    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
-    rig.pipeline
-        .approve(second, &record.filename, &record.description)
-        .unwrap();
     assert_eq!(
-        rig.rule(),
-        rule_state("John Smith", "John Smith, Jane Doe", 2, 0),
-        "the teacher approved again checks nothing"
-    );
-
-    rig.automatic(true);
-    let next = rig.read_next();
-    let held = rig.item(next);
-    assert_eq!(held.status, QueueStatus::NeedsReview);
-    assert_eq!(
-        held.proposal.unwrap().reasons,
+        rig.item(fifth).proposal.unwrap().reasons,
         vec![LEARNED_SPELLING_UNCONFIRMED]
     );
-    assert_eq!(rig.filed_as(next), None, "the wrong name is not filed");
+    rig.use_on_its_own();
+    assert_eq!(
+        rig.rule(),
+        rule_state("Acme Corporation", "Acme Corp", 2, 1)
+    );
+    assert_eq!(
+        rig.item(fifth).proposal.unwrap().reasons,
+        Vec::<String>::new()
+    );
 }
 
 /// A name a rule changed, approved with two parts of it edited - so that
@@ -6315,11 +6314,12 @@ fn an_edit_that_types_over_a_spelling_is_no_check_of_it() {
     }
 }
 
-/// A rule checked, then respelled twice by alpha.17 - which does not know
-/// the checks and leaves them as they were - after a downgrade and the
-/// update again: the new spelling is not checked, and the next name it
-/// changes waits for a person. The check carried over, and that name was
-/// filed without review in a spelling nobody had looked at.
+/// A rule a person chose to use on its own, then respelled twice by
+/// alpha.17 - which does not know the checks and leaves them as they were -
+/// after a downgrade and the update again: the new spelling is not checked,
+/// and the next name it changes waits for a person. The check carried
+/// over, and that name was filed without review in a spelling nobody had
+/// looked at.
 #[test]
 fn a_check_counts_only_for_the_spelling_checked() {
     let mut rig = Probation::new(&["John Smith", "Acme Corporation"]);
@@ -6329,10 +6329,8 @@ fn a_check_counts_only_for_the_spelling_checked() {
         rig.approve(id, "Employment Agreement between John Smith and Acme");
     }
     let third = rig.read_next();
-    let record = rig.item(third).proposal.unwrap();
-    rig.pipeline
-        .approve(third, &record.filename, &record.description)
-        .unwrap();
+    rig.use_on_its_own();
+    rig.approve_as_proposed(third);
     assert_eq!(rig.rule(), rule_state("Acme Corporation", "Acme", 2, 1));
 
     // alpha.17's own learning, twice.
@@ -6557,15 +6555,16 @@ fn a_spelling_nobody_checked_that_the_name_does_not_show_is_not_used() {
     assert_eq!(pipeline.learned_rules().unwrap()[0].confirmed, 0);
 }
 
-/// A learned spelling a waiting document's name does not show, checked on
-/// another document whose name shows it, is used on the waiting one from
-/// then on: its folder and its filing report are the spelling's, as for any
-/// checked spelling, though its name is as it was. And a third document,
-/// held for the spelling while it was unchecked, no longer says it waits
-/// for a spelling nobody has checked.
+/// A learned spelling a waiting document's name does not show is not used
+/// on it while nobody has checked it, though a document whose name shows
+/// it is approved as Intern named it: that checks nothing. Once a person
+/// chooses "Use on its own" for it, it is used on the waiting one too: its
+/// folder and its filing report are the spelling's, as for any checked
+/// spelling, though its name is as it was. And a third document, held for
+/// the spelling while it was unchecked, no longer says it waits for a
+/// spelling nobody has checked.
 #[test]
-fn a_spelling_checked_on_another_document_then_files_one_whose_name_does_not_show_it() {
-    // A company form added: nothing a document could give in its words.
+fn a_spelling_used_on_its_own_then_files_one_whose_name_does_not_show_it() {
     let spelled = format!("{RECEIVER}, Inc.");
     let temp = tempdir().unwrap();
     std::fs::create_dir_all(temp.path().join("inbox")).unwrap();
@@ -6644,6 +6643,26 @@ fn a_spelling_checked_on_another_document_then_files_one_whose_name_does_not_sho
     pipeline
         .approve(letter.id, &shown.filename, &shown.description)
         .unwrap();
+    let rule = pipeline.learned_rules().unwrap().remove(0);
+    assert_eq!(rule.confirmed, 0, "an approval checks nothing");
+    let item = |id| {
+        pipeline
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == id)
+            .unwrap()
+    };
+    assert_eq!(
+        item(notice.id).proposal.unwrap().reasons,
+        vec![LEARNED_SPELLING_UNCONFIRMED]
+    );
+    assert_eq!(
+        item(waiting.id).proposal.unwrap().house_rules,
+        Vec::new(),
+        "still not used"
+    );
+    pipeline.check_rule(rule.id, &rule.rule()).unwrap();
     assert_eq!(pipeline.learned_rules().unwrap()[0].confirmed, 1);
     let notice = pipeline
         .list()
@@ -6878,6 +6897,30 @@ impl Probation {
             .approve(id, &record.filename, &record.description)
             .unwrap();
     }
+
+    /// Chooses "Use on its own" for the one spelling learned, exactly as the
+    /// list of learned spellings shows it now.
+    fn use_on_its_own(&self) {
+        let learned = self.pipeline.learned_rules().unwrap();
+        let [rule] = learned.as_slice() else {
+            panic!("{learned:?}");
+        };
+        self.pipeline.check_rule(rule.id, &rule.rule()).unwrap();
+    }
+
+    /// Approves the document waiting as item `id` with the document's own
+    /// words for its parties put back, under the date Intern proposed.
+    fn put_back_own_words(&self, id: i64) {
+        let record = self.item(id).proposal.unwrap();
+        let date = &record.filename[..10];
+        self.pipeline
+            .approve(
+                id,
+                &format!("{date} Employment Agreement between John Smith and Acme Corporation.pdf"),
+                &record.description,
+            )
+            .unwrap();
+    }
 }
 
 /// The agreement dated by [`PROBATION_DATES`]'s `index`th date, as the
@@ -6912,142 +6955,6 @@ const SMITH_AND_ACME: [&str; 2] = ["John Smith", "Acme Corporation"];
 const MR_SMITH: &str = "This agreement is made by Mr. Smith and Acme Corporation.";
 const JOINED: &str = "Employment Agreement between John Smith, Jane Doe and Acme Corporation";
 
-/// A series of agreements with the same parties: the wrong spelling "John
-/// Smith -> John Smith, Jane Doe" is learned from two that name John Smith
-/// alone, and a third, a new agreement that names John Smith, Jane Doe and
-/// Acme Corporation itself, is approved as Intern named it - the right name
-/// for it. That approval shows nothing about the spelling: the agreement
-/// gives "Jane Doe" in its own words, as it would for anyone - or part of
-/// it, "J. Doe", which reads as the same person to the one approving. So
-/// the spelling stays unchecked, and the fourth agreement, naming John
-/// Smith alone, waits for a person. It counted as the check, and the fourth
-/// was filed without review as "... between John Smith, Jane Doe and Acme
-/// Corporation" in "John Smith, Jane Doe/".
-#[test]
-fn an_approval_of_words_the_document_gives_itself_is_no_check_of_a_spelling() {
-    let alone = "This agreement is made by John Smith and Acme Corporation.";
-    for three in [
-        "This agreement for a new role is made by John Smith, Jane Doe and Acme Corporation \
-         and replaces no earlier one.",
-        "This agreement for a new role is made by John Smith, J. Doe and Acme Corporation \
-         and replaces no earlier one.",
-    ] {
-        let mut rig = Probation::reading(
-            &SMITH_AND_ACME,
-            vec![
-                agreement(
-                    0,
-                    EMPLOYMENT,
-                    PartyRelation::Between,
-                    &SMITH_AND_ACME,
-                    alone,
-                ),
-                agreement(
-                    1,
-                    EMPLOYMENT,
-                    PartyRelation::Between,
-                    &SMITH_AND_ACME,
-                    alone,
-                ),
-                agreement(
-                    2,
-                    EMPLOYMENT,
-                    PartyRelation::Between,
-                    &SMITH_AND_ACME,
-                    three,
-                ),
-                agreement(
-                    3,
-                    EMPLOYMENT,
-                    PartyRelation::Between,
-                    &SMITH_AND_ACME,
-                    alone,
-                ),
-            ],
-        );
-        for _ in 0..2 {
-            let id = rig.read_next();
-            rig.approve(id, JOINED);
-        }
-        assert_eq!(
-            rig.rule(),
-            rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
-        );
-        rig.automatic(true);
-
-        let third = rig.read_next();
-        let held = rig.item(third);
-        assert_eq!(held.status, QueueStatus::NeedsReview, "{three}");
-        let record = held.proposal.unwrap();
-        assert_eq!(record.filename, format!("2024-06-07 {JOINED}.pdf"));
-        assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
-        rig.approve_as_proposed(third);
-        assert_eq!(
-            rig.filed_as(third),
-            Some((
-                "John Smith, Jane Doe".into(),
-                format!("2024-06-07 {JOINED}.pdf")
-            ))
-        );
-        assert_eq!(
-            rig.rule(),
-            rule_state("John Smith", "John Smith, Jane Doe", 2, 0),
-            "the agreement gives Jane Doe itself: {three}"
-        );
-
-        let fourth = rig.read_next();
-        let held = rig.item(fourth);
-        assert_eq!(held.status, QueueStatus::NeedsReview, "{three}");
-        assert_eq!(
-            held.proposal.unwrap().reasons,
-            vec![LEARNED_SPELLING_UNCONFIRMED]
-        );
-        assert_eq!(rig.filed_as(fourth), None, "the wrong name is not filed");
-    }
-}
-
-/// A spelling an earlier release learned, which kept no record of the
-/// documents it was learned from: one of them, taken back, scanned again
-/// over itself and read again, approved as Intern named it. It was filed
-/// once, so it is no document new to Intern, and its approval checks
-/// nothing. It counted as the check, and the next agreement naming John
-/// Smith alone was filed without review under "John Smith, Jane Doe".
-#[test]
-fn a_document_filed_before_is_no_check_of_a_spelling_from_an_earlier_release() {
-    let mut rig = Probation::new(&SMITH_AND_ACME);
-    let first = rig.read_next();
-    let second = rig.read_next();
-    for id in [first, second] {
-        rig.approve(id, JOINED);
-    }
-    // As alpha.17 left the database: nothing kept of the teachers.
-    let database = Connection::open(rig.temp.path().join("queue.sqlite3")).unwrap();
-    database
-        .execute("DELETE FROM house_rule_teachers", [])
-        .unwrap();
-    let _ = database.execute("DELETE FROM house_rule_teacher_content", []);
-
-    rig.pipeline.undo(second).unwrap();
-    std::fs::write(rig.temp.path().join("inbox").join("b.pdf"), b"b.pdf again").unwrap();
-    rig.pipeline.reanalyze(second).unwrap();
-    rig.pipeline.run_until_idle().unwrap();
-    let again = rig.item(second);
-    assert_eq!(
-        again.proposal.as_ref().unwrap().reasons,
-        vec![LEARNED_SPELLING_UNCONFIRMED]
-    );
-    rig.approve_as_proposed(second);
-    assert_eq!(
-        rig.rule(),
-        rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
-    );
-
-    rig.automatic(true);
-    let next = rig.read_next();
-    assert_eq!(rig.item(next).status, QueueStatus::NeedsReview);
-    assert_eq!(rig.filed_as(next), None);
-}
-
 /// An agreement long enough for a text fingerprint: `role` makes each one
 /// its own.
 fn long_agreement(index: usize, role: &str) -> (DocumentSource, ModelProposal) {
@@ -7065,107 +6972,10 @@ fn long_agreement(index: usize, role: &str) -> (DocumentSource, ModelProposal) {
     )
 }
 
-/// A second scan of a document a spelling was learned from - flagged as a
-/// near duplicate of its filing, or not, the filing taken back, or the
-/// text too short for a fingerprint - approved as Intern named it, is the
-/// reviewer's own words approved again, and checks nothing; nor does a
-/// second scan of an agreement filed before the spelling was learned,
-/// approved to be filed anyway. Each counted as the
-/// check, and the next agreement was filed without review under "John
-/// Smith, Jane Doe".
-#[test]
-fn a_second_scan_of_a_document_a_spelling_was_learned_from_is_no_check_of_it() {
-    for (case, readings) in [
-        (
-            "a teacher's second scan",
-            vec![
-                long_agreement(0, "chief engineer"),
-                long_agreement(1, "senior analyst"),
-                long_agreement(1, "senior analyst"),
-                long_agreement(3, "head of sales"),
-            ],
-        ),
-        (
-            "a teacher's second scan, its filing taken back",
-            vec![
-                long_agreement(0, "chief engineer"),
-                long_agreement(1, "senior analyst"),
-                long_agreement(1, "senior analyst"),
-                long_agreement(3, "head of sales"),
-            ],
-        ),
-        (
-            "a teacher's second scan, too short to fingerprint",
-            [0, 1, 1, 3]
-                .into_iter()
-                .map(|index| {
-                    agreement(
-                        index,
-                        EMPLOYMENT,
-                        PartyRelation::Between,
-                        &SMITH_AND_ACME,
-                        "This agreement is made by John Smith and Acme Corporation.",
-                    )
-                })
-                .collect(),
-        ),
-        (
-            "a second scan of an agreement filed before",
-            vec![
-                long_agreement(0, "chief engineer"),
-                long_agreement(1, "senior analyst"),
-                long_agreement(2, "head of sales"),
-                long_agreement(0, "chief engineer"),
-                long_agreement(4, "general counsel"),
-            ],
-        ),
-    ] {
-        let earlier = case.ends_with("before");
-        let mut rig = Probation::reading(&SMITH_AND_ACME, readings);
-        if earlier {
-            let filed = rig.read_next();
-            rig.approve_as_proposed(filed);
-        }
-        let first = rig.read_next();
-        let second = rig.read_next();
-        for id in [first, second] {
-            rig.approve(id, JOINED);
-        }
-        let undone = case.ends_with("taken back");
-        if undone {
-            rig.pipeline.undo(second).unwrap();
-        }
-        let rescan = rig.read_next();
-        let record = rig.item(rescan).proposal.unwrap();
-        assert!(
-            record
-                .reasons
-                .contains(&LEARNED_SPELLING_UNCONFIRMED.to_owned()),
-            "{case}: {record:?}"
-        );
-        let short = case.ends_with("fingerprint");
-        assert_eq!(
-            record.near_duplicate_of.is_some(),
-            !undone && !short,
-            "{case}"
-        );
-        rig.approve_as_proposed(rescan);
-        assert_eq!(
-            rig.rule(),
-            rule_state("John Smith", "John Smith, Jane Doe", 2, 0),
-            "{case}"
-        );
-
-        rig.automatic(true);
-        let next = rig.read_next();
-        assert_eq!(rig.item(next).status, QueueStatus::NeedsReview, "{case}");
-        assert_eq!(rig.filed_as(next), None, "{case}");
-    }
-}
-
-/// Takes back the filing of the teacher `second`, removes it from the
-/// queue, and adds its file again: the new item's id.
-fn add_teacher_again(pipeline: &Pipeline, inbox: &Path, second: i64) -> i64 {
+/// Takes back the filing of `second`, an agreement a spelling was learned
+/// from, removes it from the queue, and adds its file again: the new
+/// item's id.
+fn add_again(pipeline: &Pipeline, inbox: &Path, second: i64) -> i64 {
     pipeline.undo(second).unwrap();
     pipeline.remove(second, false).unwrap();
     let again = pipeline
@@ -7177,28 +6987,41 @@ fn add_teacher_again(pipeline: &Pipeline, inbox: &Path, second: i64) -> i64 {
     again
 }
 
-/// Makes the queue database at `database` what alpha.17 left: no teacher
-/// kept of any spelling, by item or by what it held, and no reading
-/// keeping the words its text gave.
+/// Makes the queue database at `database` what alpha.17 left after a
+/// downgrade: its learned spellings in alpha.17's own table, which kept no
+/// checks.
 fn as_alpha17(database: &Path) {
-    let database = Connection::open(database).unwrap();
-    database
-        .execute("DELETE FROM house_rule_teachers", [])
-        .unwrap();
-    database
-        .execute("DROP TABLE house_rule_teacher_content", [])
-        .unwrap();
-    database
-        .execute(
-            "UPDATE proposals SET proposal_json = json_remove(proposal_json, '$.documentWords')",
-            [],
+    Connection::open(database)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE house_rules_alpha17 (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               kind TEXT NOT NULL,
+               from_key TEXT NOT NULL,
+               from_value TEXT NOT NULL,
+               to_value TEXT NOT NULL,
+               seen INTEGER NOT NULL DEFAULT 1,
+               created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL,
+               UNIQUE(kind, from_key)
+             );
+             INSERT INTO house_rules_alpha17
+               SELECT id, kind, from_key, from_value, to_value, seen, created_at, updated_at
+               FROM house_rules;
+             DROP TABLE house_rules;
+             ALTER TABLE house_rules_alpha17 RENAME TO house_rules;",
         )
         .unwrap();
 }
 
-/// The queue, as [`Probation`], opened again on what `rig` left after
-/// [`as_alpha17`]: the update to this release, reading `later` in turn.
-fn updated_from_alpha17(rig: Probation, later: Vec<(DocumentSource, ModelProposal)>) -> Probation {
+/// The queue, as [`Probation`], opened again on what `rig` left once
+/// `change` has made its database what another build left, reading `later`
+/// in turn.
+fn reopened(
+    rig: Probation,
+    change: impl FnOnce(&Path),
+    later: Vec<(DocumentSource, ModelProposal)>,
+) -> Probation {
     let Probation {
         temp,
         pipeline,
@@ -7206,7 +7029,7 @@ fn updated_from_alpha17(rig: Probation, later: Vec<(DocumentSource, ModelProposa
         ..
     } = rig;
     drop(pipeline);
-    as_alpha17(&temp.path().join("queue.sqlite3"));
+    change(&temp.path().join("queue.sqlite3"));
     let (texts, replies) = later.into_iter().unzip();
     let (pipeline, filing) = reading_pipeline(
         temp.path(),
@@ -7223,62 +7046,143 @@ fn updated_from_alpha17(rig: Probation, later: Vec<(DocumentSource, ModelProposa
     }
 }
 
-/// A spelling alpha.17 learned from two agreements too short for a text
-/// fingerprint, which kept no words of their text either: one of them
-/// scanned again after the update, and approved as Intern named it. It is
-/// the reviewer's own words approved again, and checks nothing, though
-/// nothing it holds can be told from what the teacher held but its date.
-/// It counted as the check, with neither a fingerprint nor the words to
-/// compare, and the next agreement was filed without review under "John
-/// Smith, Jane Doe". An agreement of another date still checks the
-/// spelling.
+/// The queue, as [`Probation`], opened again on what `rig` left after
+/// [`as_alpha17`]: the update to this release, reading `later` in turn.
+fn updated_from_alpha17(rig: Probation, later: Vec<(DocumentSource, ModelProposal)>) -> Probation {
+    reopened(rig, as_alpha17, later)
+}
+
+/// The [`PROBATION_DATES`]'s `index`th agreement as [`Probation::new`]
+/// reads it.
+fn dated_agreement(index: usize) -> (DocumentSource, ModelProposal) {
+    let (iso, written) = PROBATION_DATES[index];
+    (dated_text(written), dated_proposal(iso, written))
+}
+
+/// A spelling alpha.17 learned and used - here one a person had chosen to
+/// use on its own before a downgrade, which alpha.17 forgets - is unchecked
+/// after the update, and a document it left ready under a name the
+/// spelling changed waits for a person from the moment the queue opens,
+/// before any document is read: with automatic renaming on, nothing files
+/// it. It was listed ready, one click from filing under a spelling nobody
+/// had checked in this release.
 #[test]
-fn a_short_teacher_of_a_spelling_from_an_earlier_release_scanned_again_is_no_check() {
-    let short = |index| {
-        agreement(
-            index,
-            EMPLOYMENT,
-            PartyRelation::Between,
-            &SMITH_AND_ACME,
-            "This agreement is made by John Smith and Acme Corporation.",
-        )
-    };
-    let mut rig = Probation::reading(&SMITH_AND_ACME, vec![short(0), short(1)]);
+fn a_spelling_from_alpha17_is_unchecked_after_the_update_and_its_ready_rows_wait_at_open() {
+    let mut rig = Probation::new(&SMITH_AND_ACME);
     let first = rig.read_next();
     let second = rig.read_next();
     for id in [first, second] {
-        rig.approve(id, JOINED);
+        rig.approve(id, "Employment Agreement between John Smith and Acme");
     }
-    let teacher = rig.item(second).proposal.unwrap();
-    assert!(teacher.analysis.text_fingerprint.is_none());
-    let mut rig = updated_from_alpha17(rig, vec![short(1), short(3)]);
-
-    let rescan = rig.read_next();
-    let record = rig.item(rescan).proposal.unwrap();
-    assert!(
-        record.filename.starts_with(&format!("2024-05-03 {JOINED}")),
-        "{}",
-        record.filename
-    );
-    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
-    rig.approve_as_proposed(rescan);
+    rig.use_on_its_own();
+    let third = rig.read_next();
+    let ready = rig.item(third);
+    assert_eq!(ready.status, QueueStatus::Ready, "checked");
     assert_eq!(
-        rig.rule(),
-        rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
+        ready.proposal.unwrap().filename,
+        "2024-06-07 Employment Agreement between John Smith and Acme.pdf"
     );
 
-    let next = rig.read_next();
-    let held = rig.item(next);
+    let rig = updated_from_alpha17(rig, vec![dated_agreement(3)]);
+    assert_eq!(rig.rule(), rule_state("Acme Corporation", "Acme", 2, 0));
+    let held = rig.item(third);
     assert_eq!(held.status, QueueStatus::NeedsReview);
     assert_eq!(
         held.proposal.unwrap().reasons,
         vec![LEARNED_SPELLING_UNCONFIRMED]
     );
-    rig.approve_as_proposed(next);
+    rig.automatic(true);
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(rig.item(third).status, QueueStatus::NeedsReview);
+    assert_eq!(rig.filed_as(third), None);
+}
+
+/// What a development build of alpha.18 left, when an approval could check
+/// a spelling: a spelling it counted as checked, the tables of the
+/// documents spellings were learned from, and readings that kept the words
+/// their text gave. The queue opens on it: the tables are gone, the
+/// spelling is unchecked - nothing says a person chose to use it on its
+/// own - and the document left ready under it waits for a person, its
+/// reading read as before. Choosing "Use on its own" then lets the next
+/// agreement be filed without review.
+#[test]
+fn a_database_a_development_build_left_opens_with_every_spelling_unchecked() {
+    let mut rig = Probation::new(&SMITH_AND_ACME);
+    let first = rig.read_next();
+    let second = rig.read_next();
+    for id in [first, second] {
+        rig.approve(id, "Employment Agreement between John Smith and Acme");
+    }
+    rig.use_on_its_own();
+    let third = rig.read_next();
+    assert_eq!(rig.item(third).status, QueueStatus::Ready, "checked");
+
+    let mut rig = reopened(
+        rig,
+        |database| {
+            Connection::open(database)
+                .unwrap()
+                .execute_batch(
+                    "CREATE TABLE house_rule_teachers (
+                       kind TEXT NOT NULL,
+                       from_key TEXT NOT NULL,
+                       queue_item_id INTEGER NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
+                       PRIMARY KEY(kind, from_key, queue_item_id)
+                     );
+                     INSERT INTO house_rule_teachers VALUES
+                       ('party', 'acme corporation', 1), ('party', 'acme corporation', 2);
+                     CREATE TABLE house_rule_teacher_content (
+                       kind TEXT NOT NULL,
+                       from_key TEXT NOT NULL,
+                       source_hash TEXT NOT NULL,
+                       fingerprint TEXT,
+                       words TEXT,
+                       filed_name TEXT NOT NULL,
+                       PRIMARY KEY(kind, from_key, source_hash)
+                     );
+                     INSERT INTO house_rule_teacher_content VALUES
+                       ('party', 'acme corporation', 'hash', NULL, 'AAEC',
+                        '2024-04-12 Employment Agreement between John Smith and Acme.pdf');
+                     UPDATE proposals
+                       SET proposal_json = json_set(proposal_json, '$.documentWords', 'AAECAwQFBgc=');",
+                )
+                .unwrap();
+        },
+        vec![dated_agreement(3)],
+    );
+    let database = Connection::open(rig.temp.path().join("queue.sqlite3")).unwrap();
+    let tables = database
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'house_rule_teacher%'",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(tables, Vec::<String>::new());
+    assert_eq!(rig.rule(), rule_state("Acme Corporation", "Acme", 2, 0));
+    let held = rig.item(third);
+    assert_eq!(held.status, QueueStatus::NeedsReview);
+    let record = held
+        .proposal
+        .expect("a reading that kept its words is read");
     assert_eq!(
-        rig.rule(),
-        rule_state("John Smith", "John Smith, Jane Doe", 2, 1),
-        "an agreement of another date"
+        record.filename,
+        "2024-06-07 Employment Agreement between John Smith and Acme.pdf"
+    );
+    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
+    assert_eq!(rig.filed_as(third), None);
+
+    rig.use_on_its_own();
+    rig.automatic(true);
+    let fourth = rig.read_next();
+    assert_eq!(
+        rig.filed_as(fourth),
+        Some((
+            "John Smith".into(),
+            "2024-07-01 Employment Agreement between John Smith and Acme.pdf".into()
+        ))
     );
 }
 
@@ -7296,174 +7200,43 @@ fn other_long_agreement(index: usize) -> (DocumentSource, ModelProposal) {
     )
 }
 
-/// A spelling alpha.17 learned, one of whose teachers failed to file and
-/// was read again (Re-analyze) before the update: a fresh reading nobody
-/// had approved, never filed, with nothing left of the approval that
-/// taught. After the update it is read again, as revalidation reads every
-/// waiting document, and approved as Intern named it - the reviewer's own
-/// words again. It checks nothing: every document waiting when the update
-/// came whose reading the spelling respells is taken as a teacher. It
-/// counted as the check, and the next agreement was filed without review
-/// under "John Smith, Jane Doe".
-#[test]
-fn a_teacher_of_a_spelling_from_an_earlier_release_whose_filing_failed_and_was_read_again_is_no_check()
- {
-    let mut rig = Probation::reading(
+/// An agreement between John Smith and Acme Corporation alone, dated by
+/// [`PROBATION_DATES`]'s `index`th date, too short for a text fingerprint.
+fn alone(index: usize) -> (DocumentSource, ModelProposal) {
+    agreement(
+        index,
+        EMPLOYMENT,
+        PartyRelation::Between,
         &SMITH_AND_ACME,
-        vec![
-            long_agreement(0, "chief engineer"),
-            other_long_agreement(1),
-            other_long_agreement(1),
-        ],
-    );
-    let first = rig.read_next();
-    let second = rig.read_next();
-    rig.approve(first, JOINED);
-    // The folder the second goes to cannot be made: a file has its name.
-    let filed = rig.temp.path().join("filed");
-    let folder = filed.join("John Smith, Jane Doe");
-    std::fs::rename(&folder, filed.join("moved")).unwrap();
-    std::fs::write(&folder, b"in the way").unwrap();
-    let date = PROBATION_DATES[1].0;
-    assert!(
-        rig.pipeline
-            .approve(
-                second,
-                &format!("{date} {JOINED}.pdf"),
-                "An employment agreement."
-            )
-            .is_err()
-    );
-    std::fs::remove_file(&folder).unwrap();
-    rig.pipeline.reanalyze(second).unwrap();
-    rig.pipeline.run_until_idle().unwrap();
-    let again = rig.item(second);
-    let record = again.proposal.as_ref().unwrap();
-    assert!(!record.approved && !record.reviewed, "{again:?}");
-    rig.read = 3;
-    let rig = updated_from_alpha17(
-        rig,
-        vec![other_long_agreement(1), long_agreement(3, "head of sales")],
-    );
-
-    rig.pipeline.reanalyze(second).unwrap();
-    rig.pipeline.run_until_idle().unwrap();
-    let record = rig.item(second).proposal.unwrap();
-    assert!(record.document_words.is_some());
-    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
-    rig.approve_as_proposed(second);
-    assert_eq!(
-        rig.rule(),
-        rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
-    );
-
-    rig.automatic(true);
-    let mut rig = rig;
-    let next = rig.read_next();
-    assert_eq!(rig.item(next).status, QueueStatus::NeedsReview);
-    assert_eq!(rig.filed_as(next), None);
+        "This agreement is made by John Smith and Acme Corporation.",
+    )
 }
 
-/// A document a spelling was learned from, taken back, removed from the
-/// queue and added again, is a new item for the same file, and its approval
-/// checks nothing: the teachers are kept by what they hold as well as by
-/// item. It counted as the check, and the next agreement was filed without
-/// review under "John Smith, Jane Doe".
-#[test]
-fn a_document_a_spelling_was_learned_from_added_again_is_no_check_of_it() {
-    let mut rig = Probation::new(&SMITH_AND_ACME);
+/// A [`Probation`] reading `readings`, that has learned the wrong spelling
+/// "John Smith -> John Smith, Jane Doe" from the first two, each approved
+/// as [`JOINED`] - wording no heuristic refuses - and the ids of those two.
+fn taught_wrong(readings: Vec<(DocumentSource, ModelProposal)>) -> (Probation, i64, i64) {
+    let mut rig = Probation::reading(&SMITH_AND_ACME, readings);
     let first = rig.read_next();
     let second = rig.read_next();
     for id in [first, second] {
         rig.approve(id, JOINED);
     }
-    let again = add_teacher_again(&rig.pipeline, &rig.temp.path().join("inbox"), second);
-    assert_ne!(again, second);
-    assert_eq!(
-        rig.item(again).proposal.unwrap().reasons,
-        vec![LEARNED_SPELLING_UNCONFIRMED]
-    );
-    rig.approve_as_proposed(again);
     assert_eq!(
         rig.rule(),
         rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
     );
-
-    rig.automatic(true);
-    rig.read = 3;
-    let next = rig.read_next();
-    assert_eq!(rig.item(next).status, QueueStatus::NeedsReview);
-    assert_eq!(rig.filed_as(next), None);
+    (rig, first, second)
 }
 
-/// The same for a spelling an earlier release learned, which kept no
-/// record of its teachers: the documents filed under a name giving the
-/// spelling are taken as its teachers when the queue first opens after the
-/// update, by what they hold.
-#[test]
-fn a_document_a_spelling_from_an_earlier_release_was_learned_from_added_again_is_no_check() {
-    let mut rig = Probation::new(&SMITH_AND_ACME);
-    let first = rig.read_next();
-    let second = rig.read_next();
-    for id in [first, second] {
-        rig.approve(id, JOINED);
-    }
-    let Probation { temp, pipeline, .. } = rig;
-    drop(pipeline);
-    // As alpha.17 left the database: nothing kept of the teachers.
-    let database = Connection::open(temp.path().join("queue.sqlite3")).unwrap();
-    database
-        .execute("DELETE FROM house_rule_teachers", [])
-        .unwrap();
-    let _ = database.execute("DROP TABLE house_rule_teacher_content", []);
-    drop(database);
-    let (pipeline, filing) = reading_pipeline(
-        temp.path(),
-        PROBATION_DATES[2..]
-            .iter()
-            .map(|(_, written)| dated_text(written))
-            .collect(),
-        PROBATION_DATES[2..]
-            .iter()
-            .map(|(iso, written)| dated_proposal(iso, written))
-            .collect(),
-        &SMITH_AND_ACME,
-        DestinationLayout::Party,
-    );
-    let rig = Probation {
-        temp,
-        pipeline,
-        filing,
-        read: 3,
-    };
-    let again = add_teacher_again(&rig.pipeline, &rig.temp.path().join("inbox"), second);
-    assert_eq!(
-        rig.item(again).proposal.unwrap().reasons,
-        vec![LEARNED_SPELLING_UNCONFIRMED]
-    );
-    rig.approve_as_proposed(again);
-    assert_eq!(
-        rig.rule(),
-        rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
-    );
-
-    rig.automatic(true);
-    let mut rig = rig;
-    let next = rig.read_next();
-    assert_eq!(rig.item(next).status, QueueStatus::NeedsReview);
-    assert_eq!(rig.filed_as(next), None);
-}
-
-/// The same for a teacher whose filing failed, still waiting in review
-/// when the queue first opens after the update: approved, though never
-/// filed, it is taken as a teacher by what it holds too.
-#[test]
-fn a_teacher_whose_filing_failed_before_the_update_added_again_is_no_check() {
-    let mut rig = Probation::new(&SMITH_AND_ACME);
+/// Approves the second agreement of `rig` as [`JOINED`] where its folder
+/// cannot be made - a file has its name - so that its filing fails and it
+/// waits in review, approved once and never filed. The first is approved
+/// as [`JOINED`] before it.
+fn taught_wrong_second_unfiled(rig: &mut Probation) -> i64 {
     let first = rig.read_next();
     let second = rig.read_next();
     rig.approve(first, JOINED);
-    // The folder the second goes to cannot be made: a file has its name.
     let filed = rig.temp.path().join("filed");
     let folder = filed.join("John Smith, Jane Doe");
     std::fs::rename(&folder, filed.join("moved")).unwrap();
@@ -7486,81 +7259,383 @@ fn a_teacher_whose_filing_failed_before_the_update_added_again_is_no_check() {
         rig.rule(),
         rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
     );
-    let Probation { temp, pipeline, .. } = rig;
-    drop(pipeline);
-    // As alpha.17 left the database: nothing kept of the teachers.
-    let database = Connection::open(temp.path().join("queue.sqlite3")).unwrap();
-    database
-        .execute("DELETE FROM house_rule_teachers", [])
-        .unwrap();
-    let _ = database.execute("DROP TABLE house_rule_teacher_content", []);
-    drop(database);
-    let (pipeline, filing) = reading_pipeline(
-        temp.path(),
-        PROBATION_DATES[2..]
-            .iter()
-            .map(|(_, written)| dated_text(written))
-            .collect(),
-        PROBATION_DATES[2..]
-            .iter()
-            .map(|(iso, written)| dated_proposal(iso, written))
-            .collect(),
-        &SMITH_AND_ACME,
-        DestinationLayout::Party,
-    );
-    let mut rig = Probation {
-        temp,
-        pipeline,
-        filing,
-        read: 3,
-    };
-    rig.pipeline.remove(second, false).unwrap();
-    let again = rig
-        .pipeline
-        .enqueue_files(&[rig
-            .temp
-            .path()
-            .join("inbox")
-            .join("b.pdf")
-            .canonicalize()
-            .unwrap()])
-        .unwrap()
-        .remove(0)
-        .id;
-    rig.pipeline.run_until_idle().unwrap();
-    assert_eq!(
-        rig.item(again).proposal.unwrap().reasons,
-        vec![LEARNED_SPELLING_UNCONFIRMED]
-    );
-    rig.approve_as_proposed(again);
-    assert_eq!(
-        rig.rule(),
-        rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
-    );
-
-    rig.automatic(true);
-    let next = rig.read_next();
-    assert_eq!(rig.item(next).status, QueueStatus::NeedsReview);
-    assert_eq!(rig.filed_as(next), None);
+    second
 }
 
-/// A spelling of each kind a person teaches, and how many approvals of a
-/// name it changed, each on a document new to Intern, it waits for before
-/// the names it changes are filed on their own. One, for every spelling
-/// that adds no word of its own - a short form, a case and company form, a
-/// company form added, an acronym - whatever the document says besides:
-/// "Acme Corporation" in a document whose name Intern writes "Acme
-/// Corporation" for "Acme", "DEQ" beside the department it stands for,
-/// "EPA" beside the "U.S. Environmental Protection Agency" whose leading
-/// "U.S." it leaves out. One for a first name added, on an agreement that
-/// says only "Mr. Smith" - scanned, and its text read from the page, too -
-/// and not on one that names John Smith itself, which is no look at what
-/// the spelling adds: the next agreement waits again, and the one after
-/// that, approved, is the check. A scanned agreement and an acronym that
-/// leaves out its agency's prefix used to check nothing, ever: every name
-/// they changed waited for a person.
+/// The wrong spelling "John Smith -> John Smith, Jane Doe", learned from
+/// two agreements a reviewer named "between John Smith, Jane Doe and Acme
+/// Corporation", changes the name of a document, which waits for a person,
+/// who approves it as Intern named it - on any document: a new agreement
+/// that names Jane Doe itself, or "J. Doe", or neither; one with a page
+/// Intern could not read; one of the agreements the spelling was learned
+/// from, read again, scanned again, added again, or read again after its
+/// filing failed; a second scan of an agreement filed before; and each of
+/// those for a spelling alpha.17 learned, after the update. The approval
+/// checks nothing. The next agreement the spelling changes, naming John
+/// Smith alone, waits for a person, and its approval checks nothing
+/// either; the one after it waits too, and the document's own words put
+/// back retract the spelling. Each of those approvals was counted as the
+/// spelling's check in some round - the document new to Intern and not
+/// seeming to give "Jane Doe" in the words compared - and the next
+/// agreement was filed without review as "... between John Smith, Jane
+/// Doe and Acme Corporation" in "John Smith, Jane Doe/".
 #[test]
-fn one_approval_of_a_new_document_checks_a_spelling_that_adds_nothing_the_document_gives() {
+fn an_approval_of_a_wrong_spelling_on_any_document_checks_nothing_and_the_next_name_waits() {
+    let both = |index, written: &str| {
+        agreement(
+            index,
+            EMPLOYMENT,
+            PartyRelation::Between,
+            &SMITH_AND_ACME,
+            &format!(
+                "This agreement for a new role is made by John Smith, {written} and Acme \
+                 Corporation and replaces no earlier one."
+            ),
+        )
+    };
+    let read_again = |rig: &Probation, second: i64| {
+        rig.pipeline.undo(second).unwrap();
+        std::fs::write(rig.temp.path().join("inbox").join("b.pdf"), b"b.pdf again").unwrap();
+        rig.pipeline.reanalyze(second).unwrap();
+        rig.pipeline.run_until_idle().unwrap();
+        second
+    };
+    type Held = Box<dyn Fn() -> (Probation, i64)>;
+    let cases: Vec<(&str, Held)> = vec![
+        (
+            "a new agreement naming John Smith, Jane Doe and Acme Corporation",
+            Box::new(move || {
+                let (mut rig, ..) = taught_wrong(vec![
+                    alone(0),
+                    alone(1),
+                    both(2, "Jane Doe"),
+                    alone(3),
+                    alone(4),
+                ]);
+                let id = rig.read_next();
+                (rig, id)
+            }),
+        ),
+        (
+            "a new agreement naming J. Doe",
+            Box::new(move || {
+                let (mut rig, ..) = taught_wrong(vec![
+                    alone(0),
+                    alone(1),
+                    both(2, "J. Doe"),
+                    alone(3),
+                    alone(4),
+                ]);
+                let id = rig.read_next();
+                (rig, id)
+            }),
+        ),
+        (
+            "a new agreement naming John Smith alone",
+            Box::new(|| {
+                let (mut rig, ..) = taught_wrong((0..5).map(alone).collect());
+                let id = rig.read_next();
+                (rig, id)
+            }),
+        ),
+        (
+            "a new agreement whose cover page Intern could not read",
+            Box::new(|| {
+                let (mut cover, reply) = long_agreement(2, "warehouse supervisor");
+                for page in &mut cover.pages {
+                    page.page_number += 1;
+                }
+                cover.pages.insert(
+                    0,
+                    SourcePage::new(1, "X7QZ0K4LMNB2RTY8WVU3JHG5FDS1", PageOrigin::Native),
+                );
+                cover.page_image = Some(PageImage {
+                    page_number: 1,
+                    media_type: "image/png".into(),
+                    bytes: vec![1, 2, 3],
+                });
+                let (mut rig, ..) =
+                    taught_wrong(vec![alone(0), alone(1), (cover, reply), alone(3), alone(4)]);
+                let id = rig.read_next();
+                (rig, id)
+            }),
+        ),
+        (
+            "an agreement it was learned from, taken back and read again",
+            Box::new(move || {
+                let (rig, _, second) =
+                    taught_wrong(vec![alone(0), alone(1), alone(1), alone(3), alone(4)]);
+                let id = read_again(&rig, second);
+                (rig, id)
+            }),
+        ),
+        (
+            "a second scan of an agreement it was learned from",
+            Box::new(|| {
+                let (mut rig, ..) = taught_wrong(vec![
+                    long_agreement(0, "chief engineer"),
+                    long_agreement(1, "senior analyst"),
+                    long_agreement(1, "senior analyst"),
+                    long_agreement(3, "head of sales"),
+                    long_agreement(4, "general counsel"),
+                ]);
+                let id = rig.read_next();
+                assert!(rig.item(id).proposal.unwrap().near_duplicate_of.is_some());
+                (rig, id)
+            }),
+        ),
+        (
+            "a second scan of an agreement it was learned from, its filing taken back",
+            Box::new(|| {
+                let (mut rig, _, second) = taught_wrong(vec![
+                    long_agreement(0, "chief engineer"),
+                    long_agreement(1, "senior analyst"),
+                    long_agreement(1, "senior analyst"),
+                    long_agreement(3, "head of sales"),
+                    long_agreement(4, "general counsel"),
+                ]);
+                rig.pipeline.undo(second).unwrap();
+                let id = rig.read_next();
+                (rig, id)
+            }),
+        ),
+        (
+            "a second scan of an agreement it was learned from, too short to fingerprint",
+            Box::new(|| {
+                let (mut rig, _, second) =
+                    taught_wrong(vec![alone(0), alone(1), alone(1), alone(3), alone(4)]);
+                assert!(
+                    rig.item(second)
+                        .proposal
+                        .unwrap()
+                        .analysis
+                        .text_fingerprint
+                        .is_none()
+                );
+                let id = rig.read_next();
+                (rig, id)
+            }),
+        ),
+        (
+            "a second scan of an agreement filed before the spelling was learned",
+            Box::new(|| {
+                let mut rig = Probation::reading(
+                    &SMITH_AND_ACME,
+                    vec![
+                        long_agreement(0, "chief engineer"),
+                        long_agreement(1, "senior analyst"),
+                        long_agreement(2, "head of sales"),
+                        long_agreement(0, "chief engineer"),
+                        long_agreement(3, "general counsel"),
+                        long_agreement(4, "chief of staff"),
+                    ],
+                );
+                let filed = rig.read_next();
+                rig.approve_as_proposed(filed);
+                let first = rig.read_next();
+                let second = rig.read_next();
+                for id in [first, second] {
+                    rig.approve(id, JOINED);
+                }
+                let id = rig.read_next();
+                assert!(rig.item(id).proposal.unwrap().near_duplicate_of.is_some());
+                (rig, id)
+            }),
+        ),
+        (
+            "an agreement it was learned from, removed from the queue and added again",
+            Box::new(|| {
+                let (rig, _, second) =
+                    taught_wrong(vec![alone(0), alone(1), alone(1), alone(3), alone(4)]);
+                let id = add_again(&rig.pipeline, &rig.temp.path().join("inbox"), second);
+                assert_ne!(id, second);
+                (rig, id)
+            }),
+        ),
+        (
+            "an agreement it was learned from whose filing failed, read again",
+            Box::new(|| {
+                // Read again from the text the queue kept of it: the worker
+                // is not asked again, the model is.
+                let (first, first_reply) = long_agreement(0, "chief engineer");
+                let (second, second_reply) = other_long_agreement(1);
+                let (next, next_reply) = long_agreement(3, "head of sales");
+                let (last, last_reply) = long_agreement(4, "general counsel");
+                let mut rig = Probation::reading(
+                    &SMITH_AND_ACME,
+                    vec![
+                        (first, first_reply),
+                        (second, second_reply.clone()),
+                        (next, second_reply),
+                        (last.clone(), next_reply),
+                        (last, last_reply),
+                    ],
+                );
+                let second = taught_wrong_second_unfiled(&mut rig);
+                rig.pipeline.reanalyze(second).unwrap();
+                rig.pipeline.run_until_idle().unwrap();
+                let record = rig.item(second).proposal.unwrap();
+                assert!(!record.approved && !record.reviewed, "{record:?}");
+                (rig, second)
+            }),
+        ),
+        (
+            "an agreement it was learned from whose filing failed, removed and added again",
+            Box::new(|| {
+                let mut rig = Probation::reading(
+                    &SMITH_AND_ACME,
+                    vec![alone(0), alone(1), alone(1), alone(3), alone(4)],
+                );
+                let second = taught_wrong_second_unfiled(&mut rig);
+                rig.pipeline.remove(second, false).unwrap();
+                let id = rig
+                    .pipeline
+                    .enqueue_files(&[rig
+                        .temp
+                        .path()
+                        .join("inbox")
+                        .join("b.pdf")
+                        .canonicalize()
+                        .unwrap()])
+                    .unwrap()
+                    .remove(0)
+                    .id;
+                rig.pipeline.run_until_idle().unwrap();
+                (rig, id)
+            }),
+        ),
+        (
+            "an agreement an alpha.17 spelling was learned from, taken back and read again \
+             after the update",
+            Box::new(move || {
+                let (rig, _, second) = taught_wrong(vec![alone(0), alone(1)]);
+                let rig = updated_from_alpha17(rig, vec![alone(1), alone(3), alone(4)]);
+                assert_eq!(rig.rule().4, 0);
+                let id = read_again(&rig, second);
+                (rig, id)
+            }),
+        ),
+        (
+            "an agreement an alpha.17 spelling was learned from, scanned again after the \
+             update, too short to fingerprint",
+            Box::new(|| {
+                let (rig, ..) = taught_wrong(vec![alone(0), alone(1)]);
+                let mut rig = updated_from_alpha17(rig, vec![alone(1), alone(3), alone(4)]);
+                let id = rig.read_next();
+                (rig, id)
+            }),
+        ),
+        (
+            "an agreement an alpha.17 spelling was learned from, removed and added again \
+             after the update",
+            Box::new(|| {
+                let (rig, _, second) = taught_wrong(vec![alone(0), alone(1)]);
+                let rig = updated_from_alpha17(rig, vec![alone(1), alone(3), alone(4)]);
+                let id = add_again(&rig.pipeline, &rig.temp.path().join("inbox"), second);
+                (rig, id)
+            }),
+        ),
+        (
+            "an agreement an alpha.17 spelling was learned from whose filing failed, read \
+             again after the update",
+            Box::new(|| {
+                let mut rig = Probation::reading(
+                    &SMITH_AND_ACME,
+                    vec![long_agreement(0, "chief engineer"), other_long_agreement(1)],
+                );
+                let second = taught_wrong_second_unfiled(&mut rig);
+                let rig = updated_from_alpha17(
+                    rig,
+                    vec![
+                        other_long_agreement(1),
+                        long_agreement(3, "head of sales"),
+                        long_agreement(4, "general counsel"),
+                    ],
+                );
+                rig.pipeline.reanalyze(second).unwrap();
+                rig.pipeline.run_until_idle().unwrap();
+                (rig, second)
+            }),
+        ),
+    ];
+    let mut failed = Vec::new();
+    for (case, held) in cases {
+        // Each case on its own: one that fails says so, and the rest still run.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (mut rig, id) = held();
+            let waiting = rig.item(id);
+            assert_eq!(waiting.status, QueueStatus::NeedsReview, "{case}");
+            let record = waiting.proposal.unwrap();
+            assert!(
+                record
+                    .reasons
+                    .contains(&LEARNED_SPELLING_UNCONFIRMED.to_owned()),
+                "{case}: {record:?}"
+            );
+            assert!(
+                record.filename.contains(JOINED),
+                "{case}: {}",
+                record.filename
+            );
+            rig.approve_as_proposed(id);
+            assert_eq!(
+                rig.rule(),
+                rule_state("John Smith", "John Smith, Jane Doe", 2, 0),
+                "{case}: the approval checks nothing"
+            );
+
+            rig.automatic(true);
+            let next = rig.read_next();
+            let held = rig.item(next);
+            assert_eq!(held.status, QueueStatus::NeedsReview, "{case}");
+            assert_eq!(
+                held.proposal.unwrap().reasons,
+                vec![LEARNED_SPELLING_UNCONFIRMED],
+                "{case}"
+            );
+            assert_eq!(
+                rig.filed_as(next),
+                None,
+                "{case}: the wrong name is not filed"
+            );
+            rig.approve_as_proposed(next);
+            assert_eq!(rig.rule().4, 0, "{case}: nor does the next approval");
+
+            let last = rig.read_next();
+            assert_eq!(rig.item(last).status, QueueStatus::NeedsReview, "{case}");
+            assert_eq!(
+                rig.filed_as(last),
+                None,
+                "{case}: the wrong name is not filed"
+            );
+            rig.put_back_own_words(last);
+            assert!(
+                rig.pipeline.learned_rules().unwrap().is_empty(),
+                "{case}: the document's own words put back retract the spelling"
+            );
+            let (folder, _) = rig.filed_as(last).unwrap();
+            assert_eq!(folder, "John Smith", "{case}");
+        }));
+        if outcome.is_err() {
+            failed.push(case);
+        }
+    }
+    assert!(failed.is_empty(), "{failed:?}");
+}
+
+/// A spelling of each kind a person teaches - a short form, a case and
+/// company form, a company form added, an acronym, a first name added on
+/// an agreement that says only "Mr. Smith" or one that names John Smith
+/// itself, an acronym that leaves out its agency's prefix, and the first
+/// name on a scanned agreement whose text was read from the page - changes
+/// the name of every later document it fires on, and each such name waits
+/// for a person however many are approved as Intern named them: two
+/// approvals, each on a document new to Intern, check nothing. Once a
+/// person chooses "Use on its own" for the spelling, the next document is
+/// filed on its own under it. One approval of a new document used to be
+/// the check of all but the "John Smith in the text" kind, which took two.
+#[test]
+fn no_approval_checks_a_spelling_of_any_kind_until_it_is_used_on_its_own() {
     struct Kind {
         label: &'static str,
         kind: &'static str,
@@ -7571,8 +7646,6 @@ fn one_approval_of_a_new_document_checks_a_spelling_that_adds_nothing_the_docume
         rule: (&'static str, &'static str),
         /// The text of each later agreement, in turn.
         later: &'static [&'static str],
-        /// Approvals of held names before one is filed on its own.
-        approvals: usize,
         /// Whether each later agreement is a scan: its page comes with an
         /// image of it, its text read by OCR.
         scanned: bool,
@@ -7587,7 +7660,6 @@ fn one_approval_of_a_new_document_checks_a_spelling_that_adds_nothing_the_docume
             edit: "Employment Agreement between John Smith and Acme",
             rule: ("Acme Corporation", "Acme"),
             later: &["This agreement is made by John Smith and Acme Corporation."; 3],
-            approvals: 1,
             scanned: false,
         },
         Kind {
@@ -7599,7 +7671,6 @@ fn one_approval_of_a_new_document_checks_a_spelling_that_adds_nothing_the_docume
             edit: "Employment Agreement between John Smith and ACME Corp",
             rule: ("ACME CORPORATION", "ACME Corp"),
             later: &["This agreement is made by John Smith and ACME CORPORATION."; 3],
-            approvals: 1,
             scanned: false,
         },
         Kind {
@@ -7616,7 +7687,6 @@ fn one_approval_of_a_new_document_checks_a_spelling_that_adds_nothing_the_docume
                 "This agreement is made by John Smith and Acme.",
                 "This agreement is made by John Smith and Acme.",
             ],
-            approvals: 1,
             scanned: false,
         },
         Kind {
@@ -7632,7 +7702,6 @@ fn one_approval_of_a_new_document_checks_a_spelling_that_adds_nothing_the_docume
                 "This order is entered with the Department of Environmental Quality.",
                 "This order is entered with the Department of Environmental Quality.",
             ],
-            approvals: 1,
             scanned: false,
         },
         Kind {
@@ -7644,7 +7713,6 @@ fn one_approval_of_a_new_document_checks_a_spelling_that_adds_nothing_the_docume
             edit: "Employment Agreement between John Smith and Acme Corporation",
             rule: ("Smith", "John Smith"),
             later: &[MR_SMITH; 3],
-            approvals: 1,
             scanned: false,
         },
         Kind {
@@ -7660,7 +7728,6 @@ fn one_approval_of_a_new_document_checks_a_spelling_that_adds_nothing_the_docume
                 MR_SMITH,
                 MR_SMITH,
             ],
-            approvals: 2,
             scanned: false,
         },
         Kind {
@@ -7673,7 +7740,6 @@ fn one_approval_of_a_new_document_checks_a_spelling_that_adds_nothing_the_docume
             rule: ("U.S. Environmental Protection Agency", "EPA"),
             later: &["This order is entered with the U.S. Environmental Protection Agency (\"EPA\").";
                 3],
-            approvals: 1,
             scanned: false,
         },
         Kind {
@@ -7689,7 +7755,6 @@ fn one_approval_of_a_new_document_checks_a_spelling_that_adds_nothing_the_docume
                       manager. Compensation includes a base salary and standard benefits. \
                       Either party may end this agreement with thirty days written notice.";
                 3],
-            approvals: 1,
             scanned: true,
         },
     ];
@@ -7731,13 +7796,10 @@ fn one_approval_of_a_new_document_checks_a_spelling_that_adds_nothing_the_docume
         );
         rig.automatic(true);
         let mut approvals = 0;
-        let filed = loop {
-            if rig.read == PROBATION_DATES.len() {
-                break false;
-            }
+        for _ in 0..2 {
             let id = rig.read_next();
             if rig.filed_as(id).is_some() {
-                break true;
+                break;
             }
             let record = rig.item(id).proposal.unwrap();
             assert_eq!(
@@ -7749,42 +7811,45 @@ fn one_approval_of_a_new_document_checks_a_spelling_that_adds_nothing_the_docume
             );
             rig.approve_as_proposed(id);
             approvals += 1;
-        };
+        }
+        let checked = rig.rule().4;
+        rig.use_on_its_own();
+        let last = rig.read_next();
+        let filed = rig.item(last).status == QueueStatus::Completed;
         eprintln!(
-            "{}: {approvals} approval(s), then filed on its own: {filed}; rule {:?}",
+            "{}: {approvals} approval(s) held, checked {checked} after them; filed on its own \
+             once used on its own: {filed}",
             kind.label,
-            rig.rule()
         );
-        if !filed || approvals != kind.approvals {
-            failed.push((kind.label, approvals, filed));
+        if approvals != 2 || checked != 0 || !filed {
+            failed.push((kind.label, approvals, checked, filed));
         }
     }
     assert!(failed.is_empty(), "{failed:?}");
 }
 
-/// Spellings whose added words a document can give in a form the words
-/// compared used to miss: an acronym spelled out ("ABC" written as
-/// "American Broadcasting Company") on a letter that spells it out itself;
-/// another company of the same family ("Acme" as "Acme Holdings", "Acme
-/// Group") on an agreement that names the parent itself; a first name with
-/// its accent, or without it, on an agreement that writes it the other way:
-/// "José" typed as "Jose", or "José" as an "e" and a combining accent, as
-/// macOS and some PDFs write it; a letter with no decomposition typed as the
-/// letter it is read as ("Łukasz" as "Lukasz", "Søren" as "Soren"), an
-/// umlaut written out ("Jürgen" as "Juergen"), an apostrophe the text writes
-/// as a modifier letter; a sign beside the word ("Widgets™", which
-/// decomposed into "widgetstm"), a word broken across a line ("Wid-" and
+/// Spellings whose added words a document can give in a form a comparison
+/// of words misses: an acronym spelled out ("ABC" written as "American
+/// Broadcasting Company") on a letter that spells it out itself; another
+/// company of the same family ("Acme" as "Acme Holdings", "Acme Group") on
+/// an agreement that names the parent itself; a first name with its accent,
+/// or without it, on an agreement that writes it the other way: "José"
+/// typed as "Jose", or "José" as an "e" and a combining accent; a letter
+/// with no decomposition typed as the letter it is read as ("Łukasz" as
+/// "Lukasz", "Søren" as "Soren"), an umlaut written out ("Jürgen" as
+/// "Juergen"), an apostrophe the text writes as a modifier letter; a sign
+/// beside the word ("Widgets™"), a word broken across a line ("Wid-" and
 /// "gets"), initials the text spaces out ("J. P." for "JP"); and a
 /// "Holdings" beside an acronym ("KKR Holdings" for "Kohlberg Kravis
-/// Roberts", taken as a contraction of the document's word, which adds
-/// nothing). Each such approval is the right name for
-/// that document and shows nothing about the next, and checks nothing: the
-/// next document, which names only the document's word, waits again, and
-/// its approval is the check. Each counted as the check, and the next was
-/// filed without review under the spelling: "Letter to American
-/// Broadcasting Company" for a letter to ABC Supply.
+/// Roberts"). Each approval of such a document is the right name for that
+/// document and shows nothing about the next, and checks nothing; nor does
+/// the approval of the next document, which names only the document's
+/// word: no approval does. The one after it waits for a person too. Each
+/// of those approvals was counted as the check in some round, and the next
+/// document was filed without review under the spelling: "Letter to
+/// American Broadcasting Company" for a letter to ABC Supply.
 #[test]
-fn an_approval_on_a_document_that_gives_what_a_spelling_adds_in_another_form_is_no_check() {
+fn no_approval_checks_a_spelling_however_a_document_gives_its_words() {
     /// The case, the type, how the parties are joined, the parties, the
     /// text of the two agreements that teach the spelling, the name they
     /// are approved under, the text of the one approved as Intern names it,
@@ -7935,144 +8000,82 @@ fn an_approval_on_a_document_that_gives_what_a_spelling_adds_in_another_form_is_
             kkr,
         ),
     ];
+    let mut failed = Vec::new();
     for (case, kind, relation, parties, taught, edit, check, next) in cases {
-        let readings = (0..5)
-            .map(|index| {
-                let body = match index {
-                    0 | 1 => taught,
-                    2 => check,
-                    _ => next,
-                };
-                let (text, mut reply) = agreement(index, kind, relation, parties, body);
-                reply.description = format!(
-                    "{kind} {} {} about the account.",
-                    relation.as_str(),
-                    parties.join(" and ")
-                );
-                (text, reply)
-            })
-            .collect();
-        let mut rig = Probation::reading(parties, readings);
-        for _ in 0..2 {
-            let id = rig.read_next();
-            rig.approve(id, edit);
-        }
-        let (from, to, seen, active, confirmed) = rig.rule();
-        assert_eq!(
-            (seen, active, confirmed),
-            (2, true, 0),
-            "{case}: {from} -> {to}"
-        );
-        rig.automatic(true);
-
-        let third = rig.read_next();
-        let record = rig.item(third).proposal.unwrap();
-        assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED], "{case}");
-        rig.approve_as_proposed(third);
-        assert_eq!(rig.rule().4, 0, "{case}: the document gives what {to} adds");
-
-        let fourth = rig.read_next();
-        let held = rig.item(fourth);
-        assert_eq!(held.status, QueueStatus::NeedsReview, "{case}");
-        assert_eq!(
-            held.proposal.unwrap().reasons,
-            vec![LEARNED_SPELLING_UNCONFIRMED],
-            "{case}"
-        );
-        assert_eq!(rig.filed_as(fourth), None, "{case}: not filed under {to}");
-        rig.approve_as_proposed(fourth);
-        assert_eq!(rig.rule().4, 1, "{case}: a document that does not give it");
-        let fifth = rig.read_next();
-        assert_eq!(rig.item(fifth).status, QueueStatus::Completed, "{case}");
-    }
-}
-
-/// The wrong spelling "John Smith -> John Smith, Jane Doe", and a new
-/// agreement whose cover page Intern could not read - a text layer of
-/// garbage, sent to the model as an image no OCR reading stands for - while
-/// it read the pages after it. What the cover page says is not known: it may
-/// name Jane Doe, as a person approving the agreement sees. So the words of
-/// the pages Intern read are not taken as everything the document gives:
-/// the agreement keeps no words, its approval checks nothing, and the next
-/// agreement, naming John Smith alone, waits for a person. The words of the
-/// pages after the cover were taken as the document's, the approval
-/// counted as the check, and the next was filed without review in "John
-/// Smith, Jane Doe/".
-#[test]
-fn an_approval_of_a_document_with_a_page_intern_did_not_read_is_no_check() {
-    let alone = "This agreement is made by John Smith and Acme Corporation.";
-    let long = "This agreement is made by John Smith and Acme Corporation. The employee \
-                shall serve as warehouse supervisor and report to the operations manager. \
-                Compensation includes a base salary and standard benefits. Either party may \
-                end this agreement with thirty days written notice.";
-    let readings = (0..5)
-        .map(|index| {
-            let body = if index == 2 { long } else { alone };
-            let (mut text, reply) = agreement(
-                index,
-                EMPLOYMENT,
-                PartyRelation::Between,
-                &SMITH_AND_ACME,
-                body,
-            );
-            if index == 2 {
-                let cover = SourcePage::new(1, "X7QZ0K4LMNB2RTY8WVU3JHG5FDS1", PageOrigin::Native);
-                for page in &mut text.pages {
-                    page.page_number += 1;
-                }
-                text.pages.insert(0, cover);
-                text.page_image = Some(PageImage {
-                    page_number: 1,
-                    media_type: "image/png".into(),
-                    bytes: vec![1, 2, 3],
-                });
+        // Each case on its own: one that fails says so, and the rest still run.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let readings = (0..5)
+                .map(|index| {
+                    let body = match index {
+                        0 | 1 => taught,
+                        2 => check,
+                        _ => next,
+                    };
+                    let (text, mut reply) = agreement(index, kind, relation, parties, body);
+                    reply.description = format!(
+                        "{kind} {} {} about the account.",
+                        relation.as_str(),
+                        parties.join(" and ")
+                    );
+                    (text, reply)
+                })
+                .collect();
+            let mut rig = Probation::reading(parties, readings);
+            for _ in 0..2 {
+                let id = rig.read_next();
+                rig.approve(id, edit);
             }
-            (text, reply)
-        })
-        .collect();
-    let mut rig = Probation::reading(&SMITH_AND_ACME, readings);
-    for _ in 0..2 {
-        let id = rig.read_next();
-        rig.approve(id, JOINED);
+            let (from, to, seen, active, confirmed) = rig.rule();
+            assert_eq!(
+                (seen, active, confirmed),
+                (2, true, 0),
+                "{case}: {from} -> {to}"
+            );
+            rig.automatic(true);
+
+            let third = rig.read_next();
+            let record = rig.item(third).proposal.unwrap();
+            assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED], "{case}");
+            rig.approve_as_proposed(third);
+            assert_eq!(rig.rule().4, 0, "{case}: the document gives what {to} adds");
+
+            let fourth = rig.read_next();
+            let held = rig.item(fourth);
+            assert_eq!(held.status, QueueStatus::NeedsReview, "{case}");
+            assert_eq!(
+                held.proposal.unwrap().reasons,
+                vec![LEARNED_SPELLING_UNCONFIRMED],
+                "{case}"
+            );
+            assert_eq!(rig.filed_as(fourth), None, "{case}: not filed under {to}");
+            rig.approve_as_proposed(fourth);
+            assert_eq!(rig.rule().4, 0, "{case}: a document that does not give it");
+            let fifth = rig.read_next();
+            assert_eq!(rig.item(fifth).status, QueueStatus::NeedsReview, "{case}");
+            assert_eq!(rig.filed_as(fifth), None, "{case}: not filed under {to}");
+        }));
+        if outcome.is_err() {
+            failed.push(case);
+        }
     }
-    assert_eq!(
-        rig.rule(),
-        rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
-    );
-    rig.automatic(true);
-
-    let third = rig.read_next();
-    let record = rig.item(third).proposal.unwrap();
-    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
-    assert_eq!(record.document_words, None, "a page it could not read");
-    rig.approve_as_proposed(third);
-    assert_eq!(
-        rig.rule(),
-        rule_state("John Smith", "John Smith, Jane Doe", 2, 0),
-        "no check"
-    );
-
-    let fourth = rig.read_next();
-    let held = rig.item(fourth);
-    assert_eq!(held.status, QueueStatus::NeedsReview);
-    assert_eq!(
-        held.proposal.unwrap().reasons,
-        vec![LEARNED_SPELLING_UNCONFIRMED]
-    );
-    assert_eq!(rig.filed_as(fourth), None);
+    assert!(failed.is_empty(), "{failed:?}");
 }
 
-/// A spelling no approval can check: "Smith" written as "John Smith",
-/// learned from agreements that each give John Smith's full name before
-/// calling him Smith, so that no approval of a name it changes shows the
-/// spelling is one. A person checks it in Settings ("Use on its own"), for
-/// the spelling they were shown: the name held for it loses the reason, and
-/// the next agreement it changes is filed on its own. A spelling for the
-/// same word learned later starts over unchecked: put in use ("Use now"),
-/// the next name it changes waits again, and the check given for the old
-/// spelling does not check the new one.
+/// "Smith" written as "John Smith", learned from agreements that each give
+/// John Smith's full name before calling him Smith. A person chooses "Use
+/// on its own" for it - in the review window or the list of learned
+/// spellings - and the choice counts only for the spelling exactly as they
+/// were shown it, in force: one with another spelling, another word or
+/// another kind, or a spelling that does not exist, is refused and checks
+/// nothing. Checked, the name held for it loses the reason but stays in
+/// review, unapproved, and the next agreement it changes is filed on its
+/// own. A spelling for the same word learned later starts over unchecked:
+/// refused while it is not in use, and once put in use ("Use now") the
+/// next name it changes waits again; the choice made for the old spelling
+/// does not check the new one, and asked for again as it was, is refused.
+/// A spelling forgotten is refused too.
 #[test]
-fn a_spelling_checked_in_settings_files_on_its_own_until_it_is_respelled() {
+fn a_spelling_used_on_its_own_files_on_its_own_until_it_is_respelled() {
     let named = "This agreement is made by John Smith (\"Smith\") and Acme Corporation.";
     let parties = ["Smith", "Acme Corporation"];
     let readings = (0..5)
@@ -8098,37 +8101,41 @@ fn a_spelling_checked_in_settings_files_on_its_own_until_it_is_respelled() {
         vec![LEARNED_SPELLING_UNCONFIRMED]
     );
 
-    // Not a spelling it was never shown as, nor one that does not exist.
+    let shown = HouseRule::new(RuleKind::Party, "Smith", "John Smith");
+    for other in [
+        HouseRule::new(RuleKind::Party, "Smith", "John Smith Jr."),
+        HouseRule::new(RuleKind::Party, "Smyth", "John Smith"),
+        HouseRule::new(RuleKind::Party, "SMITH", "John Smith"),
+        HouseRule::new(RuleKind::DocumentType, "Smith", "John Smith"),
+    ] {
+        assert_eq!(
+            rig.pipeline.check_rule(id, &other).unwrap_err().code,
+            "RULE_CHANGED",
+            "{other:?}"
+        );
+    }
     assert_eq!(
-        rig.pipeline
-            .check_rule(id, "John Smith Jr.")
-            .unwrap_err()
-            .code,
-        "RULE_CHANGED"
-    );
-    assert_eq!(
-        rig.pipeline
-            .check_rule(id + 100, "John Smith")
-            .unwrap_err()
-            .code,
+        rig.pipeline.check_rule(id + 100, &shown).unwrap_err().code,
         "RULE_NOT_FOUND"
     );
     assert_eq!(rig.rule(), rule_state("Smith", "John Smith", 2, 0));
-
-    rig.pipeline.check_rule(id, "John Smith").unwrap();
-    assert_eq!(rig.rule(), rule_state("Smith", "John Smith", 2, 1));
-    let waiting = rig.item(third).proposal.unwrap();
-    assert!(
-        !waiting
-            .reasons
-            .contains(&LEARNED_SPELLING_UNCONFIRMED.to_owned()),
-        "{:?}",
-        waiting.reasons
-    );
     assert_eq!(
-        waiting.filename,
+        rig.item(third).proposal.unwrap().reasons,
+        vec![LEARNED_SPELLING_UNCONFIRMED]
+    );
+
+    rig.pipeline.check_rule(id, &shown).unwrap();
+    assert_eq!(rig.rule(), rule_state("Smith", "John Smith", 2, 1));
+    let waiting = rig.item(third);
+    assert_eq!(waiting.status, QueueStatus::NeedsReview);
+    let record = waiting.proposal.unwrap();
+    assert_eq!(record.reasons, Vec::<String>::new());
+    assert!(!record.approved);
+    assert_eq!(
+        record.filename,
         "2024-06-07 Employment Agreement between John Smith and Acme Corporation.pdf"
     );
+    assert_eq!(rig.filed_as(third), None, "the choice files nothing");
 
     let fourth = rig.read_next();
     assert_eq!(rig.item(fourth).status, QueueStatus::Completed);
@@ -8146,13 +8153,11 @@ fn a_spelling_checked_in_settings_files_on_its_own_until_it_is_respelled() {
         "Employment Agreement between Johnny Smith and Acme Corporation",
     );
     assert_eq!(rig.rule(), rule_state("Smith", "Johnny Smith", 1, 0));
-    // Not a spelling that is not in use yet: the list offers no check of
-    // one, and it would be filed on its own the moment it was put in use.
+    let respelled = HouseRule::new(RuleKind::Party, "Smith", "Johnny Smith");
+    // Not a spelling that is not in use yet: nothing offers to use one on
+    // its own, and it would be filed on its own the moment it was put in use.
     assert_eq!(
-        rig.pipeline
-            .check_rule(id, "Johnny Smith")
-            .unwrap_err()
-            .code,
+        rig.pipeline.check_rule(id, &respelled).unwrap_err().code,
         "RULE_CHANGED"
     );
     rig.pipeline.use_rule(id).unwrap();
@@ -8167,11 +8172,11 @@ fn a_spelling_checked_in_settings_files_on_its_own_until_it_is_respelled() {
     );
     assert_eq!(rig.filed_as(fifth), None);
     assert_eq!(
-        rig.pipeline.check_rule(id, "John Smith").unwrap_err().code,
+        rig.pipeline.check_rule(id, &shown).unwrap_err().code,
         "RULE_CHANGED",
-        "the check of the old spelling"
+        "the choice made for the old spelling"
     );
-    rig.pipeline.check_rule(id, "Johnny Smith").unwrap();
+    rig.pipeline.check_rule(id, &respelled).unwrap();
     assert_eq!(rig.rule(), rule_state("Smith", "Johnny Smith", 2, 1));
     assert!(
         rig.item(fifth)
@@ -8180,6 +8185,13 @@ fn a_spelling_checked_in_settings_files_on_its_own_until_it_is_respelled() {
             .reasons
             .iter()
             .all(|reason| reason != LEARNED_SPELLING_UNCONFIRMED)
+    );
+
+    rig.pipeline.forget_rule(id).unwrap();
+    assert_eq!(
+        rig.pipeline.check_rule(id, &respelled).unwrap_err().code,
+        "RULE_NOT_FOUND",
+        "a spelling forgotten"
     );
 }
 

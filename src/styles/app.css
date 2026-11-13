@@ -676,6 +676,7 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .rule-confirm p { flex: 1 0 100%; margin: 0 0 2px; font-size: 12.5px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
 .rule-confirm q { font-weight: 600; }
 .rule-confirm button { min-height: 30px; padding: 0 10px; }
+.learned-rules li:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* The filing a near-duplicate repeats, under the reason for review. */
 .near-duplicate { margin: 8px 0 0; font-size: 13px; }

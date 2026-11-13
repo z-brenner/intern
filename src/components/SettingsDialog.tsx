@@ -15,6 +15,7 @@ import { installingLabel } from '../lib/format';
 import { folderSaveProblem, inputFolderProblem, keepsDescriptionColumn, outputFolderProblem } from '../features/intake/folderProblems';
 import { INPUT_FOLDER_HINT, OUTPUT_FOLDER_HINT } from './FolderSetupFlow';
 import { Icon } from './Icon';
+import { UseOnItsOwnQuestion, failureCode, spellingLabel } from './UseOnItsOwn';
 
 /**
  * A failed update check is almost always the network, and saying so is more
@@ -31,7 +32,7 @@ function updateFailure(error: unknown): string {
 
 /** Why a learned spelling could not be used or forgotten, in a sentence. */
 function ruleFailure(error: unknown): string {
-  const code = typeof error === 'object' && error && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
+  const code = failureCode(error);
   if (code === 'RULE_NOT_FOUND') return 'That spelling is no longer in the list; it may have been forgotten already. (RULE_NOT_FOUND)';
   if (code === 'RULE_CHANGED') return 'That spelling changed since the list was shown, so it was not used on its own. Look at it again. (RULE_CHANGED)';
   const message = error instanceof Error ? error.message : typeof error === 'object' && error && 'message' in error && typeof error.message === 'string' ? error.message : '';
@@ -335,22 +336,37 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     catch (error) {
       setRulesError(ruleFailure(error));
       // A spelling that changed under the person is shown as it is now.
-      if (typeof error === 'object' && error && 'code' in error && error.code === 'RULE_CHANGED') {
+      if (failureCode(error) === 'RULE_CHANGED') {
         await bridge.houseRulesList().then(setRules, () => undefined);
       }
     }
     finally { ruleInFlight.current = false; }
   };
   /*
-    "Use on its own" checks a spelling in use that no approval has checked:
-    one whose added words every document gives itself never can be. It is
-    the one action here that lets Intern file names without a person, so it
-    says what it does - for every later document - before it does it, and
-    Cancel holds the focus.
+    "Use on its own" is the only way a learned spelling is checked: no
+    approval checks one. It is the one action here that lets Intern file
+    names without a person, so it says what it does - for every later
+    document - before it does it, and Cancel holds the focus. Answered or
+    taken back, the focus goes back to the spelling's row: to the action
+    when the question was taken back, to the row itself once the spelling
+    is used on its own and the action is gone. It went to the page.
   */
   const [checkingRule, setCheckingRule] = useState<string>();
-  const cancelCheck = useRef<HTMLButtonElement>(null);
-  useEffect(() => { if (checkingRule !== undefined) cancelCheck.current?.focus(); }, [checkingRule]);
+  const rulesList = useRef<HTMLUListElement>(null);
+  const [focusRule, setFocusRule] = useState<{ id: string; on: 'action' | 'row' }>();
+  useEffect(() => {
+    if (!focusRule || checkingRule !== undefined) return;
+    const row = [...(rulesList.current?.querySelectorAll<HTMLElement>('li[data-rule]') ?? [])].find((li) => li.dataset.rule === focusRule.id);
+    const action = focusRule.on === 'action' ? row?.querySelector<HTMLElement>('button[data-action="use-on-its-own"]') : undefined;
+    (action ?? row)?.focus();
+    setFocusRule(undefined);
+  }, [focusRule, checkingRule, rules]);
+  const takeBackCheck = (id: string) => { setCheckingRule(undefined); setFocusRule({ id, on: 'action' }); };
+  const checkRule = async (rule: LearnedRule) => {
+    setCheckingRule(undefined);
+    await changeRule(() => bridge.houseRuleCheck(rule.id, { kind: rule.kind, from: rule.from, to: rule.to }));
+    setFocusRule({ id: rule.id, on: 'row' });
+  };
   /*
     The two folders change through a folder picker, never a typed path, and
     as safely as setup changes them: a pair the backend would refuse is
@@ -559,24 +575,15 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         */}
         <p className="section-lead">Intern learns repeated spelling corrections. You can change or forget them here.</p>
         {rules !== undefined && rules.length === 0 && <p className="check-hint">Nothing yet. Change a party's name or a document type in review and it will appear here.</p>}
-        {rules !== undefined && rules.length > 0 && <ul className="learned-rules" aria-label="Learned spellings">
-          {rules.map((rule) => <li key={rule.id}>
+        {rules !== undefined && rules.length > 0 && <ul ref={rulesList} className="learned-rules" aria-label="Learned spellings">
+          {rules.map((rule) => <li key={rule.id} data-rule={rule.id} tabIndex={-1}>
             <span className="rule-kind">{rule.kind === 'party' ? 'Party' : 'Type'}</span>
             <span className="rule-change"><q>{rule.from}</q> written as <strong>{rule.to}</strong></span>
-            <span className="rule-state">{!rule.active ? 'Seen once · in use after one more edit' : rule.confirmed > 0 ? 'In use' : 'In use · not checked yet'}</span>
-            {checkingRule === rule.id ? <div className="rule-confirm" role="group" aria-label={`Use on its own: ${rule.from} written as ${rule.to}`} aria-describedby={`rule-check-${rule.id}`} onKeyDown={(event) => {
-              // Escape takes back the question, not the whole dialog.
-              if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setCheckingRule(undefined); }
-            }}>
-              <p id={`rule-check-${rule.id}`}>{rule.kind === 'party'
-                ? <>Every later document Intern reads as naming <q>{rule.from}</q> will name <q>{rule.to}</q> instead, and may be filed under that name without your check.</>
-                : <>Every later document Intern reads as a <q>{rule.from}</q> will be called a <q>{rule.to}</q> instead, and may be filed under that name without your check.</>} Do this only if that is right for every one of them.</p>
-              <button type="button" className="primary" onClick={() => { setCheckingRule(undefined); void changeRule(() => bridge.houseRuleCheck(rule.id, rule.to)); }}>Use on its own</button>
-              <button ref={cancelCheck} type="button" onClick={() => setCheckingRule(undefined)}>Cancel</button>
-            </div> : <span className="rule-actions">
-              {!rule.active && <button type="button" aria-label={`Use now: ${rule.from} written as ${rule.to}`} onClick={() => void changeRule(() => bridge.houseRuleUse(rule.id))}>Use now</button>}
-              {rule.active && rule.confirmed === 0 && <button type="button" aria-label={`Use on its own: ${rule.from} written as ${rule.to}`} onClick={() => { setRulesError(''); setCheckingRule(rule.id); }}>Use on its own</button>}
-              <button type="button" aria-label={`Forget: ${rule.from} written as ${rule.to}`} onClick={() => void changeRule(() => bridge.houseRuleForget(rule.id))}>Forget</button>
+            <span className="rule-state">{!rule.active ? 'Seen once · in use after one more edit' : rule.confirmed > 0 ? 'In use' : 'In use · asks before filing'}</span>
+            {checkingRule === rule.id ? <UseOnItsOwnQuestion rule={rule} describedBy={`rule-check-${rule.id}`} onConfirm={() => void checkRule(rule)} onCancel={() => takeBackCheck(rule.id)} /> : <span className="rule-actions">
+              {!rule.active && <button type="button" aria-label={`Use now: ${spellingLabel(rule)}`} onClick={() => void changeRule(() => bridge.houseRuleUse(rule.id))}>Use now</button>}
+              {rule.active && rule.confirmed === 0 && <button type="button" data-action="use-on-its-own" aria-label={`Use on its own: ${spellingLabel(rule)}`} onClick={() => { setRulesError(''); setCheckingRule(rule.id); }}>Use on its own</button>}
+              <button type="button" aria-label={`Forget: ${spellingLabel(rule)}`} onClick={() => void changeRule(() => bridge.houseRuleForget(rule.id))}>Forget</button>
             </span>}
           </li>)}
         </ul>}

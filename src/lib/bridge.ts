@@ -1,5 +1,5 @@
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
-import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, ModelTier, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, ModelTier, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 
 /** A JSON-safe local document reference that Task 6 can pass to Tauri. */
 export interface FileSelection {
@@ -250,12 +250,15 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   /** Apply a learned spelling from now on without waiting for a second edit. */
   houseRuleUse(id: string): Promise<void>;
   /**
-   * Use a learned spelling in use on its own: check it, for the spelling
-   * `to` the person was shown, so the names it changes are filed without
-   * waiting for a person. Refused with RULE_CHANGED when the spelling is
-   * not in use or reads otherwise now.
+   * "Use on its own": check learned spelling `id` - the only way one is
+   * checked, an approval never is - for the spelling exactly as the person
+   * was shown it (`shown`: its kind, the document's word and the spelling),
+   * so the names it changes are filed without waiting for a person. It
+   * approves and files nothing. Refused with RULE_CHANGED when the spelling
+   * is not in use or reads otherwise now, and RULE_NOT_FOUND when it was
+   * forgotten.
    */
-  houseRuleCheck(id: string, to: string): Promise<void>;
+  houseRuleCheck(id: string, shown: HouseRule): Promise<void>;
 }
 
 /**
