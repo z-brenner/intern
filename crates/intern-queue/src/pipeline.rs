@@ -724,9 +724,12 @@ pub struct ProposalRecord {
     /// document gives in its own words what the spelling adds - in which
     /// case the approval is no check of the spelling (see
     /// [`Self::gives_what_it_adds`]). Absent from readings stored before it
-    /// was kept, where the reader read no text, a page could not be read as
-    /// text, or OCR was unsure of what it read (see [`DocumentWords::of`]):
-    /// no check counts from those where a spelling adds words.
+    /// was kept, and where the reader read no text or did not read every
+    /// word of the document surely - a page it could not read, an image no
+    /// OCR reading stands for, a page or an image on one kept without a
+    /// reading it trusts, OCR unsure, text cut or left out, characters it
+    /// could not decode (see [`DocumentWords::of`]): no check counts from
+    /// those where a spelling adds words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document_words: Option<DocumentWords>,
 }

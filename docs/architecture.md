@@ -768,7 +768,15 @@ of a name the rule changed counts as the check only when all of this holds:
   words of its spelling that are not words of the document's word, compared
   as house style compares them with accents, ligatures and compatibility
   forms folded ("José", "Jose" and "Jose" with a combining accent are one
-  word), read as written and split at punctuation, leaving out legal forms
+  word) - only letters and digits are decomposed, so a sign beside a word
+  ("Widgets™") is taken out as punctuation is - and a letter Unicode does
+  not decompose read as the one a person types for it ("Łukasz" is
+  "Lukasz", "Søren" "Soren", "ß" "ss", "æ" "ae", "þ" "th", a modifier
+  letter apostrophe an apostrophe), and an umlaut, "ø" or "å" read written
+  out as well ("Müller" is "muller" and "mueller"); read as written, split
+  at punctuation, and run together ("Smith Jones" is "smithjones"), with
+  letters spaced out as initials read together ("J. P." is "jp"), leaving
+  out legal forms
   (Ltd, Inc, LLC, Corporation, Limited, Company, ...; not Group or Holdings,
   which name another company of the same family) and words that only join
   others (of, the, and, for, ...). A rule that adds none - a short form, a
@@ -785,14 +793,30 @@ of a name the rule changed counts as the check only when all of this holds:
   John Smith alone. A spelling that adds two words, one of which a document
   gives, waits for another document's approval. The text's words are kept
   with each reading (`ProposalRecord::document_words`, a Bloom filter of
-  every word the extractor read: it can say a word is there when it is not,
-  which counts no check, but never the reverse). A reading stored before
-  they were kept, one with a page that could not be read as text
-  (`barely_readable`), or one OCR was unsure of (`LOW_OCR_CONFIDENCE`)
+  every word the extractor read, in every form above, with a word broken
+  across a line by a hyphen read whole; it can say a word is there when it
+  is not, which counts no check, but never the reverse), and a word of a
+  spelling is given when the text gives it whole or in two or three parts
+  of three letters or more ("Smith Jones" gives "smithjones"; the parts are
+  not known to be side by side, which errs towards no check). They are kept
+  only for a document Intern read whole and surely (`DocumentWords::of`):
+  not one with a page that could not be read as text (`barely_readable`);
+  nor one whose page image is of a page no OCR reading stands for (a page
+  whose image is the page, a text layer of bad OCR kept with the image of
+  its unsure reading; a blank scanned page, which OCR read as having
+  nothing on it, is read); nor one with any worker warning but a corrupt
+  text layer a scan's OCR reading took the place of (`NATIVE_TEXT_CORRUPT`):
+  `TEXT_UNREAD` (a page or an image on one kept without a reading the
+  worker trusts, image or no image going with it), `LOW_OCR_CONFIDENCE`,
+  `TEXT_TRUNCATED`, `CONTENT_ELIDED`, or a code this build does not know;
+  nor one whose text holds characters the reader could not decode (a
+  replacement character, a C1 control, a word in a font's private-use
+  characters). Such a reading, and one stored before the words were kept,
   counts no check for a rule that adds words: in doubt the next document
-  waits again. A scanned page that came with an image of it but was read
-  gives the words OCR read, as any other OCR page does: the image is not
-  shown to the model, so the text is everything the reading had.
+  waits again. A scan OCR read with confidence gives the words OCR read, as
+  any other page does, whether or not an image of it went with it: the
+  image is not shown to the model, so the text is everything the reading
+  had.
 
 "Use now" in Settings is no check either: it shows the words, not a name
 they made. One check is enough: from then on the names the rule changes

@@ -7769,7 +7769,15 @@ fn one_approval_of_a_new_document_checks_a_spelling_that_adds_nothing_the_docume
 /// Group") on an agreement that names the parent itself; a first name with
 /// its accent, or without it, on an agreement that writes it the other way:
 /// "José" typed as "Jose", or "José" as an "e" and a combining accent, as
-/// macOS and some PDFs write it. Each such approval is the right name for
+/// macOS and some PDFs write it; a letter with no decomposition typed as the
+/// letter it is read as ("Łukasz" as "Lukasz", "Søren" as "Soren"), an
+/// umlaut written out ("Jürgen" as "Juergen"), an apostrophe the text writes
+/// as a modifier letter; a sign beside the word ("Widgets™", which
+/// decomposed into "widgetstm"), a word broken across a line ("Wid-" and
+/// "gets"), initials the text spaces out ("J. P." for "JP"); and a
+/// "Holdings" beside an acronym ("KKR Holdings" for "Kohlberg Kravis
+/// Roberts", taken as a contraction of the document's word, which adds
+/// nothing). Each such approval is the right name for
 /// that document and shows nothing about the next, and checks nothing: the
 /// next document, which names only the document's word, waits again, and
 /// its approval is the check. Each counted as the check, and the next was
@@ -7792,7 +7800,9 @@ fn an_approval_on_a_document_that_gives_what_a_spelling_adds_in_another_form_is_
         &'static str,
     );
     let acme = "This agreement is made by John Smith and Acme.";
-    let cases: [Given; 5] = [
+    let kkr = "This agreement is made by John Smith and Kohlberg Kravis Roberts.";
+    let morgan = "This agreement is made by John Smith and Morgan.";
+    let cases: [Given; 13] = [
         (
             "an acronym spelled out",
             "Letter",
@@ -7842,6 +7852,87 @@ fn an_approval_on_a_document_that_gives_what_a_spelling_adds_in_another_form_is_
             "Employment Agreement between José Smith and Acme Corporation",
             "This agreement is made by Jose\u{301} Smith and Acme Corporation.",
             MR_SMITH,
+        ),
+        (
+            "a letter with a stroke the spelling types without it",
+            EMPLOYMENT,
+            PartyRelation::Between,
+            &["Smith", "Acme Corporation"],
+            MR_SMITH,
+            "Employment Agreement between Lukasz Smith and Acme Corporation",
+            "This agreement is made by \u{141}ukasz Smith and Acme Corporation.",
+            MR_SMITH,
+        ),
+        (
+            "a slashed o the spelling types as an o",
+            EMPLOYMENT,
+            PartyRelation::Between,
+            &["Smith", "Acme Corporation"],
+            MR_SMITH,
+            "Employment Agreement between Soren Smith and Acme Corporation",
+            "This agreement is made by S\u{f8}ren Smith and Acme Corporation.",
+            MR_SMITH,
+        ),
+        (
+            "an umlaut the spelling writes out",
+            EMPLOYMENT,
+            PartyRelation::Between,
+            &["Smith", "Acme Corporation"],
+            MR_SMITH,
+            "Employment Agreement between Juergen Smith and Acme Corporation",
+            "This agreement is made by J\u{fc}rgen Smith and Acme Corporation.",
+            MR_SMITH,
+        ),
+        (
+            "an apostrophe the text writes as a modifier letter",
+            EMPLOYMENT,
+            PartyRelation::Between,
+            &["Smith", "Acme Corporation"],
+            MR_SMITH,
+            "Employment Agreement between O'Brien Smith and Acme Corporation",
+            "This agreement is made by O\u{2bc}Brien Smith and Acme Corporation.",
+            MR_SMITH,
+        ),
+        (
+            "a trademark sign beside the word",
+            EMPLOYMENT,
+            PartyRelation::Between,
+            &["John Smith", "Acme"],
+            acme,
+            "Employment Agreement between John Smith and Acme Widgets",
+            "This agreement is made by John Smith and Acme Widgets\u{2122}, a division of Acme.",
+            acme,
+        ),
+        (
+            "a word broken across a line",
+            EMPLOYMENT,
+            PartyRelation::Between,
+            &["John Smith", "Acme"],
+            acme,
+            "Employment Agreement between John Smith and Acme Widgets",
+            "This agreement is made by John Smith and Acme Wi-\ndgets, a division of Acme.",
+            acme,
+        ),
+        (
+            "initials the text spaces out",
+            EMPLOYMENT,
+            PartyRelation::Between,
+            &["John Smith", "Morgan"],
+            morgan,
+            "Employment Agreement between John Smith and JP Morgan",
+            "This agreement is made by John Smith and J. P. Morgan, the bank.",
+            morgan,
+        ),
+        (
+            "a holding company beside an acronym",
+            EMPLOYMENT,
+            PartyRelation::Between,
+            &["John Smith", "Kohlberg Kravis Roberts"],
+            kkr,
+            "Employment Agreement between John Smith and KKR Holdings",
+            "This agreement is made by John Smith and KKR Holdings, the parent of Kohlberg \
+             Kravis Roberts.",
+            kkr,
         ),
     ];
     for (case, kind, relation, parties, taught, edit, check, next) in cases {
@@ -7894,6 +7985,81 @@ fn an_approval_on_a_document_that_gives_what_a_spelling_adds_in_another_form_is_
         let fifth = rig.read_next();
         assert_eq!(rig.item(fifth).status, QueueStatus::Completed, "{case}");
     }
+}
+
+/// The wrong spelling "John Smith -> John Smith, Jane Doe", and a new
+/// agreement whose cover page Intern could not read - a text layer of
+/// garbage, sent to the model as an image no OCR reading stands for - while
+/// it read the pages after it. What the cover page says is not known: it may
+/// name Jane Doe, as a person approving the agreement sees. So the words of
+/// the pages Intern read are not taken as everything the document gives:
+/// the agreement keeps no words, its approval checks nothing, and the next
+/// agreement, naming John Smith alone, waits for a person. The words of the
+/// pages after the cover were taken as the document's, the approval
+/// counted as the check, and the next was filed without review in "John
+/// Smith, Jane Doe/".
+#[test]
+fn an_approval_of_a_document_with_a_page_intern_did_not_read_is_no_check() {
+    let alone = "This agreement is made by John Smith and Acme Corporation.";
+    let long = "This agreement is made by John Smith and Acme Corporation. The employee \
+                shall serve as warehouse supervisor and report to the operations manager. \
+                Compensation includes a base salary and standard benefits. Either party may \
+                end this agreement with thirty days written notice.";
+    let readings = (0..5)
+        .map(|index| {
+            let body = if index == 2 { long } else { alone };
+            let (mut text, reply) = agreement(
+                index,
+                EMPLOYMENT,
+                PartyRelation::Between,
+                &SMITH_AND_ACME,
+                body,
+            );
+            if index == 2 {
+                let cover = SourcePage::new(1, "X7QZ0K4LMNB2RTY8WVU3JHG5FDS1", PageOrigin::Native);
+                for page in &mut text.pages {
+                    page.page_number += 1;
+                }
+                text.pages.insert(0, cover);
+                text.page_image = Some(PageImage {
+                    page_number: 1,
+                    media_type: "image/png".into(),
+                    bytes: vec![1, 2, 3],
+                });
+            }
+            (text, reply)
+        })
+        .collect();
+    let mut rig = Probation::reading(&SMITH_AND_ACME, readings);
+    for _ in 0..2 {
+        let id = rig.read_next();
+        rig.approve(id, JOINED);
+    }
+    assert_eq!(
+        rig.rule(),
+        rule_state("John Smith", "John Smith, Jane Doe", 2, 0)
+    );
+    rig.automatic(true);
+
+    let third = rig.read_next();
+    let record = rig.item(third).proposal.unwrap();
+    assert_eq!(record.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
+    assert_eq!(record.document_words, None, "a page it could not read");
+    rig.approve_as_proposed(third);
+    assert_eq!(
+        rig.rule(),
+        rule_state("John Smith", "John Smith, Jane Doe", 2, 0),
+        "no check"
+    );
+
+    let fourth = rig.read_next();
+    let held = rig.item(fourth);
+    assert_eq!(held.status, QueueStatus::NeedsReview);
+    assert_eq!(
+        held.proposal.unwrap().reasons,
+        vec![LEARNED_SPELLING_UNCONFIRMED]
+    );
+    assert_eq!(rig.filed_as(fourth), None);
 }
 
 /// A statement of work the firm signed with a supplier, dated `written`.

@@ -479,8 +479,16 @@ names Acme Holdings, the parent of Acme, and for "American Broadcasting
 Company" on a letter that spells out ABC. A short form, a legal form (Inc.,
 Corporation, Ltd), a change of case or accents, or an acronym of the
 document's words ("EPA" for "U.S. Environmental Protection Agency") is checked
-by the first approval. A scan counts by the text Intern read from it; a page
-it could not read, or read without confidence, checks nothing. Some spellings
+by the first approval. A scan counts by the text Intern read from it. A
+document Intern did not read whole and surely checks nothing: one with a page
+it could not read as text, or whose image went to the model with no OCR
+reading of it; a text layer of bad OCR kept because OCR could not do better;
+an image on a page that OCR could not read, or read too unsurely to use; text
+OCR was unsure of, cut at Intern's limits, or left out (a spreadsheet's rows
+past what Intern reads); or characters Intern could not decode. A word counts
+however it is written: with or without accents, "Łukasz" or "Lukasz",
+"Müller" or "Mueller", "O'Brien" or "OBrien", "Smith-Jones" or "Smith Jones",
+"J. P." or "JP", broken across a line, or beside a "™". Some spellings
 are never checked: one whose words every document gives itself - a full legal
 name each contract defines before it shortens it, a first name each agreement
 is signed with - leaves every name it changes waiting for you for as long as
