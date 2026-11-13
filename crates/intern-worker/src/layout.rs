@@ -747,7 +747,7 @@ pub fn text_regions(native: &NativePage) -> Vec<[u32; 4]> {
 /// The least mean confidence at which an OCR'd region's text joins the
 /// page's, and the least a line of it needs. A region below it is a
 /// photograph, a signature, or a logo, and its reading is noise.
-pub(crate) const REGION_CONFIDENCE: f32 = 60.0;
+const REGION_CONFIDENCE: f32 = 60.0;
 const REGION_LINE_CONFIDENCE: u8 = 50;
 
 /// A native page with the text OCR read from its image regions merged into

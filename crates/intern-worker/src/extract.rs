@@ -580,16 +580,6 @@ pub enum ExtractionWarning {
     /// reader chose what to show and says what it skipped, so this is a note
     /// about the document's size, not a doubt about what was read.
     ContentElided,
-    /// A page, or an image on one, kept without a reading Intern trusts: a
-    /// text layer that reads as bad OCR, kept because a fresh reading did
-    /// no better or could not be had; a page or an image OCR was to read
-    /// that it could not render, could not read, or read without
-    /// confidence; a page so little text and so much image that the image
-    /// is the page. What such a page says is not wholly in the text, though
-    /// the text is the best the reader has, so this is no doubt about the
-    /// facts the text gives: it says only that the text is not everything
-    /// a person reading the document sees.
-    TextUnread,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -693,9 +683,6 @@ enum PagePlan {
         /// The page image this page would become, if it is the first page
         /// that wants one.
         vision: Option<VisionImage>,
-        /// Read as its text, though OCR was to read it or an image on it,
-        /// or its image is the page (see [`ExtractionWarning::TextUnread`]).
-        unread: bool,
     },
     /// A scan: OCR's reading is the page.
     Scan {
@@ -987,9 +974,6 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
         }
     }
 
-    // Whether the regions OCR was to read are known to hold nothing: the
-    // page was rendered and no region on it was big enough to read.
-    let mut no_regions = false;
     if route == PageRoute::OcrRegions
         && rerenderable
         && let Some(native) = &inspection.native
@@ -1038,26 +1022,11 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
                         vision,
                     });
                 }
-                no_regions = true;
             }
             Err(error) if ends_the_document(&error) => return Err(error),
             Err(_) => {}
         }
     }
-
-    // Read as its text from here, though OCR may have been wanted: for a
-    // text layer that reads as bad OCR, or for an image on the page, which
-    // could not be rendered for it. A layer read again only to rebuild its
-    // words into a layout reads as it is. And a page whose image is the
-    // page has text that is not what a person reads on it.
-    let unread = page_needs_vision(&inspection)
-        || match route {
-            PageRoute::Ocr => {
-                signals.garbage >= GARBAGE_LAYER || text_route(&signals) == PageRoute::OcrRegions
-            }
-            PageRoute::OcrRegions => !no_regions,
-            PageRoute::Fast | PageRoute::Layout => false,
-        };
 
     // The page is read as its text, so it takes the route its text does -
     // a page that wanted OCR and could not have it included - and its
@@ -1083,11 +1052,7 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
         |timings| &mut timings.analysis_micros,
         || native_page(page_number, inspection, signals, route, &stop, planned),
     );
-    Ok(PagePlan::Done {
-        page,
-        vision,
-        unread,
-    })
+    Ok(PagePlan::Done { page, vision })
 }
 
 /// Reads a page's characters into runs if `route` reads its geometry and
@@ -1324,18 +1289,8 @@ fn assemble(
     let mut vision_candidate: Option<VisionImage> = None;
     for (page_index, plan) in plans.into_iter().enumerate() {
         let outcome = outcomes.remove(&page_index);
-        // Whether the page is kept without a reading Intern trusts (see
-        // `ExtractionWarning::TextUnread`).
-        let mut unread = false;
         let (mut page, vision) = match plan {
-            PagePlan::Done {
-                page,
-                vision,
-                unread: kept_unread,
-            } => {
-                unread = kept_unread;
-                (page.finish(&mut budget), vision)
-            }
+            PagePlan::Done { page, vision } => (page.finish(&mut budget), vision),
             PagePlan::Scan {
                 page_number,
                 corrupt,
@@ -1407,7 +1362,6 @@ fn assemble(
                         // rendered with goes with the layer's text, as it
                         // would with a scan's.
                         let reread_vision = fresh.and_then(|(_, _, page_vision)| page_vision);
-                        unread = true;
                         let route = native_route(PageRoute::Ocr, &signals);
                         runs(&mut inspection, route)?;
                         (
@@ -1423,11 +1377,6 @@ fn assemble(
                         // that region's, and as sure as that reading - so an
                         // unsure one still raises its warning below.
                         runs(&mut inspection, PageRoute::OcrRegions)?;
-                        // A reading of the page that found nothing on it
-                        // leaves the layer all there is to read.
-                        let blank = fresh
-                            .as_ref()
-                            .is_some_and(|(reading, _, _)| reading.text.trim().is_empty());
                         let merged = fresh.and_then(|(reading, size, _)| {
                             let scale = display_width(&inspection) / f64::from(size.0.max(1));
                             crate::layout::regions_page(
@@ -1439,7 +1388,6 @@ fn assemble(
                                 stop,
                             )
                         });
-                        unread = merged.is_none() && !blank;
                         let page = merged
                             .map(|page| counted(page, &mut budget))
                             .unwrap_or_else(|| {
@@ -1481,29 +1429,16 @@ fn assemble(
             } => {
                 let page_number = inspection.page_index + 1;
                 runs(&mut inspection, PageRoute::OcrRegions)?;
-                // A region OCR could not read, or read too unsurely to merge
-                // in (see `REGION_CONFIDENCE`), is not in the page's text.
-                // One merged in unsure makes the page as unsure, and the
-                // document says so below.
-                let (readings, failed) = match outcome {
-                    Some(outcome) => {
-                        let failed = outcome.readings.iter().any(Result::is_err);
-                        let readings = outcome
+                let readings = outcome
+                    .map(|outcome| {
+                        outcome
                             .readings
                             .into_iter()
                             .zip(crops)
                             .filter_map(|(reading, crop)| Some((reading.ok()?, crop)))
-                            .collect::<Vec<_>>();
-                        (readings, failed)
-                    }
-                    None => (Vec::new(), true),
-                };
-                let holds_text = |reading: &OcrResult| !reading.text.trim().is_empty();
-                unread = failed
-                    || readings.iter().any(|(reading, _)| {
-                        holds_text(reading)
-                            && reading.mean_confidence < crate::layout::REGION_CONFIDENCE
-                    });
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
                 let page = crate::layout::regions_page(
                     page_number,
                     &inspection,
@@ -1514,9 +1449,6 @@ fn assemble(
                 )
                 .map(|page| counted(page, &mut budget))
                 .unwrap_or_else(|| {
-                    // Nothing merged: what the regions read is not in the
-                    // page's text, if they read anything.
-                    unread |= readings.iter().any(|(reading, _)| holds_text(reading));
                     let route = native_route(PageRoute::OcrRegions, &signals);
                     native_page(page_number, inspection, signals, route, stop, &mut unheld)
                         .finish(&mut budget)
@@ -1524,9 +1456,6 @@ fn assemble(
                 (page, vision)
             }
         };
-        if unread && !warnings.contains(&ExtractionWarning::TextUnread) {
-            warnings.push(ExtractionWarning::TextUnread);
-        }
         // A page read by OCR, or native text with OCR'd regions merged in,
         // is only as sure as its least sure reading.
         if page

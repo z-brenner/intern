@@ -45,14 +45,6 @@ const MAX_RESPONSE_LINE_BYTES: usize = 64 * 1024 * 1024;
 /// sheet was read and chosen against, so nothing the window shows is in
 /// doubt.
 const CONTENT_ELIDED: &str = "CONTENT_ELIDED";
-/// The worker warning for a page, or an image on one, kept without a
-/// reading Intern trusts: a text layer that reads as bad OCR kept because
-/// OCR could not do better, an image OCR could not read or read unsure, a
-/// page whose image is the page. The text is the best the worker has and is
-/// read as it always was: what the warning says is that it is not all a
-/// person sees on the page, which only a learned spelling's check asks
-/// (`intern_queue`'s `DocumentWords`).
-const TEXT_UNREAD: &str = "TEXT_UNREAD";
 /// The worker's standard error, under the log directory when one is set.
 const WORKER_LOG: &str = "worker.log";
 
@@ -295,14 +287,13 @@ pub fn adapt_document(document: WorkerDocument) -> Result<DocumentSource, Extrac
     }
 
     // Every warning can corrupt what was read except a deliberate, marked
-    // elision and text kept that is not all a page shows. A code this build
-    // does not know stays fact-affecting, so a newer worker's warning errs
-    // towards review.
+    // elision. A code this build does not know stays fact-affecting, so a
+    // newer worker's warning errs towards review.
     let mut parser_warnings = document
         .warnings
         .into_iter()
         .map(|code| {
-            let field_affecting = code != CONTENT_ELIDED && code != TEXT_UNREAD;
+            let field_affecting = code != CONTENT_ELIDED;
             ParserWarning::new(code, field_affecting)
         })
         .collect::<Vec<_>>();
@@ -1086,22 +1077,6 @@ The work covers the 2026 CRM implementation, its deliverables, and its fees.\n\n
         let outcome = validated(&truncated);
         assert_eq!(outcome.status, ProposalStatus::NeedsReview);
         assert!(outcome.reasons.contains(&ReviewReason::ParserWarning));
-
-        // Text kept that is not all a page shows reads as it always did:
-        // it keeps learned spellings from being checked on the document,
-        // nothing more.
-        let unread = one_page(LONG_SHEET, &["TEXT_UNREAD"], false);
-        assert_eq!(
-            unread.parser_warnings,
-            vec![ParserWarning::new("TEXT_UNREAD", false)]
-        );
-        let outcome = validated(&unread);
-        assert_eq!(
-            outcome.status,
-            ProposalStatus::Ready,
-            "{:?}",
-            outcome.reasons
-        );
 
         // A code this build has never heard of errs towards review.
         let unknown = one_page(LONG_SHEET, &["SOMETHING_NEW"], false);
