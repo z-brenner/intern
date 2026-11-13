@@ -215,41 +215,43 @@ pub fn compose_styled_filename(
 ///
 /// A party is never respelled into words that keep it beside a connecting
 /// word or a note and more words, whatever the connecting word and on
-/// either side of a "between": words on one side of it that hold the
-/// party whole, as house style compares spellings ([`HouseRule::key`]), in
-/// any case or punctuation and lengthened or not. Behind one, with words in
+/// either side of a "between": words on one side of it that hold the party
+/// whole, as house style compares spellings ([`HouseRule::key`]), in any
+/// case or punctuation and lengthened or not. Behind one, with words in
 /// front that lengthen the type - "Notice to Tenants from ACME PROPERTY",
 /// "Notice to Tenants to Acme Property" or "Notice to Tenants from Acme
 /// Property Inc" for "Notice to Acme Property" - or in front of one, with
 /// another party or a note after it: "Letter to Carl Malamud from Jane
-/// Doe", "Notice to Acme Property re Lease". Such an edit names the party
-/// and something else, a decision about this document, and teaches
-/// nothing: learned, "Tenants from ACME PROPERTY" would name every later
-/// document giving that party, ready ones filed without review.
+/// Doe", "Notice to Acme Property re Lease"; a connecting word or a note's
+/// start left dangling after it ("Acme Corporation re") keeps it as well.
+/// Such an edit names the party and something else, a decision about this
+/// document, and teaches nothing: learned, "Tenants from ACME PROPERTY"
+/// would name every later document giving that party, ready ones filed
+/// without review.
 ///
 /// Nor is a party respelled into words that hold a connecting word or a
-/// note's start more often than its own name does, as a whole word as
-/// house style compares spellings ([`HouseRule::key`]) - "for", "from",
-/// "to", "with", "between", "re", "regarding", "about", "concerning" - or,
-/// for " - " and " (", as written: whether or not the words still hold the
+/// note's start more often than its own name does, as a whole word as house
+/// style compares spellings ([`HouseRule::key`]) - "for", "from", "to",
+/// "with", "between", "re", "regarding", "about", "concerning" - or, for
+/// " - " and " (", as written: whether or not the words still hold the
 /// party in some spelling, they name another party, or the party and
 /// something else. "Trustee for Acme Corp" for "Acme Corporation", a party
 /// the document names typed short, and "Tenants from City of Boston" for
 /// "Acme Property", words the document gives as no party at all, teach
 /// nothing. So do words that join two parties outside the name's grammar
-/// ("Smith v Acme Corp", "vs", "versus", "Jane Doe on behalf of Acme
-/// Corp", "Acme Corp by its Trustee"), and "and" or "&" on a side of a
-/// "between", or beside a party of two words or more kept whole ("Acme
-/// Corporation and Jane Doe"). A dash is found however it was typed ("–",
-/// "--") and a space whatever it is; " (" is a note only where its
+/// ("Smith v Acme Corp", "vs", "versus", "Jane Doe on behalf of Acme Corp",
+/// "Acme Corp by its Trustee", "dba", "fka", "attn"), and "and" or "&" on a
+/// side of a "between", or beside a party of two words or more kept whole
+/// ("Acme Corporation and Jane Doe"). A dash is found however it was typed
+/// ("–", "--") and a space whatever it is; " (" is a note only where its
 /// parenthetical ends the words ("Acme (signed)"), so "Acme (UK) Ltd" is a
 /// spelling; and a word that ends the words introduces nothing ("Swiss
-/// Re"). "and" and "of" are otherwise no such words, being as common
-/// inside a party's name ("Johnson and Johnson", "Friends of City of
-/// Victorville") as between two. The price is a party respelled on purpose
-/// into such words ("CDC" into "Centers for Disease Control", "Acme" into
-/// "Acme (UK)", "Acme Property" into "Acme Property and Casualty"), which
-/// teaches nothing and is made again by hand; a type may hold most of them
+/// Re"). "and" and "of" are otherwise no such words, being as common inside
+/// a party's name ("Johnson and Johnson", "Friends of City of Victorville")
+/// as between two. The price is a party respelled on purpose into such
+/// words ("CDC" into "Centers for Disease Control", "Acme" into "Acme
+/// (UK)", "Acme Property" into "Acme Property and Casualty"), which teaches
+/// nothing and is made again by hand; a type may hold most of them
 /// ("Application for Certification"). What the reviewer put in the party's
 /// place is still read for filing (see [`respelled_party`]).
 ///
@@ -712,15 +714,21 @@ fn separators() -> impl Iterator<Item = String> {
 
 /// Where [`separators`] are found in `words`, [`spaced`] already, in any
 /// case, as byte ranges: each one that begins something other than more of
-/// the name (see [`begins_more`]).
+/// the name (see [`begins_more`]), and one left dangling at the end, with
+/// nothing after it ("Acme Corporation re").
 fn separators_in(words: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
     let lower = words.to_ascii_lowercase();
     separators()
         .flat_map(move |separator| {
-            lower
+            let mut found = lower
                 .match_indices(separator.as_str())
                 .map(|(at, _)| (at, at + separator.len()))
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            let dangling = separator.trim_end();
+            if dangling != separator && lower.ends_with(dangling) {
+                found.push((lower.len() - dangling.len(), lower.len()));
+            }
+            found
         })
         .filter(|&(at, end)| begins_more(words, at, end))
 }
@@ -830,16 +838,22 @@ fn separator_marks() -> impl Iterator<Item = Mark> {
 }
 
 /// Words that join two parties outside the name's grammar: a case's
-/// caption ("Smith v Acme Corp", "v.", "vs", "versus"), and a party acting
-/// for another ("Jane Doe on behalf of Acme Corp", "Acme Corp by its
-/// Trustee"). "c/o" and "d/b/a" cannot be typed in a name.
-const JOINING: [Mark; 6] = [
+/// caption ("Smith v Acme Corp", "v.", "vs", "versus"), a party acting for
+/// another ("Jane Doe on behalf of Acme Corp", "Acme Corp by its
+/// Trustee"), another name of a party ("John Smith dba Acme Corp", "Acme
+/// Holdings fka Acme Corp"), and a person to attend ("Acme Corp attn Jane
+/// Doe"). "c/o" and "d/b/a" cannot be typed in a name; "co" is as often
+/// "Acme Co".
+const JOINING: [Mark; 9] = [
     Mark::Written(" v "),
     Mark::Written(" v. "),
     Mark::Words("vs"),
     Mark::Words("versus"),
     Mark::Words("by"),
     Mark::Words("on behalf of"),
+    Mark::Words("dba"),
+    Mark::Words("fka"),
+    Mark::Words("attn"),
 ];
 
 /// The words that join the two sides of a "between", which join a party to
@@ -2407,6 +2421,24 @@ mod tests {
                 PartyRelation::With,
                 "Employment Agreement with Acme Corp by Jane Doe",
             ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement with John Smith dba Acme Corp",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement with Acme Holdings fka Acme Corp",
+            ),
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement with Acme Corp attn Jane Doe",
+            ),
             // A type given a party in front of the party clause kept.
             (
                 "Employment Agreement",
@@ -2431,6 +2463,20 @@ mod tests {
                 &["Acme"][..],
                 PartyRelation::None,
                 "Invoice - Contoso - Acme",
+            ),
+            // The party kept with a connecting word or a note's start left
+            // dangling after it.
+            (
+                "Employment Agreement",
+                &["Acme Corporation"][..],
+                PartyRelation::With,
+                "Employment Agreement with Acme Corporation re",
+            ),
+            (
+                "Notice",
+                &["Acme Property"][..],
+                PartyRelation::To,
+                "Notice to Acme Property from",
             ),
             // The price: a type lengthened on a name that gave no party,
             // a party put in a note's parenthesis, or a party of two words
