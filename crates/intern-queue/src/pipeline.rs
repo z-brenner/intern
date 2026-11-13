@@ -1011,12 +1011,12 @@ impl ProposalRecord {
         let mut read = match &lesson {
             Some(edit) => Some(edit.to.clone()),
             None => approved_party(&styled, extension, &proposed, filename),
-        }
-        .map(|read| without_note(&read));
+        };
         // The document's own word for a party a rule respelled, kept with
         // another party or a note after it ("Acme Corporation from Jane
-        // Doe" for a name's "ACME CORP"), is that party kept, as the
-        // grammar reads the rule's spelling so kept: no party is read.
+        // Doe", "Acme Corporation re Merger" for a name's "ACME CORP"), is
+        // that party kept, as the grammar reads the rule's spelling so
+        // kept: no party is read.
         if read.as_deref().is_some_and(|read| {
             self.house_rules.iter().any(|rule| {
                 rule.kind == RuleKind::Party
@@ -1029,6 +1029,7 @@ impl ProposalRecord {
         }) {
             (lesson, read) = (None, None);
         }
+        let read = read.map(|read| without_note(&read));
         // The choice, where the grammar reads no party or reads it; not
         // where it reads a longer party typed around the choice's words.
         let chosen = chosen.filter(|_| {
@@ -7242,6 +7243,11 @@ mod as_filed_tests {
             (
                 record(agreement, with_acme, &[], &[(acme, "ACME CORP")]),
                 "Employment Agreement with Acme Corporation from Jane Doe",
+                &["ACME CORP"],
+            ),
+            (
+                record(agreement, with_acme, &[], &[(acme, "ACME CORP")]),
+                "Employment Agreement with Acme Corporation re Merger",
                 &["ACME CORP"],
             ),
             // As before: the choice beside the party kept, or in its place.
