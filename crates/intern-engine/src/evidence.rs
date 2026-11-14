@@ -425,6 +425,37 @@ pub(crate) fn date_statements(iso_date: &str, normalized: &str) -> Vec<(usize, D
     statements
 }
 
+/// Every statement of `iso_date` in `normalized` as [`date_statements`]
+/// finds it, each once, with where it ends. Every spelling searched for
+/// carries its year and none may run into a digit, so two spellings that
+/// start at one place ("04/04/2026", month first and day first) end at
+/// one place too. For a caller that reads what stands right after a date,
+/// or right before it.
+pub(crate) fn date_match_spans(iso_date: &str, normalized: &str) -> Vec<(usize, usize)> {
+    let candidates = searched_spellings(iso_date);
+    let bytes = normalized.as_bytes();
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    for (candidate, _) in candidates.iter() {
+        let mut from = 0;
+        while let Some(found) = normalized[from..].find(candidate.as_str()) {
+            let position = from + found;
+            let end = position + candidate.len();
+            // The same boundaries as `date_statements` keeps.
+            let digit_before = position > 0 && bytes[position - 1].is_ascii_digit();
+            let digit_after = bytes.get(end).is_some_and(u8::is_ascii_digit);
+            if !digit_before && !digit_after {
+                match spans.iter_mut().find(|(start, _)| *start == position) {
+                    Some(span) => span.1 = span.1.max(end),
+                    None => spans.push((position, end)),
+                }
+            }
+            from = position + candidate.chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    spans.sort_unstable();
+    spans
+}
+
 /// The spellings of one date as [`date_statements`] searches for them.
 type SearchedSpellings = Arc<[(String, DateSpelling)]>;
 
@@ -1555,9 +1586,9 @@ mod searched_spelling_tests {
     use std::{collections::VecDeque, sync::Arc};
 
     use super::{
-        DateSpelling, SPELLINGS, SPELLINGS_KEPT, SearchedSpellings, date_spellings,
-        date_statements, keep_spellings, kept_spellings, normalize, normalize_ascii,
-        normalize_unicode, searched_spellings,
+        DateSpelling, SPELLINGS, SPELLINGS_KEPT, SearchedSpellings, date_match_positions,
+        date_match_spans, date_spellings, date_statements, keep_spellings, kept_spellings,
+        normalize, normalize_ascii, normalize_unicode, searched_spellings,
     };
 
     /// A date's spellings as every call used to work them out: each built,
@@ -1907,6 +1938,49 @@ mod searched_spelling_tests {
         assert_eq!(
             date_statements("2031-07-09", "due 9 july 2031"),
             statements_afresh(&spellings_afresh("2031-07-09"), "due 9 july 2031")
+        );
+    }
+
+    /// A statement's span starts where the evidence check finds the date,
+    /// is listed once however many spellings read it there, and ends with
+    /// the date's last figure.
+    #[test]
+    fn a_dates_statement_is_listed_once_with_where_it_ends() {
+        for (date, line) in [
+            ("2024-01-08", "Flight 01/08/24 - 01/21/24"),
+            ("2017-09-01", "Service Period: 9/1/2017- 9/30/2017"),
+            ("2026-03-01", "from March 1, 2026 through March 31, 2026"),
+            ("2026-03-01", "1st March 2026 and 2026-03-01 and 01.03.2026"),
+            ("2024-01-08", "Invoice No. 2024-01-08-0457, not 12024-01-08"),
+            ("2026-04-04", "04/04/2026"),
+        ] {
+            let normalized = normalize(line);
+            let spans = date_match_spans(date, &normalized);
+            assert_eq!(
+                spans.iter().map(|(start, _)| *start).collect::<Vec<_>>(),
+                date_match_positions(date, &normalized),
+                "{line}"
+            );
+            assert!(!spans.is_empty(), "{line}");
+        }
+        let text = |date: &str, line: &str| {
+            let normalized = normalize(line);
+            date_match_spans(date, &normalized)
+                .into_iter()
+                .map(|(start, end)| normalized[start..end].to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            text("2026-03-01", "from March 1, 2026 through March 31, 2026"),
+            ["march 1, 2026"]
+        );
+        assert_eq!(
+            text("2017-09-01", "Service Period: 9/1/2017- 9/30/2017"),
+            ["9/1/2017"]
+        );
+        assert_eq!(
+            text("2024-01-08", "01/08/24 - 01/21/24 and 01/08/2024"),
+            ["01/08/24", "01/08/2024"]
         );
     }
 }

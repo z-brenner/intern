@@ -393,7 +393,7 @@ gated on the quoted wrapper and threw away correct dates on half the corpus. Wha
 must be true is that the date is really in the document, and that is what is
 checked. The model's quoted line is still stored and shown to the reviewer.
 
-A date the document states is not yet the document's date, so four more
+A date the document states is not yet the document's date, so five more
 checks read the document around it:
 
 * **Another document's date.** "the Master Services Agreement dated June 2,
@@ -438,6 +438,20 @@ checks read the document around it:
   proposal goes to review with `DATE_AMBIGUOUS`. A date read against the
   order the document does show (`03/04/2026` as 4 March beside a
   `30/01/2026`) goes to review the same way.
+* **One end of a period.** An invoice, a statement or another issued
+  document carries a date of its own, and the period it bills is another
+  matter (`Service Period: 9/1/2017 - 9/30/2017`, a broadcast invoice's
+  flight weeks). When every line that states the chosen date, running
+  lines included, joins it to another date by `to`, `through`, `thru`,
+  `until` or a dash, on either side, the date is kept and the proposal goes
+  to review with `DATE_IS_PERIOD`. One statement of the date outside any
+  period clears it, however loosely it is written (`Invoice Date:
+  08-Jan-24`), and so does a dash that runs into a number that is no date
+  (`Invoice No. 2024-01-08-0457`) or into a time written with dots
+  (`28.01.2024 - 11.30.05`: two ends in figures are written alike, with one
+  separator and a year as long). Only an issued document is asked: a
+  policy or a lease is dated by the start of its term. The evidence
+  pipeline alone raises it.
 
 All of this is string handling over text nobody controls. A panic in it -
 one slice inside an `é` once panicked on every French invoice - fails that

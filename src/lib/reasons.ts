@@ -11,8 +11,19 @@ const SENTENCES: Record<string, string> = {
   DATE_MISSING: 'No date that defines the document was found.',
   DATE_UNSUPPORTED: 'The proposed date does not appear verbatim in the document.',
   TYPE_MISSING: 'No specific document type was identified.',
-  TYPE_UNSUPPORTED: 'The proposed document type does not appear verbatim in the document.',
-  TYPE_INFERRED: 'The model gave no document type, so the document\'s own title was used; check that it names the document.',
+  // Both are raised in more cases than their first (ReviewReason in
+  // domain.rs; raised in facts.rs and validate.rs). TYPE_UNSUPPORTED: a
+  // type the document does not state; and a type it does state, but only
+  // where it says what it is about - a "Re:" or "Subject:" line a record
+  // heads ("Subject: Annual Audit Report", the line itself shown as the
+  // evidence), or a letter's text below its greeting. TYPE_INFERRED: a
+  // title of the document in place of a type the model did not give or the
+  // document did not support; and the kind the layout shows - "Letter" for
+  // a letter typed by its matter, "Email" for a header block, "Notice" for
+  // a heading that opens on it - whether or not the model gave a type.
+  // Neither sentence says the type is absent or that the model gave none.
+  TYPE_UNSUPPORTED: 'The document does not confirm the proposed type as its own. The type does not appear verbatim in the document, or appears only where the document says what it is about, such as a subject line or the text of a letter. Check the type.',
+  TYPE_INFERRED: 'Intern supplied the type in this name: the document\'s own title, or the kind its layout shows, such as “Letter” or “Email”. Check that it names the document.',
   // Both are raised in more cases than a party missing from the text
   // (ReviewReason in domain.rs; raised in facts.rs and validate.rs, on the
   // relation compose.rs reads). PARTY_UNSUPPORTED: most often a name that
@@ -54,6 +65,12 @@ const SENTENCES: Record<string, string> = {
   DATE_IMPLAUSIBLE: 'The date\'s year looks wrong for a document, often a misread such as 2625 for 2025. Check it against the document.',
   DATE_IS_DEADLINE: 'The date the model chose is a due, renewal, or expiry date, not the date the document was issued. Check the date.',
   DATE_AMBIGUOUS: 'The date is written only as numbers that could be read day-first or month-first. Check which one the document means.',
+  // An invoice, a statement or another issued document whose chosen date
+  // stands, on every line that states it, joined to another date by "to",
+  // "through", "until" or a dash: one end of a period it bills or covers,
+  // not the day it was issued (ReviewReason::DateIsPeriod). The name keeps
+  // the date.
+  DATE_IS_PERIOD: 'The date is written only as the start or end of a period, such as a billing or service period. Check which date the document itself carries.',
   // The quick model read it. Its readings are never filed on their own; the
   // accurate model reads the document again when it can, unless a person has
   // acted on it first.
@@ -219,10 +236,11 @@ const SHORT: Record<string, string> = {
   DATE_UNSUPPORTED: 'Date not in document',
   DATE_AMBIGUOUS: 'Date could be day- or month-first',
   DATE_IS_DEADLINE: 'Date is a deadline',
+  DATE_IS_PERIOD: 'Date is a period\'s start or end',
   DATE_IMPLAUSIBLE: 'Year looks wrong',
   TYPE_MISSING: 'No document type',
-  TYPE_UNSUPPORTED: 'Type not in document',
-  TYPE_INFERRED: 'Type taken from its title',
+  TYPE_UNSUPPORTED: 'Type uncertain',
+  TYPE_INFERRED: 'Type supplied by Intern',
   PARTY_UNSUPPORTED: 'Party uncertain',
   PARTY_MISSING: 'Party missing',
   DESCRIPTION_UNSUPPORTED: 'Description not supported',

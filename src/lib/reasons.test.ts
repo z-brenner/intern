@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { describeActionError } from './actionErrors';
-import { describeQueueStop, humanizeReason } from './reasons';
+import { describeQueueStop, humanizeReason, shortReason } from './reasons';
 
 describe('humanizeReason', () => {
   it('translates a single code into its sentence', () => {
@@ -46,10 +46,30 @@ describe('humanizeReason', () => {
   it('translates the pipeline comma-joined list into sentences', () => {
     const result = humanizeReason('TYPE_UNSUPPORTED, LOW_CONFIDENCE, MODEL_REQUESTED_REVIEW');
     expect(result).toBe(
-      'The proposed document type does not appear verbatim in the document. '
+      'The document does not confirm the proposed type as its own. The type does not appear verbatim in the document, or appears only where the document says what it is about, such as a subject line or the text of a letter. Check the type. '
       + 'The model was unsure of its reading. Check the name against the document, starting with the date and the parties. '
       + 'The model asked for a person to look at this one.',
     );
+  });
+
+  // TYPE_UNSUPPORTED is raised for a type the document does not state, and
+  // also for one it states only where it says what it is about: a subject
+  // line a record heads, a letter's text below its greeting. TYPE_INFERRED
+  // is raised when a title stands in for the model's type and when the
+  // layout's kind does ("Letter", "Email", "Notice"), whether or not the
+  // model gave a type. Each sentence must be true of every case, so the
+  // first does not say the type is absent and the second does not say the
+  // model gave none or that a title was used.
+  it('says the type reasons without claiming the type is absent or that the model gave none', () => {
+    const unsupported = humanizeReason('TYPE_UNSUPPORTED');
+    expect(unsupported).toMatch(/^The document does not confirm the proposed type as its own\./);
+    expect(unsupported).toMatch(/does not appear verbatim in the document, or appears only where/);
+    expect(unsupported.endsWith(' Check the type.'), unsupported).toBe(true);
+    const inferred = humanizeReason('TYPE_INFERRED');
+    expect(inferred).toMatch(/own title, or the kind its layout shows/);
+    expect(inferred).not.toMatch(/gave no|title was used/);
+    expect(shortReason(['TYPE_UNSUPPORTED'])).toEqual({ text: 'Type uncertain', more: 0 });
+    expect(shortReason(['TYPE_INFERRED'])).toEqual({ text: 'Type supplied by Intern', more: 0 });
   });
 
   // LOW_CONFIDENCE is raised when the model rates itself low, and also when
@@ -112,6 +132,16 @@ describe('humanizeReason', () => {
     expect(humanizeReason('MODEL_DECLINED')).toContain('declined');
   });
 
+  // An invoice dated with the first day of the week it bills. The date is in
+  // the document, in numbers that read one way, and is no deadline: neither
+  // DATE_AMBIGUOUS's sentence nor DATE_IS_DEADLINE's is true of it.
+  it('says a date that only bounds a period is the period\'s, and to check for the document\'s own', () => {
+    const sentence = humanizeReason('DATE_IS_PERIOD');
+    expect(sentence).toBe('The date is written only as the start or end of a period, such as a billing or service period. Check which date the document itself carries.');
+    expect(sentence).not.toMatch(/day-first|month-first|due|expiry/);
+    expect(humanizeReason('DATE_IS_PERIOD, LOW_CONFIDENCE')).toBe(`${sentence} ${humanizeReason('LOW_CONFIDENCE')}`);
+  });
+
   it('keeps unknown codes and free text verbatim', () => {
     expect(humanizeReason('SOMETHING_NEW')).toBe('SOMETHING_NEW');
     expect(humanizeReason('Duplicate of 2026-01-05 Invoice.pdf')).toBe('Duplicate of 2026-01-05 Invoice.pdf');
@@ -125,7 +155,7 @@ describe('humanizeReason', () => {
 
   it('has a plain sentence for every failure and review code the backend can store', () => {
     const codes = [
-      'DATE_IMPLAUSIBLE', 'DATE_IS_DEADLINE', 'DATE_AMBIGUOUS', 'FAST_MODEL_READING', 'PARTY_MISSING',
+      'DATE_IMPLAUSIBLE', 'DATE_IS_DEADLINE', 'DATE_AMBIGUOUS', 'DATE_IS_PERIOD', 'FAST_MODEL_READING', 'PARTY_MISSING',
       'PASSWORD_PROTECTED', 'UNSUPPORTED_CONTENT', 'DOCUMENT_TOO_LARGE', 'OCR_UNAVAILABLE',
       'EXTRACTION_FAILED', 'ANALYSIS_FAILED', 'MODEL_FAILED', 'MODEL_OUTPUT_INVALID',
       'MODEL_INPUT_TOO_LARGE', 'MODEL_REPLY_TRUNCATED', 'HOSTED_MODEL_UNAVAILABLE',

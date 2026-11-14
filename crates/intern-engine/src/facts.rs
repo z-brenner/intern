@@ -65,15 +65,16 @@ use crate::infer::{
 };
 use crate::phrases::{
     RIGHT_STOPS, gives_notice, has_a_kind, head_noun, is_form_code, is_placeholder, is_reference,
-    label_and_value, names_a_kind, opens_with_party_label, phrase_positions, possessive_side,
-    same_word, subject_value, tidy_case, title_phrase, trim_name, without_identifier, words,
+    label_and_value, names_a_kind, opening_phrase, opens_with_party_label, phrase_positions,
+    possessive_side, same_word, subject_value, tidy_case, title_phrase, trim_name,
+    without_identifier, words,
 };
 use crate::retrieve::EvidenceContext;
 use crate::validate::{
     DateField, DatePositions, GENERIC_CAPITALS, READY_CONFIDENCE, current_year, date_fields,
     date_is_tainted, date_is_tainted_as, deadline_fires, deadline_fires_as, effective_alternates,
-    first_unsupported_claim, issue_date_alternates, push, reading_is_unsettled,
-    validate_description, year_is_plausible,
+    first_unsupported_claim, issue_date_alternates, only_bounds_a_period, push,
+    reading_is_unsettled, validate_description, year_is_plausible,
 };
 
 /// Share of a subject's distinct significant words its cited units must
@@ -604,6 +605,35 @@ pub fn validate_facts_at(
             push(&mut reasons, ReviewReason::TypeInferred);
         }
     }
+    // A "Re:" or "Subject:" line says what the paper is about, above the
+    // greeting as below it. A type read from one is the paper's own kind
+    // when the line opens on what a letter does by being sent ("Re: Notice
+    // of Violation", "Re: Offer of Employment", "Re: Approval of Closure
+    // Plan"). A review, a report, a plan or minutes at its head is a paper
+    // of its own that this one discusses or sends on ("Re: Thematic Review
+    // on Early Mortgage Arrears" over "Dear CEO,"): the name waits for a
+    // person, and a letter is a "Letter", for a person to complete, as one
+    // typed by what it talks about is. As there, a type that is whole a
+    // notice, a form or an agreement keeps its kind ("Re: Consent to
+    // Assignment of Lease"): a letter can be one. And as there, a record
+    // the paper's own heading states too is the paper's type, whichever of
+    // the two lines the reply cited ("SITE INSPECTION REPORT" over "Re:
+    // Site Inspection Report - 12 Main Street").
+    let matter = |value: &str, line: &str| {
+        matter_opens_on_a_record(scope, value, line)
+            && !layout.titles_off_a_subject_line(scope, value)
+    };
+    if let Some(value) = document_type.as_deref()
+        && type_line.as_deref().is_some_and(|line| matter(value, line))
+    {
+        push(&mut reasons, ReviewReason::TypeUnsupported);
+        if layout.laid_out_as_letter(scope) && no_kind_of_its_own(Some(value)) {
+            document_type = Some("Letter".to_owned());
+            type_title = None;
+            type_line = None;
+            push(&mut reasons, ReviewReason::TypeInferred);
+        }
+    }
     // A letter's title may say whom it answers and nothing of what it is:
     // "Response to the ONS Engagement on Adjustment of Migration
     // Statistics", the reply's "ONS" among its parties. A party is no part
@@ -653,11 +683,14 @@ pub fn validate_facts_at(
     }
     if document_type.is_none() {
         // A title read below a letter's salutation is the letter talking,
-        // as above.
+        // as above, and one read from its subject line that opens on a
+        // record is the letter's matter - unless, either way, it is a
+        // kind a letter can be of its own.
         let inferred = title_of(scope).filter(|(inferred, line)| {
             !(layout.laid_out_as_letter(scope)
                 && no_kind_of_its_own(Some(inferred))
-                && unit_holding(scope, line).is_some_and(|unit| talking(unit, line, inferred)))
+                && (unit_holding(scope, line).is_some_and(|unit| talking(unit, line, inferred))
+                    || matter(inferred, line)))
         });
         match inferred {
             Some((inferred, line)) => {
@@ -985,6 +1018,23 @@ pub fn validate_facts_at(
         && (reading_is_unsettled(context, date) || reading_is_unsettled(document, date))
     {
         push(&mut reasons, ReviewReason::DateAmbiguous);
+    }
+    // An invoice, a statement or a receipt carries a date of its own, and
+    // the period it bills is another matter: "Service Period: 9/1/2017 -
+    // 9/30/2017", a broadcast invoice's flight weeks. A date the document
+    // states only as one end of a period, on every line that states it,
+    // running lines included, is as likely that period's first day as the
+    // day the paper was issued: the name keeps it, and a person checks it.
+    // A policy or a lease is dated by the start of its term, so only an
+    // issued document is asked.
+    if let Some(date) = document_date.as_deref()
+        && DocumentClass::of(document_type.as_deref()) == DocumentClass::Issued
+        && only_bounds_a_period(
+            scope.index.units().iter().map(|unit| unit.text.as_str()),
+            date,
+        )
+    {
+        push(&mut reasons, ReviewReason::DateIsPeriod);
     }
     // The wording around the date says what kind of date it is: the cited
     // units first, then the context, and the reply's role only where the
@@ -2314,6 +2364,30 @@ fn no_kind_of_its_own(document_type: Option<&str>) -> bool {
     )
 }
 
+/// Whether a type read from `line`, a "Re:", "Subject:", "Subj:" or
+/// "Regarding:" line ([`names_a_matter`]), names the paper's matter and
+/// not its kind: the phrase opens on a record. What a subject line opens with is the paper's own kind when it
+/// is something a letter does by being sent - a notice, an offer, a
+/// demand, an approval - and a record is a paper of its own: the review a
+/// regulator's letter reports on, the minutes a cover letter encloses.
+///
+/// Only the word the type's opening phrase ends on is asked, by itself
+/// ([`opening_phrase`]): a "Thematic Review on Early Mortgage Arrears" is
+/// a review, while an "Approval of Closure Plan", a "Closure Plan
+/// Approval" and a "Policy Cancellation" are an approval and a
+/// cancellation, whatever they are of. A kind of letter ("Review Letter")
+/// is the letter's own, and an email's "Subject:" is read by the email's
+/// rule.
+fn matter_opens_on_a_record(scope: &ValidationScope<'_>, document_type: &str, line: &str) -> bool {
+    let type_words = words(document_type);
+    names_a_matter(line.trim_matches(|c: char| c == '*' || c.is_whitespace()))
+        && !is_email_subject(scope, line)
+        && !type_words.iter().any(|word| word == "letter")
+        && opening_phrase(&type_words)
+            .last()
+            .is_some_and(|head| DocumentClass::of(Some(head)) == DocumentClass::Record)
+}
+
 /// The unit of the context that holds `line` as one of its lines.
 fn unit_holding<'a>(scope: &ValidationScope<'a>, line: &str) -> Option<&'a EvidenceUnit> {
     let line = line.trim();
@@ -2424,7 +2498,7 @@ fn in_capitals(line: &str) -> bool {
     total >= 4 && upper * 10 >= total * 8
 }
 
-/// Whether a line opens with "Re:", "Subject:" or "Regarding:".
+/// Whether a line opens with "Re:", "Subject:", "Subj:" or "Regarding:".
 fn names_a_matter(line: &str) -> bool {
     let opening = line
         .split_whitespace()
@@ -3139,6 +3213,9 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
             // kind of document: "Re: Demand for Payment - Highmeadow ...".
             // A kind its number follows names the numbered document the
             // letter is about: "RE: NDA 208090", "Re: Invoice No. 4471".
+            // A record at the line's head is read as a title here too;
+            // on a letter `validate_facts_at` sets it aside as the
+            // letter's matter (`matter_opens_on_a_record`).
             if names_a_matter(line.trim_matches(|c: char| c == '*' || c.is_whitespace())) {
                 let line = line.trim_matches(|c: char| c == '*' || c.is_whitespace());
                 let line_words = words(line);
@@ -4543,6 +4620,38 @@ impl LetterLayout {
             // letter's own title.
             above.iter().any(|line| {
                 !names_a_matter(line) && contains_whole(&normalize_loosely(line), &wanted)
+            })
+        })
+    }
+
+    /// Whether the first page states `value` whole where a paper's own
+    /// title stands, off any "Re:" or "Subject:" line: above the greeting
+    /// of a paper that greets someone, as [`Self::states_above_salutation`]
+    /// reads it, and on a paper that greets no one in a heading or on a
+    /// line set in capitals, as [`title_of`] reads a title. A subject line
+    /// is one whatever marks of emphasis are set around it ("**Re: ...**").
+    fn titles_off_a_subject_line(self, scope: &ValidationScope<'_>, value: &str) -> bool {
+        let wanted = normalize_loosely(value);
+        let units = scope.index.units();
+        let first_page = units.iter().map(|unit| unit.page).min();
+        units.iter().any(|unit| {
+            if unit.running || Some(unit.page) != first_page {
+                return false;
+            }
+            let lines = unit.text.lines().collect::<Vec<_>>();
+            let above = match self.salutation {
+                Some((salutation, _)) if unit.ordinal > salutation => return false,
+                Some((salutation, at)) if unit.ordinal == salutation => {
+                    &lines[..at.min(lines.len())]
+                }
+                _ => &lines[..],
+            };
+            above.iter().any(|line| {
+                !names_a_matter(line.trim_matches(|c: char| c == '*' || c.is_whitespace()))
+                    && (self.salutation.is_some()
+                        || unit.kind == UnitKind::Heading
+                        || in_capitals(&tidy_case(line)))
+                    && contains_whole(&normalize_loosely(line), &wanted)
             })
         })
     }
@@ -9020,6 +9129,215 @@ Payment terms: net 30. Remit to Halvorsen Fixture Works LLC.";
         );
     }
 
+    /// An invoice in the real sets dated, by the reply, with the first day
+    /// of the flight week it bills; a template's "Service Period". An
+    /// issued document's date that stands only as one end of a period
+    /// keeps its place in the name and waits for a person.
+    #[test]
+    fn an_issued_documents_date_that_only_bounds_a_period_waits_for_review() {
+        let invoice = |lines: &str| {
+            format!(
+                "Quillon Therapy Services LLC\n12 Quay Street, Brackenridge\n\nINVOICE\n\n\
+                 Bill To: Brackenridge Public Schools\n\n{lines}\n\n\
+                 Speech therapy sessions, 80 at $1.00, $80.00\n\nInvoice Total: $80.00"
+            )
+        };
+        let dated = |date: &'static str, cited: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some("Invoice".into()),
+                type_evidence: vec![id_of(index, "INVOICE")],
+                document_date: Some(date.into()),
+                date_evidence: vec![id_of(index, cited)],
+                parties: vec![party(
+                    "Quillon Therapy Services LLC",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "Quillon Therapy")],
+                )],
+                ..ModelFacts::default()
+            }
+        };
+        // Either end of the period, and nowhere else.
+        for date in ["2017-09-01", "2017-09-30"] {
+            let (outcome, _) = facts_for(
+                &invoice("Service Period: 9/1/2017- 9/30/2017"),
+                dated(date, "Service Period"),
+            );
+            assert_eq!(outcome.proposal.document_date.as_deref(), Some(date));
+            assert!(
+                outcome.reasons.contains(&ReviewReason::DateIsPeriod),
+                "{date}: {:?}",
+                outcome.reasons
+            );
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        }
+        // The invoice gives the date a field of its own as well: it is the
+        // invoice's date, whatever period starts on it.
+        let (outcome, _) = facts_for(
+            &invoice("Invoice Date: September 1, 2017\n\nService Period: 9/1/2017- 9/30/2017"),
+            dated("2017-09-01", "Service Period"),
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2017-09-01")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::DateIsPeriod),
+            "{:?}",
+            outcome.reasons
+        );
+        // So it is when that field writes the date as only the looser
+        // reading finds it.
+        for field in ["Invoice Date: 01-Sep-17", "Invoice Date: Sep 1,2017"] {
+            let (outcome, _) = facts_for(
+                &invoice(&format!("{field}\n\nService Period: 9/1/2017- 9/30/2017")),
+                dated("2017-09-01", "Service Period"),
+            );
+            assert_eq!(
+                outcome.proposal.document_date.as_deref(),
+                Some("2017-09-01")
+            );
+            assert!(
+                !outcome.reasons.contains(&ReviewReason::DateIsPeriod),
+                "{field}: {:?}",
+                outcome.reasons
+            );
+        }
+        // A dash into the rest of an invoice's number bounds no period.
+        let (outcome, _) = facts_for(
+            &invoice("Invoice No. 2017-09-01-0457"),
+            dated("2017-09-01", "Invoice No."),
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2017-09-01")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::DateIsPeriod),
+            "{:?}",
+            outcome.reasons
+        );
+        // A policy is dated by the start of its term: no issued document,
+        // and its period's first day is its date.
+        let (outcome, _) = facts_for(
+            "Hollowmere Mutual Insurance Company\n\nCOMMERCIAL PROPERTY POLICY\n\n\
+             | Named Insured | Fernvale Craft Brewing Cooperative |\n\
+             | Policy Period | From 07/01/2026 to 07/01/2027 at 12:01 A.M. standard time |",
+            |index| ModelFacts {
+                document_type: Some("Commercial Property Policy".into()),
+                type_evidence: vec![id_of(index, "COMMERCIAL")],
+                document_date: Some("2026-07-01".into()),
+                date_evidence: vec![id_of(index, "Policy Period")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-07-01")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::DateIsPeriod),
+            "{:?}",
+            outcome.reasons
+        );
+        // So is a lease, an agreement: its term starts on its date.
+        let (outcome, _) = facts_for(
+            "LEASE AGREEMENT\n\nThis Lease Agreement is made between Hollowmere Estates LLC \
+             (\"Landlord\") and Fernvale Craft Brewing Cooperative (\"Tenant\").\n\n\
+             Term: January 1, 2026 through December 31, 2026",
+            |index| ModelFacts {
+                document_type: Some("Lease Agreement".into()),
+                type_evidence: vec![id_of(index, "LEASE AGREEMENT")],
+                document_date: Some("2026-01-01".into()),
+                date_evidence: vec![id_of(index, "Term:")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-01-01")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::DateIsPeriod),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// The index keeps the first of a line that repeats from page to page
+    /// and sets the others aside as running lines. A date one of those
+    /// states on its own - the second of three months' invoices scanned as
+    /// one file, each under the same "Billed" line - is stated on its own
+    /// all the same, and is no period's end only.
+    #[test]
+    fn a_date_a_running_line_states_on_its_own_is_no_periods_end_only() {
+        let scan = |billed: &str| {
+            let page = |billed: &str, lines: &str| {
+                format!(
+                    "Quillon Therapy Services LLC\n12 Quay Street, Brackenridge\n\nINVOICE\n\n\
+                     Billed {billed}\n\nBill To: Brackenridge Public Schools\n\n{lines}"
+                )
+            };
+            EvidenceIndex::build(&DocumentSource::from_pages(
+                [
+                    page(
+                        "08/01/2017",
+                        "Speech therapy sessions in July, 80 at $1.00, $80.00",
+                    ),
+                    page(
+                        billed,
+                        "Service Period: 9/1/2017- 9/30/2017\n\n\
+                         Speech therapy sessions, 76 at $1.00, $76.00",
+                    ),
+                    page(
+                        "10/01/2017",
+                        "Occupational therapy assessments, 4 at $16.00, $64.00",
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(at, text)| {
+                    crate::domain::SourcePage::new(at + 1, text, PageOrigin::PlainText)
+                })
+                .collect(),
+            ))
+        };
+        let held = |billed: &str| {
+            let index = scan(billed);
+            // The second page's "Billed" line is a running line.
+            assert!(
+                index
+                    .units()
+                    .iter()
+                    .any(|unit| unit.running && unit.text.contains(billed)),
+                "{billed}"
+            );
+            let facts = ModelFacts {
+                document_type: Some("Invoice".into()),
+                type_evidence: vec![id_of(&index, "INVOICE")],
+                document_date: Some("2017-09-01".into()),
+                date_evidence: vec![id_of(&index, "Service Period")],
+                parties: vec![party(
+                    "Quillon Therapy Services LLC",
+                    Some(PartyRole::Issuer),
+                    &[id_of(&index, "Quillon Therapy")],
+                )],
+                ..ModelFacts::default()
+            };
+            let outcome = check(facts, &whole(&index), &index);
+            assert_eq!(
+                outcome.proposal.document_date.as_deref(),
+                Some("2017-09-01"),
+                "{billed}: {:?}",
+                outcome.reasons
+            );
+            outcome.reasons.contains(&ReviewReason::DateIsPeriod)
+        };
+        assert!(!held("09/01/2017"));
+        // The running line gives another day: the date stands only as the
+        // period's first.
+        assert!(held("09/02/2017"));
+    }
+
     /// InternBench's mixed-signature-region, as its text reads: the
     /// amendment takes effect on the last signature, and each party's
     /// signature block carries its own date.
@@ -13041,7 +13359,8 @@ Contractor: QRPA";
     /// typed the email by it - the agreement it sends for signature - gets
     /// "Email" for a person to confirm. A notice or an invoice sent as an
     /// email keeps the kind its subject gives, and a letter's "Subject:"
-    /// line, with no header block around it, still names the letter.
+    /// line, with no header block around it, still names the letter -
+    /// unless a record heads it (`matter_opens_on_a_record`).
     #[test]
     fn an_emails_subject_names_its_matter_not_its_kind() {
         let message = |subject: &str| {
@@ -17048,6 +17367,411 @@ Held on March 3, 2024 at the offices of Corvane Media Group LLC.";
             reply(ANSWER, "Quay Regulation Authority"),
         );
         assert_eq!(outcome.proposal.document_type.as_deref(), Some(ANSWER));
+    }
+
+    /// A regulator's letter to the firms it supervises, in the real sets,
+    /// under "Re: Thematic Review on Early Mortgage Arrears": the review is
+    /// what the letter reports on. A record at the head of a subject line
+    /// is the paper's matter; "Letter" stands in on a letter, and the name
+    /// waits for a person.
+    #[test]
+    fn a_record_at_the_head_of_a_letters_subject_line_is_its_matter() {
+        let letter = |subject: &str| {
+            format!(
+                "Harbour Conduct Authority\nPO Box 559\nPortside 1\n\n24 April 2024\n\n\
+                 {subject}\n\nDear CEO,\n\nThe protection of consumers is a key priority for the \
+                 Authority, which has written to all regulated firms about their customers in \
+                 arrears.\n\nYours sincerely,\n\nMara Quill\nDirector of Consumer Protection"
+            )
+        };
+        let typed = |kind: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(kind.into()),
+                type_evidence: vec![id_of(index, kind)],
+                document_date: Some("2024-04-24".into()),
+                date_evidence: vec![id_of(index, "24 April 2024")],
+                ..ModelFacts::default()
+            }
+        };
+        const REVIEW: &str = "Thematic Review on Early Mortgage Arrears";
+        for subject in [
+            format!("Re: {REVIEW}"),
+            format!("**Re: {REVIEW}**"),
+            format!("Subject: {REVIEW}"),
+        ] {
+            let (outcome, _) = facts_for(&letter(&subject), typed(REVIEW));
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Letter"),
+                "{subject}: {:?}",
+                outcome.reasons
+            );
+            for reason in [
+                ReviewReason::TypeUnsupported,
+                ReviewReason::TypeInferred,
+                ReviewReason::TypeMissing,
+            ] {
+                assert!(
+                    outcome.reasons.contains(&reason),
+                    "{subject}: {:?}",
+                    outcome.reasons
+                );
+            }
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        }
+        // A reply that gave no type at all: the subject line's record is
+        // no title to stand in for it either.
+        let (outcome, _) = facts_for(&letter(&format!("Re: {REVIEW}")), |index| ModelFacts {
+            document_type: None,
+            ..typed(REVIEW)(index)
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Letter"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
+        // What a letter does by being sent is its own kind, whatever it
+        // is of: the word its opening phrase ends on is no record.
+        for kind in [
+            "Approval of Closure Plan",
+            "Closure Plan Approval",
+            "Policy Cancellation",
+            "Notice of Violation",
+            "Offer of Employment",
+        ] {
+            let (outcome, _) = facts_for(&letter(&format!("Re: {kind}")), typed(kind));
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some(kind),
+                "{:?}",
+                outcome.reasons
+            );
+            assert!(
+                !outcome.reasons.contains(&ReviewReason::TypeUnsupported)
+                    && !outcome.reasons.contains(&ReviewReason::TypeInferred),
+                "{kind}: {:?}",
+                outcome.reasons
+            );
+        }
+    }
+
+    /// A consent to an assignment of a lease is an agreement, an
+    /// application a form, a notice a notice: a kind a letter can be of
+    /// its own. Under a record at the head of its subject line the name
+    /// waits for a person and keeps that kind, above the greeting as below
+    /// it; only what is a record or no known kind gives way to "Letter".
+    #[test]
+    fn a_subject_lines_record_that_is_a_kind_of_its_own_is_held_under_its_own_name() {
+        let letter = |above: &str, below: &str| {
+            format!(
+                "Northgate Estates Ltd\n14 Mill Lane, Harrowby\n\n3 March 2024\n\n\
+                 Mr. Alan Reyes\nReyes Developments Ltd\n2 Dock Road, Harrowby\n\n\
+                 {above}Dear Mr. Reyes,\n\n{below}We refer to your request of 12 February and \
+                 confirm the landlord's decision on the terms set out below.\n\n\
+                 Yours sincerely,\n\nPriya Nand\nDirector"
+            )
+        };
+        let typed = |kind: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(kind.into()),
+                type_evidence: vec![id_of(index, "Re: ")],
+                document_date: Some("2024-03-03".into()),
+                date_evidence: vec![id_of(index, "3 March 2024")],
+                ..ModelFacts::default()
+            }
+        };
+        let held = |outcome: &ValidationOutcome| {
+            outcome
+                .reasons
+                .iter()
+                .filter(|reason| **reason == ReviewReason::TypeUnsupported)
+                .count()
+        };
+        for kind in [
+            "Consent to Assignment of Lease",
+            "Certificate of Occupancy Application",
+            "Summary of Benefits and Coverage Notice",
+        ] {
+            let subject = format!("Re: {kind}\n\n");
+            for text in [letter(&subject, ""), letter("", &subject)] {
+                let (outcome, _) = facts_for(&text, typed(kind));
+                assert_eq!(
+                    outcome.proposal.document_type.as_deref(),
+                    Some(kind),
+                    "{text}: {:?}",
+                    outcome.reasons
+                );
+                assert_eq!(held(&outcome), 1, "{text}: {:?}", outcome.reasons);
+                assert!(
+                    !outcome.reasons.contains(&ReviewReason::TypeInferred),
+                    "{text}: {:?}",
+                    outcome.reasons
+                );
+                assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+            }
+        }
+        // A record and nothing more is the letter's matter on either side
+        // of the greeting, and is said to be unsupported once.
+        let subject = "Re: Certificate of Insurance\n\n";
+        for text in [letter(subject, ""), letter("", subject)] {
+            let (outcome, _) = facts_for(&text, typed("Certificate of Insurance"));
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Letter"),
+                "{text}: {:?}",
+                outcome.reasons
+            );
+            assert_eq!(held(&outcome), 1, "{text}: {:?}", outcome.reasons);
+            for reason in [ReviewReason::TypeInferred, ReviewReason::TypeMissing] {
+                assert!(
+                    outcome.reasons.contains(&reason),
+                    "{text}: {:?}",
+                    outcome.reasons
+                );
+            }
+        }
+        // A reply that gave no type: the subject line's phrase is the
+        // title to confirm when it is a kind of its own, and no title when
+        // it is a record.
+        for (kind, inferred) in [
+            ("Consent to Assignment of Lease", true),
+            ("Certificate of Insurance", false),
+        ] {
+            let (outcome, _) = facts_for(&letter(&format!("Re: {kind}\n\n"), ""), |index| {
+                ModelFacts {
+                    document_type: None,
+                    type_evidence: Vec::new(),
+                    ..typed(kind)(index)
+                }
+            });
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some(if inferred { kind } else { "Letter" }),
+                "{kind}: {:?}",
+                outcome.reasons
+            );
+            assert!(outcome.reasons.contains(&ReviewReason::TypeInferred));
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        }
+    }
+
+    /// A surveyor's report sent as a letter is headed "SITE INSPECTION
+    /// REPORT" and says the same on its "Re:" line; a hospital's policy
+    /// repeats its heading in a "Subject:" field. The paper's own heading
+    /// states the type, so the subject line's record is no other paper,
+    /// whichever of the two lines the reply cited.
+    #[test]
+    fn a_record_the_papers_own_heading_states_too_is_its_type_whichever_line_was_cited() {
+        const REPORT: &str = "Site Inspection Report";
+        let letter = |heading: &str, subject: &str| {
+            format!(
+                "Northgate Engineering Ltd\n14 Mill Lane, Harrowby\n\n{heading}3 March 2024\n\n\
+                 Mr. Alan Reyes\nReyes Developments Ltd\n2 Dock Road, Harrowby\n\n{subject}\n\n\
+                 Dear Mr. Reyes,\n\nWe inspected the property on 28 February and found the roof \
+                 structure sound and the drainage in need of repair within the year.\n\n\
+                 Yours sincerely,\n\nPriya Nand\nChartered Surveyor"
+            )
+        };
+        let typed = |cites: &'static [&'static str]| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(REPORT.into()),
+                type_evidence: cites.iter().map(|needle| id_of(index, needle)).collect(),
+                document_date: Some("2024-03-03".into()),
+                date_evidence: vec![id_of(index, "3 March 2024")],
+                ..ModelFacts::default()
+            }
+        };
+        let headed = letter(
+            "SITE INSPECTION REPORT\n\n",
+            "Re: Site Inspection Report - 12 Main Street",
+        );
+        for cites in [
+            &["Re: Site"][..],
+            &["Re: Site", "SITE INSPECTION"],
+            &["SITE INSPECTION", "Re: Site"],
+            &["SITE INSPECTION"],
+            &[],
+        ] {
+            let (outcome, _) = facts_for(&headed, typed(cites));
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some(REPORT),
+                "{cites:?}: {:?}",
+                outcome.reasons
+            );
+            assert!(
+                !outcome.reasons.contains(&ReviewReason::TypeUnsupported)
+                    && !outcome.reasons.contains(&ReviewReason::TypeInferred),
+                "{cites:?}: {:?}",
+                outcome.reasons
+            );
+        }
+        // No heading of its own, or a heading that says something else:
+        // the subject line's record is the letter's matter. A subject line
+        // set in bold is no heading either.
+        for (heading, subject) in [
+            ("", "Re: Site Inspection Report - 12 Main Street"),
+            (
+                "STRUCTURAL SURVEY\n\n",
+                "Re: Site Inspection Report - 12 Main Street",
+            ),
+            ("", "**Re: Site Inspection Report - 12 Main Street**"),
+        ] {
+            let (outcome, _) = facts_for(&letter(heading, subject), typed(&["Re: Site"]));
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Letter"),
+                "{heading}{subject}: {:?}",
+                outcome.reasons
+            );
+            assert!(outcome.reasons.contains(&ReviewReason::TypeUnsupported));
+        }
+        // A paper that greets no one: its heading, or a line set in
+        // capitals, is where its own title stands.
+        let policy = |heading: &str, body: &str| {
+            format!(
+                "Harrowby General Hospital\n\n{heading}Subject: Hand Hygiene Policy\n\
+                 Policy Number: IC-104\nEffective Date: March 3, 2024\n\n1. Purpose\n\n{body}"
+            )
+        };
+        let cited_field = |index: &EvidenceIndex| ModelFacts {
+            document_type: Some("Hand Hygiene Policy".into()),
+            type_evidence: vec![id_of(index, "Subject:")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "Effective Date")],
+            ..ModelFacts::default()
+        };
+        const PURPOSE: &str = "Staff clean their hands before and after contact with a patient \
+                               or the patient's surroundings.";
+        let (outcome, _) = facts_for(&policy("HAND HYGIENE POLICY\n\n", PURPOSE), cited_field);
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Hand Hygiene Policy")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // A sentence of its text that mentions the record is no title.
+        for body in [
+            PURPOSE,
+            "The hand hygiene policy is enclosed for the ward's review.",
+        ] {
+            let (outcome, _) = facts_for(&policy("", body), cited_field);
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Hand Hygiene Policy")
+            );
+            assert!(
+                outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+                "{body}: {:?}",
+                outcome.reasons
+            );
+        }
+    }
+
+    /// The same subject line on a paper that is no letter keeps its type
+    /// and waits for a person; a record that heads the paper itself, off
+    /// any subject line, is its title; and an email's "Subject:" is the
+    /// email rule's to read.
+    #[test]
+    fn a_record_on_a_subject_line_is_held_wherever_it_stands_and_only_there() {
+        // No greeting, no dateline, no closing: no letter.
+        let (outcome, _) = facts_for(
+            "Fernhill Water District\n\nSubject: Annual Audit Report\n\n\
+             The district's auditors completed their fieldwork in March and found no material \
+             weakness in the district's controls over its billing.",
+            |index| ModelFacts {
+                document_type: Some("Annual Audit Report".into()),
+                type_evidence: vec![id_of(index, "Subject:")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Annual Audit Report"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::TypeUnsupported));
+        assert!(!outcome.reasons.contains(&ReviewReason::TypeInferred));
+        // The paper's own heading.
+        let (outcome, _) = facts_for(
+            "Fernhill Water District\n\nANNUAL AUDIT REPORT\n\n\
+             The district's auditors completed their fieldwork in March and found no material \
+             weakness in the district's controls over its billing.",
+            |index| ModelFacts {
+                document_type: Some("Annual Audit Report".into()),
+                type_evidence: vec![id_of(index, "ANNUAL AUDIT")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Annual Audit Report")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // An email's header block: its subject's record gives way to
+        // "Email", as any matter there does, with no more said of it.
+        let (outcome, _) = facts_for(
+            "From: Betts, Bruce@DHS <Bruce.Betts@dhs.ca.gov>\n\
+             To: drose@qrpa.org <drose@qrpa.org>\n\
+             Date: Tue, 5 Apr 2016 14:42:09 +0000\n\
+             Subject: Annual Audit Report\n\n\
+             Good Morning Debra,\n\nI have attached the report for your records.",
+            |index| ModelFacts {
+                document_type: Some("Annual Audit Report".into()),
+                type_evidence: vec![id_of(index, "Subject:")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Email"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // The test itself, on the words alone.
+        let index = index_of("Re: a line");
+        let context = whole(&index);
+        let scope = ValidationScope::new(&index, &context, &[]);
+        for (kind, matter) in [
+            ("Thematic Review on Early Mortgage Arrears", true),
+            ("Status Report", true),
+            ("Meeting Minutes", true),
+            ("Consent to Assignment of Lease", true),
+            ("Review Letter", false),
+            // A kind of letter, though a record ends its opening phrase.
+            ("Letter Report on Site Investigation", false),
+            ("Approval of Closure Plan", false),
+            ("EPA Approval of Closure Plan", false),
+            ("Closure Plan Approval", false),
+            ("Policy Cancellation", false),
+            ("Policy Renewal", false),
+            ("Notice of Violation", false),
+            ("Offer of Employment", false),
+            ("Quote for Propeller Overhaul", false),
+        ] {
+            assert_eq!(
+                matter_opens_on_a_record(&scope, kind, &format!("Re: {kind}")),
+                matter,
+                "{kind}"
+            );
+            // Off a subject line, a record is the title it reads as.
+            assert!(!matter_opens_on_a_record(&scope, kind, kind), "{kind}");
+        }
     }
 
     /// A "The" that opens a name's line is the name's own; one in a sentence

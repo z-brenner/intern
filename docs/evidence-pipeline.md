@@ -121,6 +121,19 @@ identified by its prompt alone, as before, so its recordings stay valid.
 
   A replacement date is taken only when both views agree on a single one.
 
+  One guard reads every unit, running lines included, and fires only when
+  all of them agree: an invoice's, a statement's or another issued
+  document's date that every line stating it joins to another date by `to`,
+  `through`, `thru`, `until` or a dash (`Service Period: 9/1/2017 -
+  9/30/2017`, `| 01/08/24 to 01/14/24 |`) is one end of a period, not the
+  day the paper was issued. The date is kept and the name goes to review
+  with `DATE_IS_PERIOD`. One statement of the date outside a period clears
+  it, wherever it stands and however loosely it is written (`Invoice Date:
+  08-Jan-24`, a stamp's `JAN 0 8 2024`). Two ends in figures are written
+  alike, with one separator and a year as long, so a time written with dots
+  after a date (`28.01.2024 - 11.30.05`) ends no period. A period written
+  in a loose spelling at both ends is not read as one.
+
 Each fact records its `Support`:
 
 - `Cited`: a unit the reply cited for the fact states it.
@@ -226,7 +239,30 @@ The other checks:
   a title of the same kind stands in, for review (`TYPE_INFERRED`), or
   the type is unsupported. A title set in capitals that OCR scattered
   (`DElIvery RECeIPt DR-771`) and the kind a letter's `Re:` line opens
-  with (`Re: Offer of Employment - ...`) are titles too. A title phrase
+  with (`Re: Offer of Employment - ...`) are titles too. A record at the
+  head of a `Re:`, `Subject:`, `Subj:` or `Regarding:` line is not: a
+  review, a report, a plan or minutes is a paper of its own that this one
+  discusses or sends on (`Re: Thematic Review on Early Mortgage Arrears`
+  over `Dear CEO,`), so a type read from there goes to review
+  (`TYPE_UNSUPPORTED`). In a document laid out as a letter it gives way to
+  `Letter`, unless the whole type is a notice, a form or an agreement, a
+  kind a letter can be of its own (`Re: Consent to Assignment of Lease`):
+  that one keeps its name in review, as a type read below the greeting
+  does. Only the last word of the type's opening phrase, before its first
+  `of`, `to`, `for`, `and`, `on` or `under`, is asked: `Re: Approval of
+  Closure Plan`, `Re: Closure Plan Approval` and `Re: Policy Cancellation`
+  are what the letter does, and stay. A record the paper's own heading
+  states too stays as well, whichever of the two lines the reply cited
+  (`SITE INSPECTION REPORT` over `Re: Site Inspection Report - 12 Main
+  Street`): the heading is read above the greeting of a paper that greets
+  someone, and in a heading or a line set in capitals of one that greets
+  no one. An email's `Subject:` is read by the email's own rule. The rule
+  is not a letter's alone. A memorandum, a policy or minutes whose only
+  title is a subject field (`SUBJECT: Travel Policy` under `MEMORANDUM`,
+  `Subject: Hand Hygiene Policy` with no heading) waits for a person under
+  its own type, though the type stands on the line it was read from, and
+  a memorandum that signs off as a letter does becomes `Letter`. A title
+  phrase
   runs back from its noun to the start of the line, a connector, or the
   end of an issuer's name: for most kinds an organization's noun or legal
   form (`WRENFIELD RESTAURANT SUPPLY INVOICE` is an Invoice), for an
