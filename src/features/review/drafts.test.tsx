@@ -7,8 +7,8 @@ import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 import { clickCell, detailsToggle, openDetails, queueCell, selectRow } from '../queue/gridTesting';
 import type { QueueEventSource } from '../../lib/tauriBridge';
 import type { QueueItem } from '../../types';
-import { forgetOutdatedDrafts, proposalOf } from './drafts';
-import type { ReviewDrafts } from './drafts';
+import { proposalOf, setAsideOutdatedDrafts, typedAndNotFiled } from './drafts';
+import type { EarlierDrafts, ReviewDrafts } from './drafts';
 
 /*
   What is typed for a name and a description and not filed is kept for the
@@ -323,21 +323,42 @@ describe('what was typed in review and not filed', () => {
     expect(filename()).toHaveValue('2024-03-01 Lease of Unit 4');
   });
 
-  it('is forgotten once its document is seen with another proposal or none, and not for a document missing from the list', () => {
+  // Out of the fields, which show the document as it now is - and not thrown
+  // away: it used to be forgotten here, and a reading nobody asked for threw
+  // away a name and a sentence. It is set aside, for the panel to show.
+  it('is out of the fields once its document is seen with another proposal or none, and not for a document missing from the list', () => {
     const typedOver = (item: QueueItem) => ({ item: item.id, for: proposalOf(item), stem: 'typed', description: 'typed', edited: true });
     const drafts: ReviewDrafts = new Map([[lease.id, typedOver(lease)], [invoice.id, typedOver(invoice)]]);
+    const earlier: EarlierDrafts = new Map();
 
     // Nothing changed, and a list the invoice is not in: both are kept.
-    forgetOutdatedDrafts(drafts, [lease, invoice]);
-    forgetOutdatedDrafts(drafts, [lease]);
-    forgetOutdatedDrafts(drafts, []);
+    expect(setAsideOutdatedDrafts(drafts, earlier, [lease, invoice])).toEqual([]);
+    setAsideOutdatedDrafts(drafts, earlier, [lease]);
+    setAsideOutdatedDrafts(drafts, earlier, []);
     expect([...drafts.keys()]).toEqual(['lease', 'invoice']);
+    expect(earlier.size).toBe(0);
 
     // Sent back to be read: no proposal. Read again, the same proposal is another reading.
-    forgetOutdatedDrafts(drafts, [{ id: 'lease', originalFilename: 'scan.pdf', status: 'waiting' }, invoice]);
+    expect(setAsideOutdatedDrafts(drafts, earlier, [{ id: 'lease', originalFilename: 'scan.pdf', status: 'waiting' }, invoice])).toEqual(['lease']);
     expect([...drafts.keys()]).toEqual(['invoice']);
-    forgetOutdatedDrafts(drafts, [lease, { ...invoice, proposalRevision: '2' }]);
+    setAsideOutdatedDrafts(drafts, earlier, [lease, { ...invoice, proposalRevision: '2' }]);
     expect([...drafts.keys()]).toEqual([]);
+    // Each is set aside whole, the name and the description under it, and counts as typed and not filed.
+    expect(earlier.get('lease')).toMatchObject([{ text: 'typed\n\ntyped', edited: true }]);
+    expect(earlier.get('invoice')).toMatchObject([{ text: 'typed\n\ntyped', edited: true }]);
+    expect(typedAndNotFiled(drafts, earlier, 'lease')).toBe(true);
+    expect(typedAndNotFiled(drafts, earlier, 'someone-else')).toBe(false);
+
+    // A document that can no longer be filed under the proposal it has - filed from another machine - has gone from under what was typed too.
+    drafts.set(lease.id, typedOver(lease));
+    expect(setAsideOutdatedDrafts(drafts, earlier, [{ ...lease, status: 'completed' }])).toEqual(['lease']);
+    expect(earlier.get('lease')).toHaveLength(2);
+    expect(new Set(earlier.get('lease')!.map((kept) => kept.key)).size).toBe(2);
+    // Not while a decision of the person's own is being carried out for it: that decision says what becomes of it.
+    drafts.set(invoice.id, typedOver(invoice));
+    expect(setAsideOutdatedDrafts(drafts, earlier, [{ ...invoice, status: 'completed' }], 'invoice')).toEqual([]);
+    expect([...drafts.keys()]).toEqual(['invoice']);
+    drafts.clear();
 
     // Another name or another sentence under the same revision is another proposal.
     expect(proposalOf({ ...lease, proposedFilename: '2024-03-02 Lease.pdf' })).not.toBe(proposalOf(lease));

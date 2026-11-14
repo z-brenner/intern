@@ -455,6 +455,12 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .note p + p { margin-top: 6px; }
 .note .update-actions { margin-top: 10px; }
 .inspector section p { margin: 0; line-height: 1.5; }
+/* A name and a description as a person had them, kept where typing changes nothing (TypedKept): in the panel, or above the queue. */
+.typed-kept { margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--review-edge); border-left: 3px solid var(--review); border-radius: var(--radius-md); background: var(--review-surface); }
+.typed-kept p { margin: 0 0 8px; font-size: 13px; line-height: 1.5; color: var(--text-soft); }
+.typed-kept q { font-style: normal; }
+.typed-kept textarea { width: 100%; display: block; min-height: 72px; margin: 0 0 10px; padding: 9px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-subtle); font: inherit; font-size: 14px; line-height: 1.45; resize: vertical; overflow-wrap: anywhere; }
+.queue-panel > .typed-kept { margin: 0 0 12px; }
 .settled-description { color: var(--text-soft); }
 .copy-description { margin-top: 12px; min-height: 34px; }
 

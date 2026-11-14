@@ -5,9 +5,10 @@ import { ConfidenceMeter } from './ConfidenceMeter';
 import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
 import { StatusCell } from './StatusCell';
+import { TypedKept } from './TypedKept';
 import { isUnreadable, itemActions, keptOriginal, withoutReviewPrefix } from '../features/review/actions';
 import { proposalOf } from '../features/review/drafts';
-import type { ReviewDraft, ReviewDrafts } from '../features/review/drafts';
+import type { KeptText, ReviewDraft, ReviewDrafts } from '../features/review/drafts';
 import { itemFlaggedFields, itemReasonCodes, nameParts, partyGiven, withParty } from '../features/queue/check';
 import type { ReasonField } from '../lib/reasons';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
@@ -107,9 +108,16 @@ interface Props {
    * its own, which goes with it.
    */
   drafts?: ReviewDrafts;
+  /**
+   * What was typed for this document over a proposal it no longer has, set
+   * aside when the document changed by itself (see `EarlierDrafts`). Shown
+   * beside the document as it now is, read-only, until discarded.
+   */
+  earlier?: readonly KeptText[];
+  onDiscardEarlier?(kept: KeptText): void;
 }
 
-export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal, drafts }: Props) {
+export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal, drafts, earlier, onDiscardEarlier }: Props) {
   // Exactly what the backend accepts for this item. Retry on an ordinary
   // review item, and nothing at all for a ready or waiting one, were the
   // two ways this panel used to be wrong (FRONTEND_UX-3, FRONTEND_UX-4).
@@ -151,7 +159,10 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     return typed?.for === draftFor ? typed : { item: item.id, for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false };
   };
   const [draft, setDraft] = useState<ReviewDraft>(typedOrProposed);
-  useLayoutEffect(() => { if (draft.edited) kept.set(draft.item, draft); }, [draft, kept]);
+  // The draft last kept, so that one the window has since dropped - the
+  // document was decided - is not put back as review moves on (below).
+  const lastKept = useRef<ReviewDraft | undefined>(undefined);
+  useLayoutEffect(() => { if (draft.edited) { kept.set(draft.item, draft); lastKept.current = draft; } }, [draft, kept]);
   const [error, setError] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
@@ -184,8 +195,10 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     nameHadFocus.current = filenameRef.current !== null && document.activeElement === filenameRef.current;
     descriptionHadFocus.current = descriptionRef.current !== null && document.activeElement === descriptionRef.current;
     // Kept here as well: an edit can reach this render with the item that
-    // replaces its own, before any commit has shown it.
-    if (draft.edited) kept.set(draft.item, draft);
+    // replaces its own, before any commit has shown it. Only such an edit:
+    // one already kept is the window's to keep or drop, and put back here
+    // it would outlive the decision that filed it.
+    if (draft.edited && lastKept.current !== draft) kept.set(draft.item, draft);
     setDraft(typedOrProposed());
     setError(''); setMoreOpen(false); setConfirmingRemove(false);
   }
@@ -481,11 +494,21 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         {actions.reveal && <button type="button" onClick={onReveal}><Icon icon={FolderOpen} />Show in folder</button>}
       </div>}
     </div>
+    {/*
+      What was typed for this document before it changed by itself: read
+      again, filed from somewhere else, or given another proposal where it
+      waits. The fields below show the document as it now is; what the
+      person had is kept above them, and takes the caret when the caret was
+      in a field that went (see TypedKept).
+    */}
+    {earlier?.map((kept) => <TypedKept key={kept.key} kept={kept} label="Kept from before this document changed" dismiss="Discard what I had" onDismiss={() => onDiscardEarlier?.(kept)}>
+      This document changed while you were working on its name and description. They are kept here as you had them, name first, and nothing here is filed.
+    </TypedKept>)}
     {editable && <section className="proposal">
       <h3>{unreadable ? 'Name it yourself' : 'Proposed rename'}</h3>
       <label className="filename-label">Filename
         <span className="filename-field">
-          <textarea key={draft.for} ref={filenameRef} aria-label="Filename" className="filename-input" rows={1} spellCheck={false} autoComplete="off" value={stem}
+          <textarea key={draft.for} ref={filenameRef} data-review-field="name" aria-label="Filename" className="filename-input" rows={1} spellCheck={false} autoComplete="off" value={stem}
             onChange={(event) => editStem(withoutLineBreaks(event.target.value))} onKeyDown={onFilenameKeyDown}
             aria-invalid={Boolean(error)} aria-describedby={[extension !== undefined ? `${fieldId}-extension` : '', error ? `${fieldId}-error` : ''].filter(Boolean).join(' ') || undefined} />
           {extension !== undefined && <span className="filename-extension" title="The extension stays as it is" aria-hidden="true">.{extension}</span>}
@@ -554,7 +577,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
           <button type="button" className="primary" disabled={busy} onClick={decides(acceptSuggestedDate)}>Use date &amp; rename</button>
         </div>
       </div>}
-      <label>Description<textarea key={draft.for} ref={descriptionRef} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+      <label>Description<textarea key={draft.for} ref={descriptionRef} data-review-field="description" value={description} onChange={(event) => setDescription(event.target.value)} /></label>
       {flagged.includes('description') && <p className="flag-line" role="note" aria-label="Part of the name to check">Check the description against the document.</p>}
     </section>}
     {/*

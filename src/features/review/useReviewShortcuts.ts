@@ -91,6 +91,12 @@ export function useReviewShortcuts(options: ReviewShortcutOptions) {
       // in the filter) is not a shortcut as well.
       if (!enabled || event.defaultPrevented || event.isComposing) return;
       const target = event.target instanceof Element ? event.target : null;
+      // No review key acts from a read-only field. It is where what a person
+      // typed is kept, with the caret, when the field it was typed in has
+      // gone by itself (TypedKept): what is typed next there is the rest of
+      // a sentence, not a decision, and Ctrl+Enter there approved the
+      // reading that had just replaced the one being corrected.
+      if (isTextField(target) && (target as HTMLTextAreaElement).readOnly === true) return;
       const textField = isTextField(target);
       const inPanel = Boolean(target?.closest('.inspector'));
       // The panel is mounted only while it is open, so its handle is the
