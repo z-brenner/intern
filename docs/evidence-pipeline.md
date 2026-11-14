@@ -234,7 +234,22 @@ The other checks:
   must be stated whole somewhere in the context, and not as another
   document's name (`Re: Residential Lease Agreement dated ...`), and must
   name a kind of document. The type is then written in the reply's
-  words, title-cased when the reply wrote it all in lower case. A mark (a
+  words, title-cased when the reply wrote it all in lower case. A reply
+  that opens on `this` or `these` copied a sentence (`This letter sets out
+  the decision of ...`) and is not taken for a type, whatever kind it
+  names: the title or the layout stands in, in review. A stated title
+  that still runs into a date box ends before the box's label and the
+  format it asks for (`CERTIFICATE OF LIABILITY INSURANCE DATE
+  (MM/DD/YYYY)` is a Certificate of Liability Insurance). A reply that is
+  the document's own title followed by a copy marking (duplicate, copy,
+  original, reprint) is read as that title when the document prints the
+  marking alone on the line right under the title, with no heading of one
+  line after it: `INVOICE DUPLICATE` of a sheet headed `INVOICE` over a
+  `DUPLICATE` stamp is an Invoice. A marking the reply says first, one
+  printed over the title, one under a heading that is not the document's
+  own title, and one the title states (`DUPLICATE INVOICE` on one line,
+  `Application for Duplicate Title`) stay with the reply, which is read
+  whole. A mark (a
   character that is no letter, digit or space, and no accent on a kept
   letter) is kept only when the line that states the type holds it too,
   and never at either end of the type, but for a bracket closing one the
