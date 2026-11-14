@@ -677,3 +677,41 @@ Claude Code; this record is written under that standing instruction, as the
 alpha.13 and alpha.14 records were, and says so rather than naming a person who
 did not look. Acceptance was recorded at `2026-11-11T23:34:28Z`. No acceptance
 from alpha.16 or an earlier release is carried forward.
+
+
+## Alpha.18 fresh capture — accepted by Claude Code under standing instruction
+
+Whole-product QA run `43622648750`, attempt `1`, completed successfully on
+main commit `3c9ad7052782bdba7e0e21465261382af79c931f`.
+Release-input digest: `6a67a81794faf3ca0da80edef198fc14130d6a82d1be99fedf98ffcfb293ec33`.
+Capture SHA-256: `6da10423c61e4ee03a742c9e0d33c420a8036507a6a6f5e7373acdb27c6022e0`.
+The committed capture is the exact 1536x1024 image from that artifact. It is
+not byte-identical to the accepted alpha.17 capture: compared pixel by pixel,
+11 pixels differ, at the two upper corners of the Queue and Completed control,
+each by one level in one or two colour channels, which no one could see. All
+six manifest artifact hashes were verified, and the digest was recomputed on
+main. Model and installed-core gates passed. The artifact correctly recorded
+rendered-fidelity acceptance as pending.
+
+Claude Code inspected the image at full size. The header states “Private · On
+this device”. The counts strip and toolbar, the queue table and the review
+panel read as distinct planes. Status comes first, with original filename,
+proposed filename and description contiguous; proposed filenames are
+date-first. Ready, Needs review, Proposing a name and Waiting have distinct
+icons as well as color. The panel opens with “What to check”, Analysis details
+is collapsed, and Approve & rename and Keep original stay pinned with their
+shortcuts. Filename focus and row selection remain visibly distinct. No
+unintended clipping, collisions or illegible text were observed; the ellipsis
+in the Check cell is deliberate. This frame does not establish every native
+window or interaction state. In particular it shows none of the states this
+release adds to the review window (text typed for a document kept beside a new
+reading, “Back to Intern's proposal”, the note for a name a learned spelling
+changed); browser tests provide the evidence for those, and installed-app
+tests for the native window.
+
+No person looked at this capture. The maintainer, Zachary Brenner, instructed
+in advance that the work be reviewed, merged and approved for release by
+Claude Code; this record is written under that standing instruction, as the
+alpha.13, alpha.14 and alpha.17 records were, and says so rather than naming a
+person who did not look. Acceptance was recorded at `2026-11-14T18:39:46Z`. No acceptance
+from alpha.17 or an earlier release is carried forward.
