@@ -18,15 +18,48 @@ export function onItsOwnConsequence(rule: HouseRule): ReactNode {
 /** How a learned spelling is named to a screen reader: "Acme written as Acme Corp". */
 export const spellingLabel = (rule: HouseRule) => `${rule.from} written as ${rule.to}`;
 
-/** The letters and digits of `text`, in order, without case or accents: "Müller & Co." is "mullerco". */
-const lettersOf = (text: string) => text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+/**
+ * The scripts whose marks are accents a person may leave off: Latin and
+ * Greek, and Hebrew and Arabic, which as a rule write their vowel points not
+ * at all. Elsewhere a mark makes another letter or syllable - ガ is not カ,
+ * Й is not И, रमा is not राम - and is typed with it.
+ */
+const ACCENTED = /[\p{sc=Latin}\p{sc=Greek}\p{sc=Hebrew}\p{sc=Arabic}]/u;
+
+/**
+ * Letters that no decomposition takes apart, as a keyboard without them
+ * types them: "Søren" is "Soren", "Straße" is "Strasse", "Kırşehir" is
+ * "Kirsehir". A word's final sigma is its sigma.
+ */
+const PLAIN: Record<string, string> = { ß: 'ss', æ: 'ae', œ: 'oe', ø: 'o', ł: 'l', đ: 'd', ð: 'd', þ: 'th', ı: 'i', ħ: 'h', ŧ: 't', ς: 'σ' };
+
+/** What is no letter or digit as written: punctuation, spaces, a symbol, an apostrophe written as a letter (ʻ, ʼ). */
+const NOT_LETTERS = /[^\p{L}\p{M}\p{N}]|[\u02B9-\u02BF]/gu;
+/** Marks that choose how a character is drawn, not which it is. */
+const VARIATIONS = /[\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/gu;
+
+/**
+ * The letters and digits of `text`, in order, as a person types them: in
+ * any case, without accents (`ACCENTED`, `PLAIN`), and without what is no
+ * letter as written - "Müller & Co." is "mullerco", and "Acme™" is "acme",
+ * not the "acmetm" its decomposition spells.
+ */
+const lettersOf = (text: string) => text
+  .replace(VARIATIONS, '')
+  .replace(NOT_LETTERS, '')
+  .normalize('NFKD')
+  .replace(/(\P{M})(\p{M}+)/gu, (_, letter: string, marks: string) => ACCENTED.test(letter) ? letter : letter + marks)
+  .toLowerCase()
+  .replace(/[ßæœøłđðþıħŧς]/gu, (letter) => PLAIN[letter])
+  .replace(NOT_LETTERS, '');
 
 /**
  * Whether `typed` is `spelling` typed out: the same letters and digits in
  * the same order, whatever the case, the accents, the spaces and the
- * punctuation - "contoso ltd" is "Contoso Ltd.", "Muller" is "Müller", and
- * a letter missing or added is not. A spelling with no letter or digit in
- * it is typed exactly, spaces at its ends aside.
+ * punctuation - "contoso ltd" is "Contoso Ltd.", "Muller" is "Müller",
+ * "Soren" is "Søren" - and a letter missing or added is not, nor a mark
+ * that makes another letter. A spelling with no letter or digit in it is
+ * typed exactly, spaces at its ends aside.
  */
 export function typedOut(typed: string, spelling: string): boolean {
   const letters = lettersOf(spelling);
@@ -34,14 +67,31 @@ export function typedOut(typed: string, spelling: string): boolean {
   return typed.trim() !== '' && typed.trim() === spelling.trim();
 }
 
+/** How many characters `text` is as it is seen: "é" is one however it is encoded, and so is "👍🏽". */
+function characters(text: string): number {
+  if (typeof Intl.Segmenter !== 'function') return [...text].length;
+  return [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)].length;
+}
+
 /**
- * What typing puts in a field, or takes out: keys, an input method,
- * dictation, a deletion. Not a paste, a drop, a suggestion taken (a
- * spelling, an autocorrection, autofill, which says no input type at all),
- * a yank, or an undo.
+ * What typing puts in a field, or takes out: keys, an input method's
+ * composition, a deletion. A key types one character, and an input method
+ * that shows no composition commits what its keys spelled, so text put in
+ * outside a composition is taken one character at a time, or as many at
+ * once as keys were pressed for it since the last input (`keys`). Not a
+ * paste, a drop, a suggestion taken (a spelling, an autocorrection,
+ * autofill, which says no input type at all), a yank, an undo, nor a word
+ * put in at once with no keys for it: an input method's clipboard, an
+ * on-screen keyboard's clipboard or word, an emoji keyboard's.
  */
-const typing = (inputType: string | undefined) =>
-  inputType === 'insertText' || inputType === 'insertCompositionText' || inputType === 'insertFromComposition' || inputType?.startsWith('delete') === true;
+const typing = (event: InputEvent, keys: number) => {
+  const type = event.inputType;
+  if (type === 'insertText') return event.data === null || characters(event.data) <= Math.max(1, keys);
+  return type === 'insertCompositionText' || type === 'insertFromComposition' || type.startsWith('delete');
+};
+
+/** Keys that type nothing on their own. */
+const MODIFIERS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 'CapsLock', 'Fn', 'FnLock', 'NumLock', 'ScrollLock', 'Hyper', 'Super', 'Symbol', 'SymbolLock']);
 
 /**
  * The question "Use on its own" asks before it checks a spelling, where the
@@ -59,9 +109,10 @@ const typing = (inputType: string | undefined) =>
  * a scroll or a change of layout brought the yes under the pointer, not a
  * tap through a menu or a dialog over it. Rules that tried to tell a press
  * meant for the yes from one that was not kept being found wanting. So only
- * typing fills the field: a paste, a drop, a suggestion taken and an undo
- * are refused, and the browser is asked for no suggestions to take. Once
- * the spelling is typed, the yes is an ordinary button.
+ * typing fills the field (`typing`): a paste, a drop, a suggestion taken, an
+ * undo, and a word put in at once with no keys for it are refused, and the
+ * browser is asked for no suggestions to take. Once the spelling is typed,
+ * the yes is an ordinary button.
  *
  * Keys typed in the field stay there, but for Tab, and Escape: Ctrl+Enter,
  * Alt+K and Alt+N neither approve, keep nor move on in review, and Enter
@@ -92,12 +143,15 @@ function Question({ rule, describedBy, note, disabled, onConfirm, onCancel }: Qu
   // Its own name, so the browser has nothing typed before to suggest for it.
   const [name] = useState(() => `use-on-its-own-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
   const [typed, setTyped] = useState('');
+  // The keys pressed in the field since its last input, taken or refused: how much text put in at once may be.
+  const keys = useRef(0);
   const ready = !disabled && typedOut(typed, rule.to);
   useEffect(() => {
     const input = field.current;
     if (!afterAPress()) group.current?.scrollIntoView?.({ block: 'nearest' });
     input?.focus({ preventScroll: true });
-    const refuse = (event: InputEvent) => { if (!typing(event.inputType)) event.preventDefault(); };
+    // Keys a refused input was put in after are spent on it.
+    const refuse = (event: InputEvent) => { if (!typing(event, keys.current)) { keys.current = 0; event.preventDefault(); } };
     input?.addEventListener('beforeinput', refuse);
     return () => input?.removeEventListener('beforeinput', refuse);
   }, []);
@@ -108,10 +162,17 @@ function Question({ rule, describedBy, note, disabled, onConfirm, onCancel }: Qu
     <p id={describedBy}>{onItsOwnConsequence(rule)} Do this only if that is right for every one of them.{note ? <> {note}</> : null}</p>
     <label className="rule-confirm-field">Type <q>{rule.to}</q> to use it on its own
       <input ref={field} type="text" name={name} value={typed} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
-        onChange={(event) => { const input = event.nativeEvent; if (input instanceof InputEvent && typing(input.inputType)) setTyped(event.target.value); }}
+        onChange={(event) => {
+          const input = event.nativeEvent;
+          const taken = input instanceof InputEvent && typing(input, keys.current);
+          keys.current = 0;
+          if (!taken) return;
+          setTyped(event.target.value);
+        }}
         onPaste={(event) => event.preventDefault()}
         onDrop={(event) => event.preventDefault()}
         onKeyDown={(event) => {
+          if (!MODIFIERS.has(event.key)) keys.current += 1;
           // An input method's keys, the Enter that commits what it composed among them.
           const composing = event.nativeEvent.isComposing || event.keyCode === 229;
           if ((event.key === 'Tab' || event.key === 'Escape') && !composing) return;

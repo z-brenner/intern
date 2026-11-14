@@ -4,7 +4,7 @@ import { App } from '../../App';
 import { ReviewInspector } from '../../components/ReviewInspector';
 import { UseOnItsOwnQuestion, typedOut } from '../../components/UseOnItsOwn';
 import { openRow } from '../queue/gridTesting';
-import { clearField, commitComposition, composeInto, fillWithoutTyping, typeInto } from './typingTesting';
+import { clearField, commitComposition, composeInto, fillWithoutTyping, insertAtOnce, typeInto } from './typingTesting';
 import { createInMemoryBridge, createLearnedSpellingBridge } from '../../lib/inMemoryBridge';
 import { humanizeReason } from '../../lib/reasons';
 import type { HouseRule, LearnedRule, QueueItem } from '../../types';
@@ -245,6 +245,58 @@ describe('using a held document\'s spelling on its own', () => {
       expect(typedOut(' ', ' ')).toBe(false);
     });
 
+    // An accent may be left off, as a keyboard without it does. A mark that
+    // makes another letter or syllable may not: typing the document's own
+    // カトウ confirmed ガトウ, and राम confirmed रमा.
+    it('lets go of accents, and of no mark that makes another letter', () => {
+      expect(typedOut('Nguyen', 'Nguyễn')).toBe(true);
+      expect(typedOut('Dvorak', 'Dvořák')).toBe(true);
+      expect(typedOut('ELENI', 'ΕΛΕΝΗ')).toBe(false);
+      expect(typedOut('Ελενη', 'Ελένη')).toBe(true);
+      expect(typedOut('ΕΛΕΝΗΣ', 'Ελένης')).toBe(true);
+      expect(typedOut('Ελένησ', 'Ελένης')).toBe(true);
+      // Hebrew and Arabic are written without their vowel points as a rule.
+      expect(typedOut('שלום', 'שָׁלוֹם')).toBe(true);
+      expect(typedOut('محمد', 'مُحَمَّد')).toBe(true);
+      // Elsewhere a mark is a letter's own.
+      expect(typedOut('ガトウ', 'ガトウ')).toBe(true);
+      expect(typedOut('ｶﾞﾄｳ', 'ガトウ')).toBe(true);
+      expect(typedOut('カトウ', 'ガトウ')).toBe(false);
+      expect(typedOut('さとう', 'さどう')).toBe(false);
+      expect(typedOut('ホンタ', 'ホンダ')).toBe(false);
+      expect(typedOut('ポンダ', 'ホンダ')).toBe(false);
+      expect(typedOut('राम', 'रमा')).toBe(false);
+      expect(typedOut('कमल', 'कमला')).toBe(false);
+      expect(typedOut('करन', 'किरन')).toBe(false);
+      expect(typedOut('कषितिज', 'क्षितिज')).toBe(false);
+      expect(typedOut('क्षितिज', 'क्षितिज')).toBe(true);
+      expect(typedOut('Иошкар', 'Йошкар')).toBe(false);
+      expect(typedOut('Ежов', 'Ёжов')).toBe(false);
+      expect(typedOut('Йошкар', 'Йошкар')).toBe(true);
+      expect(typedOut('สดา', 'สุดา')).toBe(false);
+      expect(typedOut('கம', 'காம')).toBe(false);
+    });
+
+    // A keyboard without ø, ß or ł types o, ss and l, and the spelling's
+    // symbols are none of its letters: "Acme" is "Acme™" as it is "Acme®".
+    it('takes a letter a keyboard may lack as it is typed without it, and leaves out what is no letter as written', () => {
+      for (const [typed, spelling] of [
+        ['Moller & Son A/S', 'Møller & Søn A/S'], ['Soren', 'Søren'], ['Strasse', 'Straße'], ['STRASSE', 'Straße'], ['strasse', 'STRAẞE'],
+        ['Lodz', 'Łódź'], ['Dorde Dordevic', 'Đorđe Đorđević'], ['Caesar', 'Cæsar'], ['Aero', 'Ærø'], ['Oeuvre', 'Œuvre'],
+        ['Kirikkale', 'Kırıkkale'], ['KIRSEHIR', 'Kırşehir'], ['Thor', 'Þór'], ['Gudmundsdottir', 'Guðmundsdóttir'], ['Hamrun', 'Ħamrun'],
+        ['Acme', 'Acme™'], ['Acme', 'Acme®'], ['Acme', 'Acme℠'], ['finance', 'ﬁnance'], ['Hawaii', 'Hawaiʻi'], ['Abd al-Aziz', 'ʿAbd al-ʿAzīz'],
+        ['葛飾', '葛\u{E0100}飾'],
+      ]) expect(typedOut(typed, spelling), `${typed} for ${spelling}`).toBe(true);
+      for (const [typed, spelling] of [
+        ['Moler', 'Møller'], ['Mpller', 'Møller'], ['Stase', 'Straße'], ['Strase', 'Straße'], ['Acmetm', 'Acme™'], ['Acm', 'Acme™'],
+        ['Contoso Ltd', 'Contoso'], ['Contos', 'Contoso'], ['Thr', 'Þór'],
+      ]) expect(typedOut(typed, spelling), `${typed} for ${spelling}`).toBe(false);
+      // A spelling that is all symbols is typed as it is.
+      expect(typedOut('™', '™')).toBe(true);
+      expect(typedOut('tm', '™')).toBe(false);
+      expect(typedOut('', '™')).toBe(false);
+    });
+
     it('takes the spelling typed in any case, with or without its accents, spaces and punctuation, and not a letter missing or added', async () => {
       const rules: LearnedRule[] = [
         { id: '7', kind: 'party', from: 'Contoso Limited', to: 'Contoso Ltd.', seen: 2, active: true, confirmed: 0, learnedAt: 7 },
@@ -306,6 +358,46 @@ describe('using a held document\'s spelling on its own', () => {
       expect(question(label).group).toBeInTheDocument();
       fireEvent.keyDown(field, { key: 'Enter' });
       await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledWith('9', { kind: 'party', from: 'Yamada Taro', to: '山田太郎' }));
+    });
+
+    // A key types one character. A word put in at once, with no keys for
+    // it - an input method's clipboard, an on-screen keyboard's, an emoji
+    // keyboard's - was taken as typed, and one press checked the spelling.
+    // An input method that commits what its keys spelled, without showing a
+    // composition, puts in no more than the keys pressed for it.
+    it('takes no more characters at once than keys were pressed for them', async () => {
+      const rules: LearnedRule[] = [
+        { id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso', seen: 2, active: true, confirmed: 0, learnedAt: 1 },
+        { id: '9', kind: 'party', from: 'Yamada Taro', to: '山田太郎', seen: 2, active: true, confirmed: 0, learnedAt: 9 },
+      ];
+      const bridge = spellingBridge(rules);
+      render(<ReviewInspector item={heldFor(rules)} drawer={false} {...handlers()} spellings={bridge} />);
+      fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
+      const { field, yes, cancel } = question(CONTOSO);
+      for (const keys of [0, 1, 2, 6]) {
+        insertAtOnce(field, 'Contoso', keys);
+        expect(field, `${keys} keys`).toHaveValue('');
+        expect(yes, `${keys} keys`).toBeDisabled();
+      }
+      // Keys pressed before a character went in are spent on it.
+      for (let key = 0; key < 7; key += 1) fireEvent.keyDown(field, { key: 'Process', keyCode: 229 });
+      typeInto(field, 'C');
+      insertAtOnce(field, 'ontoso', 0);
+      expect(field).toHaveValue('C');
+      clearField(field);
+      insertAtOnce(field, 'Contoso', 7);
+      expect(field).toHaveValue('Contoso');
+      expect(yes).toBeEnabled();
+      fireEvent.click(cancel);
+
+      const label = 'Use on its own: Yamada Taro written as 山田太郎';
+      fireEvent.click(await screen.findByRole('button', { name: label }));
+      // "yamadatarou" and the key that commits it.
+      insertAtOnce(question(label).field, '山田太郎', 12);
+      expect(question(label).field).toHaveValue('山田太郎');
+      fireEvent.click(question(label).yes);
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledWith('9', { kind: 'party', from: 'Yamada Taro', to: '山田太郎' }));
+      expect(bridge.houseRuleCheck).toHaveBeenCalledOnce();
     });
 
     it('starts empty every time it asks', async () => {

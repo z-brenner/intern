@@ -11,7 +11,7 @@ import { openDetails } from './grid';
   Here no press, on the action that opens the question or on the yes
   itself, checks a spelling, in the review panel or in Settings, at two
   window sizes; typing the spelling does, with a click on the yes or with
-  Enter.
+  Enter. Nor does text put in at once with no keys for it.
 */
 
 const CONTOSO = 'Use on its own: Contoso Worldwide, Inc. written as Contoso';
@@ -196,6 +196,59 @@ test('a paste puts nothing in the field', async ({ page, context }) => {
   await page.keyboard.press('Control+Home');
   await page.keyboard.press('Control+V');
   await expect(description).toHaveValue(/^Contoso/);
+});
+
+// A key types one character. A word put in at once with no keys for it -
+// an input method's clipboard, an on-screen keyboard's, an emoji keyboard's,
+// as Chromium is told to put text in "that doesn't come from a key press" -
+// is no typing, and one press then checked the spelling. An input method
+// composing, or committing what its keys spelled, is.
+test('a word put in at once with no keys for it puts nothing in the field, and an input method puts in what it spelled', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const surface = await reviewPanel(page);
+  const { root } = surface;
+  const before = await surface.checked();
+  const cdp = await page.context().newCDPSession(page);
+  const keysTaken = async (count: number) => {
+    for (let key = 0; key < count; key += 1) {
+      for (const type of ['rawKeyDown', 'keyUp']) await cdp.send('Input.dispatchKeyEvent', { type: type as 'rawKeyDown' | 'keyUp', key: 'Process', code: 'KeyA', windowsVirtualKeyCode: 229, nativeVirtualKeyCode: 229 });
+    }
+  };
+  const question = root.getByRole('group', { name: CONTOSO });
+  const field = question.getByRole('textbox');
+  const yes = question.getByRole('button', { name: 'Use on its own' });
+
+  await root.getByRole('button', { name: CONTOSO }).click();
+  await expect(field).toBeFocused();
+  // With no key, and after the two that open an input method's clipboard and take its first entry.
+  await cdp.send('Input.insertText', { text: 'Contoso' });
+  await keysTaken(2);
+  await cdp.send('Input.insertText', { text: 'Contoso' });
+  await page.waitForTimeout(100);
+  await expect(field).toHaveValue('');
+  await expect(yes).toBeDisabled();
+  const onTheYes = await centre(yes);
+  await page.mouse.click(onTheYes.x, onTheYes.y);
+  await page.waitForTimeout(150);
+  expect(await surface.checked()).toBe(before);
+
+  // Composed, and committed.
+  await cdp.send('Input.imeSetComposition', { text: 'contoso', selectionStart: 7, selectionEnd: 7 });
+  await cdp.send('Input.insertText', { text: 'Contoso' });
+  await expect(field).toHaveValue('Contoso');
+  await expect(yes).toBeEnabled();
+  await page.keyboard.press('Escape');
+  await expect(question).toHaveCount(0);
+
+  // Committed without a composition shown, after the keys that spelled it.
+  await root.getByRole('button', { name: CONTOSO }).click();
+  await expect(field).toHaveValue('');
+  await keysTaken(7);
+  await cdp.send('Input.insertText', { text: 'Contoso' });
+  await expect(field).toHaveValue('Contoso');
+  await yes.click();
+  await expect(question).toHaveCount(0);
+  await expect.poll(() => surface.checked()).toBe(before + 1);
 });
 
 test.describe('with a touch screen', () => {

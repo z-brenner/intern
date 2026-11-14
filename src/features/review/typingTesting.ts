@@ -36,11 +36,23 @@ export function commitComposition(field: HTMLElement) {
 }
 
 /**
+ * `text` put in `field` at once, outside a composition, after `keys` keys:
+ * an input method that shows no composition commits so what its keys
+ * spelled, and, with a key or two or none, an input method's or an
+ * on-screen keyboard's clipboard, or an emoji keyboard, puts in a word.
+ */
+export function insertAtOnce(field: HTMLElement, text: string, keys: number) {
+  for (let key = 0; key < keys; key += 1) fireEvent.keyDown(field, { key: 'Process', keyCode: 229 });
+  if (!inputType(field, 'insertText', text)) return;
+  fireEvent.input(field, { target: { value: (field as HTMLInputElement).value + text }, inputType: 'insertText', data: text });
+}
+
+/**
  * Every way but typing to put `text` in `field`, each tried on its own: a
  * paste and a drop, the input each would make - and a suggestion taken, a
- * yank and an undo - and autofill's input, which says no input type. Says
- * each that put anything in the field, or that the browser was not told to
- * refuse.
+ * yank, an undo, and a word put in at once with no key for it - and
+ * autofill's input, which says no input type. Says each that put anything
+ * in the field, or that the browser was not told to refuse.
  */
 export function fillWithoutTyping(field: HTMLElement, text: string): string[] {
   const value = () => (field as HTMLInputElement).value;
@@ -48,7 +60,7 @@ export function fillWithoutTyping(field: HTMLElement, text: string): string[] {
   const clipboardData = { getData: () => text, types: ['text/plain'] };
   if (fireEvent.paste(field, { clipboardData })) through.push('paste');
   if (fireEvent.drop(field, { dataTransfer: clipboardData })) through.push('drop');
-  for (const type of ['insertFromPaste', 'insertFromPasteAsQuotation', 'insertFromDrop', 'insertReplacementText', 'insertFromYank', 'historyUndo', 'historyRedo']) {
+  for (const type of ['insertText', 'insertFromPaste', 'insertFromPasteAsQuotation', 'insertFromDrop', 'insertReplacementText', 'insertFromYank', 'historyUndo', 'historyRedo']) {
     if (inputType(field, type, text)) through.push(`beforeinput ${type}`);
     const was = value();
     fireEvent.input(field, { target: { value: was + text }, inputType: type, data: text });
