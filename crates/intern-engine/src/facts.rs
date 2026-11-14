@@ -1876,6 +1876,21 @@ pub fn validate_facts_at(
     if to_a_class || document_type.as_deref().is_some_and(memorandum_to_a_class) {
         push(&mut reasons, ReviewReason::PartyUnsupported);
     }
+    // A party too long to be a name waits for a person. A name is a few
+    // words; what runs past [`MAX_PARTY_NAME_CHARS`] is far more often a
+    // run of text the reply took for one - the recipients of a "To:" list
+    // in a row, a clause - and the filename, which sheds a party that does
+    // not fit ([`crate::naming`]), would be filed without it and without a
+    // word. The name is not changed. A real name of that length - a
+    // trustee's "..., as Trustee for ...", a union's local with its
+    // federation - waits too, though right.
+    if relation
+        .parties
+        .iter()
+        .any(|name| name.chars().count() > MAX_PARTY_NAME_CHARS)
+    {
+        push(&mut reasons, ReviewReason::PartyUnsupported);
+    }
 
     // The subject, the identifier and the key facts: every number and name
     // in them must be in what the model was shown, and the subject and a
@@ -6310,6 +6325,14 @@ fn memorandum_to_a_class(document_type: &str) -> bool {
             && names_a_class_of_recipients(&type_words[at + 2..].join(" "))
     })
 }
+
+/// The longest a party in a name may be before the name waits for a
+/// person: a chosen number, not a derived one. A long name of one party
+/// runs to sixty-odd characters ("London & South Eastern Railways Limited
+/// (trading as Southeastern)" is 65), and with a date, a type and an
+/// extension around it a longer one leaves a filename of
+/// [`crate::naming::MAX_FILENAME_CHARS`] little room for anything else.
+const MAX_PARTY_NAME_CHARS: usize = 70;
 
 /// Whether a person signs for one of `organizations`: a unit names them,
 /// then a job title, then the organization - "Harriet Voss, Vice President
@@ -12235,6 +12258,104 @@ This certificate is issued as a matter of information only.";
         });
         assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
         assert_eq!(outcome.proposal.parties, vec!["All Seasons Landscaping"]);
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// real2-office-15's shape: a bulletin whose "To:" line runs its
+    /// recipients together, which the reply gave whole as one party. A
+    /// run longer than a name is no party a document is filed by: the
+    /// name is kept as it is and waits for a person. A name of seventy
+    /// characters is filed as before, one character more waits though it
+    /// is a name, and a long party the name does not give holds nothing.
+    #[test]
+    fn a_party_too_long_to_be_a_name_goes_to_review() {
+        const RUN: &str = "Subscribers: -Harbor Weather Wire Service -Emergency Managers Weather Information Network";
+        const NOTICE: &str = "NOTICE OF SERVICE CHANGE\n\n\
+Date: 21 June 2024\n\n\
+To: Subscribers: -Harbor Weather Wire Service -Emergency Managers Weather Information Network\n\
+From: Harrow Basin Weather Office\n\n\
+Routine tsunami messages will be issued under a new header beginning on 22 July 2024.";
+        let reply = |text: &str, addressee: &str| {
+            facts_for(text, |index| ModelFacts {
+                document_type: Some("Notice of Service Change".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF SERVICE")],
+                document_date: Some("2024-06-21".into()),
+                date_evidence: vec![id_of(index, "Date: 21 June")],
+                parties: vec![
+                    party(
+                        addressee,
+                        Some(PartyRole::Addressee),
+                        &[id_of(index, "To:")],
+                    ),
+                    party(
+                        "Harrow Basin Weather Office",
+                        Some(PartyRole::Sender),
+                        &[id_of(index, "From:")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        assert!(RUN.chars().count() > MAX_PARTY_NAME_CHARS);
+        let outcome = reply(NOTICE, RUN);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec![RUN]);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+
+        // Seventy characters is a name still; seventy-one waits.
+        for (name, held) in [
+            (
+                "The Trustees of the Saltmarsh Point and Briarport Harbour Pension Fund",
+                false,
+            ),
+            (
+                "The Trustees of the Saltmarsh Point and Briarport Harbour Pension Funds",
+                true,
+            ),
+        ] {
+            assert_eq!(name.chars().count() > MAX_PARTY_NAME_CHARS, held, "{name}");
+            let outcome = reply(&NOTICE.replace(RUN, name), name);
+            assert_eq!(outcome.proposal.parties, vec![name]);
+            assert_eq!(
+                outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+                held,
+                "{name}: {:?}",
+                outcome.reasons
+            );
+        }
+
+        // The same run on the "From:" line of a notice named to its
+        // addressee is in the cast and not in the name.
+        let swapped = NOTICE
+            .replace(RUN, "Corvane Media Group LLC")
+            .replace("Harrow Basin Weather Office", RUN);
+        let (outcome, _) = facts_for(&swapped, |index| ModelFacts {
+            document_type: Some("Notice of Service Change".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF SERVICE")],
+            document_date: Some("2024-06-21".into()),
+            date_evidence: vec![id_of(index, "Date: 21 June")],
+            parties: vec![
+                party(
+                    "Corvane Media Group LLC",
+                    Some(PartyRole::Addressee),
+                    &[id_of(index, "To:")],
+                ),
+                party(RUN, Some(PartyRole::Sender), &[id_of(index, "From:")]),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["Corvane Media Group LLC"]);
         assert!(
             !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
             "{:?}",
