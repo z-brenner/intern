@@ -13,7 +13,7 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
-import { detailsToggle, openDetails, queueCell } from './grid';
+import { detailsToggle, openDetails, queueCell, untilSettled } from './grid';
 
 const SHOTS = process.env.INTERN_SHOTS;
 if (SHOTS) mkdirSync(SHOTS, { recursive: true });
@@ -200,6 +200,8 @@ test('pause, resume, apply all ready, and discard waiting all report what they d
   await page.getByRole('button', { name: /Resume queue/i }).click();
   await expect(page.getByRole('button', { name: /Pause queue/i })).toBeVisible();
 
+  // The window opened a moment ago, and its buttons with it: not at once (untilSettled).
+  await untilSettled(page);
   await page.getByRole('button', { name: /Rename all ready/i }).click();
   await shot(page, 'apply-all-ready');
   await page.getByRole('button', { name: /^Completed/ }).click();

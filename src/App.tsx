@@ -1021,7 +1021,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       <p>Intern {updateStatus.version} is available. You have {updateStatus.currentVersion}.</p>
       {updateError && <p role="alert">{updateError}</p>}
       <div className="update-actions">
-        <button type="button" className="primary" disabled={updateInstalling || renameApplying} onClick={() => void installUpdate()}>{updateInstalling ? installingLabel(updateProgress) : `Install ${updateStatus.version} and restart`}</button>
+        <button type="button" data-acts className="primary" disabled={updateInstalling || renameApplying} onClick={() => void installUpdate()}>{updateInstalling ? installingLabel(updateProgress) : `Install ${updateStatus.version} and restart`}</button>
         <button type="button" disabled={updateInstalling} onClick={() => setUpdateDismissed(updateStatus.version)}>Not now</button>
       </div>
       {renameApplying && (!updateInstalling || updateProgress?.fraction === 1) && <p className="check-hint">Waiting for a rename to finish</p>}
@@ -1118,15 +1118,15 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
           {view === 'queue' && waitingItems.length > 0 && <div className="more-menu" onKeyDown={(event) => { if (event.key === 'Escape' && moreOpen) { event.stopPropagation(); setMoreOpen(false); event.currentTarget.querySelector<HTMLButtonElement>('button')?.focus(); } }}>
             <button type="button" className="icon-button" aria-label="More queue actions" aria-haspopup="menu" aria-expanded={moreOpen} title="More queue actions" onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>
             {moreOpen && <div role="menu" aria-label="More queue actions">
-              <button type="button" role="menuitem" aria-label="Discard waiting items" disabled={actionPending} onClick={() => void (async () => { setMoreOpen(false); const dropped = waitingItems.length; await runQueueAction(() => bridge.discardWaiting(), `Discarded ${dropped} waiting ${dropped === 1 ? 'item' : 'items'}.`); })()}><Icon icon={Trash2} />Discard waiting <span>{waitingItems.length}</span></button>
+              <button type="button" data-acts role="menuitem" aria-label="Discard waiting items" disabled={actionPending} onClick={() => void (async () => { setMoreOpen(false); const dropped = waitingItems.length; await runQueueAction(() => bridge.discardWaiting(), `Discarded ${dropped} waiting ${dropped === 1 ? 'item' : 'items'}.`); })()}><Icon icon={Trash2} />Discard waiting <span>{waitingItems.length}</span></button>
             </div>}
           </div>}
-          {view === 'queue' && readyItems.length > 0 && <button type="button" className="primary" aria-label="Rename all ready" disabled={actionPending}
+          {view === 'queue' && readyItems.length > 0 && <button type="button" data-acts className="primary" aria-label="Rename all ready" disabled={actionPending}
             title={readyUntyped.length < readyItems.length ? `Renames the ${readyUntyped.length} ready ${readyUntyped.length === 1 ? 'document' : 'documents'} as Intern proposed. ${readyItems.length - readyUntyped.length} with a name or a description you typed ${readyItems.length - readyUntyped.length === 1 ? 'is' : 'are'} left for you to file.` : undefined}
             onClick={() => void applyAllReady()}>Rename all ready <span>{readyUntyped.length}</span></button>}
           {view === 'completed' && filtered.length > 0 && <>
             <button type="button" disabled={actionPending} onClick={(event) => openHistory(event.currentTarget)}>History</button>
-            <button type="button" disabled={actionPending} onClick={() => void (async () => { if (await runQueueAction(() => bridge.clearHistory(), 'History cleared.')) queueMicrotask(() => document.querySelector<HTMLButtonElement>('.view-switch button[data-view="completed"]')?.focus()); })()}>Clear history</button>
+            <button type="button" data-acts disabled={actionPending} onClick={() => void (async () => { if (await runQueueAction(() => bridge.clearHistory(), 'History cleared.')) queueMicrotask(() => document.querySelector<HTMLButtonElement>('.view-switch button[data-view="completed"]')?.focus()); })()}>Clear history</button>
           </>}
         </div>
       </div>

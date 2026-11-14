@@ -539,7 +539,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
           Rename all ready leaves for the person is exactly what shows this.
           In the heading's line, so nothing moves when it comes and goes.
         */}
-        {draft.edited && <button type="button" className="link-button" disabled={busy} title="Puts the name and the description back as they were before you typed. What you typed for this document is dropped." onClick={backToProposal}>{unreadable ? 'Back to the name it came with' : "Back to Intern's proposal"}</button>}
+        {draft.edited && <button type="button" data-acts className="link-button" disabled={busy} title="Puts the name and the description back as they were before you typed. What you typed for this document is dropped." onClick={backToProposal}>{unreadable ? 'Back to the name it came with' : "Back to Intern's proposal"}</button>}
       </div>
       <label className="filename-label">Filename
         <span className="filename-field">
@@ -594,22 +594,22 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       {(dateChoices.length > 0 || fileDate) && <div className="date-choices" role="group" aria-label="Dates to choose from">
         <p className="field-label">{dateChoices.length > 0 ? 'Dates the document states' : 'The document states no date'}</p>
         <div className="chips">
-          {dateChoices.map((date) => <button type="button" key={date} className="chip" disabled={busy} onClick={() => chooseDate(date)}>{date}</button>)}
-          {fileDate && <button type="button" className="chip chip--file" disabled={busy} title="The file's last-modified date on this computer, not a date from the document" onClick={() => chooseDate(fileDate)}>{fileDate} · file date</button>}
+          {dateChoices.map((date) => <button type="button" data-acts key={date} className="chip" disabled={busy} onClick={() => chooseDate(date)}>{date}</button>)}
+          {fileDate && <button type="button" data-acts className="chip chip--file" disabled={busy} title="The file's last-modified date on this computer, not a date from the document" onClick={() => chooseDate(fileDate)}>{fileDate} · file date</button>}
         </div>
       </div>}
       {partyChoices.length > 0 && <div className="party-choices" role="group" aria-label="Other parties to choose from">
         <p className="field-label">Other parties the document names</p>
         <span className="sr-only" id={`${fieldId}-party-choices`}>Puts this party in the filename in place of the one it gives.</span>
         <div className="chips">
-          {partyChoices.map((party) => <button type="button" key={party} className="chip" disabled={busy} aria-pressed={party === partyInName} aria-describedby={`${fieldId}-party-choices`} onClick={() => chooseParty(party)}>{party}</button>)}
+          {partyChoices.map((party) => <button type="button" data-acts key={party} className="chip" disabled={busy} aria-pressed={party === partyInName} aria-describedby={`${fieldId}-party-choices`} onClick={() => chooseParty(party)}>{party}</button>)}
         </div>
       </div>}
       {suggestedDate && <div className="suggestion" role="group" aria-label="Suggested date">
         <p><Icon icon={CalendarPlus} />Suggested date: <strong>{suggestedDate}</strong> (unverified). Check it against the document before using it.</p>
         <div className="suggestion-actions">
-          <button type="button" disabled={busy} onClick={useSuggestedDate}>Use this date</button>
-          <button type="button" className="primary" disabled={busy} onClick={decides(acceptSuggestedDate)}>Use date &amp; rename</button>
+          <button type="button" data-acts disabled={busy} onClick={useSuggestedDate}>Use this date</button>
+          <button type="button" data-acts className="primary" disabled={busy} onClick={decides(acceptSuggestedDate)}>Use date &amp; rename</button>
         </div>
       </div>}
       <label>Description<textarea key={`${draft.for} ${resets}`} ref={descriptionRef} data-review-field="description" value={description} onChange={(event) => setDescription(event.target.value)} /></label>
@@ -688,26 +688,26 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         <p>{remove.resolvedFiles
           ? 'This rename stopped part-way, so its files may need putting right by hand. Remove it only once you have: Intern will not touch them again.'
           : <>Remove <q>{item.originalFilename}</q> from the queue? The file itself stays where it is{isUnreadable(item) ? ', under this name, and Intern leaves it alone' : ''}.</>}</p>
-        <button ref={confirmRef} type="button" className="primary" disabled={busy} onClick={decides(() => { setConfirmingRemove(false); onRemove(remove.resolvedFiles); })}>{remove.resolvedFiles ? 'I have resolved the files myself' : remove.label}</button>
+        <button ref={confirmRef} type="button" data-acts className="primary" disabled={busy} onClick={decides(() => { setConfirmingRemove(false); onRemove(remove.resolvedFiles); })}>{remove.resolvedFiles ? 'I have resolved the files myself' : remove.label}</button>
         <button type="button" disabled={busy} onClick={cancelRemove}>Cancel</button>
       </div> : <>
         {/* A parked item leads with checking its files; approving, which checks them first too, comes after it. */}
-        {actions.retry?.primary && <button type="button" className="primary" disabled={busy} onClick={onRetry}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
-        {actions.approve && <button type="button" className={actions.retry?.primary ? undefined : 'primary'} disabled={busy} onClick={decides(approve)} aria-keyshortcuts="Control+Enter"><Icon icon={FileCheck2} />{item.status === 'ready' ? 'Apply rename' : 'Approve & rename'}<Shortcut keys="Ctrl+Enter" /></button>}
+        {actions.retry?.primary && <button type="button" data-acts className="primary" disabled={busy} onClick={onRetry}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
+        {actions.approve && <button type="button" data-acts="approve" className={actions.retry?.primary ? undefined : 'primary'} disabled={busy} onClick={decides(approve)} aria-keyshortcuts="Control+Enter"><Icon icon={FileCheck2} />{item.status === 'ready' ? 'Apply rename' : 'Approve & rename'}<Shortcut keys="Ctrl+Enter" /></button>}
         {actions.keep && <>
-          <button type="button" className="secondary-action" disabled={busy} onClick={decides(onKeep)} aria-keyshortcuts="Alt+K"><Icon icon={FileText} />Keep original<Shortcut keys="Alt+K" /></button>
+          <button type="button" data-acts="keep" className="secondary-action" disabled={busy} onClick={decides(onKeep)} aria-keyshortcuts="Alt+K"><Icon icon={FileText} />Keep original<Shortcut keys="Alt+K" /></button>
           <button ref={moreButtonRef} type="button" className="icon-button more-actions" disabled={busy} aria-label="More review actions" aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>
           {moreOpen && <div ref={moreMenuRef} className="review-menu" role="group" aria-label="More review actions">
-            {actions.retry && <button type="button" disabled={busy} onClick={() => { setMoreOpen(false); onRetry(); }}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
-            {actions.reanalyze && <button type="button" disabled={busy} onClick={() => { setMoreOpen(false); onReanalyze(); }}><Icon icon={RefreshCw} />Analyze again</button>}
-            {remove && <button type="button" disabled={busy} onClick={decides(chooseRemove)} aria-keyshortcuts="Delete"><Icon icon={Trash2} />{remove.label}<Shortcut keys="Del" /></button>}
+            {actions.retry && <button type="button" data-acts disabled={busy} onClick={() => { setMoreOpen(false); onRetry(); }}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
+            {actions.reanalyze && <button type="button" data-acts disabled={busy} onClick={() => { setMoreOpen(false); onReanalyze(); }}><Icon icon={RefreshCw} />Analyze again</button>}
+            {remove && <button type="button" data-acts disabled={busy} onClick={decides(chooseRemove)} aria-keyshortcuts="Delete"><Icon icon={Trash2} />{remove.label}<Shortcut keys="Del" /></button>}
           </div>}
         </>}
         {/* Parked, failed or waiting: no keep and no menu, so the rest stand on their own. */}
-        {!actions.keep && actions.retry && !actions.retry.primary && <button type="button" disabled={busy} onClick={onRetry}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
-        {!actions.keep && remove && <button type="button" className={actions.retry?.primary ? 'secondary-action' : undefined} disabled={busy} onClick={decides(chooseRemove)} aria-keyshortcuts="Delete"><Icon icon={Trash2} />{remove.label}<Shortcut keys="Del" /></button>}
-        {actions.cancel && <button type="button" disabled={busy} onClick={onCancel}><Icon icon={Ban} />Cancel processing</button>}
-        {actions.undo && <button type="button" disabled={busy} onClick={onUndo}><Icon icon={RotateCcw} />Undo</button>}
+        {!actions.keep && actions.retry && !actions.retry.primary && <button type="button" data-acts disabled={busy} onClick={onRetry}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
+        {!actions.keep && remove && <button type="button" data-acts className={actions.retry?.primary ? 'secondary-action' : undefined} disabled={busy} onClick={decides(chooseRemove)} aria-keyshortcuts="Delete"><Icon icon={Trash2} />{remove.label}<Shortcut keys="Del" /></button>}
+        {actions.cancel && <button type="button" data-acts disabled={busy} onClick={onCancel}><Icon icon={Ban} />Cancel processing</button>}
+        {actions.undo && <button type="button" data-acts disabled={busy} onClick={onUndo}><Icon icon={RotateCcw} />Undo</button>}
       </>}
     </div>
   </aside>;

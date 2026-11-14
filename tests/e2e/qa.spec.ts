@@ -1,7 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
-import { detailsToggle, openDetails, queueCell } from './grid';
+import { detailsToggle, openDetails, queueCell, untilSettled } from './grid';
 
 test.describe('whole-product browser QA', () => {
   test.use({ viewport: { width: 1536, height: 1024 } });
@@ -164,6 +164,8 @@ test.describe('whole-product browser QA', () => {
     await expect(banner.getByRole('button', { name: 'Not now' })).toBeInViewport({ ratio: 1 });
 
     // A real click: Playwright refuses one that something else would receive.
+    // The banner came by itself a moment ago, so not at once (untilSettled).
+    await untilSettled(page);
     await install.click();
     await expect(banner.getByRole('alert')).toContainText('only available in the desktop application');
     await openDetails(page);

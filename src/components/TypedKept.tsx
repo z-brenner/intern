@@ -54,7 +54,7 @@ export function TypedKept({ kept, label, className, dismiss, onDismiss, children
   return <div className={`typed-kept${className ? ` ${className}` : ''}`} role="group" aria-label={label}>
     <p id={noteId}>{children} Typing here changes nothing, and Tab stays here: press Escape, or click, to leave it.</p>
     <textarea readOnly data-typed-kept={kept.key} aria-label="What you had typed" aria-describedby={noteId} spellCheck={false} rows={3} value={kept.text} onKeyDown={held} />
-    <button ref={button} type="button" onClick={press}>{dismiss}</button>
+    <button ref={button} type="button" data-acts onClick={press}>{dismiss}</button>
   </div>;
 }
 
