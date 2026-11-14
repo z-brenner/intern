@@ -346,7 +346,7 @@ affiliate) gives none, nor does any clause when no party is left.
 | Class | Relation |
 | --- | --- |
 | Agreement, amendment | `between` the first two parties; one party, `with` |
-| Issued | `from` the issuer; for a purchase order, the side buying (buyer, client or customer), never its vendor; otherwise the vendor, seller or sender; then the party the issuer and customer cues name, or the one party at the head of the first page before any customer cue; then the side opposite a supported customer. The customer alone is never the filename's party. A reply that proposed a type but named no one who could issue it takes the one organization at the head of the first page as the issuer, read before the kind of document its line names ("Halvorsen Fixture Works LLC INVOICE"), even when the type had to come from the title |
+| Issued | `from` the issuer; for a purchase order, the side buying (buyer, client or customer), never its vendor; otherwise the vendor, seller or sender; then the party the issuer and customer cues name, or the one party at the head of the first page before any customer cue; then the side opposite a supported customer. Neither of those last two names a purchase order from a party the document or the reply calls its vendor or seller: the vendor's line heads an order's page as often as the buyer's letterhead does, so the vendor is kept with no joining word and the name waits for review. The customer alone is never the filename's party. A reply that proposed a type but named no one who could issue it takes the one organization at the head of the first page as the issuer, read before the kind of document its line names ("Halvorsen Fixture Works LLC INVOICE"), even when the type had to come from the title |
 | Notice | `for` the party it is about; else `to` the recipient; else `from` the issuer; else `for` the counterpart of a provider; else `from` the provider; two parties marked other read `between` |
 | Letter | `to` the addressee; else `from` the sender; else `for` the party it is about, or the provider's counterpart; else `from` the provider |
 | Email | `from` the sender; else `to` the addressee |
@@ -371,8 +371,17 @@ on them waits for review with `PARTY_UNSUPPORTED`. Two readings differ
 from the table there:
 
 * A notice's recipient that only the reply named is `for` it, not `to` it:
-  `to` says the notice was addressed to the party, and the document showed
-  no address. A recipient the document labels (`To: ...`) keeps `to`.
+  `to` says the notice was addressed to the party, and neither a `To:` label
+  nor an address block names it. A recipient the document labels
+  (`To: ...`) keeps `to` on the document's word. One named in the address
+  block of a notice written as a letter (the lines between its dateline and
+  its greeting, read as a letter's inside address is) keeps `to` on the
+  reply's roles, and waits for review: a notice of a mass layoff sent to a
+  state office is not `for` that office. An address block with no greeting
+  under it is not read. A claim keeps `to` as well (it is made to the party
+  it is sent to), and so does a type that names a letter, a memorandum or
+  an email beside its notice ("Notification Letter"), which is written to
+  its addressee.
 * A notice naming one party is `for` it by default, and a record whose
   roles settle nothing is `for` the first party no role sets aside. When
   the reply called that party the issuer or sender, it is named `from`
@@ -384,8 +393,12 @@ Shareholders") waits for review with `PARTY_UNSUPPORTED`, since a class is
 no party to file by. When another party is supported as the issuer or
 sender, or, the document giving it no role, was called so by the reply, the
 name says `from` that party. A class, or a person named with the post they
-hold ("Jane Doe, Acting General Counsel"), is never taken as that party, and
-the name then stays as it was. It waits for review either way.
+hold ("Jane Doe, Acting General Counsel"), is never taken as that party, nor
+is one the document gives another role, and the name then stays as it was.
+It also stays where the document, or failing that the reply, calls the named
+party the one the document is about (a certificate's "Insured: All Pro
+Suppliers"): such a party is no class of recipients, though its name opens
+like one. It waits for review either way.
 
 `tests/relation_gold.rs` checks the table against every InternBench gold
 document. Each party is given every role its gold allows, in both orders
