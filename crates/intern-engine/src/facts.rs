@@ -488,11 +488,50 @@ pub fn validate_facts(candidate: ModelProposal, scope: &ValidationScope<'_>) -> 
 }
 
 /// [`validate_facts`], with the current year given.
+///
+/// The reply is read as it always was, and that reading stands - but for
+/// one case. Where its name waits for a person already and would give a
+/// person and no one else, and one coined word stands under that person
+/// in the inside address and right over the street ([`is_coined_name`]:
+/// "PacifiCorp"), the reply is read once more with that word taken for
+/// the organization the letter is to; the second reading stands only when
+/// its name gives that organization, and such a name always waits. A name
+/// that would be filed is never reread, and neither is one that gives
+/// anyone else - the office a letter comes from, the two sides of a case:
+/// a word's shape renames nothing a document supports, and holds back
+/// nothing that was ready.
 pub fn validate_facts_at(
-    mut candidate: ModelProposal,
+    candidate: ModelProposal,
     scope: &ValidationScope<'_>,
     current_year: i32,
 ) -> ValidationOutcome {
+    let (outcome, person) = validate_reading(candidate.clone(), scope, current_year, None);
+    let Some(person) = person.filter(|_| outcome.status == ProposalStatus::NeedsReview) else {
+        return outcome;
+    };
+    let (reread, organization) = validate_reading(candidate, scope, current_year, Some(&person));
+    if organization.is_some() {
+        reread
+    } else {
+        outcome
+    }
+}
+
+/// One reading of a reply ([`validate_facts_at`]). `coined_for` is the
+/// person, loosely normalized, under whom one coined word in the inside
+/// address is taken for the organization; `None` reads no such word.
+///
+/// The second value is what the other reading needs to know. With no
+/// person given: the person the name gives alone, when one coined word
+/// stands under them and no one in the cast sends or issues the document
+/// on its own word. With a person given: the organization read from the
+/// coined word, when the name gives it.
+fn validate_reading(
+    mut candidate: ModelProposal,
+    scope: &ValidationScope<'_>,
+    current_year: i32,
+    coined_for: Option<&str>,
+) -> (ValidationOutcome, Option<String>) {
     let facts =
         without_stray_invisibles_in(candidate.facts.as_deref().cloned().unwrap_or_default());
     complete_candidate(&mut candidate, &facts, scope);
@@ -1424,10 +1463,13 @@ pub fn validate_facts_at(
     // document of no known class laid out as a letter - an agency's
     // "Advisory Opinion" opening "Dear Mr. O'Kelly:" - is read the same way.
     //
-    // An organization read there from one coined word's shape
-    // ([`is_coined_name`]) is remembered: a name that gives it waits for a
-    // person, below.
+    // One coined word under the person ([`is_coined_name`]) is read as
+    // the organization only for the person this reading was asked to read
+    // it for (`coined_for`), and is then remembered: a name that gives it
+    // waits for a person, below. Any other reading only notes the person
+    // such a word stands under, for [`validate_facts_at`] to decide on.
     let mut read_by_shape = None;
+    let mut over_a_coined_word = None;
     if matches!(
         class,
         DocumentClass::Letter | DocumentClass::Notice | DocumentClass::Unknown
@@ -1485,9 +1527,29 @@ pub fn validate_facts_at(
                 .filter(|other| !other.copied && other.name != party.name)
                 .map(|other| other.name.clone())
                 .collect::<Vec<_>>();
+            let person = normalize_loosely(&party.name);
+            let read_coined = coined_for == Some(person.as_str());
             let Some((name, unit, coined)) =
-                layout.addressee_organization(scope, &party.name, &named)
+                layout.addressee_organization(scope, &party.name, &named, read_coined)
             else {
+                // A coined word under them is no organization on this
+                // reading. It may be on another, where the document
+                // supports no one as its sender or issuer: a letter an
+                // office sends is named from the office, whoever it is to.
+                if coined_for.is_none()
+                    && !parties.iter().any(|other| {
+                        !other.copied
+                            && other.name != party.name
+                            && other.role.is_some_and(|role| {
+                                matches!(role, PartyRole::Sender | PartyRole::Issuer)
+                            })
+                    })
+                    && layout
+                        .addressee_organization(scope, &party.name, &named, true)
+                        .is_some_and(|(_, _, coined)| coined)
+                {
+                    over_a_coined_word = Some(person);
+                }
                 // The letter is to the first person its inside address
                 // names; when no organization stands under them, it is to
                 // them, and a second addressee's organization does not
@@ -1528,9 +1590,6 @@ pub fn validate_facts_at(
                     kept.document_role = Some(PartyRole::Addressee);
                     if !kept.evidence.contains(&unit.id) {
                         kept.evidence.push(unit.id.clone());
-                    }
-                    if coined {
-                        read_by_shape = Some(normalize_loosely(&kept.name));
                     }
                     break;
                 }
@@ -1913,14 +1972,24 @@ pub fn validate_facts_at(
     // under the addressee: its place and its shape say it is the
     // organization ("PacifiCorp"), and a word the extraction ran together
     // has the same shape in the same place.
-    if read_by_shape.is_some_and(|shaped| {
+    let read_by_shape = read_by_shape.filter(|shaped| {
         relation
             .parties
             .iter()
-            .any(|name| normalize_loosely(name) == shaped)
-    }) {
+            .any(|name| normalize_loosely(name) == *shaped)
+    });
+    if read_by_shape.is_some() {
         push(&mut reasons, ReviewReason::PartyUnsupported);
     }
+    // What the other reading asks of this one ([`validate_facts_at`]): the
+    // person this name gives and no one else, a coined word under them -
+    // or, read for that person, the organization the name now gives.
+    let other_reading = match coined_for {
+        Some(_) => read_by_shape,
+        None => over_a_coined_word.filter(|person| {
+            matches!(relation.parties.as_slice(), [only] if normalize_loosely(only) == *person)
+        }),
+    };
 
     // The subject, the identifier and the key facts: every number and name
     // in them must be in what the model was shown, and the subject and a
@@ -2203,7 +2272,7 @@ pub fn validate_facts_at(
     } else {
         ProposalStatus::NeedsReview
     };
-    ValidationOutcome {
+    let outcome = ValidationOutcome {
         proposal: ValidatedProposal {
             document_type,
             document_date,
@@ -2231,7 +2300,8 @@ pub fn validate_facts_at(
             support,
             evidence: references,
         }),
-    }
+    };
+    (outcome, other_reading)
 }
 
 /// How the guards find the statements of the date validation settled on:
@@ -4458,17 +4528,18 @@ impl LetterLayout {
     /// at ("Chair, Home Affairs Select Committee"). Its lines may be
     /// broken by "<br>" in a table's cell.
     ///
-    /// Under the person and over the street, a line of one coined word is
-    /// the organization too ([`is_coined_name`]: "PacifiCorp",
-    /// "Public.Resource.Org"): the place says what the word alone cannot.
-    /// The third value says the line was taken so, by its shape - which a
-    /// word the extraction ran together can share ("SeaTac" for a city
-    /// with no street over it, a person's "JaneDoe").
+    /// With `coined`, a line of one coined word under the person and right
+    /// over the street is the organization too ([`is_coined_name`]:
+    /// "PacifiCorp", "Public.Resource.Org"): the place says what the word
+    /// alone cannot. The third value says the line was taken so, by its
+    /// shape - which a word the extraction ran together can share (a
+    /// person's "JaneDoe", a delivery note's "HandDelivered").
     fn addressee_organization<'a>(
         self,
         scope: &ValidationScope<'a>,
         person: &str,
         replied: &[String],
+        coined: bool,
     ) -> Option<(String, &'a EvidenceUnit, bool)> {
         let (salutation, _) = self.salutation?;
         let person = normalize_loosely(person);
@@ -4528,9 +4599,10 @@ impl LetterLayout {
             // of Rail / Transport Scotland").
             let mut under_a_post = false;
             let mut found = None;
-            let mut coined = false;
-            for raw in below.iter().take(5) {
-                if is_address_line(raw) && !is_organization(raw) {
+            let mut shaped = false;
+            let street = |raw: &str| is_address_line(raw) && !is_organization(raw);
+            for (at, raw) in below.iter().take(5).enumerate() {
+                if street(raw) {
                     break;
                 }
                 let line = raw.trim_end_matches([',', ';', '|', '\\']).trim();
@@ -4568,9 +4640,13 @@ impl LetterLayout {
                     found = Some(line.to_owned());
                     break;
                 }
-                if is_coined_name(line) {
+                // One coined word, the street's line right under it.
+                if coined
+                    && is_coined_name(line)
+                    && below.get(at + 1).is_some_and(|next| street(next))
+                {
                     found = Some(line.to_owned());
-                    coined = true;
+                    shaped = true;
                     break;
                 }
             }
@@ -4588,7 +4664,7 @@ impl LetterLayout {
                     (is_organization(above) && !holds_a_post(above) && !is_address_line(above))
                         .then(|| above.to_owned())
                 })
-                .map(|name| (name, *unit, coined))
+                .map(|name| (name, *unit, shaped))
         })
     }
 
@@ -5835,10 +5911,11 @@ const HONORIFICS: &[&str] = &[
 /// particles are named. A web address is no name ("www.Example.Org").
 ///
 /// The shape is a company's as often as not, never surely: "SeaTac" is a
-/// city and "JaneDoe" a person run together. Only the inside address reads
-/// it, under the addressee and over the street
-/// ([`LetterLayout::addressee_organization`]), and a name it gives waits
-/// for a person.
+/// city, "JaneDoe" a person and "HandDelivered" a note run together. Only
+/// the inside address reads it, under the addressee and right over the
+/// street ([`LetterLayout::addressee_organization`]), only for a name that
+/// waits already and would give that person alone
+/// ([`validate_facts_at`]), and a name it gives waits for a person.
 fn is_coined_name(line: &str) -> bool {
     const PARTICLES: &[&str] = &["mac", "van", "von", "fitz", "del", "des", "der", "den"];
     let word = line.trim();
@@ -14951,13 +15028,19 @@ Tidewater Buying LLC / POL\nAttention: Accounts Payable\n41 Wharf Street\nGilchr
     /// real4-letter-15's and real3-notice-07's shape: an inside address
     /// whose organization is one coined word - capitalized parts run
     /// together or joined by dots - under the person, or under their post,
-    /// and over the street. The letter is to the organization. The word's
-    /// shape is all that says so, and a word the extraction ran together
-    /// can share it, so the name waits for a person; the same organization
-    /// set in capitals is filed as before. A post, a greeting or a street
-    /// run together, a scrap of a scan, an initial before a name and a
-    /// surname with its particle are no coined name, and a city under the
-    /// street is never reached.
+    /// and right over the street. A letter that would be named to the
+    /// person alone is named to the organization. The word's shape is all
+    /// that says so, and a word the extraction ran together can share it,
+    /// so the name waits for a person; the same organization set in
+    /// capitals is filed as before. A post, a greeting or a street run
+    /// together, a scrap of a scan, an initial before a name and a surname
+    /// with its particle are no coined name; a city under the street is
+    /// never reached, and a word with no street under it is not read.
+    ///
+    /// A name that would give anyone else is left as it is, filed or not:
+    /// the letter an office sends is named from the office, whatever word
+    /// stands under the person it is to. So is a name that would be filed:
+    /// a word's shape holds back nothing that was ready.
     #[test]
     fn one_coined_word_under_the_addressee_is_the_organization_and_waits() {
         for (line, coined) in [
@@ -15044,12 +15127,18 @@ Sincerely,\n\nOdalys Brandt";
             "{:?}",
             outcome.reasons
         );
-        // A post run together under the person, a city under the street
-        // and a surname's line leave the letter to the person.
+        // A post run together under the person, a city under the street,
+        // a surname's line, and a coined word with no street right under
+        // it - a city over its state, a marking over the greeting, a word
+        // over another line of the address - leave the letter to the
+        // person.
         for address in [
             "Mr. Corbin Vale\nChiefExecutive\nPO Box 800\nMillbrook, OR 97232",
             "Mr. Corbin Vale\nPO Box 800\nSeaTac\nWA 98188",
             "Mr. Corbin Vale\nMacDonald\nPO Box 800\nMillbrook, OR 97232",
+            "Mr. Corbin Vale\nSeaTac\nWashington",
+            "Mr. Corbin Vale\nHandDelivered",
+            "Mr. Corbin Vale\nCorvaneWorks\nAccounts Payable\nPO Box 800\nMillbrook, OR 97232",
         ] {
             let text = LETTER.replace(
                 "Mr. Corbin Vale\nCorvaneWorks\nPO Box 800\nMillbrook, OR 97232",
@@ -15058,6 +15147,113 @@ Sincerely,\n\nOdalys Brandt";
             let outcome = addressed(&text, "Letter", "Corbin Vale");
             assert_eq!(outcome.proposal.parties, vec!["Corbin Vale"], "{address}");
         }
+
+        // A notice and a letter the reply named from the office that
+        // issues them, the person they are to named too: the name is from
+        // the office and is filed, whatever coined word - a company, a
+        // delivery note, a house, a person run together - stands under
+        // the person.
+        const NOTICE: &str = "HARLOW BASIN WATER AUTHORITY\n\nNOTICE OF VIOLATION\n\n\
+August 27, 2021\n\n\
+Mr. Corbin Vale\nCorvaneWorks\nPO Box 800\nMillbrook, OR 97232\n\n\
+Dear Mr. Vale,\n\nWe inspected the yard on August 2 and found the violations listed below.\n\n\
+Sincerely,\n\nOdalys Brandt\nRecords Officer";
+        let sent = |text: &str, title: &str, to: PartyRole, from: &str, by: PartyRole| {
+            let (outcome, _) = facts_for(text, |index| ModelFacts {
+                document_type: Some(display_name(title)),
+                type_evidence: vec![id_of(index, title)],
+                document_date: Some("2021-08-27".into()),
+                date_evidence: vec![id_of(index, "August 27, 2021")],
+                parties: vec![
+                    party("Corbin Vale", Some(to), &[id_of(index, "Corbin Vale")]),
+                    party(from, Some(by), &[id_of(index, from)]),
+                ],
+                ..ModelFacts::default()
+            });
+            outcome
+        };
+        for under in ["CorvaneWorks", "HandDelivered", "RoseCottage", "JaneDoe"] {
+            let notice = NOTICE.replace("CorvaneWorks", under);
+            let letter = notice.replace("NOTICE OF VIOLATION", "LETTER OF INSTRUCTION");
+            for outcome in [
+                sent(
+                    &notice,
+                    "NOTICE OF VIOLATION",
+                    PartyRole::Recipient,
+                    "HARLOW BASIN WATER AUTHORITY",
+                    PartyRole::Issuer,
+                ),
+                sent(
+                    &letter,
+                    "LETTER OF INSTRUCTION",
+                    PartyRole::Addressee,
+                    "HARLOW BASIN WATER AUTHORITY",
+                    PartyRole::Sender,
+                ),
+                // The reply named the person who signs: the letterhead
+                // names the office they sign for.
+                sent(
+                    &letter,
+                    "LETTER OF INSTRUCTION",
+                    PartyRole::Addressee,
+                    "Odalys Brandt",
+                    PartyRole::Sender,
+                ),
+            ] {
+                assert_eq!(
+                    outcome.proposal.party_relation,
+                    PartyRelation::From,
+                    "{under}"
+                );
+                assert_eq!(
+                    outcome.proposal.parties,
+                    vec!["HARLOW BASIN WATER AUTHORITY"],
+                    "{under}"
+                );
+                assert_eq!(
+                    outcome.status,
+                    ProposalStatus::Ready,
+                    "{under}: {:?}",
+                    outcome.reasons
+                );
+            }
+        }
+
+        // The reply named the person alone. The letter's name, to a person
+        // on the reply's word, waits already and is named to the
+        // organization; the notice's, for the person, would be filed, and
+        // a name that would be filed is left as it is.
+        let alone = |text: &str, title: &str, role: PartyRole| {
+            let (outcome, _) = facts_for(text, |index| ModelFacts {
+                document_type: Some(display_name(title)),
+                type_evidence: vec![id_of(index, title)],
+                document_date: Some("2021-08-27".into()),
+                date_evidence: vec![id_of(index, "August 27, 2021")],
+                parties: vec![party(
+                    "Corbin Vale",
+                    Some(role),
+                    &[id_of(index, "Corbin Vale")],
+                )],
+                ..ModelFacts::default()
+            });
+            outcome
+        };
+        let outcome = alone(
+            &NOTICE.replace("NOTICE OF VIOLATION", "LETTER OF INSTRUCTION"),
+            "LETTER OF INSTRUCTION",
+            PartyRole::Addressee,
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["CorvaneWorks"]);
+        assert_eq!(outcome.reasons, vec![ReviewReason::PartyUnsupported]);
+        let outcome = alone(NOTICE, "NOTICE OF VIOLATION", PartyRole::Recipient);
+        assert_eq!(outcome.proposal.parties, vec!["Corbin Vale"]);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
     }
 
     /// A letter's inside address names the organization it is to under
