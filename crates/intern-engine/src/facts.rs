@@ -3369,9 +3369,7 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
 /// reply is kept as written.
 /// A stated type as a title names its kind, not the whole line a bigger
 /// model copies. The field a title line runs into is cut away ("CHANGE
-/// ORDER Distribution: Briarport Library District" is a "Change Order"),
-/// and so is a date box's label with the format it asks for
-/// ([`before_date_field`]);
+/// ORDER Distribution: Briarport Library District" is a "Change Order");
 /// the line's own kind phrase stands for the line ("Fieldnote S2 Product
 /// Launch Plan" is a "Product Launch Plan", "Spring Wholesale Availability
 /// and Price List" a "Price List", as [`title_phrase`] reads a title); and
@@ -3380,8 +3378,26 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
 /// agreement or an amendment keeps its title whole: it is named for what
 /// it is about ("Supply Agreement", "Amendment to Lease"), and a party's
 /// name can be part of that.
+///
+/// A title that still runs into a date box after all of this - the box's
+/// label with the format it asks for, "CERTIFICATE OF LIABILITY INSURANCE
+/// DATE (MM/DD/YYYY)" - ends before the label ([`before_date_field`]), and
+/// what is left is read the same way. Only then: a title the reading
+/// above already frees of the box ("... Insurance Effective Date
+/// (MM/DD/YYYY)" is a "... Insurance") is not cut a second time, so the
+/// one name this changes is a name that held a format placeholder.
 fn stated_title(value: &str, parties: &[&str]) -> String {
-    let value = before_date_field(value);
+    let title = title_as_stated(value, parties);
+    let kept = before_date_field(&title);
+    if kept.len() < title.len() {
+        title_as_stated(kept, parties)
+    } else {
+        title
+    }
+}
+
+/// [`stated_title`] of a value, whatever date box it runs into.
+fn title_as_stated(value: &str, parties: &[&str]) -> String {
     // "PLAINTIFF'S Notice of Voluntary Dismissal": the side filing a
     // notice is no part of its name.
     let tokens = value
@@ -3523,7 +3539,8 @@ fn before_date_field(value: &str) -> &str {
 /// says how to fill its date box: "(MM/DD/YYYY)", "[DD-MM-YYYY]",
 /// "(yyyy.mm.dd)", "(DD MMM YYYY)" - a bracket closed within three tokens
 /// that holds nothing but the letters D, M and Y, at least two of them,
-/// and the marks that set them apart.
+/// and the marks that set them apart. Two letters with no mark between
+/// them are no format: "(MD)" is as likely a state or a degree.
 fn opens_with_a_date_format(tokens: &[&str]) -> bool {
     let Some(first) = tokens.first() else {
         return false;
@@ -3549,7 +3566,9 @@ fn opens_with_a_date_format(tokens: &[&str]) -> bool {
         .into_iter()
         .filter(|letter| inside.contains(*letter))
         .count();
+    let written = inside.chars().filter(char::is_ascii_alphabetic).count();
     letters >= 2
+        && (written >= 3 || written < inside.chars().count())
         && inside
             .chars()
             .all(|character| matches!(character, 'd' | 'm' | 'y' | '/' | '-' | '.' | ' '))
@@ -9002,14 +9021,33 @@ mod tests {
             ),
             ("Delivery Receipt DATE (yyyy.mm.dd):", "Delivery Receipt"),
             ("Loss Report Date (DD MMM YYYY)", "Loss Report"),
+            ("Supply Agreement Date (D/M/Y)", "Supply Agreement"),
         ] {
             assert_eq!(stated_title(value, &[]), title, "{value}");
         }
+        // A title the reading already frees of the box is not cut a second
+        // time: what stood between the title and the label - the label's
+        // own "Effective", the field's "Order", a connector - would be
+        // left on it. These read as they did before the rule.
+        for (value, title) in [
+            (
+                "Certificate of Liability Insurance Effective Date (MM/DD/YYYY)",
+                "Certificate of Liability Insurance",
+            ),
+            ("Purchase Order Order Date (MM/DD/YYYY)", "Purchase Order"),
+            ("Tax Invoice Invoice Date (DD/MM/YYYY)", "Tax Invoice"),
+            ("Notice of Change of Date (DD/MM/YYYY)", "Notice of Change"),
+        ] {
+            assert_eq!(title_as_stated(value, &[]), title, "{value}");
+            assert_eq!(stated_title(value, &[]), title, "{value}");
+        }
         for kept in [
-            // No format: the bracket says something about the date.
+            // No format: the bracket says something about the date, or
+            // holds two letters that are as likely a state's or a degree's.
             "Notice of Hearing Date (Rescheduled)",
             "Notice of Hearing Date (May)",
             "Certificate of Insurance Date (Required)",
+            "Notice of Hearing Date (MD)",
             // No bracket, or a format with no label before it.
             "Notice of Hearing Date MM/DD/YYYY",
             "Certificate of Insurance (MM/DD/YYYY)",
