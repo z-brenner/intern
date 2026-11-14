@@ -1,6 +1,7 @@
 import { ExternalLink, FolderOpen, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { describeActionError } from '../lib/actionErrors';
+import { useEditsOnlyInside } from '../lib/dialogEdits';
 import type { DesktopBridge, SelectionBoundary } from '../lib/bridge';
 import type { HistoryEntry } from '../types';
 import { Icon } from './Icon';
@@ -41,7 +42,7 @@ function formatWhen(at: number): string {
 /**
  * Modal history of finished renames and undos, with CSV export. Same
  * backdrop/focus-trap conventions as SettingsDialog: Escape closes, Tab
- * cycles within the dialog.
+ * cycles within the dialog, and no field behind it changes while it is open.
  */
 export function HistoryDialog({ bridge, selection, filedItems, onClose }: Props) {
   const [entries, setEntries] = useState<HistoryEntry[]>();
@@ -56,6 +57,8 @@ export function HistoryDialog({ bridge, selection, filedItems, onClose }: Props)
   // does not have to depend on its identity.
   const close = useRef(onClose);
   useEffect(() => { close.current = onClose; }, [onClose]);
+  // No field behind the dialog changes while it is open: an undo here went to the review panel's name.
+  useEditsOnlyInside(dialog);
 
   useEffect(() => {
     let active = true;

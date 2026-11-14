@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { Locator, Page } from '@playwright/test';
-import { openDetails } from './grid';
+import { openDetails, queueCell } from './grid';
 
 /*
   The review panel scrolls under its decision - Approve & rename, Keep
@@ -124,3 +124,65 @@ test('a press on a control half under the decision lands on it', async ({ page }
   // scrolled clear again.
   expect(await tabThroughOpenPanel(page, panel, 'Lease Agreement - 123 Main St.pdf')).toEqual([]);
 });
+
+/*
+  The browser's undo and redo go to the field edited last in the page,
+  wherever the focus is, and take the focus there. With Settings open over
+  the review panel, Ctrl+Z in a field of Settings with nothing of its own to
+  undo undid the edit to the panel's Filename behind the dialog and put the
+  caret in it; what was typed next went into the name, and Enter filed the
+  document, with Settings still open over it. While a dialog is open, no
+  field behind it changes.
+*/
+for (const size of [{ width: 1400, height: 900 }, { width: 1280, height: 720 }]) {
+  test(`no undo or redo in Settings changes the review panel's name behind it, at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await page.goto('/');
+    const panel = await openDetails(page, 'Lease Agreement - 123 Main St.pdf');
+    const name = panel.getByRole('textbox', { name: 'Filename' });
+    await name.click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' v2');
+    const edited = await name.inputValue();
+    expect(edited).toMatch(/ v2$/);
+    const status = () => queueCell(page, 'Lease Agreement - 123 Main St.pdf', 'status').textContent();
+    const before = await status();
+
+    await page.getByRole('button', { name: 'Settings' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Settings' });
+    await dialog.locator('summary', { hasText: 'Shared folders and troubleshooting' }).click();
+    const machine = dialog.getByRole('textbox', { name: "This machine's name" });
+    const close = dialog.getByRole('button', { name: 'Close settings' });
+    for (const [where, focusOn] of [['in this machine\'s name', () => machine.click()], ['on Close', () => close.focus()]] as const) {
+      for (const key of ['Control+Z', 'Control+Y', 'Control+Shift+Z']) {
+        await focusOn();
+        await page.keyboard.press(key);
+        await page.waitForTimeout(100);
+        await expect(name, `${key} ${where}`).toHaveValue(edited);
+        await expect(name, `${key} ${where}`).not.toBeFocused();
+      }
+    }
+    // What is typed next, and Enter, are Settings' own: the document is not filed.
+    const machineName = await machine.inputValue();
+    await machine.click();
+    await page.keyboard.press('Control+Z');
+    await page.keyboard.type('x');
+    await expect(machine).toHaveValue(`${machineName}x`);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(300);
+    await expect(name).toHaveValue(edited);
+    expect(await status()).toBe(before);
+    // The field's own undo is the browser's, as before.
+    await machine.click();
+    await page.keyboard.press('Control+Z');
+    await expect(machine).toHaveValue(machineName);
+
+    // Closed, the name's own undo is the browser's again.
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await name.click();
+    await page.keyboard.press('Control+Z');
+    await expect(name).not.toHaveValue(edited);
+    expect(await status()).toBe(before);
+  });
+}

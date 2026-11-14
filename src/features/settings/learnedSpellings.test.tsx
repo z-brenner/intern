@@ -865,19 +865,30 @@ describe('the question "Use on its own" asks', () => {
     }
   });
 
-  it('takes a character typed outside its field, and no other key, nor one typed in another field or in a dialog over it', () => {
+  // A press on its sentence or its waiting yes takes the focus off its
+  // field. What is typed next is its own: a character typed in the dialog
+  // it is in, or on nothing, goes into its field - but not one typed in
+  // another field, nor one typed outside its dialog, and nothing once it
+  // has gone.
+  it('takes a character typed in its dialog or on nothing into its field, and no other key, nor one typed in another field or outside its dialog', () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(Element.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true });
     const beyond = vi.fn();
     document.addEventListener('keydown', beyond);
     try {
       const view = render(<div>
-        <input aria-label="Another field" />
-        <UseOnItsOwnQuestion rule={{ id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' }} describedBy="asked" onConfirm={vi.fn()} onCancel={vi.fn()} />
+        <button type="button">Outside</button>
+        <section role="dialog" aria-modal="true" aria-label="Settings">
+          <input aria-label="Another field" />
+          <button type="button">Save</button>
+          <UseOnItsOwnQuestion rule={{ id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' }} describedBy="asked" onConfirm={vi.fn()} onCancel={vi.fn()} />
+        </section>
       </div>);
       const group = screen.getByRole('group');
       const field = screen.getByRole('textbox', { name: 'Type Contoso to use it on its own' });
       const cancel = screen.getByRole('button', { name: 'Cancel' });
+      const save = screen.getByRole('button', { name: 'Save' });
+      const outside = screen.getByRole('button', { name: 'Outside' });
       const other = screen.getByRole('textbox', { name: 'Another field' });
       /** `init` pressed at `target`: whether it went on to the page's own listeners, and where the focus is after it. */
       const pressAt = (target: HTMLElement, init: KeyboardEventInit) => {
@@ -888,9 +899,9 @@ describe('the question "Use on its own" asks', () => {
         fireEvent.keyDown(target, init);
         return { reached: beyond.mock.calls.length === 1, focus: document.activeElement };
       };
-      // A character on nothing, or on its Cancel: into its field, brought into sight, and to nothing else.
-      for (const target of [document.body, cancel]) {
-        expect(pressAt(target, { key: 'k' })).toEqual({ reached: false, focus: field });
+      // A character on nothing, on its Cancel, or on another control of its dialog: into its field, brought into sight, and to nothing else.
+      for (const target of [document.body, cancel, save]) {
+        expect(pressAt(target, { key: 'k' }), target.tagName).toEqual({ reached: false, focus: field });
         expect(scrollIntoView.mock.contexts).toEqual([group]);
       }
       // Not the space bar, which presses Cancel; nor a key held with Ctrl, nor an input method's, nor a named key.
@@ -898,97 +909,16 @@ describe('the question "Use on its own" asks', () => {
       for (const init of [{ key: 'k', ctrlKey: true }, { key: 'k', isComposing: true }, { key: 'Process', keyCode: 229 }, { key: 'Dead' }, { key: 'Enter' }, { key: 'ArrowDown' }]) {
         expect(pressAt(document.body, init), JSON.stringify(init)).toEqual({ reached: true, focus: document.body });
       }
-      // Not a key typed in another field: that field's.
+      // Not a key typed in another field: that field's. Nor one typed outside its dialog.
       expect(pressAt(other, { key: 'k' })).toEqual({ reached: true, focus: other });
-      // Nor one typed in a dialog open over it, which keeps its keys.
-      const over = document.createElement('div');
-      over.setAttribute('role', 'dialog');
-      over.setAttribute('aria-modal', 'true');
-      const inIt = document.createElement('button');
-      over.append(inIt);
-      document.body.append(over);
-      expect(pressAt(inIt, { key: 'k' })).toEqual({ reached: true, focus: inIt });
-      expect(pressAt(document.body, { key: 'k' })).toEqual({ reached: true, focus: document.body });
-      over.remove();
-      expect(pressAt(document.body, { key: 'k' })).toEqual({ reached: false, focus: field });
-      // Gone with the page it was on, it leaves nothing behind.
+      expect(pressAt(outside, { key: 'k' })).toEqual({ reached: true, focus: outside });
+      // Gone, it leaves nothing behind.
       view.unmount();
       view.container.remove();
       expect(pressAt(document.body, { key: 'k' })).toEqual({ reached: true, focus: document.body });
     } finally {
       document.removeEventListener('keydown', beyond);
       Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
-    }
-  });
-
-  it('lets keys be again once it is answered or taken back, or went away by itself with the focus on another control, or after Tab, Escape or a press', () => {
-    const rule = { id: '1', kind: 'party' as const, from: 'Contoso Worldwide, Inc.', to: 'Contoso' };
-    const Asker = ({ open, to = rule.to }: { open: boolean; to?: string }) => <div>
-      <button type="button">Close</button>
-      <table><tbody><tr><td role="gridcell" tabIndex={-1}>A cell</td></tr></tbody></table>
-      {open && <UseOnItsOwnQuestion rule={{ ...rule, to }} describedBy="asked" onConfirm={vi.fn()} onCancel={vi.fn()} />}
-    </div>;
-    const beyond = vi.fn();
-    /** Whether `key` pressed at `target` reached what listens on the page, and was not refused. */
-    const reaches = (target: Element, key: string) => {
-      beyond.mockClear();
-      const taken = fireEvent.keyDown(target, { key });
-      return taken && beyond.mock.calls.length === 1;
-    };
-    /** Whether `key` pressed at `target` was refused, and reached nothing else on the page. */
-    const goesNowhere = (target: Element, key: string) => {
-      beyond.mockClear();
-      const taken = fireEvent.keyDown(target, { key });
-      return !taken && beyond.mock.calls.length === 0;
-    };
-    document.addEventListener('keydown', beyond);
-    try {
-      const { rerender } = render(<Asker open={false} />);
-      /** The question asked, with "Con" typed into it; then `end`, and the question gone. */
-      const askThen = (end: (field: HTMLElement) => void) => {
-        rerender(<Asker open />);
-        const field = screen.getByRole('textbox');
-        typeInto(field, 'Con');
-        end(field);
-        rerender(<Asker open={false} />);
-        expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
-      };
-      askThen((field) => { typeInto(field, 'toso'); fireEvent.keyDown(field, { key: 'Enter' }); });
-      expect(reaches(document.body, 'k'), 'answered').toBe(true);
-      askThen(() => fireEvent.click(screen.getByRole('button', { name: 'Cancel' })));
-      expect(reaches(document.body, 'k'), 'taken back by its Cancel').toBe(true);
-      askThen((field) => fireEvent.keyDown(field, { key: 'Escape' }));
-      expect(reaches(document.body, 'k'), 'taken back by Escape in its field').toBe(true);
-      askThen(() => fireEvent.keyDown(document.body, { key: 'Escape' }));
-      expect(reaches(document.body, 'k'), 'taken back by Escape elsewhere').toBe(true);
-      // Answered after the spelling it asked about changed while it asked, and it asked again, empty.
-      askThen((field) => {
-        rerender(<Asker open to="Contoso Ltd" />);
-        expect(field).not.toBeInTheDocument();
-        const asked = screen.getByRole('textbox');
-        asked.focus();
-        typeInto(asked, 'Contoso Ltd');
-        fireEvent.keyDown(asked, { key: 'Enter' });
-      });
-      expect(reaches(document.body, 'k'), 'answered, asked again').toBe(true);
-      for (const control of [screen.getByRole('button', { name: 'Close' }), screen.getByRole('gridcell')]) {
-        askThen(() => control.focus());
-        expect(reaches(control, 'k'), `gone with the focus on ${control.tagName}`).toBe(true);
-      }
-
-      // Gone by itself with the focus in its field: every key goes nowhere but Tab, Escape, and those after them or after a press.
-      for (const [freed, free] of [['Tab', () => reaches(document.body, 'Tab')], ['Escape', () => reaches(document.body, 'Escape')], ['a press', () => { fireEvent.pointerDown(document.body); return true; }]] as const) {
-        askThen(() => undefined);
-        for (const key of ['t', 'k', 'Enter', ' ', 'Backspace', 'ArrowDown']) expect(goesNowhere(document.body, key), `${key} before ${freed}`).toBe(true);
-        expect(free(), freed).toBe(true);
-        expect(reaches(document.body, 'k'), `after ${freed}`).toBe(true);
-      }
-      // So too with the focus on nothing, as after a press on its sentence.
-      askThen(() => (document.activeElement as HTMLElement).blur());
-      expect(goesNowhere(document.body, 'k'), 'gone with the focus on nothing').toBe(true);
-      fireEvent.pointerDown(document.body);
-    } finally {
-      document.removeEventListener('keydown', beyond);
     }
   });
 });

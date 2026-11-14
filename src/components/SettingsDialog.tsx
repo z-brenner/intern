@@ -12,6 +12,7 @@ import { GUIDE_URL } from '../lib/bridge';
 import { tooShortOwnNames } from '../lib/ownNames';
 import type { DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateProgressListener, UpdateStatus } from '../lib/bridge';
 import { installingLabel } from '../lib/format';
+import { useEditsOnlyInside } from '../lib/dialogEdits';
 import { folderSaveProblem, inputFolderProblem, keepsDescriptionColumn, outputFolderProblem } from '../features/intake/folderProblems';
 import { INPUT_FOLDER_HINT, OUTPUT_FOLDER_HINT } from './FolderSetupFlow';
 import { Icon } from './Icon';
@@ -269,6 +270,8 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   // depending on its identity.
   const close = useRef(onClose);
   useEffect(() => { close.current = onClose; }, [onClose]);
+  // No field behind the dialog changes while it is open: an undo here went to the review panel's name.
+  useEditsOnlyInside(dialog);
   // The settings the draft was started from, so settings that arrive later
   // can tell the person's edits from the values they replace.
   const shownFrom = useRef(settings);
@@ -345,16 +348,16 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   };
   /*
     "Use on its own" is the only way a learned spelling is checked: no
-    approval checks one. It is the one action here that lets Intern file
-    names without a person, so it says what it does - for every later
-    document - before it does it, and answers only once the spelling is
-    typed out (UseOnItsOwnQuestion).
+    approval checks one, and the review window does not ask. It is the one
+    action here that lets Intern file names without a person, so it says
+    what it does - for every later document - before it does it, and
+    answers only once the spelling is typed out (UseOnItsOwnQuestion).
 
-    While it asks, the other spellings' actions wait, as in the review
-    window: a press on another "Use on its own" closed the question above
-    it, its row moved up by the height the question had taken, and the new
-    question opened under the pointer that had pressed the action. Nothing
-    in the list moves while it asks. Escape takes back the question, and
+    While it asks, the other spellings' actions wait: a press on another
+    "Use on its own" closed the question above it, its row moved up by the
+    height the question had taken, and the new question opened under the
+    pointer that had pressed the action. Nothing in the list moves while it
+    asks. Escape takes back the question, and
     nothing else, wherever the focus is in the dialog: a press on its
     sentence leaves the focus on the row, and Escape there closed Settings
     with whatever was not saved.
