@@ -1901,9 +1901,12 @@ pub fn validate_facts_at(
     // The office such a document comes from is what a person files it by,
     // and where the cast holds it the name gives it in the class's place:
     // an annual report from its company, never "for Fellow Shareholders";
-    // a circular from the department the reply named. The name waits for
-    // a person all the same: the reason raised above stands, whichever
-    // party the name gives ([`source_for_a_class`]).
+    // a circular from the department the reply named. A party the
+    // document or the reply calls the one the document is about - a
+    // certificate's insured whose name opens like a class - keeps its
+    // place. The name waits for a person all the same: the reason raised
+    // above stands, whichever party the name gives
+    // ([`source_for_a_class`]).
     let relation = to_a_class
         .then(|| source_for_a_class(&cast, &relation))
         .flatten()
@@ -6322,15 +6325,34 @@ fn names_a_class_of_recipients(name: &str) -> bool {
 /// "from" the party it comes from: the first party of the cast, besides the
 /// one `relation` names, that the document supports as its issuer or
 /// sender, else the first the document gives no role and the reply called
-/// its issuer or sender. A class of recipients is no source, and neither is
-/// a person named with the post they hold ([`names_a_post_holder`]), who
-/// acts for an office the cast does not hold. `None` when the cast holds no
-/// such party: the name stays as it was.
+/// its issuer or sender. A party the document gives another role is no
+/// source, whatever the reply called it: the document's word is against the
+/// reply's reading. A class of recipients is no source, and neither is a
+/// person named with the post they hold ([`names_a_post_holder`]), who acts
+/// for an office the cast does not hold. `None` when the cast holds no such
+/// party: the name stays as it was.
+///
+/// A class of recipients is whom a document was sent to. A party the
+/// document calls the one it is about - a certificate's "Insured:", a
+/// notice's "Tenant:" ([`SUBSTANTIVE`]) - or, the document giving it no
+/// role, that the reply called so, is no such class, though its name opens
+/// like one ("All Pro Suppliers"): a name "for" it stays as it was, `None`.
 fn source_for_a_class(cast: &[CastMember], relation: &Relation) -> Option<Relation> {
     let sending = |role: Option<PartyRole>| {
         role.filter(|role| matches!(role, PartyRole::Issuer | PartyRole::Sender))
     };
     let supported = |party: &CastMember| party.role.filter(|_| party.role_supported);
+    let about = |party: &CastMember| {
+        supported(party)
+            .or(party.proposed_role)
+            .is_some_and(|role| SUBSTANTIVE.contains(&role))
+    };
+    if cast
+        .iter()
+        .any(|party| relation.parties.contains(&party.name) && about(party))
+    {
+        return None;
+    }
     let sources = cast
         .iter()
         .filter(|party| {
@@ -6372,10 +6394,11 @@ fn source_for_a_class(cast: &[CastMember], relation: &Relation) -> Option<Relati
 /// Whether a party's name is a person's given with the post they hold:
 /// words before a comma that name no organization and a post after it
 /// ("Odalys B. Brandt, Acting General Counsel", "Odalys Brandt, Director,
-/// Office of Budget and Planning"), or a post with no organization's name
-/// around it ("Acting General Counsel", "Clerk of Court"). An office named
-/// by a post is an organization ("Office of the General Counsel"), and so
-/// is a company whose name holds a post's word ("Brandt Partner Holdings
+/// Office of Budget and Planning"), or a post, alone or written before the
+/// body it is held at ("Acting General Counsel", "Clerk of Court",
+/// "Director, Office of Prescription Drug Promotion"). An office named by
+/// a post is an organization ("Office of the General Counsel"), and so is
+/// a company whose name holds a post's word ("Brandt Partner Holdings
 /// Ltd").
 fn names_a_post_holder(name: &str) -> bool {
     if !holds_a_post(name) {
@@ -12531,22 +12554,22 @@ Since assuming the role of Acting General Counsel of the Meriden Labor Relations
 conducted a comprehensive review of active General Counsel Memoranda and determined that the \
 following actions are warranted.";
         const CLASS: &str = "Regional Directors, Officers-in-Charge, and Resident Officers";
-        let reply = |text: &str, addressee: &str, other: Option<(&str, PartyRole, &str)>| {
+        let reply = |text: &str, addressee: &str, others: &[(&str, PartyRole, &str)]| {
             facts_for(text, |index| ModelFacts {
                 document_type: Some("MEMORANDUM".into()),
                 type_evidence: vec![id_of(index, "MEMORANDUM GC")],
                 document_date: Some("2025-02-14".into()),
                 date_evidence: vec![id_of(index, "MEMORANDUM GC")],
-                parties: [
-                    Some(party(
-                        addressee,
-                        Some(PartyRole::Addressee),
-                        &[id_of(index, "TO:")],
-                    )),
-                    other.map(|(name, role, line)| party(name, Some(role), &[id_of(index, line)])),
-                ]
-                .into_iter()
-                .flatten()
+                parties: std::iter::once(party(
+                    addressee,
+                    Some(PartyRole::Addressee),
+                    &[id_of(index, "TO:")],
+                ))
+                .chain(
+                    others
+                        .iter()
+                        .map(|(name, role, line)| party(name, Some(*role), &[id_of(index, line)])),
+                )
                 .collect(),
                 ..ModelFacts::default()
             })
@@ -12554,12 +12577,19 @@ following actions are warranted.";
         };
         // The board the reply called the issuer is named in a sentence
         // only: no label supports the role.
-        let board = Some((
+        let board = (
             "Meriden Labor Relations Board",
             PartyRole::Issuer,
             "Since assuming",
-        ));
-        let outcome = reply(MEMO, CLASS, board);
+        );
+        let basis = |outcome: &ValidationOutcome| {
+            outcome
+                .facts
+                .as_ref()
+                .map(|facts| facts.relation_basis.clone())
+                .unwrap_or_default()
+        };
+        let outcome = reply(MEMO, CLASS, &[board]);
         assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
         assert_eq!(
             outcome.proposal.parties,
@@ -12570,18 +12600,20 @@ following actions are warranted.";
             "{:?}",
             outcome.reasons
         );
+        assert!(
+            basis(&outcome).ends_with("so from the issuer the reply named"),
+            "{}",
+            basis(&outcome)
+        );
 
         // The same memorandum under the office's letterhead.
         let headed = format!("OFFICE OF THE GENERAL COUNSEL\n{MEMO}");
-        let outcome = reply(
-            &headed,
-            CLASS,
-            Some((
-                "Office of the General Counsel",
-                PartyRole::Issuer,
-                "OFFICE OF THE",
-            )),
+        let office = (
+            "Office of the General Counsel",
+            PartyRole::Issuer,
+            "OFFICE OF THE",
         );
+        let outcome = reply(&headed, CLASS, &[office]);
         assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
         assert_eq!(
             outcome.proposal.parties,
@@ -12592,17 +12624,74 @@ following actions are warranted.";
             "{:?}",
             outcome.reasons
         );
+        assert!(
+            basis(&outcome).ends_with("so from the issuer the document names"),
+            "{}",
+            basis(&outcome)
+        );
+
+        // Both are in the cast, the board the reply alone called the
+        // issuer named first: the office the document names comes before
+        // any the reply named.
+        let outcome = reply(&headed, CLASS, &[board, office]);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Office of the General Counsel"]
+        );
+        assert!(
+            basis(&outcome).ends_with("so from the issuer the document names"),
+            "{}",
+            basis(&outcome)
+        );
 
         // The person on the "FROM:" line holds a post at an office the
         // reply did not name.
         let outcome = reply(
             MEMO,
             CLASS,
-            Some((
+            &[(
                 "Odalys B. Brandt, Acting General Counsel",
                 PartyRole::Sender,
                 "FROM:",
-            )),
+            )],
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec![CLASS]);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        // A class of senders is no more one party than a class of
+        // recipients: a memorandum to all staff from the regional
+        // directors stays "to" its class.
+        let from_a_class = MEMO.replace(CLASS, "All Staff").replace(
+            "Odalys B. Brandt, Acting General Counsel",
+            "Regional Directors",
+        );
+        let outcome = reply(
+            &from_a_class,
+            "All Staff",
+            &[("Regional Directors", PartyRole::Sender, "FROM:")],
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["All Staff"]);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        // The reply called a party the issuer that the document labels its
+        // client: the document's own word is against the reply's reading,
+        // and the party is no source.
+        let for_a_client = MEMO.replace("SUBJECT:", "CLIENT: Calder Freight LLC\nSUBJECT:");
+        let outcome = reply(
+            &for_a_client,
+            CLASS,
+            &[("Calder Freight LLC", PartyRole::Issuer, "CLIENT:")],
         );
         assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
         assert_eq!(outcome.proposal.parties, vec![CLASS]);
@@ -12614,7 +12703,7 @@ following actions are warranted.";
 
         // One named organization is a party a memorandum is filed by.
         let named = MEMO.replace(CLASS, "Corvane Media Group LLC");
-        let outcome = reply(&named, "Corvane Media Group LLC", board);
+        let outcome = reply(&named, "Corvane Media Group LLC", &[board]);
         assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
         assert_eq!(outcome.proposal.parties, vec!["Corvane Media Group LLC"]);
         assert_eq!(
@@ -12822,6 +12911,115 @@ This certificate is issued as a matter of information only.";
             !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
             "{:?}",
             outcome.reasons
+        );
+    }
+
+    /// A class of recipients is whom a document is sent to. A party the
+    /// document labels as the one it is about - a certificate's "Insured:" -
+    /// is no such class, though its name opens like one ("All Pro
+    /// Suppliers", "Every Day Lenders"): the name waits for a person, as a
+    /// name that may give a class does, and stays "for" the insured. It is
+    /// not turned into a name "from" the insurer that issued the
+    /// certificate. The same holds where only the reply said the party is
+    /// the certificate's client. A party neither says anything of may be a
+    /// class, and gives way to the issuer.
+    #[test]
+    fn a_party_a_document_is_about_is_not_replaced_as_a_class_of_recipients() {
+        const LABELED: &str = "Harrowmere Mutual Insurance Company\n\
+12 Quay Street, Brackenridge\n\n\
+CERTIFICATE OF LIABILITY INSURANCE\n\n\
+Date: June 23, 2026\n\n\
+Issued by: Harrowmere Mutual Insurance Company\n\n\
+Insured: All Pro Suppliers\n\n\
+This certifies that the policies of insurance listed below have been issued to the insured named \
+above for the policy period indicated. General liability, policy BCC-GL-4471902.";
+        const UNLABELED: &str = "Harrowmere Mutual Insurance Company\n\
+12 Quay Street, Brackenridge\n\n\
+CERTIFICATE OF LIABILITY INSURANCE\n\n\
+Date: June 23, 2026\n\n\
+Issued by: Harrowmere Mutual Insurance Company\n\n\
+This certifies that general liability cover is in force for Every Day Lenders under policy \
+BCC-GL-4471902 for the policy period indicated.";
+        let certificate = |text: &str, name: &str, role: Option<PartyRole>| {
+            facts_for(text, |index| ModelFacts {
+                document_type: Some("Certificate of Liability Insurance".into()),
+                type_evidence: vec![id_of(index, "CERTIFICATE OF LIABILITY")],
+                document_date: Some("2026-06-23".into()),
+                date_evidence: vec![id_of(index, "Date: June 23")],
+                parties: vec![
+                    party(
+                        "Harrowmere Mutual Insurance Company",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "Issued by:")],
+                    ),
+                    party(name, role, &[id_of(index, name)]),
+                ],
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        let basis = |outcome: &ValidationOutcome| {
+            outcome
+                .facts
+                .as_ref()
+                .map(|facts| facts.relation_basis.clone())
+                .unwrap_or_default()
+        };
+        let every_day = LABELED.replace("All Pro Suppliers", "Every Day Lenders");
+        for (text, name, role, row) in [
+            (
+                LABELED,
+                "All Pro Suppliers",
+                None,
+                "record: the party it is about",
+            ),
+            (
+                LABELED,
+                "All Pro Suppliers",
+                Some(PartyRole::Client),
+                "record: the party it is about",
+            ),
+            (
+                every_day.as_str(),
+                "Every Day Lenders",
+                None,
+                "record: the party it is about",
+            ),
+            (
+                UNLABELED,
+                "Every Day Lenders",
+                Some(PartyRole::Client),
+                "record: the provider's counterpart",
+            ),
+        ] {
+            let outcome = certificate(text, name, role);
+            assert_eq!(
+                outcome.proposal.party_relation,
+                PartyRelation::For,
+                "{name} {role:?}: {}",
+                basis(&outcome)
+            );
+            assert_eq!(outcome.proposal.parties, vec![name], "{name} {role:?}");
+            assert_eq!(
+                outcome.reasons,
+                vec![ReviewReason::PartyUnsupported],
+                "{name} {role:?}"
+            );
+            assert_eq!(basis(&outcome), row, "{name} {role:?}");
+        }
+        // Neither the document nor the reply says what the party is to the
+        // certificate.
+        let outcome = certificate(UNLABELED, "Every Day Lenders", None);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Harrowmere Mutual Insurance Company"]
+        );
+        assert_eq!(outcome.reasons, vec![ReviewReason::PartyUnsupported]);
+        assert_eq!(
+            basis(&outcome),
+            "record: the provider's counterpart, a class of recipients, so from the issuer the \
+document names"
         );
     }
 
