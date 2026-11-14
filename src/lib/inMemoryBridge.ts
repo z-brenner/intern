@@ -164,6 +164,13 @@ export interface InMemoryBridgeOptions {
    * which tests that script the first read do not expect.
    */
   liveEvents?: boolean;
+  /**
+   * Hands over a way to change the queue with nobody asking, as the desktop
+   * backend does: `change` a document - read again, given another proposal,
+   * filed from another machine - or take it out of the queue (`leave`). Each
+   * says the queue changed, so it is for a bridge with `liveEvents`.
+   */
+  byItself?: (queue: QueueByItself) => void;
   /** How long a re-analysis takes before the item is back in review. */
   analysisDelayMs?: number;
   /**
@@ -267,6 +274,9 @@ function numberedName(name: string, index: number): string {
   const dot = name.lastIndexOf('.');
   return dot > 0 ? `${name.slice(0, dot)} (${index})${name.slice(dot)}` : `${name} (${index})`;
 }
+
+/** See `InMemoryBridgeOptions.byItself`. */
+export interface QueueByItself { change(id: string, change: Partial<QueueItem>): void; leave(id: string): void }
 
 function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): DesktopBridge {
   let items = (options.items ?? seedItems).map((item) => ({ ...item }));
@@ -496,6 +506,10 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     replace(checked);
     return checked;
   };
+  options.byItself?.({
+    change: (id, change) => { update(id, change); queueChanged(); },
+    leave: (id) => { items = items.filter((item) => item.id !== id); queueChanged(); },
+  });
   // The seeded proposals still named from their facts. A name a person
   // approved is theirs: it leaves this map and keeps what they typed.
   const composedNames = new Map(options.items ? [] : Object.entries(seedNames));
