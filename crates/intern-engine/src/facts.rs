@@ -65,8 +65,9 @@ use crate::infer::{
 };
 use crate::phrases::{
     RIGHT_STOPS, gives_notice, has_a_kind, head_noun, is_form_code, is_placeholder, is_reference,
-    label_and_value, names_a_kind, opens_with_party_label, phrase_positions, possessive_side,
-    same_word, subject_value, tidy_case, title_phrase, trim_name, without_identifier, words,
+    label_and_value, names_a_kind, opening_phrase, opens_with_party_label, phrase_positions,
+    possessive_side, same_word, subject_value, tidy_case, title_phrase, trim_name,
+    without_identifier, words,
 };
 use crate::retrieve::EvidenceContext;
 use crate::validate::{
@@ -604,6 +605,28 @@ pub fn validate_facts_at(
             push(&mut reasons, ReviewReason::TypeInferred);
         }
     }
+    // A "Re:" or "Subject:" line says what the paper is about, above the
+    // greeting as below it. A type read from one is the paper's own kind
+    // when the line opens on what a letter does by being sent ("Re: Notice
+    // of Violation", "Re: Offer of Employment", "Re: Approval of Closure
+    // Plan"). A review, a report, a plan or minutes at its head is a paper
+    // of its own that this one discusses or sends on ("Re: Thematic Review
+    // on Early Mortgage Arrears" over "Dear CEO,"): the name waits for a
+    // person, and a letter is a "Letter", for a person to complete, as one
+    // typed by what it talks about is.
+    if let Some(value) = document_type.as_deref()
+        && type_line
+            .as_deref()
+            .is_some_and(|line| matter_opens_on_a_record(scope, value, line))
+    {
+        push(&mut reasons, ReviewReason::TypeUnsupported);
+        if layout.laid_out_as_letter(scope) {
+            document_type = Some("Letter".to_owned());
+            type_title = None;
+            type_line = None;
+            push(&mut reasons, ReviewReason::TypeInferred);
+        }
+    }
     // A letter's title may say whom it answers and nothing of what it is:
     // "Response to the ONS Engagement on Adjustment of Migration
     // Statistics", the reply's "ONS" among its parties. A party is no part
@@ -653,11 +676,14 @@ pub fn validate_facts_at(
     }
     if document_type.is_none() {
         // A title read below a letter's salutation is the letter talking,
-        // as above.
+        // as above, and one read from its subject line that opens on a
+        // record is the letter's matter.
         let inferred = title_of(scope).filter(|(inferred, line)| {
             !(layout.laid_out_as_letter(scope)
-                && no_kind_of_its_own(Some(inferred))
-                && unit_holding(scope, line).is_some_and(|unit| talking(unit, line, inferred)))
+                && ((no_kind_of_its_own(Some(inferred))
+                    && unit_holding(scope, line)
+                        .is_some_and(|unit| talking(unit, line, inferred)))
+                    || matter_opens_on_a_record(scope, inferred, line)))
         });
         match inferred {
             Some((inferred, line)) => {
@@ -2312,6 +2338,30 @@ fn no_kind_of_its_own(document_type: Option<&str>) -> bool {
         DocumentClass::of(document_type),
         DocumentClass::Unknown | DocumentClass::Record
     )
+}
+
+/// Whether a type read from `line`, a "Re:", "Subject:" or "Regarding:"
+/// line, names the paper's matter and not its kind: the phrase opens on a
+/// record. What a subject line opens with is the paper's own kind when it
+/// is something a letter does by being sent - a notice, an offer, a
+/// demand, an approval - and a record is a paper of its own: the review a
+/// regulator's letter reports on, the minutes a cover letter encloses.
+///
+/// Only the word the type's opening phrase ends on is asked, by itself
+/// ([`opening_phrase`]): a "Thematic Review on Early Mortgage Arrears" is
+/// a review, while an "Approval of Closure Plan", a "Closure Plan
+/// Approval" and a "Policy Cancellation" are an approval and a
+/// cancellation, whatever they are of. A kind of letter ("Review Letter")
+/// is the letter's own, and an email's "Subject:" is read by the email's
+/// rule.
+fn matter_opens_on_a_record(scope: &ValidationScope<'_>, document_type: &str, line: &str) -> bool {
+    let type_words = words(document_type);
+    names_a_matter(line.trim_matches(|c: char| c == '*' || c.is_whitespace()))
+        && !is_email_subject(scope, line)
+        && !type_words.iter().any(|word| word == "letter")
+        && opening_phrase(&type_words)
+            .last()
+            .is_some_and(|head| DocumentClass::of(Some(head)) == DocumentClass::Record)
 }
 
 /// The unit of the context that holds `line` as one of its lines.
@@ -17048,6 +17098,193 @@ Held on March 3, 2024 at the offices of Corvane Media Group LLC.";
             reply(ANSWER, "Quay Regulation Authority"),
         );
         assert_eq!(outcome.proposal.document_type.as_deref(), Some(ANSWER));
+    }
+
+    /// A regulator's letter to the firms it supervises, in the real sets,
+    /// under "Re: Thematic Review on Early Mortgage Arrears": the review is
+    /// what the letter reports on. A record at the head of a subject line
+    /// is the paper's matter; "Letter" stands in on a letter, and the name
+    /// waits for a person.
+    #[test]
+    fn a_record_at_the_head_of_a_letters_subject_line_is_its_matter() {
+        let letter = |subject: &str| {
+            format!(
+                "Harbour Conduct Authority\nPO Box 559\nPortside 1\n\n24 April 2024\n\n\
+                 {subject}\n\nDear CEO,\n\nThe protection of consumers is a key priority for the \
+                 Authority, which has written to all regulated firms about their customers in \
+                 arrears.\n\nYours sincerely,\n\nMara Quill\nDirector of Consumer Protection"
+            )
+        };
+        let typed = |kind: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(kind.into()),
+                type_evidence: vec![id_of(index, kind)],
+                document_date: Some("2024-04-24".into()),
+                date_evidence: vec![id_of(index, "24 April 2024")],
+                ..ModelFacts::default()
+            }
+        };
+        const REVIEW: &str = "Thematic Review on Early Mortgage Arrears";
+        for subject in [
+            format!("Re: {REVIEW}"),
+            format!("**Re: {REVIEW}**"),
+            format!("Subject: {REVIEW}"),
+        ] {
+            let (outcome, _) = facts_for(&letter(&subject), typed(REVIEW));
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Letter"),
+                "{subject}: {:?}",
+                outcome.reasons
+            );
+            for reason in [
+                ReviewReason::TypeUnsupported,
+                ReviewReason::TypeInferred,
+                ReviewReason::TypeMissing,
+            ] {
+                assert!(
+                    outcome.reasons.contains(&reason),
+                    "{subject}: {:?}",
+                    outcome.reasons
+                );
+            }
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        }
+        // A reply that gave no type at all: the subject line's record is
+        // no title to stand in for it either.
+        let (outcome, _) = facts_for(&letter(&format!("Re: {REVIEW}")), |index| ModelFacts {
+            document_type: None,
+            ..typed(REVIEW)(index)
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Letter"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
+        // What a letter does by being sent is its own kind, whatever it
+        // is of: the word its opening phrase ends on is no record.
+        for kind in [
+            "Approval of Closure Plan",
+            "Closure Plan Approval",
+            "Policy Cancellation",
+            "Notice of Violation",
+            "Offer of Employment",
+        ] {
+            let (outcome, _) = facts_for(&letter(&format!("Re: {kind}")), typed(kind));
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some(kind),
+                "{:?}",
+                outcome.reasons
+            );
+            assert!(
+                !outcome.reasons.contains(&ReviewReason::TypeUnsupported)
+                    && !outcome.reasons.contains(&ReviewReason::TypeInferred),
+                "{kind}: {:?}",
+                outcome.reasons
+            );
+        }
+    }
+
+    /// The same subject line on a paper that is no letter keeps its type
+    /// and waits for a person; a record that heads the paper itself, off
+    /// any subject line, is its title; and an email's "Subject:" is the
+    /// email rule's to read.
+    #[test]
+    fn a_record_on_a_subject_line_is_held_wherever_it_stands_and_only_there() {
+        // No greeting, no dateline, no closing: no letter.
+        let (outcome, _) = facts_for(
+            "Fernhill Water District\n\nSubject: Annual Audit Report\n\n\
+             The district's auditors completed their fieldwork in March and found no material \
+             weakness in the district's controls over its billing.",
+            |index| ModelFacts {
+                document_type: Some("Annual Audit Report".into()),
+                type_evidence: vec![id_of(index, "Subject:")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Annual Audit Report"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::TypeUnsupported));
+        assert!(!outcome.reasons.contains(&ReviewReason::TypeInferred));
+        // The paper's own heading.
+        let (outcome, _) = facts_for(
+            "Fernhill Water District\n\nANNUAL AUDIT REPORT\n\n\
+             The district's auditors completed their fieldwork in March and found no material \
+             weakness in the district's controls over its billing.",
+            |index| ModelFacts {
+                document_type: Some("Annual Audit Report".into()),
+                type_evidence: vec![id_of(index, "ANNUAL AUDIT")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Annual Audit Report")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // An email's header block: its subject's record gives way to
+        // "Email", as any matter there does, with no more said of it.
+        let (outcome, _) = facts_for(
+            "From: Betts, Bruce@DHS <Bruce.Betts@dhs.ca.gov>\n\
+             To: drose@qrpa.org <drose@qrpa.org>\n\
+             Date: Tue, 5 Apr 2016 14:42:09 +0000\n\
+             Subject: Annual Audit Report\n\n\
+             Good Morning Debra,\n\nI have attached the report for your records.",
+            |index| ModelFacts {
+                document_type: Some("Annual Audit Report".into()),
+                type_evidence: vec![id_of(index, "Subject:")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Email"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // The test itself, on the words alone.
+        let index = index_of("Re: a line");
+        let context = whole(&index);
+        let scope = ValidationScope::new(&index, &context, &[]);
+        for (kind, matter) in [
+            ("Thematic Review on Early Mortgage Arrears", true),
+            ("Status Report", true),
+            ("Meeting Minutes", true),
+            ("Consent to Assignment of Lease", true),
+            ("Review Letter", false),
+            ("Approval of Closure Plan", false),
+            ("EPA Approval of Closure Plan", false),
+            ("Closure Plan Approval", false),
+            ("Policy Cancellation", false),
+            ("Policy Renewal", false),
+            ("Notice of Violation", false),
+            ("Offer of Employment", false),
+            ("Quote for Propeller Overhaul", false),
+        ] {
+            assert_eq!(
+                matter_opens_on_a_record(&scope, kind, &format!("Re: {kind}")),
+                matter,
+                "{kind}"
+            );
+            // Off a subject line, a record is the title it reads as.
+            assert!(!matter_opens_on_a_record(&scope, kind, kind), "{kind}");
+        }
     }
 
     /// A "The" that opens a name's line is the name's own; one in a sentence

@@ -205,12 +205,21 @@ pub(crate) fn head_noun(words: &[String]) -> Option<&str> {
     if let Some((_, word)) = by_kind {
         return Some(word.as_str());
     }
+    opening_phrase(words).last().map(String::as_str)
+}
+
+/// The words a phrase opens with, before the first connector past its
+/// first word: "Thematic Review" of "Thematic Review on Early Mortgage
+/// Arrears", "Approval" of "Approval of Closure Plan", and all of "Closure
+/// Plan Approval", which no connector cuts. Its last word is what the
+/// phrase calls itself before anything completes it.
+pub(crate) fn opening_phrase(words: &[String]) -> &[String] {
     let end = words
         .iter()
         .skip(1)
         .position(|word| CONNECTORS.contains(&word.as_str()))
         .map_or(words.len(), |at| at + 1);
-    words[..end].last().map(String::as_str)
+    &words[..end]
 }
 
 /// Whether a phrase names a kind of document anywhere in it: "Assignment
@@ -1370,6 +1379,21 @@ mod tests {
             head_noun(&w("Assignment and Assumption of Lease")),
             Some("assignment")
         );
+    }
+
+    #[test]
+    fn a_phrase_opens_with_its_words_before_the_first_connector() {
+        let opening = |text: &str| opening_phrase(&w(text)).join(" ");
+        assert_eq!(
+            opening("Thematic Review on Early Mortgage Arrears"),
+            "thematic review"
+        );
+        assert_eq!(opening("Approval of Closure Plan"), "approval");
+        // No connector cuts a compound: all of it opens the phrase.
+        assert_eq!(opening("Closure Plan Approval"), "closure plan approval");
+        // A connector that is the first word joins nothing yet.
+        assert_eq!(opening("On Call Report"), "on call report");
+        assert_eq!(opening(""), "");
     }
 
     #[test]
