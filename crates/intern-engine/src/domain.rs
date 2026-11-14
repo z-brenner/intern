@@ -709,8 +709,10 @@ pub enum ReviewReason {
     TypeInferred,
     /// The document does not settle the filename's party: a named party
     /// could not be found in it, or the name rests on roles only the reply
-    /// gave, on a default the reply's own reading speaks against, or on a
-    /// class of recipients rather than a party.
+    /// gave, on a default the reply's own reading speaks against, or on no
+    /// joining word at all; or the document is addressed to a class of
+    /// recipients rather than a party, whether the name gives the class or
+    /// the party the document comes from.
     PartyUnsupported,
     /// A party the filename needs is missing: an agreement named only one
     /// of its two sides, an issued document no issuer, or any document no
