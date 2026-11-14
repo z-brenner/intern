@@ -4165,7 +4165,8 @@ fn role_words(role: PartyRole) -> (&'static [&'static str], &'static [&'static s
 /// and customer cues of an issued document on its line.
 ///
 /// `payees`: the units that are a payment slip's "To:" line
-/// ([`payee_lines`]), which names who is paid.
+/// ([`payee_lines`]), which names who is paid: the party its value opens
+/// with ([`paid_on`]) and no other the unit happens to hold.
 fn role_support(
     scope: &ValidationScope<'_>,
     name: &str,
@@ -4177,17 +4178,14 @@ fn role_support(
     let loose = normalize_loosely(name);
     let letter = LetterLayout::of(scope);
     let supports = |unit: &EvidenceUnit| {
-        // A payment slip's "To:" line names who is paid: no one the
-        // document is to, and the issuing side when it names the party.
-        if payees.contains(&unit.ordinal) {
+        // A payment slip's "To:" line names who is paid: for that party
+        // it is no one the document is to, and the issuing side. Anyone
+        // else the unit holds - the customer a reader ran into the same
+        // line - is read as on any line.
+        if payees.contains(&unit.ordinal) && paid_on(unit, &loose) {
             match role {
                 PartyRole::Recipient | PartyRole::Addressee => return false,
-                PartyRole::Issuer | PartyRole::Vendor | PartyRole::Seller
-                    if contains_whole(&unit.normalized, &normalized)
-                        || contains_whole(&normalize_loosely(&unit.text), &loose) =>
-                {
-                    return true;
-                }
+                PartyRole::Issuer | PartyRole::Vendor | PartyRole::Seller => return true,
                 _ => {}
             }
         }
@@ -4242,7 +4240,8 @@ fn labeled_role(scope: &ValidationScope<'_>, name: &str) -> Option<PartyRole> {
 }
 
 /// [`labeled_role`], a payment slip's "To:" lines (`payees`, from
-/// [`payee_lines`]) labeling no one the document is to.
+/// [`payee_lines`]) not labeling the party they pay ([`paid_on`]) as one
+/// the document is to.
 fn labeled_role_past(scope: &ValidationScope<'_>, name: &str, payees: &[u32]) -> Option<PartyRole> {
     let normalized = normalize(name);
     let loose = normalize_loosely(name);
@@ -4258,6 +4257,7 @@ fn labeled_role_past(scope: &ValidationScope<'_>, name: &str, payees: &[u32]) ->
         naming.iter().any(|unit| {
             if payees.contains(&unit.ordinal)
                 && matches!(role, PartyRole::Recipient | PartyRole::Addressee)
+                && paid_on(unit, &loose)
             {
                 return false;
             }
@@ -4275,20 +4275,46 @@ fn labeled_role_past(scope: &ValidationScope<'_>, name: &str, payees: &[u32]) ->
     })
 }
 
+/// Whether a payment slip's "To:" line pays the party named `loose`,
+/// loosely normalized: what follows its "To" opens with the name, whole.
+/// A reader that ran two columns into one line leaves the customer on the
+/// same line, after the supplier's address ("To: Corbin Vale Plant Limited
+/// Mill Farm Dalton Road Customer Saltmarsh Point Borough Council"): the
+/// line pays the party it opens with and says nothing of the other.
+fn paid_on(unit: &EvidenceUnit, loose: &str) -> bool {
+    let text = unit
+        .text
+        .trim_start_matches(|c: char| c == '|' || c.is_whitespace());
+    let Some(value) = text
+        .get(..2)
+        .filter(|to| to.eq_ignore_ascii_case("to"))
+        .map(|_| &text[2..])
+    else {
+        return false;
+    };
+    let value = normalize_loosely(
+        value.trim_start_matches(|c: char| matches!(c, ':' | '|' | '.') || c.is_whitespace()),
+    );
+    !loose.is_empty()
+        && value
+            .strip_prefix(loose)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+}
+
 /// The "To:" lines of an invoice's payment slip, by their units'
 /// ordinals. Many invoices end in a tear-off slip the customer sends back
 /// with the payment, headed "PAYMENT ADVICE" over "To:" and the supplier's
 /// name and address: there "To:" names who is paid - whoever issued the
-/// invoice - and not who the invoice is to. Such a line labels no
-/// recipient or addressee, and supports the reply's issuer, vendor or
-/// seller as a line that says where payment goes does
-/// ([`PAYMENT_ADDRESS_CUES`]).
+/// invoice - and not who the invoice is to. For the party its value opens
+/// with ([`paid_on`]) such a line labels no recipient or addressee, and
+/// supports the reply's issuer, vendor or seller as a line that says
+/// where payment goes does ([`PAYMENT_ADDRESS_CUES`]).
 ///
 /// Only on an issued document that is no payment's own advice: a
 /// remittance or payment advice the payer sends is to the party it names
 /// so. And only under a "Payment Advice" line that is not the document's
-/// own title - the first heading of its first page, or its first line -
-/// whatever the reply called the document.
+/// own title - neither the first heading of its first page nor its first
+/// line - whatever the reply called the document.
 fn payee_lines(scope: &ValidationScope<'_>, document_type: Option<&str>) -> Vec<u32> {
     let type_words = words(document_type.unwrap_or_default());
     let advice = ["payment".to_owned(), "advice".to_owned()];
@@ -4305,10 +4331,10 @@ fn payee_lines(scope: &ValidationScope<'_>, document_type: Option<&str>) -> Vec<
         .filter(|unit| !unit.running)
         .collect::<Vec<_>>();
     let first_page = units.iter().map(|unit| unit.page).min();
-    let title = units
+    let first_line = units.first().map(|unit| unit.ordinal);
+    let first_heading = units
         .iter()
         .find(|unit| Some(unit.page) == first_page && unit.kind == UnitKind::Heading)
-        .or(units.first())
         .map(|unit| unit.ordinal);
     let labeled_to = |unit: &EvidenceUnit| {
         unit.label
@@ -4322,8 +4348,10 @@ fn payee_lines(scope: &ValidationScope<'_>, document_type: Option<&str>) -> Vec<
     units
         .windows(2)
         .filter(|pair| {
+            let advice = Some(pair[0].ordinal);
             normalize_loosely(&pair[0].text) == "payment advice"
-                && Some(pair[0].ordinal) != title
+                && advice != first_line
+                && advice != first_heading
                 && labeled_to(pair[1])
         })
         .map(|pair| pair[1].ordinal)
@@ -11948,6 +11976,10 @@ Defendants Tavistock Boatworks, Inc. d/b/a Harbor Yard and Corvane Marine LLC.";
     /// being sent by. A "To:" line anywhere else labels a recipient as
     /// before, and so does the "To:" of a payment advice that is the
     /// document itself, by its type or by its title.
+    ///
+    /// The slip pays the party its "To:" opens with and no other: a
+    /// customer a reader ran into the same line is no vendor for standing
+    /// on it, whatever the reply called them.
     #[test]
     fn the_to_line_of_an_invoices_payment_slip_names_who_is_paid() {
         const INVOICE: &str = "TAX INVOICE\n\n\
@@ -12007,6 +12039,125 @@ Amount Enclosed: enter the amount you are paying above";
                 outcome.reasons
             );
         }
+        // The slip's "To:" labels the supplier no recipient, whatever the
+        // reply called them or left unsaid: the invoice is never named
+        // from its customer for it.
+        for supplier in [Some(PartyRole::Recipient), None] {
+            let (outcome, _) = facts_for(INVOICE, |index| ModelFacts {
+                document_type: Some("Tax Invoice".into()),
+                document_date: Some("2025-09-09".into()),
+                parties: vec![
+                    party(
+                        "Saltmarsh Point Borough Council",
+                        Some(PartyRole::Customer),
+                        &[id_of(index, "Saltmarsh Point Borough Council")],
+                    ),
+                    party(
+                        "Corbin Vale Plant Limited",
+                        supplier,
+                        &[id_of(index, "Corbin Vale Plant Limited")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            });
+            assert_ne!(
+                outcome.proposal.parties,
+                vec!["Saltmarsh Point Borough Council"],
+                "{supplier:?}"
+            );
+            let facts = outcome.facts.expect("facts");
+            let paid = facts
+                .parties
+                .iter()
+                .find(|party| party.name == "Corbin Vale Plant Limited")
+                .expect("the supplier");
+            assert!(
+                !matches!(paid.role, Some(PartyRole::Recipient | PartyRole::Addressee)),
+                "{supplier:?}: {:?}",
+                paid.role
+            );
+        }
+        // A reader ran the slip's two columns into one line: the supplier,
+        // its address, then the customer under the other column's label.
+        // The line pays the supplier it opens with. It says nothing of the
+        // council, and a reply that called the council the vendor, the
+        // seller or the issuer has no support for it there: the name
+        // waits with no party, as it did before the slip was read.
+        let merged = INVOICE.replace(
+            "To: Corbin Vale Plant Limited, Mill Farm, Dalton Road\n\n\
+Customer: Saltmarsh Point B. Council, The Quays",
+            "To: Corbin Vale Plant Limited Mill Farm Dalton Road Customer \
+Saltmarsh Point Borough Council",
+        );
+        assert_ne!(merged, INVOICE);
+        let (outcome, _) = reply(
+            &merged,
+            "Tax Invoice",
+            PartyRole::Vendor,
+            PartyRole::Customer,
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(outcome.proposal.parties, vec!["Corbin Vale Plant Limited"]);
+        for (supplier, council) in [
+            (PartyRole::Customer, PartyRole::Vendor),
+            (PartyRole::Customer, PartyRole::Issuer),
+            (PartyRole::Buyer, PartyRole::Seller),
+            (PartyRole::Recipient, PartyRole::Issuer),
+        ] {
+            let (outcome, _) = reply(&merged, "Tax Invoice", supplier, council);
+            assert!(
+                outcome.proposal.parties.is_empty(),
+                "{council:?}: {:?}",
+                outcome.proposal.parties
+            );
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview, "{council:?}");
+            assert!(
+                outcome.reasons.contains(&ReviewReason::PartyMissing),
+                "{council:?}: {:?}",
+                outcome.reasons
+            );
+        }
+        let pays = |line: &str, name: &str| {
+            let index = index_of(line);
+            paid_on(&index.units()[0], &normalize_loosely(name))
+        };
+        for (line, name, paid) in [
+            (
+                "To: Corbin Vale Plant Limited, Mill Farm",
+                "Corbin Vale Plant Limited",
+                true,
+            ),
+            (
+                "| To | Corbin Vale Plant Limited |",
+                "Corbin Vale Plant Limited",
+                true,
+            ),
+            (
+                "TO : CORBIN VALE PLANT LIMITED",
+                "Corbin Vale Plant Limited",
+                true,
+            ),
+            (
+                "To: Corbin Vale Plant Limited Customer Saltmarsh Point Borough Council",
+                "Saltmarsh Point Borough Council",
+                false,
+            ),
+            // A name the value only begins like is another's.
+            ("To: Corbin Vale Plant Limited", "Corbin Vale Plant", true),
+            (
+                "To: Corbin Vale Plantations Limited",
+                "Corbin Vale Plant",
+                false,
+            ),
+            (
+                "To: The Corbin Vale Plant Limited",
+                "Corbin Vale Plant Limited",
+                false,
+            ),
+        ] {
+            assert_eq!(pays(line, name), paid, "{line} / {name}");
+        }
+
         // Under any other heading the "To:" line says who the document is
         // to, as it did: the supplier is read as the receiving side.
         let delivery = INVOICE.replace("PAYMENT ADVICE", "DELIVERY ADVICE");
@@ -12031,6 +12182,13 @@ Date: 9 Sep 2025\n\n\
 We have today paid your invoice INV-8129 in the sum of 53,220.00.";
         assert!(slips(ADVICE, "Invoice").is_empty());
         assert!(slips(ADVICE, "Remittance Advice").is_empty());
+        // Its title is its first line, though the first heading a reader
+        // found stands further down the page.
+        let unheaded = format!(
+            "{}\n\n# Terms\n\nPaid by BACS.",
+            ADVICE.replace("PAYMENT ADVICE", "Payment advice")
+        );
+        assert!(slips(&unheaded, "Invoice").is_empty());
         let headed = format!("Saltmarsh Point Borough Council\n\nACCOUNTS PAYABLE\n\n{ADVICE}");
         // Under a letterhead's heading only the type tells the advice
         // from an invoice's slip.
