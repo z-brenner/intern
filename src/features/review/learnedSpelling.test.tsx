@@ -224,6 +224,70 @@ describe('using a held document\'s spelling on its own', () => {
       expect(actions.onApprove).not.toHaveBeenCalled();
     });
 
+    // An Enter that did not answer said nothing, and a screen reader heard
+    // silence: Tab from the field passes the yes, which is disabled.
+    it('says why when Enter does not answer, until the field changes', async () => {
+      const bridge = spellingBridge(spellings);
+      render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={bridge} />);
+      fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
+      const { group, field } = question(CONTOSO);
+      const status = within(group).getByRole('status');
+      expect(status).toHaveTextContent(/^$/);
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(status).toHaveTextContent(/^$/);
+      typeInto(field, 'Contoso Worldwide, Inc.');
+      expect(status).toHaveTextContent(/^$/);
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(status).toHaveTextContent('That is not Contoso: type it as it is shown.');
+      clearField(field);
+      expect(status).toHaveTextContent(/^$/);
+      typeInto(field, 'Contos');
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(status).toHaveTextContent('That is not Contoso: type it as it is shown.');
+      typeInto(field, 'o');
+      expect(status).toHaveTextContent(/^$/);
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+      fireEvent.keyDown(field, { key: 'Enter' });
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
+
+    // The panel is busy while a decision is on its way: the yes waits for
+    // it, the spelling typed or not, and so does Enter.
+    it('waits while the panel is busy, the spelling typed or not', async () => {
+      const bridge = spellingBridge(spellings);
+      const actions = handlers();
+      const { rerender } = render(<ReviewInspector item={held} drawer={false} {...actions} spellings={bridge} />);
+      fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
+      typeInto(question(CONTOSO).field, 'Contoso');
+      expect(question(CONTOSO).yes).toBeEnabled();
+      rerender(<ReviewInspector item={held} drawer={false} busy {...actions} spellings={bridge} />);
+      expect(question(CONTOSO).yes).toBeDisabled();
+      fireEvent.click(question(CONTOSO).yes);
+      fireEvent.keyDown(question(CONTOSO).field, { key: 'Enter' });
+      expect(within(question(CONTOSO).group).getByRole('status')).toHaveTextContent(/^$/);
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+      rerender(<ReviewInspector item={held} drawer={false} {...actions} spellings={bridge} />);
+      expect(question(CONTOSO).field).toHaveValue('Contoso');
+      fireEvent.keyDown(question(CONTOSO).field, { key: 'Enter' });
+      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
+    });
+
+    // While one spelling is asked about, the others' actions wait: a press
+    // on the next one closed the question above it and opened its own
+    // under the pointer.
+    it('leaves the other spellings\' actions waiting while it asks', async () => {
+      const bridge = spellingBridge(spellings);
+      render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={bridge} />);
+      fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
+      const other = screen.getByRole('button', { name: RIDGELINE });
+      expect(other).toBeDisabled();
+      fireEvent.click(other);
+      expect(question(CONTOSO).group).toBeInTheDocument();
+      expect(screen.queryByRole('group', { name: RIDGELINE })).not.toBeInTheDocument();
+      fireEvent.click(question(CONTOSO).cancel);
+      expect(screen.getByRole('button', { name: RIDGELINE })).toBeEnabled();
+    });
+
     it('is the spelling\'s letters and digits in order, whatever the case, accents, spaces and punctuation', () => {
       expect(typedOut('contoso ltd', 'Contoso Ltd.')).toBe(true);
       expect(typedOut('CONTOSO-LTD', 'Contoso Ltd.')).toBe(true);
@@ -509,6 +573,21 @@ describe('using a held document\'s spelling on its own', () => {
       expect(keyed.field).toHaveFocus();
       expect(scrollIntoView.mock.contexts).toEqual([keyed.group]);
       expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    });
+
+    // Opened by a press where it reaches past what can be seen, the question
+    // stayed there while the spelling was typed into a field out of sight.
+    // A key is no aim of the pointer: the first one brings it into sight.
+    it('is brought into sight by a key typed in it after a press opened it', async () => {
+      const scrollIntoView = vi.fn();
+      Object.defineProperty(Element.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true });
+      render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={spellingBridge(spellings)} />);
+      pressOn(await screen.findByRole('button', { name: CONTOSO }));
+      const { group, field } = question(CONTOSO);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+      typeInto(field, 'C');
+      expect(scrollIntoView.mock.contexts).toEqual([group]);
+      expect(scrollIntoView).toHaveBeenLastCalledWith({ block: 'nearest' });
     });
 
     // A press on the sentence clicks nothing in the question, and leaves the

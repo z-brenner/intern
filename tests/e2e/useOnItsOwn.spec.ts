@@ -78,6 +78,26 @@ const under = (page: Page, at: Point) => page.evaluate(({ x, y }) => {
   return hit.closest('p') ? 'the sentence' : hit.tagName;
 }, at);
 
+/** Whether the whole of `part` can be seen: nothing over the top or the bottom of it, and neither out of the window. */
+const seenWhole = (part: Locator) => part.evaluate((element) => {
+  const box = element.getBoundingClientRect();
+  return [box.top + 3, box.bottom - 3].every((y) => {
+    const hit = document.elementFromPoint(box.left + Math.min(box.width / 2, 40), y);
+    return hit !== null && (hit === element || element.contains(hit));
+  });
+});
+
+/** The parts of `question` that cannot be seen whole: its sentence, its field, its yes and its Cancel. */
+async function outOfSight(question: Locator) {
+  const parts: [string, Locator][] = [
+    ['the sentence', question.locator('p')], ['the field', question.getByRole('textbox')],
+    ['the yes', question.getByRole('button', { name: 'Use on its own' })], ['Cancel', question.getByRole('button', { name: 'Cancel' })],
+  ];
+  const hidden: string[] = [];
+  for (const [name, part] of parts) if (!await seenWhole(part)) hidden.push(name);
+  return hidden;
+}
+
 /** Every press there is at `at`, each after a press there that opened the question or found it open. */
 const presses: [string, (page: Page, at: Point) => Promise<void>][] = [
   ['a double-click', (page, at) => page.mouse.dblclick(at.x, at.y)],
@@ -147,19 +167,28 @@ for (const [name, open] of surfaces) {
       await (await actionInSight(surface, CONTOSO, true)).focus();
       await page.keyboard.press('Enter');
       await expect(field).toBeFocused();
-      for (const part of [question.locator('p'), field, yes, question.getByRole('button', { name: 'Cancel' })]) {
-        const seen = await part.evaluate((element) => {
-          const box = element.getBoundingClientRect();
-          return [box.top + 3, box.bottom - 3].every((y) => {
-            const hit = document.elementFromPoint(box.left + Math.min(box.width / 2, 40), y);
-            return hit !== null && (hit === element || element.contains(hit));
-          });
-        });
-        expect(seen, await part.evaluate((element) => element.outerHTML.slice(0, 60))).toBe(true);
-      }
+      expect(await outOfSight(question), 'opened from the keyboard').toEqual([]);
+      await page.keyboard.press('Escape');
+      await expect(question).toHaveCount(0);
+
+      // Opened there by a press, it moves nothing, and - where the action
+      // could be scrolled to the bottom of what can be seen - reaches past
+      // it; the spelling typed into it brings it into sight.
+      const atTheBottom = await actionInSight(surface, CONTOSO, true);
+      const reaches = await surface.scroller.evaluate((element, name) => {
+        const action = [...element.querySelectorAll('button')].find((button) => button.getAttribute('aria-label') === name)!;
+        const end = element.querySelector('.inspector-actions')?.getBoundingClientRect().top ?? element.getBoundingClientRect().bottom;
+        return action.getBoundingClientRect().bottom > end - 8;
+      }, CONTOSO);
+      const pressedAt = await centre(atTheBottom);
+      await page.mouse.click(pressedAt.x, pressedAt.y);
+      await expect(field).toBeFocused();
+      expect(await under(page, pressedAt)).not.toBe('the yes');
+      if (reaches) expect(await outOfSight(question), 'opened by a press').not.toEqual([]);
+      await page.keyboard.type('contoso');
+      expect(await outOfSight(question), 'typed into').toEqual([]);
 
       // Typed out, then the yes clicked: checked.
-      await page.keyboard.type('contoso');
       await expect(yes).toBeEnabled();
       await yes.click();
       await expect(question).toHaveCount(0);

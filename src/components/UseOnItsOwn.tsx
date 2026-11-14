@@ -111,8 +111,9 @@ const MODIFIERS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 
  * meant for the yes from one that was not kept being found wanting. So only
  * typing fills the field (`typing`): a paste, a drop, a suggestion taken, an
  * undo, and a word put in at once with no keys for it are refused, and the
- * browser is asked for no suggestions to take. Once the spelling is typed,
- * the yes is an ordinary button.
+ * browser is asked for no suggestions to take. An Enter the field does not
+ * answer says why. Once the spelling is typed, the yes is an ordinary
+ * button.
  *
  * Keys typed in the field stay there, but for Tab, and Escape: Ctrl+Enter,
  * Alt+K and Alt+N neither approve, keep nor move on in review, and Enter
@@ -120,7 +121,7 @@ const MODIFIERS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 
  * when the spelling it asks about changes while it asks. Opened by a press,
  * the question takes the focus in its field and moves nothing under the
  * pointer (`afterAPress`); opened from the keyboard, it is brought into
- * sight.
+ * sight, and so it is by the first key typed in it after a press opened it.
  */
 export function UseOnItsOwnQuestion(props: QuestionProps) {
   const { rule } = props;
@@ -145,7 +146,10 @@ function Question({ rule, describedBy, note, disabled, onConfirm, onCancel }: Qu
   const [typed, setTyped] = useState('');
   // The keys pressed in the field since its last input, taken or refused: how much text put in at once may be.
   const keys = useRef(0);
-  const ready = !disabled && typedOut(typed, rule.to);
+  // An Enter the field did not answer, said until the field changes.
+  const [notYet, setNotYet] = useState(false);
+  const matches = typedOut(typed, rule.to);
+  const ready = !disabled && matches;
   useEffect(() => {
     const input = field.current;
     if (!afterAPress()) group.current?.scrollIntoView?.({ block: 'nearest' });
@@ -155,7 +159,10 @@ function Question({ rule, describedBy, note, disabled, onConfirm, onCancel }: Qu
     input?.addEventListener('beforeinput', refuse);
     return () => input?.removeEventListener('beforeinput', refuse);
   }, []);
-  const answer = () => { if (ready) onConfirm(); };
+  const answer = () => {
+    if (ready) onConfirm();
+    else if (!matches && typed.trim() !== '') setNotYet(true);
+  };
   return <div ref={group} className="rule-confirm" role="group" aria-label={`Use on its own: ${spellingLabel(rule)}`} aria-describedby={describedBy} onKeyDown={(event) => {
     if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); onCancel(); }
   }}>
@@ -168,6 +175,7 @@ function Question({ rule, describedBy, note, disabled, onConfirm, onCancel }: Qu
           keys.current = 0;
           if (!taken) return;
           setTyped(event.target.value);
+          setNotYet(false);
         }}
         onPaste={(event) => event.preventDefault()}
         onDrop={(event) => event.preventDefault()}
@@ -177,6 +185,8 @@ function Question({ rule, describedBy, note, disabled, onConfirm, onCancel }: Qu
           const composing = event.nativeEvent.isComposing || event.keyCode === 229;
           if ((event.key === 'Tab' || event.key === 'Escape') && !composing) return;
           event.stopPropagation();
+          // A key is no aim of the pointer: what it types is brought into sight.
+          group.current?.scrollIntoView?.({ block: 'nearest' });
           if (event.key !== 'Enter' || composing) return;
           event.preventDefault();
           if (!event.repeat && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) answer();
@@ -184,6 +194,7 @@ function Question({ rule, describedBy, note, disabled, onConfirm, onCancel }: Qu
     </label>
     <span className="rule-confirm-buttons"><button type="button" className="primary" disabled={!ready} onClick={answer}>Use on its own</button>
       <button type="button" onClick={onCancel}>Cancel</button></span>
+    <span className="rule-confirm-not-yet" role="status">{notYet && !matches ? <>That is not <q>{rule.to}</q>: type it as it is shown.</> : null}</span>
   </div>;
 }
 

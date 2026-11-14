@@ -274,15 +274,18 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // by Tab, the question "Use on its own" asks with its buttons cut off. A
   // control focused from the keyboard is scrolled clear of the buttons,
   // however tall they are now, never so far that its top leaves the panel;
-  // a control of that question brings the whole question clear. After a
-  // press nothing is scrolled until a key is pressed (`afterAPress`): not
-  // the control the press focused, so that the press lands on what was
-  // pressed, and not the question a press opened, whose scroll clear of the
-  // buttons brought its yes under the pointer for the press that came next.
-  const keepFocusInSight = (event: FocusEvent<HTMLElement>) => {
+  // a control of that question brings the whole question clear, and so
+  // does a key typed in it. After a press nothing is scrolled until a key
+  // is pressed (`afterAPress`): not the control the press focused, so that
+  // the press lands on what was pressed, and not the question a press
+  // opened, whose scroll clear of the buttons brought its yes under the
+  // pointer for the press that came next. Left where it opened, though,
+  // that question took the spelling typed into it in a field under the
+  // buttons; the first key brings it clear.
+  const keepFocusInSight = (event: FocusEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
     const panel = inspectorRef.current;
     const decision = actionsRef.current;
-    const focused = event.target;
+    const focused = event.target as HTMLElement;
     if (afterAPress() || !panel || !decision || decision.offsetHeight === 0 || decision.contains(focused)) return;
     const box = (focused.closest('.rule-confirm') ?? focused).getBoundingClientRect();
     const under = box.bottom + 12 - decision.getBoundingClientRect().top;
@@ -506,7 +509,8 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // The parts of the name being edited that the review is about, as they now read.
   const nameFlags = editable ? flaggedNameParts(joinFilename(stem, extension), flagged) : [];
   const reviewNote = item.reason && (item.status === 'review' || item.status === 'failed');
-  return <aside ref={inspectorRef} id={id} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown} onFocus={keepFocusInSight}>
+  return <aside ref={inspectorRef} id={id} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown} onFocus={keepFocusInSight}
+    onKeyDownCapture={(event) => { if ((event.target as HTMLElement).closest('.rule-confirm')) keepFocusInSight(event); }}>
     {/* A filed document's name is no longer its "current" one; it said so anyway (FRONTEND_UX-8). */}
     {/* Focusable so selecting a row can bring a keyboard user here, past the rest of the queue. */}
     <div className="inspector-title"><h2 ref={headingRef} tabIndex={-1}>{completed ? 'Filed document' : 'Review item'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close review"><Icon icon={X} /></button></div>
