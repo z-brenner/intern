@@ -615,11 +615,16 @@ pub fn validate_facts_at(
     // person, and a letter is a "Letter", for a person to complete, as one
     // typed by what it talks about is. As there, a type that is whole a
     // notice, a form or an agreement keeps its kind ("Re: Consent to
-    // Assignment of Lease"): a letter can be one.
+    // Assignment of Lease"): a letter can be one. And as there, a record
+    // the paper's own heading states too is the paper's type, whichever of
+    // the two lines the reply cited ("SITE INSPECTION REPORT" over "Re:
+    // Site Inspection Report - 12 Main Street").
+    let matter = |value: &str, line: &str| {
+        matter_opens_on_a_record(scope, value, line)
+            && !layout.titles_off_a_subject_line(scope, value)
+    };
     if let Some(value) = document_type.as_deref()
-        && type_line
-            .as_deref()
-            .is_some_and(|line| matter_opens_on_a_record(scope, value, line))
+        && type_line.as_deref().is_some_and(|line| matter(value, line))
     {
         push(&mut reasons, ReviewReason::TypeUnsupported);
         if layout.laid_out_as_letter(scope) && no_kind_of_its_own(Some(value)) {
@@ -685,7 +690,7 @@ pub fn validate_facts_at(
             !(layout.laid_out_as_letter(scope)
                 && no_kind_of_its_own(Some(inferred))
                 && (unit_holding(scope, line).is_some_and(|unit| talking(unit, line, inferred))
-                    || matter_opens_on_a_record(scope, inferred, line)))
+                    || matter(inferred, line)))
         });
         match inferred {
             Some((inferred, line)) => {
@@ -4612,6 +4617,38 @@ impl LetterLayout {
             // letter's own title.
             above.iter().any(|line| {
                 !names_a_matter(line) && contains_whole(&normalize_loosely(line), &wanted)
+            })
+        })
+    }
+
+    /// Whether the first page states `value` whole where a paper's own
+    /// title stands, off any "Re:" or "Subject:" line: above the greeting
+    /// of a paper that greets someone, as [`Self::states_above_salutation`]
+    /// reads it, and on a paper that greets no one in a heading or on a
+    /// line set in capitals, as [`title_of`] reads a title. A subject line
+    /// is one whatever marks of emphasis are set around it ("**Re: ...**").
+    fn titles_off_a_subject_line(self, scope: &ValidationScope<'_>, value: &str) -> bool {
+        let wanted = normalize_loosely(value);
+        let units = scope.index.units();
+        let first_page = units.iter().map(|unit| unit.page).min();
+        units.iter().any(|unit| {
+            if unit.running || Some(unit.page) != first_page {
+                return false;
+            }
+            let lines = unit.text.lines().collect::<Vec<_>>();
+            let above = match self.salutation {
+                Some((salutation, _)) if unit.ordinal > salutation => return false,
+                Some((salutation, at)) if unit.ordinal == salutation => {
+                    &lines[..at.min(lines.len())]
+                }
+                _ => &lines[..],
+            };
+            above.iter().any(|line| {
+                !names_a_matter(line.trim_matches(|c: char| c == '*' || c.is_whitespace()))
+                    && (self.salutation.is_some()
+                        || unit.kind == UnitKind::Heading
+                        || in_capitals(&tidy_case(line)))
+                    && contains_whole(&normalize_loosely(line), &wanted)
             })
         })
     }
@@ -17399,6 +17436,122 @@ Held on March 3, 2024 at the offices of Corvane Media Group LLC.";
             );
             assert!(outcome.reasons.contains(&ReviewReason::TypeInferred));
             assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        }
+    }
+
+    /// A surveyor's report sent as a letter is headed "SITE INSPECTION
+    /// REPORT" and says the same on its "Re:" line; a hospital's policy
+    /// repeats its heading in a "Subject:" field. The paper's own heading
+    /// states the type, so the subject line's record is no other paper,
+    /// whichever of the two lines the reply cited.
+    #[test]
+    fn a_record_the_papers_own_heading_states_too_is_its_type_whichever_line_was_cited() {
+        const REPORT: &str = "Site Inspection Report";
+        let letter = |heading: &str, subject: &str| {
+            format!(
+                "Northgate Engineering Ltd\n14 Mill Lane, Harrowby\n\n{heading}3 March 2024\n\n\
+                 Mr. Alan Reyes\nReyes Developments Ltd\n2 Dock Road, Harrowby\n\n{subject}\n\n\
+                 Dear Mr. Reyes,\n\nWe inspected the property on 28 February and found the roof \
+                 structure sound and the drainage in need of repair within the year.\n\n\
+                 Yours sincerely,\n\nPriya Nand\nChartered Surveyor"
+            )
+        };
+        let typed = |cites: &'static [&'static str]| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(REPORT.into()),
+                type_evidence: cites.iter().map(|needle| id_of(index, needle)).collect(),
+                document_date: Some("2024-03-03".into()),
+                date_evidence: vec![id_of(index, "3 March 2024")],
+                ..ModelFacts::default()
+            }
+        };
+        let headed = letter(
+            "SITE INSPECTION REPORT\n\n",
+            "Re: Site Inspection Report - 12 Main Street",
+        );
+        for cites in [
+            &["Re: Site"][..],
+            &["Re: Site", "SITE INSPECTION"],
+            &["SITE INSPECTION", "Re: Site"],
+            &["SITE INSPECTION"],
+            &[],
+        ] {
+            let (outcome, _) = facts_for(&headed, typed(cites));
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some(REPORT),
+                "{cites:?}: {:?}",
+                outcome.reasons
+            );
+            assert!(
+                !outcome.reasons.contains(&ReviewReason::TypeUnsupported)
+                    && !outcome.reasons.contains(&ReviewReason::TypeInferred),
+                "{cites:?}: {:?}",
+                outcome.reasons
+            );
+        }
+        // No heading of its own, or a heading that says something else:
+        // the subject line's record is the letter's matter. A subject line
+        // set in bold is no heading either.
+        for (heading, subject) in [
+            ("", "Re: Site Inspection Report - 12 Main Street"),
+            (
+                "STRUCTURAL SURVEY\n\n",
+                "Re: Site Inspection Report - 12 Main Street",
+            ),
+            ("", "**Re: Site Inspection Report - 12 Main Street**"),
+        ] {
+            let (outcome, _) = facts_for(&letter(heading, subject), typed(&["Re: Site"]));
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Letter"),
+                "{heading}{subject}: {:?}",
+                outcome.reasons
+            );
+            assert!(outcome.reasons.contains(&ReviewReason::TypeUnsupported));
+        }
+        // A paper that greets no one: its heading, or a line set in
+        // capitals, is where its own title stands.
+        let policy = |heading: &str, body: &str| {
+            format!(
+                "Harrowby General Hospital\n\n{heading}Subject: Hand Hygiene Policy\n\
+                 Policy Number: IC-104\nEffective Date: March 3, 2024\n\n1. Purpose\n\n{body}"
+            )
+        };
+        let cited_field = |index: &EvidenceIndex| ModelFacts {
+            document_type: Some("Hand Hygiene Policy".into()),
+            type_evidence: vec![id_of(index, "Subject:")],
+            document_date: Some("2024-03-03".into()),
+            date_evidence: vec![id_of(index, "Effective Date")],
+            ..ModelFacts::default()
+        };
+        const PURPOSE: &str = "Staff clean their hands before and after contact with a patient \
+                               or the patient's surroundings.";
+        let (outcome, _) = facts_for(&policy("HAND HYGIENE POLICY\n\n", PURPOSE), cited_field);
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Hand Hygiene Policy")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // A sentence of its text that mentions the record is no title.
+        for body in [
+            PURPOSE,
+            "The hand hygiene policy is enclosed for the ward's review.",
+        ] {
+            let (outcome, _) = facts_for(&policy("", body), cited_field);
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Hand Hygiene Policy")
+            );
+            assert!(
+                outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+                "{body}: {:?}",
+                outcome.reasons
+            );
         }
     }
 
