@@ -489,11 +489,50 @@ pub fn validate_facts(candidate: ModelProposal, scope: &ValidationScope<'_>) -> 
 }
 
 /// [`validate_facts`], with the current year given.
+///
+/// The reply is read as it always was, and that reading stands - but for
+/// one case. Where its name waits for a person already and would give a
+/// person and no one else, and one coined word stands under that person
+/// in the inside address and right over the street ([`is_coined_name`]:
+/// "PacifiCorp"), the reply is read once more with that word taken for
+/// the organization the letter is to; the second reading stands only when
+/// its name gives that organization, and such a name always waits. A name
+/// that would be filed is never reread, and neither is one that gives
+/// anyone else - the office a letter comes from, the two sides of a case:
+/// a word's shape renames nothing a document supports, and holds back
+/// nothing that was ready.
 pub fn validate_facts_at(
-    mut candidate: ModelProposal,
+    candidate: ModelProposal,
     scope: &ValidationScope<'_>,
     current_year: i32,
 ) -> ValidationOutcome {
+    let (outcome, person) = validate_reading(candidate.clone(), scope, current_year, None);
+    let Some(person) = person.filter(|_| outcome.status == ProposalStatus::NeedsReview) else {
+        return outcome;
+    };
+    let (reread, organization) = validate_reading(candidate, scope, current_year, Some(&person));
+    if organization.is_some() {
+        reread
+    } else {
+        outcome
+    }
+}
+
+/// One reading of a reply ([`validate_facts_at`]). `coined_for` is the
+/// person, loosely normalized, under whom one coined word in the inside
+/// address is taken for the organization; `None` reads no such word.
+///
+/// The second value is what the other reading needs to know. With no
+/// person given: the person the name gives alone, when one coined word
+/// stands under them and no one in the cast sends or issues the document
+/// on its own word. With a person given: the organization read from the
+/// coined word, when the name gives it.
+fn validate_reading(
+    mut candidate: ModelProposal,
+    scope: &ValidationScope<'_>,
+    current_year: i32,
+    coined_for: Option<&str>,
+) -> (ValidationOutcome, Option<String>) {
     let facts =
         without_stray_invisibles_in(candidate.facts.as_deref().cloned().unwrap_or_default());
     complete_candidate(&mut candidate, &facts, scope);
@@ -1067,6 +1106,7 @@ pub fn validate_facts_at(
     // supports, or none.
     let mut parties: Vec<(ValidatedParty, Option<u32>)> = Vec::new();
     let mut parties_supported = true;
+    let payees = payee_lines(scope, document_type.as_deref());
     for party in &facts.parties {
         let Some(written) = content(Some(party.name.as_str()), scope) else {
             parties_supported = false;
@@ -1117,11 +1157,11 @@ pub fn validate_facts_at(
         let copied = copied(scope, name);
         let role_support = match party.role {
             None | Some(PartyRole::Other) => Support::Absent,
-            Some(role) => role_support(scope, name, role, &party.evidence),
+            Some(role) => role_support(scope, name, role, &party.evidence, &payees),
         };
         let supported = matches!(role_support, Support::Cited | Support::Context);
         let document_role = (!supported && !copied)
-            .then(|| labeled_role(scope, name))
+            .then(|| labeled_role_past(scope, name, &payees))
             .flatten();
         // The role the document supports: the reply's, else the one its
         // own wording gives, else none. Someone copied is a bystander.
@@ -1235,6 +1275,11 @@ pub fn validate_facts_at(
     // "Examined by | Delphine Moncrieff, Associate Conservator", "/s/ Arlo
     // Sinclair-Ray" - unless a line names them as the one it is about or a
     // "between" clause makes them a party.
+    let organizations = parties
+        .iter()
+        .filter(|party| !party.copied && is_organization_name(&party.name))
+        .map(|party| party.name.clone())
+        .collect::<Vec<_>>();
     let standing = parties
         .iter()
         .map(|party| {
@@ -1244,6 +1289,12 @@ pub fn validate_facts_at(
                 // A label that gives them a party's role ("Recipient:",
                 // "Tenant:") outranks a signature or a post, and keeps the
                 // others' staff from taking them along.
+                Standing::Subject
+            } else if opens_the_answering_side(scope, &party.name, &organizations) {
+                // So does a court caption that opens its answering side
+                // with their name: "v. DOUG BURGUM, SECRETARY OF THE
+                // INTERIOR" is sued in that office, not staff of it -
+                // where the reply named no organization for that side.
                 Standing::Subject
             } else {
                 standing_of(scope, &party.name, class)
@@ -1467,6 +1518,14 @@ pub fn validate_facts_at(
     // person as the addressee gets the organization in their place. A
     // document of no known class laid out as a letter - an agency's
     // "Advisory Opinion" opening "Dear Mr. O'Kelly:" - is read the same way.
+    //
+    // One coined word under the person ([`is_coined_name`]) is read as
+    // the organization only for the person this reading was asked to read
+    // it for (`coined_for`), and is then remembered: a name that gives it
+    // waits for a person, below. Any other reading only notes the person
+    // such a word stands under, for [`validate_facts_at`] to decide on.
+    let mut read_by_shape = None;
+    let mut over_a_coined_word = None;
     if matches!(
         class,
         DocumentClass::Letter | DocumentClass::Notice | DocumentClass::Unknown
@@ -1524,8 +1583,29 @@ pub fn validate_facts_at(
                 .filter(|other| !other.copied && other.name != party.name)
                 .map(|other| other.name.clone())
                 .collect::<Vec<_>>();
-            let Some((name, unit)) = layout.addressee_organization(scope, &party.name, &named)
+            let person = normalize_loosely(&party.name);
+            let read_coined = coined_for == Some(person.as_str());
+            let Some((name, unit, coined)) =
+                layout.addressee_organization(scope, &party.name, &named, read_coined)
             else {
+                // A coined word under them is no organization on this
+                // reading. It may be on another, where the document
+                // supports no one as its sender or issuer: a letter an
+                // office sends is named from the office, whoever it is to.
+                if coined_for.is_none()
+                    && !parties.iter().any(|other| {
+                        !other.copied
+                            && other.name != party.name
+                            && other.role.is_some_and(|role| {
+                                matches!(role, PartyRole::Sender | PartyRole::Issuer)
+                            })
+                    })
+                    && layout
+                        .addressee_organization(scope, &party.name, &named, true)
+                        .is_some_and(|(_, _, coined)| coined)
+                {
+                    over_a_coined_word = Some(person);
+                }
                 // The letter is to the first person its inside address
                 // names; when no organization stands under them, it is to
                 // them, and a second addressee's organization does not
@@ -1573,6 +1653,9 @@ pub fn validate_facts_at(
             }
             if party.signatory {
                 continue;
+            }
+            if coined {
+                read_by_shape = Some(normalize_loosely(&display_name(&name)));
             }
             remember(
                 &Found {
@@ -1926,6 +2009,43 @@ pub fn validate_facts_at(
     if to_a_class || document_type.as_deref().is_some_and(memorandum_to_a_class) {
         push(&mut reasons, ReviewReason::PartyUnsupported);
     }
+    // A party too long to be a name waits for a person. A name is a few
+    // words; what runs past [`MAX_PARTY_NAME_CHARS`] is far more often a
+    // run of text the reply took for one - the recipients of a "To:" list
+    // in a row, a clause - and the filename, which sheds a party that does
+    // not fit ([`crate::naming`]), would be filed without it and without a
+    // word. The name is not changed. A real name of that length - a
+    // trustee's "..., as Trustee for ...", a union's local with its
+    // federation - waits too, though right.
+    if relation
+        .parties
+        .iter()
+        .any(|name| name.chars().count() > MAX_PARTY_NAME_CHARS)
+    {
+        push(&mut reasons, ReviewReason::PartyUnsupported);
+    }
+    // So does a name that gives an organization read from one coined word
+    // under the addressee: its place and its shape say it is the
+    // organization ("PacifiCorp"), and a word the extraction ran together
+    // has the same shape in the same place.
+    let read_by_shape = read_by_shape.filter(|shaped| {
+        relation
+            .parties
+            .iter()
+            .any(|name| normalize_loosely(name) == *shaped)
+    });
+    if read_by_shape.is_some() {
+        push(&mut reasons, ReviewReason::PartyUnsupported);
+    }
+    // What the other reading asks of this one ([`validate_facts_at`]): the
+    // person this name gives and no one else, a coined word under them -
+    // or, read for that person, the organization the name now gives.
+    let other_reading = match coined_for {
+        Some(_) => read_by_shape,
+        None => over_a_coined_word.filter(|person| {
+            matches!(relation.parties.as_slice(), [only] if normalize_loosely(only) == *person)
+        }),
+    };
 
     // The subject, the identifier and the key facts: every number and name
     // in them must be in what the model was shown, and the subject and a
@@ -2208,7 +2328,7 @@ pub fn validate_facts_at(
     } else {
         ProposalStatus::NeedsReview
     };
-    ValidationOutcome {
+    let outcome = ValidationOutcome {
         proposal: ValidatedProposal {
             document_type,
             document_date,
@@ -2236,7 +2356,8 @@ pub fn validate_facts_at(
             support,
             evidence: references,
         }),
-    }
+    };
+    (outcome, other_reading)
 }
 
 /// How the guards find the statements of the date validation settled on:
@@ -4125,16 +4246,32 @@ fn role_words(role: PartyRole) -> (&'static [&'static str], &'static [&'static s
 /// ([`Support::Context`]) - a role word labeling the name, a defined term
 /// after it, a page-one letterhead for an issuer or sender, or the issuer
 /// and customer cues of an issued document on its line.
+///
+/// `payees`: the units that are a payment slip's "To:" line
+/// ([`payee_lines`]), which names who is paid: the party its value opens
+/// with ([`paid_on`]) and no other the unit happens to hold.
 fn role_support(
     scope: &ValidationScope<'_>,
     name: &str,
     role: PartyRole,
     cited: &[String],
+    payees: &[u32],
 ) -> Support {
     let normalized = normalize(name);
     let loose = normalize_loosely(name);
     let letter = LetterLayout::of(scope);
     let supports = |unit: &EvidenceUnit| {
+        // A payment slip's "To:" line names who is paid: for that party
+        // it is no one the document is to, and the issuing side. Anyone
+        // else the unit holds - the customer a reader ran into the same
+        // line - is read as on any line.
+        if payees.contains(&unit.ordinal) && paid_on(unit, &loose) {
+            match role {
+                PartyRole::Recipient | PartyRole::Addressee => return false,
+                PartyRole::Issuer | PartyRole::Vendor | PartyRole::Seller => return true,
+                _ => {}
+            }
+        }
         let header = table_header_line(scope, unit);
         unit_supports_role(
             unit,
@@ -4182,6 +4319,13 @@ const LABELED_ROLES: [PartyRole; 18] = [
 /// shown gives `name` in its own words: a label, a defined term, a
 /// letterhead, an issuer or customer cue.
 fn labeled_role(scope: &ValidationScope<'_>, name: &str) -> Option<PartyRole> {
+    labeled_role_past(scope, name, &[])
+}
+
+/// [`labeled_role`], a payment slip's "To:" lines (`payees`, from
+/// [`payee_lines`]) not labeling the party they pay ([`paid_on`]) as one
+/// the document is to.
+fn labeled_role_past(scope: &ValidationScope<'_>, name: &str, payees: &[u32]) -> Option<PartyRole> {
     let normalized = normalize(name);
     let loose = normalize_loosely(name);
     let naming = scope
@@ -4194,6 +4338,12 @@ fn labeled_role(scope: &ValidationScope<'_>, name: &str) -> Option<PartyRole> {
     let letter = LetterLayout::of(scope);
     LABELED_ROLES.into_iter().find(|role| {
         naming.iter().any(|unit| {
+            if payees.contains(&unit.ordinal)
+                && matches!(role, PartyRole::Recipient | PartyRole::Addressee)
+                && paid_on(unit, &loose)
+            {
+                return false;
+            }
             let header = table_header_line(scope, unit);
             unit_supports_role(
                 unit,
@@ -4206,6 +4356,89 @@ fn labeled_role(scope: &ValidationScope<'_>, name: &str) -> Option<PartyRole> {
             )
         })
     })
+}
+
+/// Whether a payment slip's "To:" line pays the party named `loose`,
+/// loosely normalized: what follows its "To" opens with the name, whole.
+/// A reader that ran two columns into one line leaves the customer on the
+/// same line, after the supplier's address ("To: Corbin Vale Plant Limited
+/// Mill Farm Dalton Road Customer Saltmarsh Point Borough Council"): the
+/// line pays the party it opens with and says nothing of the other.
+fn paid_on(unit: &EvidenceUnit, loose: &str) -> bool {
+    let text = unit
+        .text
+        .trim_start_matches(|c: char| c == '|' || c.is_whitespace());
+    let Some(value) = text
+        .get(..2)
+        .filter(|to| to.eq_ignore_ascii_case("to"))
+        .map(|_| &text[2..])
+    else {
+        return false;
+    };
+    let value = normalize_loosely(
+        value.trim_start_matches(|c: char| matches!(c, ':' | '|' | '.') || c.is_whitespace()),
+    );
+    !loose.is_empty()
+        && value
+            .strip_prefix(loose)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+}
+
+/// The "To:" lines of an invoice's payment slip, by their units'
+/// ordinals. Many invoices end in a tear-off slip the customer sends back
+/// with the payment, headed "PAYMENT ADVICE" over "To:" and the supplier's
+/// name and address: there "To:" names who is paid - whoever issued the
+/// invoice - and not who the invoice is to. For the party its value opens
+/// with ([`paid_on`]) such a line labels no recipient or addressee, and
+/// supports the reply's issuer, vendor or seller as a line that says
+/// where payment goes does ([`PAYMENT_ADDRESS_CUES`]).
+///
+/// Only on an issued document that is no payment's own advice: a
+/// remittance or payment advice the payer sends is to the party it names
+/// so. And only under a "Payment Advice" line that is not the document's
+/// own title - neither the first heading of its first page nor its first
+/// line - whatever the reply called the document.
+fn payee_lines(scope: &ValidationScope<'_>, document_type: Option<&str>) -> Vec<u32> {
+    let type_words = words(document_type.unwrap_or_default());
+    let advice = ["payment".to_owned(), "advice".to_owned()];
+    if DocumentClass::of(document_type) != DocumentClass::Issued
+        || type_words.iter().any(|word| word == "remittance")
+        || !phrase_positions(&type_words, &advice).is_empty()
+    {
+        return Vec::new();
+    }
+    let units = scope
+        .index
+        .units()
+        .iter()
+        .filter(|unit| !unit.running)
+        .collect::<Vec<_>>();
+    let first_page = units.iter().map(|unit| unit.page).min();
+    let first_line = units.first().map(|unit| unit.ordinal);
+    let first_heading = units
+        .iter()
+        .find(|unit| Some(unit.page) == first_page && unit.kind == UnitKind::Heading)
+        .map(|unit| unit.ordinal);
+    let labeled_to = |unit: &EvidenceUnit| {
+        unit.label
+            .as_deref()
+            .is_some_and(|label| normalize(label).trim_end_matches([':', '.']).trim() == "to")
+            || unit
+                .normalized
+                .strip_prefix("to")
+                .is_some_and(|rest| rest.trim_start().starts_with(':'))
+    };
+    units
+        .windows(2)
+        .filter(|pair| {
+            let advice = Some(pair[0].ordinal);
+            normalize_loosely(&pair[0].text) == "payment advice"
+                && advice != first_line
+                && advice != first_heading
+                && labeled_to(pair[1])
+        })
+        .map(|pair| pair[1].ordinal)
+        .collect()
 }
 
 /// The header row of the table a row unit belongs to, as its first line
@@ -4405,12 +4638,20 @@ impl LetterLayout {
     /// Resource", "Daily Telegraph"), and the organization a post is held
     /// at ("Chair, Home Affairs Select Committee"). Its lines may be
     /// broken by "<br>" in a table's cell.
+    ///
+    /// With `coined`, a line of one coined word under the person and right
+    /// over the street is the organization too ([`is_coined_name`]:
+    /// "PacifiCorp", "Public.Resource.Org"): the place says what the word
+    /// alone cannot. The third value says the line was taken so, by its
+    /// shape - which a word the extraction ran together can share (a
+    /// person's "JaneDoe", a delivery note's "HandDelivered").
     fn addressee_organization<'a>(
         self,
         scope: &ValidationScope<'a>,
         person: &str,
         replied: &[String],
-    ) -> Option<(String, &'a EvidenceUnit)> {
+        coined: bool,
+    ) -> Option<(String, &'a EvidenceUnit, bool)> {
         let (salutation, _) = self.salutation?;
         let person = normalize_loosely(person);
         let in_address = |unit: &EvidenceUnit| self.in_address(unit);
@@ -4469,8 +4710,10 @@ impl LetterLayout {
             // of Rail / Transport Scotland").
             let mut under_a_post = false;
             let mut found = None;
-            for raw in below.iter().take(5) {
-                if is_address_line(raw) && !is_organization(raw) {
+            let mut shaped = false;
+            let street = |raw: &str| is_address_line(raw) && !is_organization(raw);
+            for (at, raw) in below.iter().take(5).enumerate() {
+                if street(raw) {
                     break;
                 }
                 let line = raw.trim_end_matches([',', ';', '|', '\\']).trim();
@@ -4508,6 +4751,15 @@ impl LetterLayout {
                     found = Some(line.to_owned());
                     break;
                 }
+                // One coined word, the street's line right under it.
+                if coined
+                    && is_coined_name(line)
+                    && below.get(at + 1).is_some_and(|next| street(next))
+                {
+                    found = Some(line.to_owned());
+                    shaped = true;
+                    break;
+                }
             }
             found
                 .or_else(|| {
@@ -4523,7 +4775,7 @@ impl LetterLayout {
                     (is_organization(above) && !holds_a_post(above) && !is_address_line(above))
                         .then(|| above.to_owned())
                 })
-                .map(|name| (name, *unit))
+                .map(|name| (name, *unit, shaped))
         })
     }
 
@@ -5789,6 +6041,57 @@ const HONORIFICS: &[&str] = &[
     "fr",
 ];
 
+/// Whether a line is one coined word of the kind a company is named by:
+/// two or more capitalized parts of at least three letters each, run
+/// together ("PacifiCorp", "MediaWorks") or joined by dots
+/// ("Public.Resource.Org"), with no figure and no other mark in it. Set
+/// apart, its parts must read as an organization's line would
+/// ([`organization_line`]): a post, a greeting or a street the extraction
+/// ran together is none ("ChiefExecutive", "DearSir", "RiversideHouse").
+/// Three letters keep out the scraps a scan leaves ("AllN", "C.Sgh",
+/// "IfDEQ"), an initial before a name ("J.Smith", "D.Phil") and a
+/// surname's particle ("McKenzie", "DuBois", "LaSalle"); the longer
+/// particles are named. A web address is no name ("www.Example.Org").
+///
+/// The shape is a company's as often as not, never surely: "SeaTac" is a
+/// city, "JaneDoe" a person and "HandDelivered" a note run together. Only
+/// the inside address reads it, under the addressee and right over the
+/// street ([`LetterLayout::addressee_organization`]), only for a name that
+/// waits already and would give that person alone
+/// ([`validate_facts_at`]), and a name it gives waits for a person.
+fn is_coined_name(line: &str) -> bool {
+    const PARTICLES: &[&str] = &["mac", "van", "von", "fitz", "del", "des", "der", "den"];
+    let word = line.trim();
+    if word.is_empty() || !word.chars().all(|c| c.is_alphabetic() || c == '.') {
+        return false;
+    }
+    // Its parts: what the dots join, and in each, what a capital after a
+    // small letter opens.
+    let mut parts: Vec<String> = Vec::new();
+    for piece in word.split('.') {
+        let mut part = String::new();
+        let mut previous_lower = false;
+        for character in piece.chars() {
+            if character.is_uppercase() && previous_lower {
+                parts.push(std::mem::take(&mut part));
+            }
+            previous_lower = character.is_lowercase();
+            part.push(character);
+        }
+        parts.push(part);
+    }
+    parts.len() >= 2
+        && parts.iter().all(|part| {
+            let mut letters = part.chars();
+            part.chars().count() >= 3
+                && letters.next().is_some_and(char::is_uppercase)
+                && letters.all(char::is_lowercase)
+        })
+        && !parts[0].eq_ignore_ascii_case("www")
+        && !PARTICLES.contains(&parts[0].to_lowercase().as_str())
+        && organization_line(&parts.join(" "))
+}
+
 /// Whether a line names an organization the way an inside address or a
 /// signature block writes one: a short line of capitalized words with no
 /// figure, no post, no street and no greeting in it - "OFCOM", "Daily
@@ -6419,6 +6722,14 @@ fn memorandum_to_a_class(document_type: &str) -> bool {
             && names_a_class_of_recipients(&type_words[at + 2..].join(" "))
     })
 }
+
+/// The longest a party in a name may be before the name waits for a
+/// person: a chosen number, not a derived one. A long name of one party
+/// runs to sixty-odd characters ("London & South Eastern Railways Limited
+/// (trading as Southeastern)" is 65), and with a date, a type and an
+/// extension around it a longer one leaves a filename of
+/// [`crate::naming::MAX_FILENAME_CHARS`] little room for anything else.
+const MAX_PARTY_NAME_CHARS: usize = 70;
 
 /// Whether a person signs for one of `organizations`: a unit names them,
 /// then a job title, then the organization - "Harriet Voss, Vice President
@@ -7255,10 +7566,17 @@ fn between_cue(context: &ScopeView, cast: &[CastMember]) -> bool {
 }
 
 /// Whether a word is a role's own label - "Tenant", "Buyer", "Plaintiff" -
-/// or a field's - "Name", "Account" - which names no one.
+/// or a field's - "Name", "Account" - which names no one. A side of a case
+/// is labeled in the plural as often as not ("Defendants", "Plaintiffs"),
+/// and a bankruptcy's is its "Debtor" or "Debtors".
 fn is_role_word(word: &str) -> bool {
-    BRINGING_SIDE.contains(&word)
-        || ANSWERING_SIDE.contains(&word)
+    let side = |word: &str| {
+        BRINGING_SIDE.contains(&word)
+            || ANSWERING_SIDE.contains(&word)
+            || DEBTOR_LABELS.contains(&word)
+    };
+    side(word)
+        || word.strip_suffix('s').is_some_and(side)
         || matches!(word, "name" | "account")
         || crate::cues::PARTY_LABELS.contains(&word)
         || PartyRole::ALL
@@ -7384,6 +7702,8 @@ struct CaptionLayout {
     /// Whether the answering side's label closes its names: a caption with
     /// no label sets out its sides, but nothing says where the second ends.
     answering_closed: bool,
+    /// Whether the bringing side's label closes its names, before "v.".
+    bringing_closed: bool,
 }
 
 impl CaptionLayout {
@@ -7461,8 +7781,92 @@ impl CaptionLayout {
             bringing: start..bringing_end,
             answering: versus..answering_end,
             answering_closed: answering_label.is_some(),
+            bringing_closed: bringing_label.is_some(),
         })
     }
+}
+
+/// Whether a person's name opens the answering side of the case a court
+/// document's caption sets out: the first name right after "v.", in a
+/// caption that closes each side with its label. An official sued in
+/// their office is written so - "v. DOUG BURGUM, SECRETARY OF THE
+/// INTERIOR; ..." - and is that side of the case, whatever post follows
+/// the name: cases are cited by the names that open their sides.
+///
+/// Only where the reply named no organization for that side:
+/// `organizations` are the cast's, and each must stand on the bringing
+/// side of the caption. An agency the reply named beside its officer is
+/// the party, as it always was.
+///
+/// Anyone else a caption names keeps the standing their post gives them:
+/// the second official on a side, a judge a reader ran into the caption's
+/// column, and everyone on the bringing side - where a side opens is plain
+/// only after "v.", not under a court's heading, whose lines a party's own
+/// can read like ("STATE OF OHIO ex rel."). A court form that labels no
+/// sides sets out none to open.
+fn opens_the_answering_side(
+    scope: &ValidationScope<'_>,
+    name: &str,
+    organizations: &[String],
+) -> bool {
+    let caption = caption_units(scope);
+    let text = caption_text(&caption);
+    let Some(layout) = CaptionLayout::of(&text, &caption) else {
+        return false;
+    };
+    if !(layout.bringing_closed && layout.answering_closed) {
+        return false;
+    }
+    let loose = normalize_loosely(name);
+    if loose.is_empty() {
+        return false;
+    }
+    let brings = |organization: &String| {
+        whole_positions(&text, &normalize_loosely(organization))
+            .into_iter()
+            .any(|at| layout.bringing.contains(&at))
+    };
+    // The side opens right after the versus word, with the name.
+    let opens = text[layout.answering.start..]
+        .split_once(' ')
+        .and_then(|(_, rest)| {
+            rest.trim_start_matches(|character: char| !character.is_alphanumeric())
+                .strip_prefix(loose.as_str())
+        })
+        .is_some_and(|rest| !rest.starts_with(char::is_alphanumeric));
+    // And with the whole name: as the caption writes it, a comma or a
+    // semicolon ends it ("v. ODALYS BRANDT, SECRETARY OF ..."). A company
+    // whose name begins like a person's ("v. BRANDT SHIPPING CO.,") opens
+    // its side itself.
+    let written = caption_cells(&caption)
+        .into_iter()
+        .flat_map(|(_, words)| words)
+        .collect::<Vec<_>>();
+    let forum_word = |word: &&str| {
+        let word = caption_word(word);
+        FORUM_WORDS.contains(&word.as_str())
+            || word
+                .strip_suffix('s')
+                .is_some_and(|word| FORUM_WORDS.contains(&word))
+    };
+    let name = loose.split(' ').collect::<Vec<_>>();
+    let closed = written
+        .iter()
+        .position(forum_word)
+        .and_then(|forum| {
+            written[forum..]
+                .iter()
+                .position(|word| VERSUS_WORDS.contains(&caption_word(word).as_str()))
+                .map(|versus| forum + versus + 1)
+        })
+        .and_then(|start| written.get(start..start + name.len()))
+        .is_some_and(|run| {
+            run.iter()
+                .zip(&name)
+                .all(|(word, part)| normalize_loosely(word) == *part)
+                && run.last().is_some_and(|last| last.ends_with([',', ';']))
+        });
+    opens && closed && organizations.iter().all(brings)
 }
 
 /// How far after "v." a caption's answering side and its label can run.
@@ -11717,6 +12121,441 @@ Date of notice: August 12, 2026";
         );
     }
 
+    /// The end of a name stands alone on a line wherever the name is
+    /// wrapped (a letterhead set over two lines, a scan's capitals
+    /// scattered or not) and wherever a table heads a column, or a form
+    /// labels a line, with the words a name ends on. A reply that gave only
+    /// that end is completed from the place that writes the name whole,
+    /// though a line holds the end by itself: nothing in a layout tells a
+    /// name set out whole from the second line of a longer one.
+    #[test]
+    fn the_end_of_a_name_alone_on_a_line_is_still_completed() {
+        const INVOICE: &str = "EMBer POSt\nMANUFACtURInG LLC\n12 Quay Street, Brackenridge\n\n\
+INVOICE\n\nInvoice No.: INV-10438\n\nInvoice Date: May 1, 2025\n\n\
+Bill To: Quillon Ridge Bakery, Inc.\n\n\
+Display shelving for the bakery counter, $1,248.00\n\n\
+Please make cheques payable to Ember Post Manufacturing LLC within 30 days of the invoice date.";
+        let (outcome, _) = facts_for(INVOICE, |index| ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec![id_of(index, "INVOICE")],
+            document_date: Some("2025-05-01".into()),
+            date_evidence: vec![id_of(index, "Invoice Date")],
+            parties: vec![
+                party(
+                    "MANUFACTURING LLC",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "MANUFACtURInG")],
+                ),
+                party(
+                    "Quillon Ridge Bakery, Inc.",
+                    Some(PartyRole::Customer),
+                    &[id_of(index, "Bill To")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Ember Post Manufacturing LLC"]
+        );
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+
+        // A letter under the same letterhead, the reply naming its sender
+        // by the second line alone.
+        const LETTER: &str = "EMBER POST\nMANUFACTURING LLC\n\nLETTER OF INSTRUCTION\n\n\
+May 1, 2025\n\n\
+Quillon Ridge Bakery, Inc.\n44 Mill Lane\nBrackenridge, OR 97232\n\n\
+Dear Sirs,\n\n\
+Ember Post Manufacturing LLC instructs you to release the shelving held to our order.\n\n\
+Sincerely,\n\nOdalys Brandt\nDirector";
+        let (outcome, _) = facts_for(LETTER, |index| ModelFacts {
+            document_type: Some("Letter of Instruction".into()),
+            type_evidence: vec![id_of(index, "LETTER OF INSTRUCTION")],
+            document_date: Some("2025-05-01".into()),
+            date_evidence: vec![id_of(index, "May 1, 2025")],
+            parties: vec![party(
+                "Manufacturing LLC",
+                Some(PartyRole::Sender),
+                &[id_of(index, "MANUFACTURING LLC")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Ember Post Manufacturing LLC"]
+        );
+
+        // A table that heads a column with the words the name ends on, the
+        // reply naming the heading.
+        const BILL: &str = "UTILITY BILL\n\nBilling Date: May 2, 2019\n\n\
+| Water Authority | Account | Amount Due |\n\
+| --- | --- | --- |\n\
+| Harlow Basin Water Authority | 1234-77 | $58.20 |\n\n\
+Bill To: Quillon Ridge Bakery, Inc.\n\n\
+Please make cheques payable to Harlow Basin Water Authority within 30 days.";
+        let (outcome, _) = facts_for(BILL, |index| ModelFacts {
+            document_type: Some("Utility Bill".into()),
+            type_evidence: vec![id_of(index, "UTILITY BILL")],
+            document_date: Some("2019-05-02".into()),
+            date_evidence: vec![id_of(index, "Billing Date")],
+            parties: vec![
+                party(
+                    "Water Authority",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "payable to")],
+                ),
+                party(
+                    "Quillon Ridge Bakery, Inc.",
+                    Some(PartyRole::Customer),
+                    &[id_of(index, "Bill To")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Harlow Basin Water Authority"]
+        );
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+
+        // A signature block's label that is the name's last word.
+        const AGREEMENT: &str = "SERVICES AGREEMENT\n\nDated May 2, 2019\n\n\
+This Agreement is made between Acme Widget Company (the \"Company\") and Odalys Brandt \
+(the \"Consultant\").\n\n\
+COMPANY:\n\nBy: ____________\n\nCONSULTANT:\n\nBy: ____________";
+        let (outcome, _) = facts_for(AGREEMENT, |index| ModelFacts {
+            document_type: Some("Services Agreement".into()),
+            type_evidence: vec![id_of(index, "SERVICES AGREEMENT")],
+            document_date: Some("2019-05-02".into()),
+            date_evidence: vec![id_of(index, "Dated")],
+            parties: vec![
+                party(
+                    "Company",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "between")],
+                ),
+                party(
+                    "Odalys Brandt",
+                    Some(PartyRole::Contractor),
+                    &[id_of(index, "between")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Acme Widget Company", "Odalys Brandt"]
+        );
+    }
+
+    /// real2-notice-04's and real3-notice-08's shape: a court notice whose
+    /// text names a side by its label in the plural, "Defendants Tavistock
+    /// Boatworks, Inc. and ...". The label is no part of the name, as the
+    /// singular never was.
+    #[test]
+    fn a_side_labeled_in_the_plural_is_no_part_of_the_name_it_labels() {
+        for label in [
+            "plaintiffs",
+            "defendants",
+            "appellants",
+            "respondents",
+            "petitioners",
+            "appellees",
+            "claimants",
+            "debtor",
+            "debtors",
+        ] {
+            assert!(is_role_word(label), "{label}");
+        }
+        for word in ["holdings", "partners", "s", "calms"] {
+            assert!(!is_role_word(word), "{word}");
+        }
+        const NOTICE: &str = "SUPERIOR COURT OF THE STATE OF WASHINGTON\n\n\
+NOTICE OF DEPOSITION\n\n\
+May 2, 2019\n\n\
+Please take notice that Plaintiff will take the deposition upon oral examination of \
+Defendants Tavistock Boatworks, Inc. d/b/a Harbor Yard and Corvane Marine LLC.";
+        let (outcome, _) = facts_for(NOTICE, |index| ModelFacts {
+            document_type: Some("Notice of Deposition".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF DEPOSITION")],
+            document_date: Some("2019-05-02".into()),
+            date_evidence: vec![id_of(index, "May 2, 2019")],
+            parties: vec![party(
+                "Tavistock Boatworks, Inc.",
+                Some(PartyRole::Recipient),
+                &[id_of(index, "Please take notice")],
+            )],
+            ..ModelFacts::default()
+        });
+        let facts = outcome.facts.expect("facts");
+        assert_eq!(
+            facts
+                .parties
+                .iter()
+                .map(|party| party.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Tavistock Boatworks, Inc."]
+        );
+    }
+
+    /// real5-invoice-06's shape: an invoice that ends in the slip its
+    /// customer sends back with the payment, "PAYMENT ADVICE" over "To:"
+    /// and the supplier's name. The slip's "To:" names who is paid, so the
+    /// supplier is no recipient and the reply's vendor is supported: the
+    /// invoice is from the supplier, not from the customer it was read as
+    /// being sent by. A "To:" line anywhere else labels a recipient as
+    /// before, and so does the "To:" of a payment advice that is the
+    /// document itself, by its type or by its title.
+    ///
+    /// The slip pays the party its "To:" opens with and no other: a
+    /// customer a reader ran into the same line is no vendor for standing
+    /// on it, whatever the reply called them.
+    #[test]
+    fn the_to_line_of_an_invoices_payment_slip_names_who_is_paid() {
+        const INVOICE: &str = "TAX INVOICE\n\n\
+Invoice Date: 9 Sep 2025\n\n\
+Invoice Number: INV-8129\n\n\
+Saltmarsh Point Borough Council\nThe Quays, Brunel Way\n\n\
+Corbin Vale Plant Limited\nMill Farm, Dalton Road\n\n\
+Drainage works completed, 42,350.00\n\n\
+Amount due GBP 53,220.00\n\n\
+PAYMENT ADVICE\n\n\
+To: Corbin Vale Plant Limited, Mill Farm, Dalton Road\n\n\
+Customer: Saltmarsh Point B. Council, The Quays\n\n\
+Amount Enclosed: enter the amount you are paying above";
+        let reply = |text: &str, document_type: &str, supplier: PartyRole, customer: PartyRole| {
+            facts_for(text, |index| ModelFacts {
+                document_type: Some(document_type.into()),
+                document_date: Some("2025-09-09".into()),
+                parties: vec![
+                    party(
+                        "Saltmarsh Point Borough Council",
+                        Some(customer),
+                        &[id_of(index, "Saltmarsh Point Borough Council")],
+                    ),
+                    party(
+                        "Corbin Vale Plant Limited",
+                        Some(supplier),
+                        &[id_of(index, "Corbin Vale Plant Limited")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            })
+        };
+        let slips = |text: &str, document_type: &str| {
+            let index = index_of(text);
+            let context = whole(&index);
+            let scope = ValidationScope::new(&index, &context, &[]);
+            payee_lines(&scope, Some(document_type))
+                .into_iter()
+                .map(|ordinal| index.units()[ordinal as usize].text.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            slips(INVOICE, "Tax Invoice"),
+            vec!["To: Corbin Vale Plant Limited, Mill Farm, Dalton Road"]
+        );
+        for supplier in [PartyRole::Vendor, PartyRole::Seller, PartyRole::Issuer] {
+            let (outcome, _) = reply(INVOICE, "Tax Invoice", supplier, PartyRole::Customer);
+            assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["Corbin Vale Plant Limited"],
+                "{supplier:?}"
+            );
+            assert!(
+                !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+                "{supplier:?}: {:?}",
+                outcome.reasons
+            );
+        }
+        // The slip's "To:" labels the supplier no recipient, whatever the
+        // reply called them or left unsaid: the invoice is never named
+        // from its customer for it.
+        for supplier in [Some(PartyRole::Recipient), None] {
+            let (outcome, _) = facts_for(INVOICE, |index| ModelFacts {
+                document_type: Some("Tax Invoice".into()),
+                document_date: Some("2025-09-09".into()),
+                parties: vec![
+                    party(
+                        "Saltmarsh Point Borough Council",
+                        Some(PartyRole::Customer),
+                        &[id_of(index, "Saltmarsh Point Borough Council")],
+                    ),
+                    party(
+                        "Corbin Vale Plant Limited",
+                        supplier,
+                        &[id_of(index, "Corbin Vale Plant Limited")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            });
+            assert_ne!(
+                outcome.proposal.parties,
+                vec!["Saltmarsh Point Borough Council"],
+                "{supplier:?}"
+            );
+            let facts = outcome.facts.expect("facts");
+            let paid = facts
+                .parties
+                .iter()
+                .find(|party| party.name == "Corbin Vale Plant Limited")
+                .expect("the supplier");
+            assert!(
+                !matches!(paid.role, Some(PartyRole::Recipient | PartyRole::Addressee)),
+                "{supplier:?}: {:?}",
+                paid.role
+            );
+        }
+        // A reader ran the slip's two columns into one line: the supplier,
+        // its address, then the customer under the other column's label.
+        // The line pays the supplier it opens with. It says nothing of the
+        // council, and a reply that called the council the vendor, the
+        // seller or the issuer has no support for it there: the name
+        // waits with no party, as it did before the slip was read.
+        let merged = INVOICE.replace(
+            "To: Corbin Vale Plant Limited, Mill Farm, Dalton Road\n\n\
+Customer: Saltmarsh Point B. Council, The Quays",
+            "To: Corbin Vale Plant Limited Mill Farm Dalton Road Customer \
+Saltmarsh Point Borough Council",
+        );
+        assert_ne!(merged, INVOICE);
+        let (outcome, _) = reply(
+            &merged,
+            "Tax Invoice",
+            PartyRole::Vendor,
+            PartyRole::Customer,
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(outcome.proposal.parties, vec!["Corbin Vale Plant Limited"]);
+        for (supplier, council) in [
+            (PartyRole::Customer, PartyRole::Vendor),
+            (PartyRole::Customer, PartyRole::Issuer),
+            (PartyRole::Buyer, PartyRole::Seller),
+            (PartyRole::Recipient, PartyRole::Issuer),
+        ] {
+            let (outcome, _) = reply(&merged, "Tax Invoice", supplier, council);
+            assert!(
+                outcome.proposal.parties.is_empty(),
+                "{council:?}: {:?}",
+                outcome.proposal.parties
+            );
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview, "{council:?}");
+            assert!(
+                outcome.reasons.contains(&ReviewReason::PartyMissing),
+                "{council:?}: {:?}",
+                outcome.reasons
+            );
+        }
+        let pays = |line: &str, name: &str| {
+            let index = index_of(line);
+            paid_on(&index.units()[0], &normalize_loosely(name))
+        };
+        for (line, name, paid) in [
+            (
+                "To: Corbin Vale Plant Limited, Mill Farm",
+                "Corbin Vale Plant Limited",
+                true,
+            ),
+            (
+                "| To | Corbin Vale Plant Limited |",
+                "Corbin Vale Plant Limited",
+                true,
+            ),
+            (
+                "TO : CORBIN VALE PLANT LIMITED",
+                "Corbin Vale Plant Limited",
+                true,
+            ),
+            (
+                "To: Corbin Vale Plant Limited Customer Saltmarsh Point Borough Council",
+                "Saltmarsh Point Borough Council",
+                false,
+            ),
+            // A name the value only begins like is another's.
+            ("To: Corbin Vale Plant Limited", "Corbin Vale Plant", true),
+            (
+                "To: Corbin Vale Plantations Limited",
+                "Corbin Vale Plant",
+                false,
+            ),
+            (
+                "To: The Corbin Vale Plant Limited",
+                "Corbin Vale Plant Limited",
+                false,
+            ),
+        ] {
+            assert_eq!(pays(line, name), paid, "{line} / {name}");
+        }
+
+        // Under any other heading the "To:" line says who the document is
+        // to, as it did: the supplier is read as the receiving side.
+        let delivery = INVOICE.replace("PAYMENT ADVICE", "DELIVERY ADVICE");
+        assert!(slips(&delivery, "Tax Invoice").is_empty());
+        let (outcome, _) = reply(
+            &delivery,
+            "Tax Invoice",
+            PartyRole::Vendor,
+            PartyRole::Customer,
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Saltmarsh Point Borough Council"]
+        );
+        // A payment advice the payer sends is to the party its "To:"
+        // names: by its type, wherever its heading stands, and by its
+        // title, whatever the reply called it.
+        const ADVICE: &str = "PAYMENT ADVICE\n\n\
+To: Corbin Vale Plant Limited, Mill Farm, Dalton Road\n\n\
+From: Saltmarsh Point Borough Council\n\n\
+Date: 9 Sep 2025\n\n\
+We have today paid your invoice INV-8129 in the sum of 53,220.00.";
+        assert!(slips(ADVICE, "Invoice").is_empty());
+        assert!(slips(ADVICE, "Remittance Advice").is_empty());
+        // Its title is its first line, though the first heading a reader
+        // found stands further down the page.
+        let unheaded = format!(
+            "{}\n\n# Terms\n\nPaid by BACS.",
+            ADVICE.replace("PAYMENT ADVICE", "Payment advice")
+        );
+        assert!(slips(&unheaded, "Invoice").is_empty());
+        let headed = format!("Saltmarsh Point Borough Council\n\nACCOUNTS PAYABLE\n\n{ADVICE}");
+        // Under a letterhead's heading only the type tells the advice
+        // from an invoice's slip.
+        assert!(!slips(&headed, "Invoice").is_empty());
+        assert!(slips(&headed, "Remittance Advice").is_empty());
+        assert!(slips(&headed, "Payment Advice").is_empty());
+        assert!(slips(&headed, "Letter").is_empty());
+        let (outcome, _) = reply(
+            &headed,
+            "Remittance Advice",
+            PartyRole::Recipient,
+            PartyRole::Issuer,
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Saltmarsh Point Borough Council"]
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
     #[test]
     fn someone_who_signs_for_a_party_is_no_party_of_their_own() {
         const NOTICE: &str = "NOTICE OF TERMINATION\n\nDate of this Notice: December 29, 2026\n\n\
@@ -12553,6 +13392,104 @@ This certificate is issued as a matter of information only.";
         });
         assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
         assert_eq!(outcome.proposal.parties, vec!["All Seasons Landscaping"]);
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// real2-office-15's shape: a bulletin whose "To:" line runs its
+    /// recipients together, which the reply gave whole as one party. A
+    /// run longer than a name is no party a document is filed by: the
+    /// name is kept as it is and waits for a person. A name of seventy
+    /// characters is filed as before, one character more waits though it
+    /// is a name, and a long party the name does not give holds nothing.
+    #[test]
+    fn a_party_too_long_to_be_a_name_goes_to_review() {
+        const RUN: &str = "Subscribers: -Harbor Weather Wire Service -Emergency Managers Weather Information Network";
+        const NOTICE: &str = "NOTICE OF SERVICE CHANGE\n\n\
+Date: 21 June 2024\n\n\
+To: Subscribers: -Harbor Weather Wire Service -Emergency Managers Weather Information Network\n\
+From: Harrow Basin Weather Office\n\n\
+Routine tsunami messages will be issued under a new header beginning on 22 July 2024.";
+        let reply = |text: &str, addressee: &str| {
+            facts_for(text, |index| ModelFacts {
+                document_type: Some("Notice of Service Change".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF SERVICE")],
+                document_date: Some("2024-06-21".into()),
+                date_evidence: vec![id_of(index, "Date: 21 June")],
+                parties: vec![
+                    party(
+                        addressee,
+                        Some(PartyRole::Addressee),
+                        &[id_of(index, "To:")],
+                    ),
+                    party(
+                        "Harrow Basin Weather Office",
+                        Some(PartyRole::Sender),
+                        &[id_of(index, "From:")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        assert!(RUN.chars().count() > MAX_PARTY_NAME_CHARS);
+        let outcome = reply(NOTICE, RUN);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec![RUN]);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+
+        // Seventy characters is a name still; seventy-one waits.
+        for (name, held) in [
+            (
+                "The Trustees of the Saltmarsh Point and Briarport Harbour Pension Fund",
+                false,
+            ),
+            (
+                "The Trustees of the Saltmarsh Point and Briarport Harbour Pension Funds",
+                true,
+            ),
+        ] {
+            assert_eq!(name.chars().count() > MAX_PARTY_NAME_CHARS, held, "{name}");
+            let outcome = reply(&NOTICE.replace(RUN, name), name);
+            assert_eq!(outcome.proposal.parties, vec![name]);
+            assert_eq!(
+                outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+                held,
+                "{name}: {:?}",
+                outcome.reasons
+            );
+        }
+
+        // The same run on the "From:" line of a notice named to its
+        // addressee is in the cast and not in the name.
+        let swapped = NOTICE
+            .replace(RUN, "Corvane Media Group LLC")
+            .replace("Harrow Basin Weather Office", RUN);
+        let (outcome, _) = facts_for(&swapped, |index| ModelFacts {
+            document_type: Some("Notice of Service Change".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF SERVICE")],
+            document_date: Some("2024-06-21".into()),
+            date_evidence: vec![id_of(index, "Date: 21 June")],
+            parties: vec![
+                party(
+                    "Corvane Media Group LLC",
+                    Some(PartyRole::Addressee),
+                    &[id_of(index, "To:")],
+                ),
+                party(RUN, Some(PartyRole::Sender), &[id_of(index, "From:")]),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["Corvane Media Group LLC"]);
         assert!(
             !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
             "{:?}",
@@ -14589,6 +15526,237 @@ Tidewater Buying LLC / POL\nAttention: Accounts Payable\n41 Wharf Street\nGilchr
         assert_eq!(outcome.proposal.document_type, None);
     }
 
+    /// real4-letter-15's and real3-notice-07's shape: an inside address
+    /// whose organization is one coined word - capitalized parts run
+    /// together or joined by dots - under the person, or under their post,
+    /// and right over the street. A letter that would be named to the
+    /// person alone is named to the organization. The word's shape is all
+    /// that says so, and a word the extraction ran together can share it,
+    /// so the name waits for a person; the same organization set in
+    /// capitals is filed as before. A post, a greeting or a street run
+    /// together, a scrap of a scan, an initial before a name and a surname
+    /// with its particle are no coined name; a city under the street is
+    /// never reached, and a word with no street under it is not read.
+    ///
+    /// A name that would give anyone else is left as it is, filed or not:
+    /// the letter an office sends is named from the office, whatever word
+    /// stands under the person it is to. So is a name that would be filed:
+    /// a word's shape holds back nothing that was ready.
+    #[test]
+    fn one_coined_word_under_the_addressee_is_the_organization_and_waits() {
+        for (line, coined) in [
+            ("PacifiCorp", true),
+            ("MediaWorks", true),
+            ("Public.Resource.Org", true),
+            ("CorvaneWorks,", false),
+            ("AllN", false),
+            ("C.Sgh", false),
+            ("IfDEQ", false),
+            ("DearSir", false),
+            ("ChiefExecutive", false),
+            ("ManagingDirector", false),
+            ("RiversideHouse", false),
+            ("DuBois", false),
+            ("D.Phil", false),
+            ("J.Smith", false),
+            ("McKenzie", false),
+            ("MacDonald", false),
+            ("LaSalle", false),
+            ("www.Example.Org", false),
+            ("Corvane2Works", false),
+            ("info@Corvane.Works", false),
+            ("Corvane-Works", false),
+            ("Corvaneworks", false),
+            ("London", false),
+            ("OFCOM", false),
+            ("Corvane Works", false),
+            // The shape cannot tell a city or a person run together from
+            // a company: the place it is read in and the review do.
+            ("SeaTac", true),
+            ("JaneDoe", true),
+        ] {
+            assert_eq!(is_coined_name(line), coined, "{line}");
+        }
+        let addressed = |text: &str, class: &str, person: &str| {
+            let (outcome, _) = facts_for(text, |index| ModelFacts {
+                document_type: Some(class.into()),
+                document_date: Some("2021-08-27".into()),
+                date_evidence: vec![id_of(index, "August 27, 2021")],
+                parties: vec![party(
+                    person,
+                    Some(PartyRole::Addressee),
+                    &[id_of(index, person)],
+                )],
+                ..ModelFacts::default()
+            });
+            outcome
+        };
+        const LETTER: &str = "HARLOW BASIN WATER AUTHORITY\n\nAugust 27, 2021\n\n\
+Mr. Corbin Vale\nCorvaneWorks\nPO Box 800\nMillbrook, OR 97232\n\n\
+Dear Mr. Vale,\n\nWe received the records request you sent on August 2.\n\n\
+Sincerely,\n\nOdalys Brandt";
+        // A name of three parts is shown in capitals, as the reply's own
+        // spelling of it is ([`display_name`]).
+        for (line, organization) in [
+            ("CorvaneWorks", "CorvaneWorks"),
+            ("Corvane.Works.Org", "CORVANE.WORKS.ORG"),
+            ("Records Officer\nCorvaneWorks", "CorvaneWorks"),
+        ] {
+            let outcome = addressed(
+                &LETTER.replace("CorvaneWorks", line),
+                "Letter",
+                "Corbin Vale",
+            );
+            assert_eq!(outcome.proposal.parties, vec![organization], "{line}");
+            assert_eq!(outcome.proposal.party_relation, PartyRelation::To, "{line}");
+            assert!(
+                outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+                "{line}: {:?}",
+                outcome.reasons
+            );
+        }
+        // The same organization as an inside address has always been read:
+        // nothing waits.
+        let outcome = addressed(
+            &LETTER.replace("CorvaneWorks", "CORVANE WORKS"),
+            "Letter",
+            "Corbin Vale",
+        );
+        assert_eq!(outcome.proposal.parties, vec!["CORVANE WORKS"]);
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // A post run together under the person, a city under the street,
+        // a surname's line, and a coined word with no street right under
+        // it - a city over its state, a marking over the greeting, a word
+        // over another line of the address - leave the letter to the
+        // person.
+        for address in [
+            "Mr. Corbin Vale\nChiefExecutive\nPO Box 800\nMillbrook, OR 97232",
+            "Mr. Corbin Vale\nPO Box 800\nSeaTac\nWA 98188",
+            "Mr. Corbin Vale\nMacDonald\nPO Box 800\nMillbrook, OR 97232",
+            "Mr. Corbin Vale\nSeaTac\nWashington",
+            "Mr. Corbin Vale\nHandDelivered",
+            "Mr. Corbin Vale\nCorvaneWorks\nAccounts Payable\nPO Box 800\nMillbrook, OR 97232",
+        ] {
+            let text = LETTER.replace(
+                "Mr. Corbin Vale\nCorvaneWorks\nPO Box 800\nMillbrook, OR 97232",
+                address,
+            );
+            let outcome = addressed(&text, "Letter", "Corbin Vale");
+            assert_eq!(outcome.proposal.parties, vec!["Corbin Vale"], "{address}");
+        }
+
+        // A notice and a letter the reply named from the office that
+        // issues them, the person they are to named too: the name is from
+        // the office and is filed, whatever coined word - a company, a
+        // delivery note, a house, a person run together - stands under
+        // the person.
+        const NOTICE: &str = "HARLOW BASIN WATER AUTHORITY\n\nNOTICE OF VIOLATION\n\n\
+August 27, 2021\n\n\
+Mr. Corbin Vale\nCorvaneWorks\nPO Box 800\nMillbrook, OR 97232\n\n\
+Dear Mr. Vale,\n\nWe inspected the yard on August 2 and found the violations listed below.\n\n\
+Sincerely,\n\nOdalys Brandt\nRecords Officer";
+        let sent = |text: &str, title: &str, to: PartyRole, from: &str, by: PartyRole| {
+            let (outcome, _) = facts_for(text, |index| ModelFacts {
+                document_type: Some(display_name(title)),
+                type_evidence: vec![id_of(index, title)],
+                document_date: Some("2021-08-27".into()),
+                date_evidence: vec![id_of(index, "August 27, 2021")],
+                parties: vec![
+                    party("Corbin Vale", Some(to), &[id_of(index, "Corbin Vale")]),
+                    party(from, Some(by), &[id_of(index, from)]),
+                ],
+                ..ModelFacts::default()
+            });
+            outcome
+        };
+        for under in ["CorvaneWorks", "HandDelivered", "RoseCottage", "JaneDoe"] {
+            let notice = NOTICE.replace("CorvaneWorks", under);
+            let letter = notice.replace("NOTICE OF VIOLATION", "LETTER OF INSTRUCTION");
+            for outcome in [
+                sent(
+                    &notice,
+                    "NOTICE OF VIOLATION",
+                    PartyRole::Recipient,
+                    "HARLOW BASIN WATER AUTHORITY",
+                    PartyRole::Issuer,
+                ),
+                sent(
+                    &letter,
+                    "LETTER OF INSTRUCTION",
+                    PartyRole::Addressee,
+                    "HARLOW BASIN WATER AUTHORITY",
+                    PartyRole::Sender,
+                ),
+                // The reply named the person who signs: the letterhead
+                // names the office they sign for.
+                sent(
+                    &letter,
+                    "LETTER OF INSTRUCTION",
+                    PartyRole::Addressee,
+                    "Odalys Brandt",
+                    PartyRole::Sender,
+                ),
+            ] {
+                assert_eq!(
+                    outcome.proposal.party_relation,
+                    PartyRelation::From,
+                    "{under}"
+                );
+                assert_eq!(
+                    outcome.proposal.parties,
+                    vec!["HARLOW BASIN WATER AUTHORITY"],
+                    "{under}"
+                );
+                assert_eq!(
+                    outcome.status,
+                    ProposalStatus::Ready,
+                    "{under}: {:?}",
+                    outcome.reasons
+                );
+            }
+        }
+
+        // The reply named the person alone. The letter's name, to a person
+        // on the reply's word, waits already and is named to the
+        // organization; the notice's, for the person, would be filed, and
+        // a name that would be filed is left as it is.
+        let alone = |text: &str, title: &str, role: PartyRole| {
+            let (outcome, _) = facts_for(text, |index| ModelFacts {
+                document_type: Some(display_name(title)),
+                type_evidence: vec![id_of(index, title)],
+                document_date: Some("2021-08-27".into()),
+                date_evidence: vec![id_of(index, "August 27, 2021")],
+                parties: vec![party(
+                    "Corbin Vale",
+                    Some(role),
+                    &[id_of(index, "Corbin Vale")],
+                )],
+                ..ModelFacts::default()
+            });
+            outcome
+        };
+        let outcome = alone(
+            &NOTICE.replace("NOTICE OF VIOLATION", "LETTER OF INSTRUCTION"),
+            "LETTER OF INSTRUCTION",
+            PartyRole::Addressee,
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["CorvaneWorks"]);
+        assert_eq!(outcome.reasons, vec![ReviewReason::PartyUnsupported]);
+        let outcome = alone(NOTICE, "NOTICE OF VIOLATION", PartyRole::Recipient);
+        assert_eq!(outcome.proposal.parties, vec!["Corbin Vale"]);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
     /// A letter's inside address names the organization it is to under
     /// the person, in more ways than an organization's word: a name set in
     /// capitals, a committee a post is held at, the organization's line
@@ -15267,6 +16435,221 @@ Rickmansworth,
                 .contains("bramble"),
             "{:?}",
             outcome.proposal
+        );
+    }
+
+    /// real4-notice-02's shape: a notice of appeal in a suit against
+    /// officials, each written as a name and an office. The person whose
+    /// name opens the answering side - the first right after "v." - is
+    /// that side of the case, though a post follows the name: the notice
+    /// is between the two sides. The second official on that side, anyone
+    /// on the bringing side, a judge a reader ran into the caption and a
+    /// person named in a caption that does not close both sides with their
+    /// labels keep the standing their post gives them; and where the reply
+    /// named an organization for the answering side too, the organization
+    /// is the party, as before.
+    #[test]
+    fn the_person_who_opens_the_answering_side_of_a_caption_is_a_party() {
+        const NOTICE: &str = "IN THE UNITED STATES DISTRICT COURT\n\
+FOR THE EASTERN DISTRICT OF PENNSYLVANIA\n\n\
+CITY OF MILLBROOK,\n\nPlaintiff,\n\nv.\n\n\
+ODALYS BRANDT, SECRETARY OF THE\nINTERIOR; HARLOW BASIN WATER AUTHORITY;\n\
+CORBIN VALE, ACTING DIRECTOR\nOF THE NATIONAL PARK SERVICE; and\nNATIONAL PARK SERVICE,\n\n\
+Defendants.\n\nNOTICE OF APPEAL\n\n\
+Defendants hereby appeal this Court's February 16, 2026 memorandum opinion to the United \
+States Court of Appeals for the Third Circuit.\n\nDated: February 17, 2026";
+        let reply = |text: &str, names: &[&str]| {
+            let (outcome, _) = facts_for(text, |index| ModelFacts {
+                document_type: Some("Notice of Appeal".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF APPEAL")],
+                document_date: Some("2026-02-17".into()),
+                date_evidence: vec![id_of(index, "Dated")],
+                parties: names
+                    .iter()
+                    .enumerate()
+                    .map(|(at, name)| {
+                        let role = if at == 0 {
+                            PartyRole::Client
+                        } else {
+                            PartyRole::Employer
+                        };
+                        party(name, Some(role), &[])
+                    })
+                    .collect(),
+                ..ModelFacts::default()
+            });
+            outcome
+        };
+        let outcome = reply(NOTICE, &["CITY OF MILLBROOK", "ODALYS BRANDT"]);
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::Between,
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["CITY OF MILLBROOK", "ODALYS BRANDT"]
+        );
+        // The second official the caption names on that side is no side of
+        // the case.
+        let outcome = reply(NOTICE, &["CITY OF MILLBROOK", "CORBIN VALE"]);
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|name| name.contains("VALE")),
+            "{:?}",
+            outcome.proposal
+        );
+        // The reply named the agency sued beside its officer, in either
+        // order: the notice is between the city and the agency, as it was.
+        for names in [
+            [
+                "City of Millbrook",
+                "Odalys Brandt",
+                "Harlow Basin Water Authority",
+            ],
+            [
+                "City of Millbrook",
+                "Harlow Basin Water Authority",
+                "Odalys Brandt",
+            ],
+        ] {
+            let outcome = reply(NOTICE, &names);
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["City of Millbrook", "Harlow Basin Water Authority"],
+                "{names:?}"
+            );
+        }
+
+        // Who opens the answering side, read on the caption alone.
+        let opens = |text: &str, name: &str, organizations: &[&str]| {
+            let index = index_of(text);
+            let context = whole(&index);
+            let organizations = organizations
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>();
+            opens_the_answering_side(
+                &ValidationScope::new(&index, &context, &[]),
+                name,
+                &organizations,
+            )
+        };
+        assert!(opens(NOTICE, "ODALYS BRANDT", &[]));
+        assert!(opens(NOTICE, "Odalys Brandt", &["City of Millbrook"]));
+        assert!(!opens(NOTICE, "CORBIN VALE", &[]));
+        // A name the opener's only begins with is another's, and so is one
+        // a company's name begins with: the company opens its side.
+        assert!(!opens(NOTICE, "Odalys Bran", &[]));
+        assert!(!opens(NOTICE, "Odalys", &[]));
+        let shipping = NOTICE.replace(
+            "ODALYS BRANDT, SECRETARY OF THE\nINTERIOR;",
+            "ODALYS BRANDT SHIPPING CO.; ODALYS BRANDT, ITS PRESIDENT;",
+        );
+        assert_ne!(shipping, NOTICE);
+        assert!(!opens(&shipping, "Odalys Brandt", &[]));
+        // An organization the caption names on the answering side, or
+        // nowhere, is that side's party before its officer.
+        assert!(!opens(
+            NOTICE,
+            "Odalys Brandt",
+            &["City of Millbrook", "National Park Service"]
+        ));
+        assert!(!opens(
+            NOTICE,
+            "Odalys Brandt",
+            &["City of Millbrook", "Department of the Interior"]
+        ));
+        // A judge a reader ran into the caption after the bringing side's
+        // label opens nothing.
+        let judged = NOTICE.replace("Plaintiff,", "Plaintiff, JUDGE ODESSA WREN");
+        assert!(opens(&judged, "Odalys Brandt", &[]));
+        assert!(!opens(&judged, "Odessa Wren", &[]));
+        assert!(!opens(&judged, "Judge Odessa Wren", &[]));
+        // A caption that labels no sides sets out none to open.
+        let unlabeled = NOTICE
+            .replace("Plaintiff,\n\n", "")
+            .replace("Defendants.\n\n", "");
+        assert!(!opens(&unlabeled, "ODALYS BRANDT", &[]));
+        let outcome = reply(&unlabeled, &["CITY OF MILLBROOK", "ODALYS BRANDT"]);
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|name| name.contains("BRANDT")),
+            "{:?}",
+            outcome.proposal
+        );
+        // Nor does one a reader took the bringing side's label out of
+        // line in, down under "v.": that side is not closed where it ends.
+        let displaced = NOTICE.replace("Plaintiff,\n\n", "").replace(
+            "\n\nDefendants.",
+            "\n\nPlaintiff, Case No. 26-cv-0117\n\nDefendants.",
+        );
+        {
+            let index = index_of(&displaced);
+            let context = whole(&index);
+            let scope = ValidationScope::new(&index, &context, &[]);
+            let caption = caption_units(&scope);
+            let layout = CaptionLayout::of(&caption_text(&caption), &caption).expect("a caption");
+            assert!(layout.answering_closed && !layout.bringing_closed);
+        }
+        assert!(!opens(&displaced, "Odalys Brandt", &[]));
+
+        // The bringing side is not read this way. An official who brings
+        // the case, the officer a state appears through, and an officer
+        // under their organization's line - which ends on no comma and
+        // reads like where a court sits - open nothing.
+        const ENFORCEMENT: &str = "IN THE COURT OF COMMON PLEAS\nFRANKLIN COUNTY, OHIO\n\n\
+ODALYS BRANDT, Acting Secretary of Labor,\n\nPlaintiff,\n\nv.\n\n\
+TAVISTOCK BOATWORKS, INC.,\n\nDefendant.\n\nNOTICE OF APPEAL\n\n\
+Defendant hereby appeals from the judgment entered February 16, 2026.\n\n\
+Dated: February 17, 2026";
+        assert!(!opens(ENFORCEMENT, "Odalys Brandt", &[]));
+        for side in [
+            "STATE OF OHIO,\nby and through ODALYS BRANDT, Attorney General,",
+            "STATE OF OHIO ex rel.\nODALYS BRANDT, Director of Insurance,",
+            "MILLBROOK SCHOOL DISTRICT and\nODALYS BRANDT, Director of Schools,",
+            "GILCHRIST HARBOR MARINE SUPPLY, LLC, a company organized in the State of Ohio; and\n\
+ODALYS BRANDT, Director of Gilchrist Harbor Marine Supply, LLC,",
+        ] {
+            let text = ENFORCEMENT.replace("ODALYS BRANDT, Acting Secretary of Labor,", side);
+            assert!(!opens(&text, "Odalys Brandt", &[]), "{side}");
+        }
+        // The company's own director, named under its line with no comma
+        // to end it, takes no side from the company: the notice stays
+        // between the company and the defendant, and is filed.
+        let company = ENFORCEMENT
+            .replace(
+                "ODALYS BRANDT, Acting Secretary of Labor,",
+                "GILCHRIST HARBOR MARINE SUPPLY, LLC, a company organized in the State of Ohio; and\n\
+ODALYS BRANDT, Director of Gilchrist Harbor Marine Supply, LLC,",
+            )
+            .replace("Plaintiff,", "Plaintiffs,");
+        let outcome = reply(&company, &["Odalys Brandt", "Tavistock Boatworks, Inc."]);
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::Between,
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec![
+                "GILCHRIST HARBOR MARINE SUPPLY, LLC",
+                "Tavistock Boatworks, Inc."
+            ]
+        );
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
         );
     }
 

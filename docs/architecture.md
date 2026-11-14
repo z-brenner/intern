@@ -557,6 +557,9 @@ a digit, an apostrophe, or a `Mc`/`Mac` surname prefix is left alone
 and the description keep the document's casing.
 Names longer than 120 characters shed the second party, then the party clause,
 then truncate the type — detail is lost from the least identifying end first.
+A name whose party is longer than 70 characters waits for review
+(`PARTY_UNSUPPORTED`): such a party is seldom one name, and would be shed here
+without a word.
 Typographic ligatures (`ﬁ`) and full-width letters (`ＡＣＭＥ`) are folded to the
 letters a person types and every segment is composed to NFC, so two spellings
 of one accented name make one filename. Windows-hostile characters, reserved
