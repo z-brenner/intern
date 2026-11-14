@@ -39,6 +39,11 @@ const buttonAt = (page: Page, at: { x: number; y: number }) => page.evaluate(({ 
   const button = document.elementFromPoint(x, y)?.closest('button');
   return button ? button.getAttribute('aria-label') ?? button.textContent : null;
 }, at);
+/** How the border of the button at a place is drawn: the browser draws one with no border of its own pressed in ("inset") while a mouse button is held on it. */
+const borderAt = (page: Page, at: { x: number; y: number }) => page.evaluate(({ x, y }) => {
+  const button = document.elementFromPoint(x, y)?.closest('button');
+  return button ? getComputedStyle(button).borderTopStyle : null;
+}, at);
 const middle = (box: { x: number; y: number; width: number; height: number } | null) => ({ x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 });
 /** Every row of the queue as it reads: its name, its status and the name proposed for it. */
 const rows = (page: Page) => page.locator('.queue-grid tbody tr').evaluateAll((all) => all.map((row) => `${row.querySelector('[data-column="original"]')?.textContent} | ${row.querySelector('[data-column="status"]')?.textContent} | ${row.querySelector('[data-column="proposed"]')?.textContent}`));
@@ -91,6 +96,7 @@ for (const size of [WIDE, NARROW]) {
 test('a press on its way to the name does nothing on "Discard what I had", which came there as the document was read again', async ({ page }) => {
   await page.setViewportSize(WIDE);
   let aimedAt = { x: 0, y: 0 };
+  let heldDown: string | null = '';
   const kept = page.getByRole('textbox', { name: 'What you had typed' });
   await withinTheSettleTime(page, async () => {
     await page.goto('/?queue=changes');
@@ -103,13 +109,18 @@ test('a press on its way to the name does nothing on "Discard what I had", which
     await untilSettled(page);
     await byItself(page, 'read again');
     await expect(kept).toBeFocused();
-    await page.mouse.click(aimedAt.x, aimedAt.y);
+    await page.mouse.move(aimedAt.x, aimedAt.y);
+    await page.mouse.down();
+    heldDown = await borderAt(page, aimedAt);
+    await page.mouse.up();
   });
   expect(await buttonAt(page, aimedAt)).toBe('Discard what I had');
   await page.waitForTimeout(300);
   await expect(kept).toHaveValue(/ v2 signed/);
   // Not the focus either: the caret is still in what was kept.
   await expect(kept).toBeFocused();
+  // Nor was anything shown: with the mouse button held down the control looked as it does now.
+  expect(heldDown).toBe(await borderAt(page, aimedAt));
 
   await untilSettled(page);
   await page.mouse.click(aimedAt.x, aimedAt.y);
