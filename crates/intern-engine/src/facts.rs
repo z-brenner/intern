@@ -2364,9 +2364,9 @@ fn no_kind_of_its_own(document_type: Option<&str>) -> bool {
     )
 }
 
-/// Whether a type read from `line`, a "Re:", "Subject:" or "Regarding:"
-/// line, names the paper's matter and not its kind: the phrase opens on a
-/// record. What a subject line opens with is the paper's own kind when it
+/// Whether a type read from `line`, a "Re:", "Subject:", "Subj:" or
+/// "Regarding:" line ([`names_a_matter`]), names the paper's matter and
+/// not its kind: the phrase opens on a record. What a subject line opens with is the paper's own kind when it
 /// is something a letter does by being sent - a notice, an offer, a
 /// demand, an approval - and a record is a paper of its own: the review a
 /// regulator's letter reports on, the minutes a cover letter encloses.
@@ -2498,7 +2498,7 @@ fn in_capitals(line: &str) -> bool {
     total >= 4 && upper * 10 >= total * 8
 }
 
-/// Whether a line opens with "Re:", "Subject:" or "Regarding:".
+/// Whether a line opens with "Re:", "Subject:", "Subj:" or "Regarding:".
 fn names_a_matter(line: &str) -> bool {
     let opening = line
         .split_whitespace()
@@ -3213,6 +3213,9 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
             // kind of document: "Re: Demand for Payment - Highmeadow ...".
             // A kind its number follows names the numbered document the
             // letter is about: "RE: NDA 208090", "Re: Invoice No. 4471".
+            // A record at the line's head is read as a title here too;
+            // on a letter `validate_facts_at` sets it aside as the
+            // letter's matter (`matter_opens_on_a_record`).
             if names_a_matter(line.trim_matches(|c: char| c == '*' || c.is_whitespace())) {
                 let line = line.trim_matches(|c: char| c == '*' || c.is_whitespace());
                 let line_words = words(line);
@@ -13356,7 +13359,8 @@ Contractor: QRPA";
     /// typed the email by it - the agreement it sends for signature - gets
     /// "Email" for a person to confirm. A notice or an invoice sent as an
     /// email keeps the kind its subject gives, and a letter's "Subject:"
-    /// line, with no header block around it, still names the letter.
+    /// line, with no header block around it, still names the letter -
+    /// unless a record heads it (`matter_opens_on_a_record`).
     #[test]
     fn an_emails_subject_names_its_matter_not_its_kind() {
         let message = |subject: &str| {

@@ -426,10 +426,11 @@ pub(crate) fn date_statements(iso_date: &str, normalized: &str) -> Vec<(usize, D
 }
 
 /// Every statement of `iso_date` in `normalized` as [`date_statements`]
-/// finds it, each with where it ends: the longest spelling that starts
-/// there ("january 8, 2024", not the "january 8" a shorter spelling would
-/// stop at). For a caller that reads what stands right after a date, or
-/// right before it.
+/// finds it, each once, with where it ends. Every spelling searched for
+/// carries its year and none may run into a digit, so two spellings that
+/// start at one place ("04/04/2026", month first and day first) end at
+/// one place too. For a caller that reads what stands right after a date,
+/// or right before it.
 pub(crate) fn date_match_spans(iso_date: &str, normalized: &str) -> Vec<(usize, usize)> {
     let candidates = searched_spellings(iso_date);
     let bytes = normalized.as_bytes();
@@ -1940,10 +1941,11 @@ mod searched_spelling_tests {
         );
     }
 
-    /// A statement's span starts where the evidence check finds the date
-    /// and ends with its longest spelling there.
+    /// A statement's span starts where the evidence check finds the date,
+    /// is listed once however many spellings read it there, and ends with
+    /// the date's last figure.
     #[test]
-    fn a_dates_statement_ends_where_its_longest_spelling_does() {
+    fn a_dates_statement_is_listed_once_with_where_it_ends() {
         for (date, line) in [
             ("2024-01-08", "Flight 01/08/24 - 01/21/24"),
             ("2017-09-01", "Service Period: 9/1/2017- 9/30/2017"),
