@@ -1,8 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
-import { createInMemoryBridge } from '../../lib/inMemoryBridge';
-import { clearField, commitComposition, composeInto, fillWithoutTyping, typeInto } from '../review/typingTesting';
+import { UseOnItsOwnQuestion, typedOut } from '../../components/UseOnItsOwn';
+import { createInMemoryBridge, createLearnedSpellingBridge } from '../../lib/inMemoryBridge';
+import { openRow } from '../queue/gridTesting';
+import { clearField, commitComposition, composeInto, fillWithoutTyping, insertAtOnce, typeInto } from './typingTesting';
 import type { HouseRule, LearnedRule } from '../../types';
 
 async function openSettings() {
@@ -192,11 +194,10 @@ describe('the spellings Intern has learned', () => {
     expect(forget).toHaveFocus();
   });
 
-  // The same question as in the review window: the yes answers only once the
-  // spelling is typed out, which no press does. A press on another
-  // spelling's "Use on its own" closed the question above it and opened the
-  // next with its yes under the pointer, and rules on which presses the yes
-  // would take kept being got round.
+  // The yes answers only once the spelling is typed out, which no press
+  // does. A press on another spelling's "Use on its own" closed the question
+  // above it and opened the next with its yes under the pointer, and rules
+  // on which presses the yes would take kept being got round.
   it('answers only once the spelling is typed out: until then its yes waits and Enter in its field does nothing, and Enter never saves Settings', async () => {
     const third: LearnedRule = { id: '3', kind: 'party', from: 'Northwind Traders', to: 'Northwind', seen: 2, active: true, confirmed: 0, learnedAt: 1716369300 };
     const base = createInMemoryBridge({ learnedRules: [learned[0], third] });
@@ -284,6 +285,8 @@ describe('the spellings Intern has learned', () => {
     expect(asked().field).toHaveValue('');
     expect(asked().yes).toBeDisabled();
     expect(asked().field).toHaveAttribute('autocomplete', 'off');
+    expect(asked().field).toHaveAttribute('autocorrect', 'off');
+    expect(asked().field).toHaveAttribute('autocapitalize', 'off');
     expect(asked().field).toHaveAttribute('spellcheck', 'false');
     const name = asked().field.getAttribute('name');
 
@@ -304,15 +307,17 @@ describe('the spellings Intern has learned', () => {
     composeInto(asked().field, ['やまだ', '山田', '山田太郎']);
     expect(asked().yes).toBeEnabled();
     commitComposition(asked().field);
+    // WebKit ends the composition before the Enter that commits it, a key it marks as the input method's.
+    fireEvent.keyDown(asked().field, { key: 'Enter', keyCode: 229 });
     expect(houseRuleCheck).not.toHaveBeenCalled();
     fireEvent.keyDown(asked().field, { key: 'Enter' });
     await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledWith('9', { kind: 'party', from: 'Yamada Taro', to: '山田太郎' }));
     expect(houseRuleCheck).toHaveBeenCalledOnce();
   });
 
-  // As in the review window: while one spelling is asked about, the other
-  // spellings' actions wait. A press on another's "Use on its own" closed
-  // the question above it and opened its own where the pointer was.
+  // While one spelling is asked about, the other spellings' actions wait. A
+  // press on another's "Use on its own" closed the question above it and
+  // opened its own where the pointer was.
   it('leaves every other spelling\'s actions waiting while it asks', async () => {
     const rules: LearnedRule[] = [
       { id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso', seen: 2, active: true, confirmed: 0, learnedAt: 1 },
@@ -422,9 +427,9 @@ describe('the spellings Intern has learned', () => {
   });
 
   // A press on the sentence, or on the waiting yes, took the focus off the
-  // question's field, and the spelling typed next went nowhere - or, in
-  // the review window, to its shortcuts. What is typed is the question's
-  // wherever the focus is in the dialog, but in another field.
+  // question's field, and the spelling typed next went nowhere. What is
+  // typed is the question's wherever the focus is in the dialog, but in
+  // another field.
   it('takes a character typed after the focus left its field into the field', async () => {
     const base = createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] });
     const houseRuleCheck = vi.fn(base.houseRuleCheck);
@@ -554,9 +559,9 @@ describe('the spellings Intern has learned', () => {
     await waitFor(() => expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('Quarterly Operations Review written as Board Minutes'));
   });
 
-  // A spelling forgotten since the list was shown - in the review window,
-  // or by putting a document's own words back - stayed in the list as in
-  // use, its "Use on its own" refused again however often it was tried.
+  // A spelling forgotten since the list was shown - by putting a document's
+  // own words back in review - stayed in the list as in use, its "Use on
+  // its own" refused again however often it was tried.
   it('takes a spelling forgotten since the list was shown out of the list when using it on its own finds it gone', async () => {
     const unchecked: LearnedRule = { id: '3', kind: 'party', from: 'Northwind Traders', to: 'Northwind', seen: 2, active: true, confirmed: 0, learnedAt: 1716369300 };
     const base = createInMemoryBridge({ learnedRules: [learned[0], unchecked, learned[1]] });
@@ -578,6 +583,160 @@ describe('the spellings Intern has learned', () => {
     expect(rows()[1]).toHaveTextContent('Quarterly Operations Review written as Meeting Minutes');
   });
 
+  // An Enter that did not answer said nothing, and a screen reader heard
+  // silence: Tab from the field passes the yes, which is disabled.
+  it('says why when Enter does not answer, until the field changes', async () => {
+    const base = createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] });
+    const houseRuleCheck = vi.fn(base.houseRuleCheck);
+    render(<App bridge={{ ...base, houseRuleCheck }} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    fireEvent.click(within(list).getByRole('button', { name: /^Use on its own:/ }));
+    const question = within(list).getByRole('group');
+    const field = within(question).getByRole('textbox');
+    const status = within(question).getByRole('status');
+    expect(status).toHaveTextContent(/^$/);
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(status).toHaveTextContent(/^$/);
+    typeInto(field, 'Quarterly Operations Review');
+    expect(status).toHaveTextContent(/^$/);
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(status).toHaveTextContent('That is not Meeting Minutes: type it as it is shown.');
+    clearField(field);
+    expect(status).toHaveTextContent(/^$/);
+    typeInto(field, 'Meeting Minute');
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(status).toHaveTextContent('That is not Meeting Minutes: type it as it is shown.');
+    typeInto(field, 's');
+    expect(status).toHaveTextContent(/^$/);
+    expect(houseRuleCheck).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: 'Enter' });
+    await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledOnce());
+    expect(dialog).toBeInTheDocument();
+  });
+
+  // A key types one character. A word put in at once, with no keys for
+  // it - an input method's clipboard, an on-screen keyboard's, an emoji
+  // keyboard's - was taken as typed, and one press checked the spelling.
+  // An input method that commits what its keys spelled, without showing a
+  // composition, puts in no more than the keys pressed for it.
+  it('takes no more characters at once than keys were pressed for them', async () => {
+    const rules: LearnedRule[] = [
+      { id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso', seen: 2, active: true, confirmed: 0, learnedAt: 1 },
+      { id: '9', kind: 'party', from: 'Yamada Taro', to: '山田太郎', seen: 2, active: true, confirmed: 0, learnedAt: 9 },
+    ];
+    const base = createInMemoryBridge({ learnedRules: rules });
+    const houseRuleCheck = vi.fn(base.houseRuleCheck);
+    render(<App bridge={{ ...base, houseRuleCheck }} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    const asked = () => {
+      const question = within(list).getByRole('group');
+      return { field: within(question).getByRole('textbox'), yes: within(question).getByRole('button', { name: 'Use on its own' }), cancel: within(question).getByRole('button', { name: 'Cancel' }) };
+    };
+    fireEvent.click(within(list).getByRole('button', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' }));
+    const { field, yes, cancel } = asked();
+    for (const keys of [0, 1, 2, 6]) {
+      insertAtOnce(field, 'Contoso', keys);
+      expect(field, `${keys} keys`).toHaveValue('');
+      expect(yes, `${keys} keys`).toBeDisabled();
+    }
+    // Keys that type nothing earn nothing: an arrow, Enter, Home, a
+    // function key, Backspace, a modifier, a key held with Ctrl or Cmd.
+    const typeNothing = [
+      { key: 'ArrowLeft' }, { key: 'ArrowLeft', repeat: true }, { key: 'Enter' }, { key: 'Home' }, { key: 'F5' },
+      { key: 'Backspace' }, { key: 'Shift' }, { key: 'a', ctrlKey: true }, { key: 'v', metaKey: true },
+    ];
+    for (const key of typeNothing) {
+      for (let pressed = 0; pressed < 7; pressed += 1) fireEvent.keyDown(field, key);
+      insertAtOnce(field, 'Contoso', 0);
+      expect(field, JSON.stringify(key)).toHaveValue('');
+    }
+    // A character key does, and so do an input method's keys, a dead key, Alt (Option) and AltGr (Ctrl+Alt).
+    const typeSomething = [
+      { key: 'c' }, { key: ' ' }, { key: 'Unidentified', keyCode: 229 }, { key: 'Dead' }, { key: 'å', altKey: true }, { key: 'ł', ctrlKey: true, altKey: true },
+    ];
+    for (const key of typeSomething) {
+      for (let pressed = 0; pressed < 7; pressed += 1) fireEvent.keyDown(field, key);
+      insertAtOnce(field, 'Contoso', 0);
+      expect(field, JSON.stringify(key)).toHaveValue('Contoso');
+      clearField(field);
+    }
+    // Keys pressed before a character went in are spent on it.
+    for (let key = 0; key < 7; key += 1) fireEvent.keyDown(field, { key: 'Process', keyCode: 229 });
+    typeInto(field, 'C');
+    insertAtOnce(field, 'ontoso', 0);
+    expect(field).toHaveValue('C');
+    clearField(field);
+    insertAtOnce(field, 'Contoso', 7);
+    expect(field).toHaveValue('Contoso');
+    expect(yes).toBeEnabled();
+    fireEvent.click(cancel);
+
+    fireEvent.click(within(list).getByRole('button', { name: 'Use on its own: Yamada Taro written as 山田太郎' }));
+    // "yamadatarou" and the key that commits it.
+    insertAtOnce(asked().field, '山田太郎', 12);
+    expect(asked().field).toHaveValue('山田太郎');
+    fireEvent.click(asked().yes);
+    await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledWith('9', { kind: 'party', from: 'Yamada Taro', to: '山田太郎' }));
+    expect(houseRuleCheck).toHaveBeenCalledOnce();
+  });
+
+  // Opened by a press where it reaches past what can be seen, the question
+  // stayed there while the spelling was typed into a field out of sight,
+  // "Save settings" under it. A key is no aim of the pointer: the first one
+  // brings it into sight.
+  it('is brought into sight by a key typed in it after a press opened it', async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true });
+    try {
+      render(<App bridge={createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] })} />);
+      const dialog = await openSettings();
+      const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+      const action = within(list).getByRole('button', { name: /^Use on its own:/ });
+      fireEvent.pointerDown(action, { pointerType: 'mouse' });
+      fireEvent.click(action, { detail: 1 });
+      const question = within(list).getByRole('group');
+      expect(scrollIntoView).not.toHaveBeenCalled();
+      typeInto(within(question).getByRole('textbox'), 'M');
+      expect(scrollIntoView.mock.contexts).toEqual([question]);
+      expect(scrollIntoView).toHaveBeenLastCalledWith({ block: 'nearest' });
+    } finally {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+    }
+  });
+
+  // Settings opens over the review window, whose shortcuts are off while it
+  // is open. Keys typed in the question's field stay in it besides: none
+  // approves, keeps or moves on the document behind the dialog, and none
+  // saves or closes Settings.
+  it('keeps every key typed in its field to itself, with a held document open behind Settings', async () => {
+    const base = createLearnedSpellingBridge();
+    const bridge = { ...base, approve: vi.fn(base.approve), keepOriginal: vi.fn(base.keepOriginal), remove: vi.fn(base.remove), houseRuleCheck: vi.fn(base.houseRuleCheck), saveSettings: vi.fn(base.saveSettings) };
+    render(<App bridge={bridge} />);
+    const panel = await openRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    fireEvent.click(within(list).getByRole('button', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' }));
+    const field = within(list).getByRole('textbox');
+    for (const typed of ['Cont', 'oso']) {
+      typeInto(field, typed);
+      for (const key of [
+        { key: 'Enter', ctrlKey: true }, { key: 'Enter', metaKey: true }, { key: 'k', code: 'KeyK', altKey: true },
+        { key: 'n', code: 'KeyN', altKey: true }, { key: 'F2' }, { key: 'Delete' }, { key: '/' }, { key: 'j' },
+      ]) fireEvent.keyDown(field, key);
+    }
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue('Contoso');
+    expect(panel).toHaveTextContent('SOW final v3.pdf');
+    expect(dialog).toBeInTheDocument();
+    expect(bridge.approve).not.toHaveBeenCalled();
+    expect(bridge.keepOriginal).not.toHaveBeenCalled();
+    expect(bridge.remove).not.toHaveBeenCalled();
+    expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+    expect(bridge.saveSettings).not.toHaveBeenCalled();
+  });
+
   it('reports a spelling that could not be changed and keeps the list', async () => {
     const base = createInMemoryBridge({ learnedRules: learned });
     const houseRuleForget = vi.fn(async () => { throw { code: 'DATABASE_UNAVAILABLE', message: 'the queue database is locked' }; });
@@ -587,5 +746,249 @@ describe('the spellings Intern has learned', () => {
     fireEvent.click(within(within(list).getAllByRole('listitem')[0]).getByRole('button', { name: /Forget:/ }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('The spelling could not be changed');
     expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+  });
+});
+
+// What the question takes as the spelling typed out, and how it keeps the
+// keys while it asks, wherever it is put.
+describe('the question "Use on its own" asks', () => {
+  it('is the spelling\'s letters and digits in order, whatever the case, accents, spaces and punctuation', () => {
+    expect(typedOut('contoso ltd', 'Contoso Ltd.')).toBe(true);
+    expect(typedOut('CONTOSO-LTD', 'Contoso Ltd.')).toBe(true);
+    expect(typedOut('Muller', 'Müller')).toBe(true);
+    expect(typedOut('Ｃｏｎｔｏｓｏ', 'Contoso')).toBe(true);
+    expect(typedOut('山田太郎', '山田太郎')).toBe(true);
+    expect(typedOut('3M', '3M Company')).toBe(false);
+    expect(typedOut('Mller', 'Müller')).toBe(false);
+    expect(typedOut('Mueller', 'Müller')).toBe(false);
+    expect(typedOut('Contoso Ltd. 2', 'Contoso Ltd.')).toBe(false);
+    expect(typedOut('Ltd. Contoso', 'Contoso Ltd.')).toBe(false);
+    expect(typedOut('山田', '山田太郎')).toBe(false);
+    expect(typedOut('', 'Contoso')).toBe(false);
+    expect(typedOut(' .', 'Contoso')).toBe(false);
+    // A spelling with no letter or digit is typed exactly, spaces at its ends aside.
+    expect(typedOut(' & ', '&')).toBe(true);
+    expect(typedOut('+', '&')).toBe(false);
+    expect(typedOut('', ' ')).toBe(false);
+    expect(typedOut(' ', ' ')).toBe(false);
+  });
+
+  // An accent may be left off, as a keyboard without it does. A mark that
+  // makes another letter or syllable may not: typing the document's own
+  // カトウ confirmed ガトウ, and राम confirmed रमा.
+  it('lets go of accents, and of no mark that makes another letter', () => {
+    expect(typedOut('Nguyen', 'Nguyễn')).toBe(true);
+    expect(typedOut('Dvorak', 'Dvořák')).toBe(true);
+    expect(typedOut('ELENI', 'ΕΛΕΝΗ')).toBe(false);
+    expect(typedOut('Ελενη', 'Ελένη')).toBe(true);
+    expect(typedOut('ΕΛΕΝΗΣ', 'Ελένης')).toBe(true);
+    expect(typedOut('Ελένησ', 'Ελένης')).toBe(true);
+    // Hebrew and Arabic are written without their vowel points as a rule.
+    expect(typedOut('שלום', 'שָׁלוֹם')).toBe(true);
+    expect(typedOut('محمد', 'مُحَمَّد')).toBe(true);
+    // Elsewhere a mark is a letter's own.
+    expect(typedOut('ガトウ', 'ガトウ')).toBe(true);
+    expect(typedOut('ｶﾞﾄｳ', 'ガトウ')).toBe(true);
+    expect(typedOut('カトウ', 'ガトウ')).toBe(false);
+    expect(typedOut('さとう', 'さどう')).toBe(false);
+    expect(typedOut('ホンタ', 'ホンダ')).toBe(false);
+    expect(typedOut('ポンダ', 'ホンダ')).toBe(false);
+    expect(typedOut('राम', 'रमा')).toBe(false);
+    expect(typedOut('कमल', 'कमला')).toBe(false);
+    expect(typedOut('करन', 'किरन')).toBe(false);
+    expect(typedOut('कषितिज', 'क्षितिज')).toBe(false);
+    expect(typedOut('क्षितिज', 'क्षितिज')).toBe(true);
+    expect(typedOut('Иошкар', 'Йошкар')).toBe(false);
+    expect(typedOut('Ежов', 'Ёжов')).toBe(false);
+    expect(typedOut('Йошкар', 'Йошкар')).toBe(true);
+    expect(typedOut('สดา', 'สุดา')).toBe(false);
+    expect(typedOut('கம', 'காம')).toBe(false);
+  });
+
+  // A keyboard without ø, ß or ł types o, ss and l, and the spelling's
+  // symbols are none of its letters: "Acme" is "Acme™" as it is "Acme®".
+  it('takes a letter a keyboard may lack as it is typed without it, and leaves out what is no letter as written', () => {
+    for (const [typed, spelling] of [
+      ['Moller & Son A/S', 'Møller & Søn A/S'], ['Soren', 'Søren'], ['Strasse', 'Straße'], ['STRASSE', 'Straße'], ['strasse', 'STRAẞE'],
+      ['Lodz', 'Łódź'], ['Dorde Dordevic', 'Đorđe Đorđević'], ['Caesar', 'Cæsar'], ['Aero', 'Ærø'], ['Oeuvre', 'Œuvre'],
+      ['Kirikkale', 'Kırıkkale'], ['KIRSEHIR', 'Kırşehir'], ['Thor', 'Þór'], ['Gudmundsdottir', 'Guðmundsdóttir'], ['Hamrun', 'Ħamrun'],
+      ['Acme', 'Acme™'], ['Acme', 'Acme®'], ['Acme', 'Acme℠'], ['finance', 'ﬁnance'], ['Hawaii', 'Hawaiʻi'], ['Abd al-Aziz', 'ʿAbd al-ʿAzīz'],
+      ['葛飾', '葛\u{E0100}飾'],
+    ]) expect(typedOut(typed, spelling), `${typed} for ${spelling}`).toBe(true);
+    for (const [typed, spelling] of [
+      ['Moler', 'Møller'], ['Mpller', 'Møller'], ['Stase', 'Straße'], ['Strase', 'Straße'], ['Acmetm', 'Acme™'], ['Acm', 'Acme™'],
+      ['Contoso Ltd', 'Contoso'], ['Contos', 'Contoso'], ['Thr', 'Þór'],
+    ]) expect(typedOut(typed, spelling), `${typed} for ${spelling}`).toBe(false);
+    // A spelling that is all symbols is typed as it is.
+    expect(typedOut('™', '™')).toBe(true);
+    expect(typedOut('tm', '™')).toBe(false);
+    expect(typedOut('', '™')).toBe(false);
+  });
+
+  it('starts empty again when the spelling it asks about changes while it asks', () => {
+    const onConfirm = vi.fn();
+    type Shown = Pick<LearnedRule, 'id' | 'kind' | 'from' | 'to'>;
+    const rule: Shown = { id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' };
+    const ask = (shown: Shown) => <UseOnItsOwnQuestion rule={shown} describedBy="asked" onConfirm={onConfirm} onCancel={() => undefined} />;
+    const { rerender } = render(ask(rule));
+    typeInto(screen.getByRole('textbox'), 'Contoso');
+    expect(screen.getByRole('button', { name: 'Use on its own' })).toBeEnabled();
+    const changes: Shown[] = [{ ...rule, id: '5' }, { ...rule, kind: 'document_type' }, { ...rule, from: 'Contoso Worldwide' }, { ...rule, to: 'Contoso Ltd.' }];
+    for (const changed of changes) {
+      rerender(ask(changed));
+      expect(screen.getByRole('textbox'), JSON.stringify(changed)).toHaveValue('');
+      expect(screen.getByRole('textbox')).toHaveFocus();
+      expect(screen.getByRole('button', { name: 'Use on its own' })).toBeDisabled();
+      typeInto(screen.getByRole('textbox'), changed.to);
+      expect(screen.getByRole('button', { name: 'Use on its own' })).toBeEnabled();
+    }
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it('takes itself back on Escape from its field, and lets Tab through, but not the Escape an input method takes', () => {
+    const onCancel = vi.fn();
+    render(<UseOnItsOwnQuestion rule={{ id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' }} describedBy="asked" onConfirm={vi.fn()} onCancel={onCancel} />);
+    const field = screen.getByRole('textbox');
+    const beyond = vi.fn();
+    document.addEventListener('keydown', beyond);
+    try {
+      fireEvent.keyDown(field, { key: 'Escape', isComposing: true });
+      expect(onCancel).not.toHaveBeenCalled();
+      fireEvent.keyDown(field, { key: 'Escape' });
+      expect(onCancel).toHaveBeenCalledOnce();
+      expect(beyond).not.toHaveBeenCalled();
+      // Tab goes on to the dialog's own keys, which keep the focus in it.
+      fireEvent.keyDown(field, { key: 'Tab' });
+      expect(beyond).toHaveBeenCalledOnce();
+    } finally {
+      document.removeEventListener('keydown', beyond);
+    }
+  });
+
+  it('takes a character typed outside its field, and no other key, nor one typed in another field or in a dialog over it', () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true });
+    const beyond = vi.fn();
+    document.addEventListener('keydown', beyond);
+    try {
+      const view = render(<div>
+        <input aria-label="Another field" />
+        <UseOnItsOwnQuestion rule={{ id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' }} describedBy="asked" onConfirm={vi.fn()} onCancel={vi.fn()} />
+      </div>);
+      const group = screen.getByRole('group');
+      const field = screen.getByRole('textbox', { name: 'Type Contoso to use it on its own' });
+      const cancel = screen.getByRole('button', { name: 'Cancel' });
+      const other = screen.getByRole('textbox', { name: 'Another field' });
+      /** `init` pressed at `target`: whether it went on to the page's own listeners, and where the focus is after it. */
+      const pressAt = (target: HTMLElement, init: KeyboardEventInit) => {
+        target.focus();
+        if (target === document.body) (document.activeElement as HTMLElement).blur();
+        beyond.mockClear();
+        scrollIntoView.mockClear();
+        fireEvent.keyDown(target, init);
+        return { reached: beyond.mock.calls.length === 1, focus: document.activeElement };
+      };
+      // A character on nothing, or on its Cancel: into its field, brought into sight, and to nothing else.
+      for (const target of [document.body, cancel]) {
+        expect(pressAt(target, { key: 'k' })).toEqual({ reached: false, focus: field });
+        expect(scrollIntoView.mock.contexts).toEqual([group]);
+      }
+      // Not the space bar, which presses Cancel; nor a key held with Ctrl, nor an input method's, nor a named key.
+      expect(pressAt(cancel, { key: ' ' })).toEqual({ reached: true, focus: cancel });
+      for (const init of [{ key: 'k', ctrlKey: true }, { key: 'k', isComposing: true }, { key: 'Process', keyCode: 229 }, { key: 'Dead' }, { key: 'Enter' }, { key: 'ArrowDown' }]) {
+        expect(pressAt(document.body, init), JSON.stringify(init)).toEqual({ reached: true, focus: document.body });
+      }
+      // Not a key typed in another field: that field's.
+      expect(pressAt(other, { key: 'k' })).toEqual({ reached: true, focus: other });
+      // Nor one typed in a dialog open over it, which keeps its keys.
+      const over = document.createElement('div');
+      over.setAttribute('role', 'dialog');
+      over.setAttribute('aria-modal', 'true');
+      const inIt = document.createElement('button');
+      over.append(inIt);
+      document.body.append(over);
+      expect(pressAt(inIt, { key: 'k' })).toEqual({ reached: true, focus: inIt });
+      expect(pressAt(document.body, { key: 'k' })).toEqual({ reached: true, focus: document.body });
+      over.remove();
+      expect(pressAt(document.body, { key: 'k' })).toEqual({ reached: false, focus: field });
+      // Gone with the page it was on, it leaves nothing behind.
+      view.unmount();
+      view.container.remove();
+      expect(pressAt(document.body, { key: 'k' })).toEqual({ reached: true, focus: document.body });
+    } finally {
+      document.removeEventListener('keydown', beyond);
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+    }
+  });
+
+  it('lets keys be again once it is answered or taken back, or went away by itself with the focus on another control, or after Tab, Escape or a press', () => {
+    const rule = { id: '1', kind: 'party' as const, from: 'Contoso Worldwide, Inc.', to: 'Contoso' };
+    const Asker = ({ open, to = rule.to }: { open: boolean; to?: string }) => <div>
+      <button type="button">Close</button>
+      <table><tbody><tr><td role="gridcell" tabIndex={-1}>A cell</td></tr></tbody></table>
+      {open && <UseOnItsOwnQuestion rule={{ ...rule, to }} describedBy="asked" onConfirm={vi.fn()} onCancel={vi.fn()} />}
+    </div>;
+    const beyond = vi.fn();
+    /** Whether `key` pressed at `target` reached what listens on the page, and was not refused. */
+    const reaches = (target: Element, key: string) => {
+      beyond.mockClear();
+      const taken = fireEvent.keyDown(target, { key });
+      return taken && beyond.mock.calls.length === 1;
+    };
+    /** Whether `key` pressed at `target` was refused, and reached nothing else on the page. */
+    const goesNowhere = (target: Element, key: string) => {
+      beyond.mockClear();
+      const taken = fireEvent.keyDown(target, { key });
+      return !taken && beyond.mock.calls.length === 0;
+    };
+    document.addEventListener('keydown', beyond);
+    try {
+      const { rerender } = render(<Asker open={false} />);
+      /** The question asked, with "Con" typed into it; then `end`, and the question gone. */
+      const askThen = (end: (field: HTMLElement) => void) => {
+        rerender(<Asker open />);
+        const field = screen.getByRole('textbox');
+        typeInto(field, 'Con');
+        end(field);
+        rerender(<Asker open={false} />);
+        expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+      };
+      askThen((field) => { typeInto(field, 'toso'); fireEvent.keyDown(field, { key: 'Enter' }); });
+      expect(reaches(document.body, 'k'), 'answered').toBe(true);
+      askThen(() => fireEvent.click(screen.getByRole('button', { name: 'Cancel' })));
+      expect(reaches(document.body, 'k'), 'taken back by its Cancel').toBe(true);
+      askThen((field) => fireEvent.keyDown(field, { key: 'Escape' }));
+      expect(reaches(document.body, 'k'), 'taken back by Escape in its field').toBe(true);
+      askThen(() => fireEvent.keyDown(document.body, { key: 'Escape' }));
+      expect(reaches(document.body, 'k'), 'taken back by Escape elsewhere').toBe(true);
+      // Answered after the spelling it asked about changed while it asked, and it asked again, empty.
+      askThen((field) => {
+        rerender(<Asker open to="Contoso Ltd" />);
+        expect(field).not.toBeInTheDocument();
+        const asked = screen.getByRole('textbox');
+        asked.focus();
+        typeInto(asked, 'Contoso Ltd');
+        fireEvent.keyDown(asked, { key: 'Enter' });
+      });
+      expect(reaches(document.body, 'k'), 'answered, asked again').toBe(true);
+      for (const control of [screen.getByRole('button', { name: 'Close' }), screen.getByRole('gridcell')]) {
+        askThen(() => control.focus());
+        expect(reaches(control, 'k'), `gone with the focus on ${control.tagName}`).toBe(true);
+      }
+
+      // Gone by itself with the focus in its field: every key goes nowhere but Tab, Escape, and those after them or after a press.
+      for (const [freed, free] of [['Tab', () => reaches(document.body, 'Tab')], ['Escape', () => reaches(document.body, 'Escape')], ['a press', () => { fireEvent.pointerDown(document.body); return true; }]] as const) {
+        askThen(() => undefined);
+        for (const key of ['t', 'k', 'Enter', ' ', 'Backspace', 'ArrowDown']) expect(goesNowhere(document.body, key), `${key} before ${freed}`).toBe(true);
+        expect(free(), freed).toBe(true);
+        expect(reaches(document.body, 'k'), `after ${freed}`).toBe(true);
+      }
+      // So too with the focus on nothing, as after a press on its sentence.
+      askThen(() => (document.activeElement as HTMLElement).blur());
+      expect(goesNowhere(document.body, 'k'), 'gone with the focus on nothing').toBe(true);
+      fireEvent.pointerDown(document.body);
+    } finally {
+      document.removeEventListener('keydown', beyond);
+    }
   });
 });

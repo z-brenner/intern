@@ -1,13 +1,11 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import { ReviewInspector } from '../../components/ReviewInspector';
-import { UseOnItsOwnQuestion, typedOut } from '../../components/UseOnItsOwn';
-import { openRow } from '../queue/gridTesting';
-import { clearField, commitComposition, composeInto, fillWithoutTyping, insertAtOnce, typeInto } from './typingTesting';
+import { openRow, queueCell } from '../queue/gridTesting';
 import { createInMemoryBridge, createLearnedSpellingBridge } from '../../lib/inMemoryBridge';
 import { humanizeReason } from '../../lib/reasons';
-import type { HouseRule, LearnedRule, QueueItem } from '../../types';
+import type { QueueItem } from '../../types';
 
 const selectRow = openRow;
 
@@ -77,926 +75,168 @@ const held: QueueItem = {
   ],
 };
 
-/** The learned spellings: the first two the held name used, unchecked; the third used and checked; one more unchecked that it did not use. */
-const spellings: LearnedRule[] = [
-  { id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso', seen: 2, active: true, confirmed: 0, learnedAt: 1 },
-  { id: '2', kind: 'party', from: 'Ridgeline Cartography LLC', to: 'Ridgeline Cartography', seen: 2, active: true, confirmed: 0, learnedAt: 2 },
-  { id: '3', kind: 'document_type', from: 'Statement of Work', to: 'SOW', seen: 2, active: true, confirmed: 1, learnedAt: 3 },
-  { id: '4', kind: 'party', from: 'Northwind Traders', to: 'Northwind', seen: 2, active: true, confirmed: 0, learnedAt: 4 },
-];
-
-/** A bridge holding `rules`, whose check behaves as the backend's: exact, in use, or refused. */
-function spellingBridge(rules: LearnedRule[]) {
-  let current = rules.map((rule) => ({ ...rule }));
-  const houseRulesList = vi.fn(async () => current.map((rule) => ({ ...rule })));
-  const houseRuleCheck = vi.fn(async (id: string, shown: HouseRule) => {
-    const rule = current.find((candidate) => candidate.id === id);
-    if (!rule) throw { code: 'RULE_NOT_FOUND', message: 'learned spelling does not exist' };
-    if (!rule.active || rule.kind !== shown.kind || rule.from !== shown.from || rule.to !== shown.to) throw { code: 'RULE_CHANGED', message: 'learned spelling is not in use as it was shown' };
-    current = current.map((candidate) => candidate.id === id ? { ...candidate, confirmed: candidate.confirmed + 1 } : candidate);
-  });
-  return { houseRulesList, houseRuleCheck, respell(id: string, to: string) { current = current.map((rule) => rule.id === id ? { ...rule, to } : rule); } };
-}
-
-/** A held statement of work whose name used `rules`, unchecked. */
-const heldFor = (rules: LearnedRule[]): QueueItem => ({ ...held, houseRules: rules.map(({ kind, from, to }) => ({ kind, from, to })) });
-
-const CONTOSO = 'Use on its own: Contoso Worldwide, Inc. written as Contoso';
-const RIDGELINE = 'Use on its own: Ridgeline Cartography LLC written as Ridgeline Cartography';
-
-/** The question open for the spelling `label` names: the group, the field the spelling is typed into, its yes and its Cancel. */
-function question(label: string) {
-  const group = screen.getByRole('group', { name: label });
+/** The held statement of work of `?learnedSpellings=held`, first in the demo's queue, with what the bridge is asked watched. */
+function heldBridge() {
+  const base = createLearnedSpellingBridge();
   return {
-    group,
-    field: within(group).getByRole('textbox'),
-    yes: within(group).getByRole('button', { name: 'Use on its own' }),
-    cancel: within(group).getByRole('button', { name: 'Cancel' }),
+    ...base,
+    approve: vi.fn(base.approve), keepOriginal: vi.fn(base.keepOriginal), remove: vi.fn(base.remove),
+    houseRulesList: vi.fn(base.houseRulesList), houseRuleCheck: vi.fn(base.houseRuleCheck),
   };
 }
 
-/** A press on `button`, as Chromium makes one: the pointer down, then a click counting one press. */
-const pressOn = (button: HTMLElement) => { fireEvent.pointerDown(button, { pointerType: 'mouse' }); fireEvent.click(button, { detail: 1 }); };
+const HELD_NAME = '2026-04-01 SOW between Ridgeline Cartography and Contoso';
 
-// No approval checks a learned spelling. A document held for one shows,
-// beside "Uses your spelling", "Use on its own" for each spelling nobody has
-// checked that its name used - the only way to stop being asked - after the
-// question Settings asks. It checks the spelling, as shown, and nothing else:
-// the document is neither approved nor filed.
-describe('using a held document\'s spelling on its own', () => {
-  afterEach(() => cleanup());
+/**
+ * `text` typed a key at a time wherever the focus is, as a person types it:
+ * the key, then - into the field that has the focus once the key is down -
+ * the input it makes, unless the key or the input was refused.
+ */
+function typeAtTheFocus(text: string) {
+  for (const data of text) {
+    if (!fireEvent.keyDown(document.activeElement ?? document.body, { key: data })) continue;
+    const field = document.activeElement;
+    if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) continue;
+    if (!fireEvent(field, new InputEvent('beforeinput', { inputType: 'insertText', data, bubbles: true, cancelable: true }))) continue;
+    fireEvent.input(field, { target: { value: field.value + data }, inputType: 'insertText', data });
+  }
+}
 
-  it('is offered only for the unchecked spellings the name used, beside the pointer to Settings', async () => {
-    const bridge = spellingBridge(spellings);
-    render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={bridge} />);
-    expect(await screen.findByRole('button', { name: CONTOSO })).toBeVisible();
-    expect(screen.getByRole('button', { name: RIDGELINE })).toBeVisible();
-    // Not the checked one, nor one the name did not use.
-    expect(screen.getAllByRole('button', { name: /^Use on its own:/ })).toHaveLength(2);
+/*
+  No approval checks a learned spelling, and the review window checks none
+  either. "Use on its own" is asked in Settings only: asked here, the
+  spelling typed into it reached review's own keys, which move on, put the
+  caret in a document's name and file it. A document held for a spelling
+  nobody has checked says why it waits and where "Use on its own" is, and
+  is reviewed like any other.
+*/
+describe('a document held for a spelling nobody has checked', () => {
+  it('asks nothing and offers no field for a spelling, and says why it waits and where "Use on its own" is', () => {
+    render(<ReviewInspector item={held} drawer={false} {...handlers()} />);
+    expect(screen.queryByRole('button', { name: /Use on its own/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: /Use on its own/ })).not.toBeInTheDocument();
+    // The name and the description, and no field to type a spelling into.
+    expect(screen.getAllByRole('textbox')).toEqual([screen.getByRole('textbox', { name: 'Filename' }), screen.getByRole('textbox', { name: 'Description' })]);
+    const why = screen.getByRole('note', { name: 'Why the name waits' });
+    expect(why).toHaveTextContent('This name waits for you because Intern has not been told to use every one of these spellings on its own: Use on its own is in Settings, under Learned spellings.');
+    // It does not say that approving the name would do instead.
+    expect(why.textContent).not.toMatch(/approv/i);
     expect(screen.getByRole('note', { name: 'Learned spellings applied' })).toHaveTextContent('Change or forget it under Settings.');
   });
 
-  it('is not offered for a document not held for a spelling', async () => {
-    const bridge = spellingBridge(spellings);
-    const { rerender } = render(<ReviewInspector item={{ ...held, status: 'ready', errorCode: undefined, reasonCodes: undefined, reason: undefined }} drawer={false} {...handlers()} spellings={bridge} />);
-    rerender(<ReviewInspector item={{ ...held, errorCode: 'LOW_CONFIDENCE', reasonCodes: ['LOW_CONFIDENCE'], reason: humanizeReason('LOW_CONFIDENCE') }} drawer={false} {...handlers()} spellings={bridge} />);
-    await Promise.resolve();
-    expect(screen.queryByRole('button', { name: /Use on its own/ })).not.toBeInTheDocument();
+  it('says "this spelling" under a note of one', () => {
+    render(<ReviewInspector item={{ ...held, houseRules: [held.houseRules![0]] }} drawer={false} {...handlers()} />);
+    expect(screen.getByRole('note', { name: 'Why the name waits' })).toHaveTextContent('This name waits for you because Intern has not been told to use this spelling on its own: Use on its own is in Settings, under Learned spellings.');
+  });
+
+  it('says nothing of it for a name in your spelling that is not held for it', () => {
+    const { rerender } = render(<ReviewInspector item={{ ...held, status: 'ready', errorCode: undefined, reasonCodes: undefined, reason: undefined }} drawer={false} {...handlers()} />);
+    expect(screen.queryByRole('note', { name: 'Why the name waits' })).not.toBeInTheDocument();
+    rerender(<ReviewInspector item={{ ...held, errorCode: 'LOW_CONFIDENCE', reasonCodes: ['LOW_CONFIDENCE'], reason: humanizeReason('LOW_CONFIDENCE') }} drawer={false} {...handlers()} />);
+    expect(screen.queryByRole('note', { name: 'Why the name waits' })).not.toBeInTheDocument();
+    expect(screen.getByRole('note', { name: 'Learned spellings applied' })).toBeInTheDocument();
+  });
+
+  // Whatever is pressed in the panel, and whatever is typed - the spellings
+  // themselves, at the panel, in its fields, and with Enter - no spelling is
+  // read or checked from the review window, and approving the name files it.
+  it('reads and checks no spelling from the review window, whatever is pressed or typed there', async () => {
+    const bridge = heldBridge();
+    render(<App bridge={bridge} />);
+    const panel = await selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
+    const name = within(panel).getByRole('textbox', { name: 'Filename' });
+    const pressable = within(panel).getAllByRole('button')
+      .filter((button) => !button.closest('.inspector-actions') && !['Close review', 'Next undecided'].includes(button.getAttribute('aria-label') ?? button.textContent ?? ''));
+    for (const button of pressable) {
+      fireEvent.pointerDown(button, { pointerType: 'mouse' });
+      fireEvent.click(button, { detail: 1 });
+    }
+    fireEvent.click(within(panel).getByText('Analysis details'));
+    // The spellings typed, and Enter, on the panel's heading and on nothing.
+    for (const focusOn of [() => within(panel).getByRole('heading', { name: 'Review item' }).focus(), () => (document.activeElement as HTMLElement).blur()]) {
+      for (const spelling of ['Contoso', 'Ridgeline Cartography']) {
+        focusOn();
+        typeAtTheFocus(spelling);
+        fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Enter' });
+      }
+    }
+    expect(panel).toHaveTextContent('SOW final v3.pdf');
+    expect(name).toHaveValue(HELD_NAME);
+    // In its fields, and the name filed with Enter: an approval, which checks nothing.
+    within(panel).getByRole('textbox', { name: 'Description' }).focus();
+    typeAtTheFocus(' Contoso');
+    name.focus();
+    typeAtTheFocus(' Contoso');
+    fireEvent.keyDown(name, { key: 'Enter' });
+    await waitFor(() => expect(bridge.approve).toHaveBeenCalledWith('sow', `${HELD_NAME} Contoso.pdf`, `${held.description} Contoso`));
+    expect(bridge.approve).toHaveBeenCalledOnce();
+    expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
     expect(bridge.houseRulesList).not.toHaveBeenCalled();
   });
 
-  it('asks first, for the spelling to be typed, and Cancel or Escape take the question back and nothing else', async () => {
-    const bridge = spellingBridge(spellings);
-    const actions = handlers();
-    render(<ReviewInspector item={held} drawer {...actions} spellings={bridge} />);
-    fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
-    const asked = question(CONTOSO);
-    expect(asked.group).toHaveAccessibleDescription('Every later document Intern reads as naming Contoso Worldwide, Inc. will name Contoso instead, and may be filed under that name without your check. Do this only if that is right for every one of them. Choosing this does not approve this document: it still waits for you.');
-    expect(asked.field).toHaveAccessibleName('Type Contoso to use it on its own');
-    expect(asked.field).toHaveFocus();
-    expect(asked.field).toHaveValue('');
-    expect(asked.yes).toBeDisabled();
-
-    fireEvent.click(asked.cancel);
-    expect(screen.queryByRole('group', { name: /^Use on its own:/ })).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('button', { name: CONTOSO })).toHaveFocus());
-
-    fireEvent.click(screen.getByRole('button', { name: CONTOSO }));
-    fireEvent.keyDown(question(CONTOSO).field, { key: 'Escape' });
-    expect(screen.queryByRole('group', { name: /^Use on its own:/ })).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('button', { name: CONTOSO })).toHaveFocus());
-    // The drawer stays open: Escape took back the question only.
-    expect(actions.onClose).not.toHaveBeenCalled();
-    expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
-  });
-
-  it('checks the spelling as shown once it is typed, and neither approves nor files the document', async () => {
-    const bridge = spellingBridge(spellings);
-    const actions = handlers();
-    const onSpellingChecked = vi.fn();
-    render(<ReviewInspector item={held} drawer={false} {...actions} spellings={bridge} onSpellingChecked={onSpellingChecked} />);
-    fireEvent.click(await screen.findByRole('button', { name: RIDGELINE }));
-    const { field, yes } = question(RIDGELINE);
-    typeInto(field, 'Ridgeline Cartography');
-    fireEvent.click(yes);
-    await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledWith('2', { kind: 'party', from: 'Ridgeline Cartography LLC', to: 'Ridgeline Cartography' }));
-    expect(await screen.findByRole('status')).toHaveTextContent('Intern will use “Ridgeline Cartography” on its own from now on. This document still waits for you.');
-    await waitFor(() => expect(screen.queryByRole('button', { name: /Use on its own: Ridgeline/ })).not.toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /Use on its own: Contoso/ })).toBeVisible();
-    expect(onSpellingChecked).toHaveBeenCalledOnce();
-    expect(actions.onApprove).not.toHaveBeenCalled();
-    expect(bridge.houseRuleCheck).toHaveBeenCalledOnce();
-    await waitFor(() => expect(screen.getByRole('group', { name: 'Use a learned spelling on its own' })).toHaveFocus());
-  });
-
-  // Every rule that tried to tell a press meant for the yes from one that
-  // was not - no double-click, half a second's wait, a pointer that moved
-  // onto it - was got round: a slow double-click, a scroll, a tap through a
-  // menu, a window closing over it. The yes now waits for the spelling to
-  // be typed out, which no press does, and which makes the person read it.
-  describe('answers only once the spelling is typed out', () => {
-    it('keeps its yes disabled, and takes no click on it nor Enter in the field, until then', async () => {
-      const bridge = spellingBridge(spellings);
-      const actions = handlers();
-      render(<ReviewInspector item={held} drawer={false} {...actions} spellings={bridge} />);
-      fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
-      const { group, field, yes } = question(CONTOSO);
-      for (const typed of ['', 'Contos', 'Contosoo', 'Cantoso', 'Contoso Ltd']) {
-        clearField(field);
-        typeInto(field, typed);
-        expect(field, typed).toHaveValue(typed);
-        expect(yes, typed).toBeDisabled();
-        // A press, a click from the keyboard or assistive technology, and Enter.
-        fireEvent.pointerDown(yes, { pointerType: 'mouse' });
-        fireEvent.click(yes, { detail: 1 });
-        fireEvent.click(yes, { detail: 0 });
-        fireEvent.keyDown(field, { key: 'Enter' });
-        expect(group, typed).toBeInTheDocument();
-      }
-      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
-
-      clearField(field);
-      typeInto(field, 'Contoso');
-      expect(yes).toBeEnabled();
-      fireEvent.keyDown(field, { key: 'Enter' });
-      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledWith('1', { kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' }));
-      expect(bridge.houseRuleCheck).toHaveBeenCalledOnce();
-      expect(actions.onApprove).not.toHaveBeenCalled();
-    });
-
-    // An Enter that did not answer said nothing, and a screen reader heard
-    // silence: Tab from the field passes the yes, which is disabled.
-    it('says why when Enter does not answer, until the field changes', async () => {
-      const bridge = spellingBridge(spellings);
-      render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={bridge} />);
-      fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
-      const { group, field } = question(CONTOSO);
-      const status = within(group).getByRole('status');
-      expect(status).toHaveTextContent(/^$/);
-      fireEvent.keyDown(field, { key: 'Enter' });
-      expect(status).toHaveTextContent(/^$/);
-      typeInto(field, 'Contoso Worldwide, Inc.');
-      expect(status).toHaveTextContent(/^$/);
-      fireEvent.keyDown(field, { key: 'Enter' });
-      expect(status).toHaveTextContent('That is not Contoso: type it as it is shown.');
-      clearField(field);
-      expect(status).toHaveTextContent(/^$/);
-      typeInto(field, 'Contos');
-      fireEvent.keyDown(field, { key: 'Enter' });
-      expect(status).toHaveTextContent('That is not Contoso: type it as it is shown.');
-      typeInto(field, 'o');
-      expect(status).toHaveTextContent(/^$/);
-      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
-      fireEvent.keyDown(field, { key: 'Enter' });
-      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
-    });
-
-    // The panel is busy while a decision is on its way: the yes waits for
-    // it, the spelling typed or not, and so does Enter.
-    it('waits while the panel is busy, the spelling typed or not', async () => {
-      const bridge = spellingBridge(spellings);
-      const actions = handlers();
-      const { rerender } = render(<ReviewInspector item={held} drawer={false} {...actions} spellings={bridge} />);
-      fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
-      typeInto(question(CONTOSO).field, 'Contoso');
-      expect(question(CONTOSO).yes).toBeEnabled();
-      rerender(<ReviewInspector item={held} drawer={false} busy {...actions} spellings={bridge} />);
-      expect(question(CONTOSO).yes).toBeDisabled();
-      fireEvent.click(question(CONTOSO).yes);
-      fireEvent.keyDown(question(CONTOSO).field, { key: 'Enter' });
-      expect(within(question(CONTOSO).group).getByRole('status')).toHaveTextContent(/^$/);
-      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
-      rerender(<ReviewInspector item={held} drawer={false} {...actions} spellings={bridge} />);
-      expect(question(CONTOSO).field).toHaveValue('Contoso');
-      fireEvent.keyDown(question(CONTOSO).field, { key: 'Enter' });
-      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledOnce());
-    });
-
-    // While one spelling is asked about, the others' actions wait: a press
-    // on the next one closed the question above it and opened its own
-    // under the pointer.
-    it('leaves the other spellings\' actions waiting while it asks', async () => {
-      const bridge = spellingBridge(spellings);
-      render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={bridge} />);
-      fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
-      const other = screen.getByRole('button', { name: RIDGELINE });
-      expect(other).toBeDisabled();
-      fireEvent.click(other);
-      expect(question(CONTOSO).group).toBeInTheDocument();
-      expect(screen.queryByRole('group', { name: RIDGELINE })).not.toBeInTheDocument();
-      fireEvent.click(question(CONTOSO).cancel);
-      expect(screen.getByRole('button', { name: RIDGELINE })).toBeEnabled();
-    });
-
-    it('is the spelling\'s letters and digits in order, whatever the case, accents, spaces and punctuation', () => {
-      expect(typedOut('contoso ltd', 'Contoso Ltd.')).toBe(true);
-      expect(typedOut('CONTOSO-LTD', 'Contoso Ltd.')).toBe(true);
-      expect(typedOut('Muller', 'Müller')).toBe(true);
-      expect(typedOut('Ｃｏｎｔｏｓｏ', 'Contoso')).toBe(true);
-      expect(typedOut('山田太郎', '山田太郎')).toBe(true);
-      expect(typedOut('3M', '3M Company')).toBe(false);
-      expect(typedOut('Mller', 'Müller')).toBe(false);
-      expect(typedOut('Mueller', 'Müller')).toBe(false);
-      expect(typedOut('Contoso Ltd. 2', 'Contoso Ltd.')).toBe(false);
-      expect(typedOut('Ltd. Contoso', 'Contoso Ltd.')).toBe(false);
-      expect(typedOut('山田', '山田太郎')).toBe(false);
-      expect(typedOut('', 'Contoso')).toBe(false);
-      expect(typedOut(' .', 'Contoso')).toBe(false);
-      // A spelling with no letter or digit is typed exactly, spaces at its ends aside.
-      expect(typedOut(' & ', '&')).toBe(true);
-      expect(typedOut('+', '&')).toBe(false);
-      expect(typedOut('', ' ')).toBe(false);
-      expect(typedOut(' ', ' ')).toBe(false);
-    });
-
-    // An accent may be left off, as a keyboard without it does. A mark that
-    // makes another letter or syllable may not: typing the document's own
-    // カトウ confirmed ガトウ, and राम confirmed रमा.
-    it('lets go of accents, and of no mark that makes another letter', () => {
-      expect(typedOut('Nguyen', 'Nguyễn')).toBe(true);
-      expect(typedOut('Dvorak', 'Dvořák')).toBe(true);
-      expect(typedOut('ELENI', 'ΕΛΕΝΗ')).toBe(false);
-      expect(typedOut('Ελενη', 'Ελένη')).toBe(true);
-      expect(typedOut('ΕΛΕΝΗΣ', 'Ελένης')).toBe(true);
-      expect(typedOut('Ελένησ', 'Ελένης')).toBe(true);
-      // Hebrew and Arabic are written without their vowel points as a rule.
-      expect(typedOut('שלום', 'שָׁלוֹם')).toBe(true);
-      expect(typedOut('محمد', 'مُحَمَّد')).toBe(true);
-      // Elsewhere a mark is a letter's own.
-      expect(typedOut('ガトウ', 'ガトウ')).toBe(true);
-      expect(typedOut('ｶﾞﾄｳ', 'ガトウ')).toBe(true);
-      expect(typedOut('カトウ', 'ガトウ')).toBe(false);
-      expect(typedOut('さとう', 'さどう')).toBe(false);
-      expect(typedOut('ホンタ', 'ホンダ')).toBe(false);
-      expect(typedOut('ポンダ', 'ホンダ')).toBe(false);
-      expect(typedOut('राम', 'रमा')).toBe(false);
-      expect(typedOut('कमल', 'कमला')).toBe(false);
-      expect(typedOut('करन', 'किरन')).toBe(false);
-      expect(typedOut('कषितिज', 'क्षितिज')).toBe(false);
-      expect(typedOut('क्षितिज', 'क्षितिज')).toBe(true);
-      expect(typedOut('Иошкар', 'Йошкар')).toBe(false);
-      expect(typedOut('Ежов', 'Ёжов')).toBe(false);
-      expect(typedOut('Йошкар', 'Йошкар')).toBe(true);
-      expect(typedOut('สดา', 'สุดา')).toBe(false);
-      expect(typedOut('கம', 'காம')).toBe(false);
-    });
-
-    // A keyboard without ø, ß or ł types o, ss and l, and the spelling's
-    // symbols are none of its letters: "Acme" is "Acme™" as it is "Acme®".
-    it('takes a letter a keyboard may lack as it is typed without it, and leaves out what is no letter as written', () => {
-      for (const [typed, spelling] of [
-        ['Moller & Son A/S', 'Møller & Søn A/S'], ['Soren', 'Søren'], ['Strasse', 'Straße'], ['STRASSE', 'Straße'], ['strasse', 'STRAẞE'],
-        ['Lodz', 'Łódź'], ['Dorde Dordevic', 'Đorđe Đorđević'], ['Caesar', 'Cæsar'], ['Aero', 'Ærø'], ['Oeuvre', 'Œuvre'],
-        ['Kirikkale', 'Kırıkkale'], ['KIRSEHIR', 'Kırşehir'], ['Thor', 'Þór'], ['Gudmundsdottir', 'Guðmundsdóttir'], ['Hamrun', 'Ħamrun'],
-        ['Acme', 'Acme™'], ['Acme', 'Acme®'], ['Acme', 'Acme℠'], ['finance', 'ﬁnance'], ['Hawaii', 'Hawaiʻi'], ['Abd al-Aziz', 'ʿAbd al-ʿAzīz'],
-        ['葛飾', '葛\u{E0100}飾'],
-      ]) expect(typedOut(typed, spelling), `${typed} for ${spelling}`).toBe(true);
-      for (const [typed, spelling] of [
-        ['Moler', 'Møller'], ['Mpller', 'Møller'], ['Stase', 'Straße'], ['Strase', 'Straße'], ['Acmetm', 'Acme™'], ['Acm', 'Acme™'],
-        ['Contoso Ltd', 'Contoso'], ['Contos', 'Contoso'], ['Thr', 'Þór'],
-      ]) expect(typedOut(typed, spelling), `${typed} for ${spelling}`).toBe(false);
-      // A spelling that is all symbols is typed as it is.
-      expect(typedOut('™', '™')).toBe(true);
-      expect(typedOut('tm', '™')).toBe(false);
-      expect(typedOut('', '™')).toBe(false);
-    });
-
-    it('takes the spelling typed in any case, with or without its accents, spaces and punctuation, and not a letter missing or added', async () => {
-      const rules: LearnedRule[] = [
-        { id: '7', kind: 'party', from: 'Contoso Limited', to: 'Contoso Ltd.', seen: 2, active: true, confirmed: 0, learnedAt: 7 },
-        { id: '8', kind: 'party', from: 'Mueller GmbH', to: 'Müller', seen: 2, active: true, confirmed: 0, learnedAt: 8 },
-      ];
-      const bridge = spellingBridge(rules);
-      render(<ReviewInspector item={heldFor(rules)} drawer={false} {...handlers()} spellings={bridge} />);
-      for (const [rule, right, wrong] of [[rules[0], 'contoso ltd', ['contoso lt', 'contoso ltdd']], [rules[1], 'Muller', ['Mller', 'Mueller']]] as const) {
-        const label = `Use on its own: ${rule.from} written as ${rule.to}`;
-        fireEvent.click(await screen.findByRole('button', { name: label }));
-        const { field, yes } = question(label);
-        for (const typed of wrong) {
-          clearField(field);
-          typeInto(field, typed);
-          expect(yes, typed).toBeDisabled();
-        }
-        clearField(field);
-        typeInto(field, right);
-        expect(yes, right).toBeEnabled();
-        fireEvent.click(yes);
-        await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenLastCalledWith(rule.id, { kind: rule.kind, from: rule.from, to: rule.to }));
-      }
-    });
-
-    it('takes nothing into its field but typing: no paste, drop, suggestion, undo or autofill, and asks the browser for no suggestions', async () => {
-      const bridge = spellingBridge(spellings);
-      render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={bridge} />);
-      fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
-      const { field, yes, cancel } = question(CONTOSO);
-      expect(fillWithoutTyping(field, 'Contoso')).toEqual([]);
-      expect(field).toHaveValue('');
-      expect(yes).toBeDisabled();
-      expect(field).toHaveAttribute('autocomplete', 'off');
-      expect(field).toHaveAttribute('autocorrect', 'off');
-      expect(field).toHaveAttribute('autocapitalize', 'off');
-      expect(field).toHaveAttribute('spellcheck', 'false');
-      // A name of its own, so nothing typed into another is suggested for it.
-      const name = field.getAttribute('name');
-      fireEvent.click(cancel);
-      fireEvent.click(await screen.findByRole('button', { name: RIDGELINE }));
-      expect(question(RIDGELINE).field.getAttribute('name')).not.toBe(name);
-      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
-    });
-
-    it('takes a name typed with an input method, and not the Enter that ends the composition', async () => {
-      const rules: LearnedRule[] = [{ id: '9', kind: 'party', from: 'Yamada Taro', to: '山田太郎', seen: 2, active: true, confirmed: 0, learnedAt: 9 }];
-      const bridge = spellingBridge(rules);
-      render(<ReviewInspector item={heldFor(rules)} drawer={false} {...handlers()} spellings={bridge} />);
-      const label = 'Use on its own: Yamada Taro written as 山田太郎';
-      fireEvent.click(await screen.findByRole('button', { name: label }));
-      const { field, yes } = question(label);
-      composeInto(field, ['やまだ', '山田', '山田たろう', '山田太郎']);
-      expect(field).toHaveValue('山田太郎');
-      expect(yes).toBeEnabled();
-      commitComposition(field);
-      // WebKit ends the composition before the Enter that commits it, a key it marks as the input method's.
-      fireEvent.keyDown(field, { key: 'Enter', keyCode: 229 });
-      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
-      expect(question(label).group).toBeInTheDocument();
-      fireEvent.keyDown(field, { key: 'Enter' });
-      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledWith('9', { kind: 'party', from: 'Yamada Taro', to: '山田太郎' }));
-    });
-
-    // A key types one character. A word put in at once, with no keys for
-    // it - an input method's clipboard, an on-screen keyboard's, an emoji
-    // keyboard's - was taken as typed, and one press checked the spelling.
-    // An input method that commits what its keys spelled, without showing a
-    // composition, puts in no more than the keys pressed for it.
-    it('takes no more characters at once than keys were pressed for them', async () => {
-      const rules: LearnedRule[] = [
-        { id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso', seen: 2, active: true, confirmed: 0, learnedAt: 1 },
-        { id: '9', kind: 'party', from: 'Yamada Taro', to: '山田太郎', seen: 2, active: true, confirmed: 0, learnedAt: 9 },
-      ];
-      const bridge = spellingBridge(rules);
-      render(<ReviewInspector item={heldFor(rules)} drawer={false} {...handlers()} spellings={bridge} />);
-      fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
-      const { field, yes, cancel } = question(CONTOSO);
-      for (const keys of [0, 1, 2, 6]) {
-        insertAtOnce(field, 'Contoso', keys);
-        expect(field, `${keys} keys`).toHaveValue('');
-        expect(yes, `${keys} keys`).toBeDisabled();
-      }
-      // Keys that type nothing earn nothing: an arrow, Enter, Home, a
-      // function key, Backspace, a modifier, a key held with Ctrl or Cmd.
-      const typeNothing = [
-        { key: 'ArrowLeft' }, { key: 'ArrowLeft', repeat: true }, { key: 'Enter' }, { key: 'Home' }, { key: 'F5' },
-        { key: 'Backspace' }, { key: 'Shift' }, { key: 'a', ctrlKey: true }, { key: 'v', metaKey: true },
-      ];
-      for (const key of typeNothing) {
-        for (let pressed = 0; pressed < 7; pressed += 1) fireEvent.keyDown(field, key);
-        insertAtOnce(field, 'Contoso', 0);
-        expect(field, JSON.stringify(key)).toHaveValue('');
-      }
-      // A character key does, and so do an input method's keys, a dead key, Alt (Option) and AltGr (Ctrl+Alt).
-      const typeSomething = [
-        { key: 'c' }, { key: ' ' }, { key: 'Unidentified', keyCode: 229 }, { key: 'Dead' }, { key: 'å', altKey: true }, { key: 'ł', ctrlKey: true, altKey: true },
-      ];
-      for (const key of typeSomething) {
-        for (let pressed = 0; pressed < 7; pressed += 1) fireEvent.keyDown(field, key);
-        insertAtOnce(field, 'Contoso', 0);
-        expect(field, JSON.stringify(key)).toHaveValue('Contoso');
-        clearField(field);
-      }
-      // Keys pressed before a character went in are spent on it.
-      for (let key = 0; key < 7; key += 1) fireEvent.keyDown(field, { key: 'Process', keyCode: 229 });
-      typeInto(field, 'C');
-      insertAtOnce(field, 'ontoso', 0);
-      expect(field).toHaveValue('C');
-      clearField(field);
-      insertAtOnce(field, 'Contoso', 7);
-      expect(field).toHaveValue('Contoso');
-      expect(yes).toBeEnabled();
-      fireEvent.click(cancel);
-
-      const label = 'Use on its own: Yamada Taro written as 山田太郎';
-      fireEvent.click(await screen.findByRole('button', { name: label }));
-      // "yamadatarou" and the key that commits it.
-      insertAtOnce(question(label).field, '山田太郎', 12);
-      expect(question(label).field).toHaveValue('山田太郎');
-      fireEvent.click(question(label).yes);
-      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledWith('9', { kind: 'party', from: 'Yamada Taro', to: '山田太郎' }));
-      expect(bridge.houseRuleCheck).toHaveBeenCalledOnce();
-    });
-
-    it('starts empty every time it asks', async () => {
-      render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={spellingBridge(spellings)} />);
-      fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
-      typeInto(question(CONTOSO).field, 'Contoso');
-      expect(question(CONTOSO).yes).toBeEnabled();
-      fireEvent.keyDown(question(CONTOSO).field, { key: 'Escape' });
-      fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
-      expect(question(CONTOSO).field).toHaveValue('');
-      expect(question(CONTOSO).yes).toBeDisabled();
-      typeInto(question(CONTOSO).field, 'Contoso');
-      fireEvent.click(question(CONTOSO).cancel);
-      fireEvent.click(await screen.findByRole('button', { name: RIDGELINE }));
-      expect(question(RIDGELINE).field).toHaveValue('');
-      expect(question(RIDGELINE).yes).toBeDisabled();
-    });
-
-    it('starts empty again when the spelling it asks about changes while it asks', () => {
-      const onConfirm = vi.fn();
-      type Shown = Pick<LearnedRule, 'id' | 'kind' | 'from' | 'to'>;
-      const rule: Shown = { id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' };
-      const ask = (shown: Shown) => <UseOnItsOwnQuestion rule={shown} describedBy="asked" onConfirm={onConfirm} onCancel={() => undefined} />;
-      const { rerender } = render(ask(rule));
-      typeInto(screen.getByRole('textbox'), 'Contoso');
-      expect(screen.getByRole('button', { name: 'Use on its own' })).toBeEnabled();
-      const changes: Shown[] = [{ ...rule, id: '5' }, { ...rule, kind: 'document_type' }, { ...rule, from: 'Contoso Worldwide' }, { ...rule, to: 'Contoso Ltd.' }];
-      for (const changed of changes) {
-        rerender(ask(changed));
-        expect(screen.getByRole('textbox'), JSON.stringify(changed)).toHaveValue('');
-        expect(screen.getByRole('textbox')).toHaveFocus();
-        expect(screen.getByRole('button', { name: 'Use on its own' })).toBeDisabled();
-        typeInto(screen.getByRole('textbox'), changed.to);
-        expect(screen.getByRole('button', { name: 'Use on its own' })).toBeEnabled();
-      }
-      expect(onConfirm).not.toHaveBeenCalled();
-    });
-
-    // The review window's shortcuts work from its own fields: Ctrl+Enter
-    // approves and Alt+K keeps from the name, Alt+N moves on. Not from this
-    // one, where a person types a spelling and nothing else.
-    it('keeps every key typed in its field to itself: no approving, keeping or moving on from there', async () => {
-      const base = createLearnedSpellingBridge();
-      const bridge = { ...base, approve: vi.fn(base.approve), keepOriginal: vi.fn(base.keepOriginal), houseRuleCheck: vi.fn(base.houseRuleCheck) };
+  describe('is reviewed from the keyboard as any other document is', () => {
+    const press = (key: string, init: Partial<KeyboardEventInit> = {}) => fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init });
+    const sow = () => queueCell('SOW final v3.pdf');
+    async function start() {
+      const bridge = heldBridge();
       render(<App bridge={bridge} />);
       const panel = await selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
-      fireEvent.click(await within(panel).findByRole('button', { name: CONTOSO }));
-      const { field } = question(CONTOSO);
-      for (const typed of ['Cont', 'oso']) {
-        typeInto(field, typed);
-        for (const key of [
-          { key: 'Enter', ctrlKey: true }, { key: 'Enter', metaKey: true }, { key: 'k', code: 'KeyK', altKey: true },
-          { key: 'n', code: 'KeyN', altKey: true }, { key: 'F2' }, { key: 'Delete' }, { key: '/' }, { key: 'j' },
-        ]) fireEvent.keyDown(field, key);
-      }
-      expect(field).toHaveFocus();
-      expect(field).toHaveValue('Contoso');
+      sow().focus();
+      return { bridge, panel, name: () => within(panel).getByRole('textbox', { name: 'Filename' }) };
+    }
+
+    it('J and K move from it and back, F2 and Enter go to its name, "/" to the filter, Alt+N on, and Delete asks', async () => {
+      const { bridge, panel, name } = await start();
+      press('j');
+      await waitFor(() => expect(panel).not.toHaveTextContent('SOW final v3.pdf'));
+      press('k');
+      await waitFor(() => expect(sow()).toHaveFocus());
       expect(panel).toHaveTextContent('SOW final v3.pdf');
-      expect(bridge.approve).not.toHaveBeenCalled();
-      expect(bridge.keepOriginal).not.toHaveBeenCalled();
-      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
-    });
-
-    it('takes itself back on Escape from its field, and lets Tab through, but not the Escape an input method takes', () => {
-      const onCancel = vi.fn();
-      render(<UseOnItsOwnQuestion rule={{ id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' }} describedBy="asked" onConfirm={vi.fn()} onCancel={onCancel} />);
-      const field = screen.getByRole('textbox');
-      const beyond = vi.fn();
-      document.addEventListener('keydown', beyond);
-      try {
-        fireEvent.keyDown(field, { key: 'Escape', isComposing: true });
-        expect(onCancel).not.toHaveBeenCalled();
-        fireEvent.keyDown(field, { key: 'Escape' });
-        expect(onCancel).toHaveBeenCalledOnce();
-        expect(beyond).not.toHaveBeenCalled();
-        // Tab goes on to the drawer's or the dialog's own keys, which keep the focus in them.
-        fireEvent.keyDown(field, { key: 'Tab' });
-        expect(beyond).toHaveBeenCalledOnce();
-      } finally {
-        document.removeEventListener('keydown', beyond);
-      }
-    });
-  });
-
-  // An undo or a redo goes to the field edited last, wherever the focus
-  // is, and takes the focus there. Ctrl+Z pressed in the question's field
-  // before anything was typed in it undid the edit to the document's name,
-  // and the spelling, typed next with Enter as the question asks, went into
-  // the name and approved the document under "... Contoso vContoso.pdf".
-  it('changes no field but the one with the focus while it asks: no undo or redo reaches the name behind it', async () => {
-    const actions = handlers();
-    const bridge = spellingBridge(spellings);
-    render(<ReviewInspector item={held} drawer {...actions} spellings={bridge} />);
-    const name = screen.getByRole('textbox', { name: 'Filename' });
-    const description = screen.getByRole('textbox', { name: 'Description' });
-    fireEvent.change(name, { target: { value: `${(name as HTMLTextAreaElement).value} v2` } });
-    /** Whether the browser may make the undo or redo it is about to in `field`: an event nobody refused. */
-    const undoes = (field: HTMLElement, inputType: string) => fireEvent(field, new InputEvent('beforeinput', { inputType, bubbles: true, cancelable: true }));
-    // Before it asks, an undo is the browser's, wherever the focus is.
-    for (const field of [name, description]) expect(undoes(field, 'historyUndo')).toBe(true);
-    const action = await screen.findByRole('button', { name: CONTOSO });
-    action.focus();
-    expect(undoes(name, 'historyUndo')).toBe(true);
-
-    fireEvent.click(action);
-    const { group, field, cancel } = question(CONTOSO);
-    const focusOn: [string, () => void][] = [
-      ['in its field', () => field.focus()],
-      ['on its Cancel', () => cancel.focus()],
-      ['on nothing, after a press on its sentence', () => (document.activeElement as HTMLElement).blur()],
-    ];
-    for (const [where, focus] of focusOn) {
-      focus();
-      for (const [other, inputType] of [[name, 'historyUndo'], [name, 'historyRedo'], [description, 'historyUndo']] as const) {
-        expect(undoes(other, inputType), `${inputType} of ${other.getAttribute('aria-label') ?? 'Description'}, the focus ${where}`).toBe(false);
-      }
-    }
-    // In the field with the focus, the browser's undo is the person's.
-    name.focus();
-    expect(undoes(name, 'historyUndo')).toBe(true);
-    field.focus();
-    typeInto(field, 'Contoso');
-    fireEvent.keyDown(field, { key: 'Enter' });
-    await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledWith('1', { kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' }));
-    expect(group).not.toBeInTheDocument();
-    expect(name).toHaveValue('2026-04-01 SOW between Ridgeline Cartography and Contoso v2');
-    expect(actions.onApprove).not.toHaveBeenCalled();
-    // Asking no more, it leaves undo to the browser again.
-    fireEvent.click(screen.getByRole('button', { name: RIDGELINE }));
-    fireEvent.click(question(RIDGELINE).cancel);
-    expect(screen.queryByRole('group', { name: /^Use on its own:/ })).not.toBeInTheDocument();
-    expect(undoes(name, 'historyUndo')).toBe(true);
-    expect(cancel).not.toBeInTheDocument();
-  });
-
-  // Only its field kept its keys. A press on its sentence or on its waiting
-  // yes, or the second press of a double-click on its action, took the
-  // focus off the field, and the spelling typed next went to the review
-  // shortcuts: the K of "Deutsche Bank" moved review up to the document
-  // before, the drawer put the caret in that document's name, and the Enter
-  // that was to answer the question filed it, unreviewed; a second Enter
-  // filed the held one, its spelling still unchecked.
-  describe('while it asks, takes every key that is no other field\'s, wherever the focus is', () => {
-    afterEach(() => vi.unstubAllGlobals());
-    /** A window at most 1100 pixels wide, where the review panel is a drawer over the queue. */
-    const narrowWindow = () => vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
-      matches: query === '(max-width: 1100px)', media: query, onchange: null,
-      addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
-    })));
-    /** The held statement of work, first in the queue and opened in the drawer, with the bridge's decisions watched. */
-    async function heldInTheDrawer(base = createLearnedSpellingBridge()) {
-      narrowWindow();
-      const bridge = { ...base, approve: vi.fn(base.approve), keepOriginal: vi.fn(base.keepOriginal), remove: vi.fn(base.remove), houseRuleCheck: vi.fn(base.houseRuleCheck) };
-      render(<App bridge={bridge} />);
-      const panel = await selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
-      fireEvent.click(await within(panel).findByRole('button', { name: CONTOSO }));
-      return { bridge, panel, ...question(CONTOSO) };
-    }
-    /** `key` pressed wherever the focus is, as a person presses it. */
-    const press = (init: KeyboardEventInit) => fireEvent.keyDown(document.activeElement ?? document.body, init);
-
-    it('takes a character typed after the focus left its field into the field, and no shortcut moves, opens, keeps or files anything', async () => {
-      const { bridge, panel, field, cancel } = await heldInTheDrawer();
-      const name = within(panel).getByRole('textbox', { name: 'Filename' });
-      const away: [string, () => void][] = [
-        ['on the group around it, where a press on its sentence or its waiting yes leaves it', () => screen.getByRole('group', { name: 'Use a learned spelling on its own' }).focus()],
-        ['on nothing', () => (document.activeElement as HTMLElement).blur()],
-        ['on the panel\'s heading', () => within(panel).getByRole('heading', { name: 'Review item' }).focus()],
-        ['on its Cancel', () => cancel.focus()],
-      ];
-      for (const [where, focusAway] of away) {
-        focusAway();
-        expect(field, where).not.toHaveFocus();
-        // Enter, F2, Delete, the arrows, Ctrl+Enter, Alt+K, Alt+N: none of them a shortcut while it asks.
-        const keys: KeyboardEventInit[] = [{ key: 'F2' }, { key: 'Delete' }, { key: 'ArrowDown' }, { key: 'ArrowUp' }, { key: 'Enter', ctrlKey: true }, { key: 'k', code: 'KeyK', altKey: true }, { key: 'n', code: 'KeyN', altKey: true }];
-        // Enter on Cancel is Cancel's.
-        if (where !== 'on its Cancel') keys.unshift({ key: 'Enter' });
-        for (const key of keys) press(key);
-        expect(name, where).not.toHaveFocus();
-        expect(panel, where).toHaveTextContent('SOW final v3.pdf');
-        expect(question(CONTOSO).group, where).toBeInTheDocument();
-        // A character goes into its field, with the focus: J and K, and "/".
-        for (const key of ['j', 'K', '/']) {
-          focusAway();
-          expect(press({ key, code: key === '/' ? 'Slash' : `Key${key.toUpperCase()}` }), `${key} ${where}`).toBe(true);
-          expect(field, `${key} ${where}`).toHaveFocus();
-        }
-        expect(panel, where).toHaveTextContent('SOW final v3.pdf');
-      }
-      // The spelling, typed on into the field, and its Enter answer the question and nothing else.
-      typeInto(field, 'Contoso');
-      fireEvent.keyDown(field, { key: 'Enter' });
-      await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledWith('1', { kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' }));
+      press('F2');
+      expect(name()).toHaveFocus();
+      expect(name()).toHaveValue(HELD_NAME);
+      sow().focus();
+      press('Enter');
+      await waitFor(() => expect(name()).toHaveFocus());
+      sow().focus();
+      press('/');
+      expect(screen.getByRole('searchbox', { name: 'Filter queue' })).toHaveFocus();
+      sow().focus();
+      press('Delete');
+      expect(within(panel).getByRole('group', { name: 'Confirm removal' })).toBeInTheDocument();
+      fireEvent.click(within(panel).getByRole('button', { name: 'Cancel' }));
+      name().focus();
+      press('n', { code: 'KeyN', altKey: true });
+      await waitFor(() => expect(panel).not.toHaveTextContent('SOW final v3.pdf'));
       expect(bridge.approve).not.toHaveBeenCalled();
       expect(bridge.keepOriginal).not.toHaveBeenCalled();
       expect(bridge.remove).not.toHaveBeenCalled();
-      expect(panel).toHaveTextContent('SOW final v3.pdf');
-      // Asking no more, the shortcuts are back: J moves on.
-      await waitFor(() => expect(screen.getByRole('group', { name: 'Use a learned spelling on its own' })).toHaveFocus());
-      press({ key: 'j', code: 'KeyJ' });
-      await waitFor(() => expect(panel).not.toHaveTextContent('SOW final v3.pdf'));
-    });
-
-    // The drawer puts the caret in the name of the document it shows. It did
-    // so while the question asked, when the window narrowed into a drawer,
-    // and what was typed next went into the name, where Enter files it.
-    it('keeps the focus in its field when the panel becomes a drawer', async () => {
-      const actions = handlers();
-      const bridge = spellingBridge(spellings);
-      const { rerender } = render(<ReviewInspector item={held} drawer={false} {...actions} spellings={bridge} />);
-      fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
-      const { field } = question(CONTOSO);
-      expect(field).toHaveFocus();
-      rerender(<ReviewInspector item={held} drawer {...actions} spellings={bridge} />);
-      expect(field).toHaveFocus();
-      fireEvent.click(question(CONTOSO).cancel);
-      // Asking no more, a drawer opening puts the caret in the name as before.
-      rerender(<ReviewInspector item={held} drawer={false} {...actions} spellings={bridge} />);
-      rerender(<ReviewInspector item={held} drawer {...actions} spellings={bridge} />);
-      expect(screen.getByRole('textbox', { name: 'Filename' })).toHaveFocus();
-    });
-
-    // The question can go away by itself while its spelling is typed: the
-    // document read again, the spelling changed. The rest of what was typed
-    // went to the shortcuts: J moved review on, the drawer put the caret in
-    // the next document's name, and Enter filed it.
-    it('leaves what is typed for it once it went away by itself going nowhere, until a press, Tab or Escape', async () => {
-      const base = createLearnedSpellingBridge();
-      let revision = '1';
-      let changed: (() => void) | undefined;
-      const { bridge, panel, field } = await heldInTheDrawer({
-        ...base,
-        listItems: async () => (await base.listItems()).map((item) => item.id === 'sow' ? { ...item, proposalRevision: revision } : item),
-        subscribeQueue: async (listener: (event: { type: 'changed' }) => void) => { changed = () => listener({ type: 'changed' }); return () => { changed = undefined; }; },
-      } as typeof base);
-      typeInto(field, 'Conto');
-      revision = '2';
-      act(() => changed?.());
-      await waitFor(() => expect(field).not.toBeInTheDocument());
-      for (const key of ['s', 'j', 'Enter', 'Enter', 'F2', ' ']) expect(press({ key }), key).toBe(false);
-      await Promise.resolve();
-      expect(panel).toHaveTextContent('SOW final v3.pdf');
-      expect(within(panel).getByRole('textbox', { name: 'Filename' })).not.toHaveFocus();
-      expect(bridge.approve).not.toHaveBeenCalled();
-      // A press, and the keys are the person's again.
-      fireEvent.pointerDown(panel, { pointerType: 'mouse' });
-      press({ key: 'j', code: 'KeyJ' });
-      await waitFor(() => expect(panel).not.toHaveTextContent('SOW final v3.pdf'));
-      expect(bridge.approve).not.toHaveBeenCalled();
-    });
-
-    it('takes a character typed outside its field, and no other key, nor one typed in another field or in a dialog over it', () => {
-      const scrollIntoView = vi.fn();
-      Object.defineProperty(Element.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true });
-      const beyond = vi.fn();
-      document.addEventListener('keydown', beyond);
-      try {
-        const view = render(<div>
-          <input aria-label="Another field" />
-          <UseOnItsOwnQuestion rule={{ id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' }} describedBy="asked" onConfirm={vi.fn()} onCancel={vi.fn()} />
-        </div>);
-        const group = screen.getByRole('group');
-        const field = screen.getByRole('textbox', { name: 'Type Contoso to use it on its own' });
-        const cancel = screen.getByRole('button', { name: 'Cancel' });
-        const other = screen.getByRole('textbox', { name: 'Another field' });
-        /** `init` pressed at `target`: whether it went on to the page's own listeners, and where the focus is after it. */
-        const pressAt = (target: HTMLElement, init: KeyboardEventInit) => {
-          target.focus();
-          if (target === document.body) (document.activeElement as HTMLElement).blur();
-          beyond.mockClear();
-          scrollIntoView.mockClear();
-          fireEvent.keyDown(target, init);
-          return { reached: beyond.mock.calls.length === 1, focus: document.activeElement };
-        };
-        // A character on nothing, or on its Cancel: into its field, brought into sight, and to nothing else.
-        for (const target of [document.body, cancel]) {
-          expect(pressAt(target, { key: 'k' })).toEqual({ reached: false, focus: field });
-          expect(scrollIntoView.mock.contexts).toEqual([group]);
-        }
-        // Not the space bar, which presses Cancel; nor a key held with Ctrl, nor an input method's, nor a named key.
-        expect(pressAt(cancel, { key: ' ' })).toEqual({ reached: true, focus: cancel });
-        for (const init of [{ key: 'k', ctrlKey: true }, { key: 'k', isComposing: true }, { key: 'Process', keyCode: 229 }, { key: 'Dead' }, { key: 'Enter' }, { key: 'ArrowDown' }]) {
-          expect(pressAt(document.body, init), JSON.stringify(init)).toEqual({ reached: true, focus: document.body });
-        }
-        // Not a key typed in another field: that field's.
-        expect(pressAt(other, { key: 'k' })).toEqual({ reached: true, focus: other });
-        // Nor one typed in a dialog open over it, which keeps its keys.
-        const over = document.createElement('div');
-        over.setAttribute('role', 'dialog');
-        over.setAttribute('aria-modal', 'true');
-        const inIt = document.createElement('button');
-        over.append(inIt);
-        document.body.append(over);
-        expect(pressAt(inIt, { key: 'k' })).toEqual({ reached: true, focus: inIt });
-        expect(pressAt(document.body, { key: 'k' })).toEqual({ reached: true, focus: document.body });
-        over.remove();
-        expect(pressAt(document.body, { key: 'k' })).toEqual({ reached: false, focus: field });
-        // Gone with the page it was on, it leaves nothing behind.
-        view.unmount();
-        view.container.remove();
-        expect(pressAt(document.body, { key: 'k' })).toEqual({ reached: true, focus: document.body });
-      } finally {
-        document.removeEventListener('keydown', beyond);
-        Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
-      }
-    });
-
-    it('lets keys be again once it is answered or taken back, or went away by itself with the focus on another control, or after Tab, Escape or a press', () => {
-      const rule = { id: '1', kind: 'party' as const, from: 'Contoso Worldwide, Inc.', to: 'Contoso' };
-      const Asker = ({ open, to = rule.to }: { open: boolean; to?: string }) => <div>
-        <button type="button">Close</button>
-        <table><tbody><tr><td role="gridcell" tabIndex={-1}>A cell</td></tr></tbody></table>
-        {open && <UseOnItsOwnQuestion rule={{ ...rule, to }} describedBy="asked" onConfirm={vi.fn()} onCancel={vi.fn()} />}
-      </div>;
-      const beyond = vi.fn();
-      /** Whether `key` pressed at `target` reached what listens on the page, and was not refused. */
-      const reaches = (target: Element, key: string) => {
-        beyond.mockClear();
-        const taken = fireEvent.keyDown(target, { key });
-        return taken && beyond.mock.calls.length === 1;
-      };
-      /** Whether `key` pressed at `target` was refused, and reached nothing else on the page. */
-      const goesNowhere = (target: Element, key: string) => {
-        beyond.mockClear();
-        const taken = fireEvent.keyDown(target, { key });
-        return !taken && beyond.mock.calls.length === 0;
-      };
-      document.addEventListener('keydown', beyond);
-      try {
-        const { rerender } = render(<Asker open={false} />);
-        /** The question asked, with "Con" typed into it; then `end`, and the question gone. */
-        const askThen = (end: (field: HTMLElement) => void) => {
-          rerender(<Asker open />);
-          const field = screen.getByRole('textbox');
-          typeInto(field, 'Con');
-          end(field);
-          rerender(<Asker open={false} />);
-          expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
-        };
-        askThen((field) => { typeInto(field, 'toso'); fireEvent.keyDown(field, { key: 'Enter' }); });
-        expect(reaches(document.body, 'k'), 'answered').toBe(true);
-        askThen(() => fireEvent.click(screen.getByRole('button', { name: 'Cancel' })));
-        expect(reaches(document.body, 'k'), 'taken back by its Cancel').toBe(true);
-        askThen((field) => fireEvent.keyDown(field, { key: 'Escape' }));
-        expect(reaches(document.body, 'k'), 'taken back by Escape in its field').toBe(true);
-        askThen(() => fireEvent.keyDown(document.body, { key: 'Escape' }));
-        expect(reaches(document.body, 'k'), 'taken back by Escape elsewhere').toBe(true);
-        // Answered after the spelling it asked about changed while it asked, and it asked again, empty.
-        askThen((field) => {
-          rerender(<Asker open to="Contoso Ltd" />);
-          expect(field).not.toBeInTheDocument();
-          const asked = screen.getByRole('textbox');
-          asked.focus();
-          typeInto(asked, 'Contoso Ltd');
-          fireEvent.keyDown(asked, { key: 'Enter' });
-        });
-        expect(reaches(document.body, 'k'), 'answered, asked again').toBe(true);
-        for (const control of [screen.getByRole('button', { name: 'Close' }), screen.getByRole('gridcell')]) {
-          askThen(() => control.focus());
-          expect(reaches(control, 'k'), `gone with the focus on ${control.tagName}`).toBe(true);
-        }
-
-        // Gone by itself with the focus in its field: every key goes nowhere but Tab, Escape, and those after them or after a press.
-        for (const [freed, free] of [['Tab', () => reaches(document.body, 'Tab')], ['Escape', () => reaches(document.body, 'Escape')], ['a press', () => { fireEvent.pointerDown(document.body); return true; }]] as const) {
-          askThen(() => undefined);
-          for (const key of ['t', 'k', 'Enter', ' ', 'Backspace', 'ArrowDown']) expect(goesNowhere(document.body, key), `${key} before ${freed}`).toBe(true);
-          expect(free(), freed).toBe(true);
-          expect(reaches(document.body, 'k'), `after ${freed}`).toBe(true);
-        }
-        // So too with the focus on nothing, as after a press on its sentence.
-        askThen(() => (document.activeElement as HTMLElement).blur());
-        expect(goesNowhere(document.body, 'k'), 'gone with the focus on nothing').toBe(true);
-        fireEvent.pointerDown(document.body);
-      } finally {
-        document.removeEventListener('keydown', beyond);
-      }
-    });
-  });
-
-  // Opened by a press, the question opens where its action was, sentence
-  // first, and nothing moves under the pointer: the panel used to scroll it
-  // clear of the decision, which brought its buttons under the pointer for
-  // the next press. Opened from the keyboard, it is brought into sight.
-  describe('opened by a press, moves nothing under the pointer', () => {
-    afterEach(() => { vi.restoreAllMocks(); Reflect.deleteProperty(Element.prototype, 'scrollIntoView'); });
-
-    it('takes the focus in its field without scrolling when a press opened it, and is brought into sight when a key did', async () => {
-      const focus = vi.spyOn(HTMLElement.prototype, 'focus');
-      // jsdom scrolls nothing, and has no scrollIntoView to call.
-      const scrollIntoView = vi.fn();
-      Object.defineProperty(Element.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true });
-      render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={spellingBridge(spellings)} />);
-      pressOn(await screen.findByRole('button', { name: CONTOSO }));
-      const pressed = question(CONTOSO);
-      expect(pressed.field).toHaveFocus();
-      expect(focus.mock.calls.filter((_, index) => focus.mock.contexts[index] === pressed.field)).toEqual([[{ preventScroll: true }]]);
-      expect(scrollIntoView).not.toHaveBeenCalled();
-      fireEvent.keyDown(pressed.field, { key: 'Escape' });
-
-      const again = await screen.findByRole('button', { name: CONTOSO });
-      fireEvent.keyDown(again, { key: 'Enter' });
-      fireEvent.click(again, { detail: 0 });
-      const keyed = question(CONTOSO);
-      expect(keyed.field).toHaveFocus();
-      expect(scrollIntoView.mock.contexts).toEqual([keyed.group]);
-      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
-    });
-
-    // Opened by a press where it reaches past what can be seen, the question
-    // stayed there while the spelling was typed into a field out of sight.
-    // A key is no aim of the pointer: the first one brings it into sight.
-    it('is brought into sight by a key typed in it after a press opened it', async () => {
-      const scrollIntoView = vi.fn();
-      Object.defineProperty(Element.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true });
-      render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={spellingBridge(spellings)} />);
-      pressOn(await screen.findByRole('button', { name: CONTOSO }));
-      const { group, field } = question(CONTOSO);
-      expect(scrollIntoView).not.toHaveBeenCalled();
-      typeInto(field, 'C');
-      expect(scrollIntoView.mock.contexts).toEqual([group]);
-      expect(scrollIntoView).toHaveBeenLastCalledWith({ block: 'nearest' });
-    });
-
-    // A press on the sentence clicks nothing in the question, and leaves the
-    // focus on the group around it. Escape there closed the drawer, question
-    // and all.
-    it('takes back the question, and only the question, on Escape wherever the focus is in the drawer', async () => {
-      const bridge = spellingBridge(spellings);
-      const actions = handlers();
-      render(<ReviewInspector item={held} drawer {...actions} spellings={bridge} />);
-      for (const focusElsewhere of [
-        () => screen.getByRole('group', { name: 'Use a learned spelling on its own' }).focus(),
-        () => screen.getByLabelText('Filename').focus(),
-        () => question(CONTOSO).yes.focus(),
-      ]) {
-        pressOn(await screen.findByRole('button', { name: CONTOSO }));
-        const asked = question(CONTOSO);
-        typeInto(asked.field, 'Contoso');
-        fireEvent.pointerDown(asked.group.querySelector('p')!, { pointerType: 'mouse' });
-        focusElsewhere();
-        fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
-        expect(asked.group).not.toBeInTheDocument();
-        await waitFor(() => expect(screen.getByRole('button', { name: CONTOSO })).toHaveFocus());
-      }
-      expect(actions.onClose).not.toHaveBeenCalled();
       expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
-      // With no question open, Escape closes the drawer as before.
-      fireEvent.keyDown(screen.getByRole('button', { name: CONTOSO }), { key: 'Escape' });
-      expect(actions.onClose).toHaveBeenCalledOnce();
+    });
+
+    it('Ctrl+Enter approves it under the name shown', async () => {
+      const { bridge } = await start();
+      press('Enter', { ctrlKey: true });
+      await waitFor(() => expect(bridge.approve).toHaveBeenCalledWith('sow', `${HELD_NAME}.pdf`, held.description));
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+    });
+
+    it('Alt+K keeps its original name', async () => {
+      const { bridge } = await start();
+      press('k', { code: 'KeyK', altKey: true });
+      await waitFor(() => expect(bridge.keepOriginal).toHaveBeenCalledWith('sow'));
+      expect(bridge.approve).not.toHaveBeenCalled();
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
+    });
+
+    it('a name typed into it, and Enter, renames it under that name', async () => {
+      const { bridge, name } = await start();
+      press('F2');
+      fireEvent.change(name(), { target: { value: '2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso Worldwide' } });
+      fireEvent.keyDown(name(), { key: 'Enter' });
+      await waitFor(() => expect(bridge.approve).toHaveBeenCalledWith('sow', '2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso Worldwide.pdf', held.description));
+      expect(bridge.houseRuleCheck).not.toHaveBeenCalled();
     });
   });
 
-  // The record's spelling can be older than the spelling: an approval of
-  // another document can respell it while this one is on screen. Checking a
-  // spelling the person was not shown would let Intern file names they
-  // never agreed to.
-  it('says when the spelling changed since it was shown, and checks nothing', async () => {
-    const bridge = spellingBridge(spellings);
-    const onSpellingChecked = vi.fn();
-    render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={bridge} onSpellingChecked={onSpellingChecked} />);
-    fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
-    bridge.respell('1', 'Contoso Ltd');
-    typeInto(question(CONTOSO).field, 'Contoso');
-    fireEvent.click(question(CONTOSO).yes);
-    expect(await screen.findByRole('alert')).toHaveTextContent('This spelling changed - look at it again.');
-    expect(bridge.houseRuleCheck).toHaveBeenCalledWith('1', { kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' });
-    expect(onSpellingChecked).not.toHaveBeenCalled();
-    // As it reads now, it is not the spelling the name used: nothing to offer for it.
-    await waitFor(() => expect(screen.queryByRole('button', { name: /Use on its own: Contoso/ })).not.toBeInTheDocument());
-  });
-
-  // The note above lists every spelling the name used. A bare "Use on its
-  // own" under it - the only unchecked one of three, or the one left after
-  // the other was checked and named in the line below - read as an action
-  // for whichever spelling was nearest. Each says which it is on screen
-  // whenever the note lists more than one.
-  it('names the spelling beside "Use on its own" when it is the one unchecked of several the note lists', async () => {
-    const oneUnchecked = spellingBridge(spellings.map((rule) => rule.id === '2' ? { ...rule, confirmed: 1 } : rule));
-    render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={oneUnchecked} />);
-    await screen.findByRole('button', { name: CONTOSO });
-    const group = screen.getByRole('group', { name: 'Use a learned spelling on its own' });
-    expect(within(group).getAllByRole('button', { name: /^Use on its own:/ })).toHaveLength(1);
-    expect(group).toHaveTextContent('Contoso Worldwide, Inc. written as Contoso');
-  });
-
-  it('names the spelling beside the "Use on its own" left once the other was checked', async () => {
-    const bridge = spellingBridge(spellings);
-    render(<ReviewInspector item={held} drawer={false} {...handlers()} spellings={bridge} />);
-    fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
-    typeInto(question(CONTOSO).field, 'Contoso');
-    fireEvent.click(question(CONTOSO).yes);
-    await screen.findByRole('status');
-    await waitFor(() => expect(screen.queryByRole('button', { name: /Use on its own: Contoso/ })).not.toBeInTheDocument());
-    const left = screen.getByRole('group', { name: 'Use a learned spelling on its own' });
-    expect(within(left).getAllByRole('button', { name: /^Use on its own:/ })).toHaveLength(1);
-    expect(left).toHaveTextContent('Ridgeline Cartography LLC written as Ridgeline Cartography');
-  });
-
-  it('shows the action alone under a note of one spelling', async () => {
-    const one: QueueItem = { ...held, houseRules: [held.houseRules![0]] };
-    render(<ReviewInspector item={one} drawer={false} {...handlers()} spellings={spellingBridge(spellings)} />);
-    await screen.findByRole('button', { name: CONTOSO });
-    expect(screen.getByRole('group', { name: 'Use a learned spelling on its own' })).toHaveTextContent(/^Use on its own$/);
-  });
-
-  it('is offered from the review window of the app, which reads the spellings from the bridge', async () => {
-    const base = createInMemoryBridge({ items: [held], learnedRules: spellings });
-    const houseRuleCheck = vi.fn(base.houseRuleCheck);
-    render(<App bridge={{ ...base, houseRuleCheck }} />);
-    await selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
-    fireEvent.click(await screen.findByRole('button', { name: CONTOSO }));
-    typeInto(question(CONTOSO).field, 'Contoso');
-    fireEvent.click(question(CONTOSO).yes);
-    await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledWith('1', { kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' }));
-    expect((await base.houseRulesList()).find((rule) => rule.id === '1')?.confirmed).toBe(1);
-  });
 });

@@ -1018,7 +1018,8 @@ export function createReviewBatchBridge(options: InMemoryBridgeOptions = {}): De
 /**
  * A statement of work held because two of the learned spellings its name
  * used have not been checked, ahead of the demo's queue, for walking "Use on
- * its own" in the review panel: the browser build's `?learnedSpellings=held`.
+ * its own" in Settings and what the review panel says of such a name: the
+ * browser build's `?learnedSpellings=held`.
  */
 const heldForSpelling: QueueItem = {
   id: 'sow', originalFilename: 'SOW final v3.pdf', status: 'review', confidence: 0.93,

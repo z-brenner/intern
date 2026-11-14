@@ -250,10 +250,11 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   /** Apply a learned spelling from now on without waiting for a second edit. */
   houseRuleUse(id: string): Promise<void>;
   /**
-   * "Use on its own": check learned spelling `id` - the only way one is
-   * checked, an approval never is - for the spelling exactly as the person
-   * was shown it (`shown`: its kind, the document's word and the spelling),
-   * so the names it changes are filed without waiting for a person. It
+   * "Use on its own", in Settings: check learned spelling `id` - the only
+   * way one is checked, an approval never is - for the spelling exactly as
+   * the person was shown it (`shown`: its kind, the document's word and the
+   * spelling), so the names it changes are filed without waiting for a
+   * person. It
    * approves and files nothing. Refused with RULE_CHANGED when the spelling
    * is not in use or reads otherwise now, and RULE_NOT_FOUND when it was
    * forgotten.

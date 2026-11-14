@@ -6,12 +6,14 @@
   aimed there too: the second of a double-click, however slow, or a press
   that follows the first because nothing seemed to happen. So nothing a
   press sets off scrolls what is under the pointer: not the focus the press
-  itself moves, and not the focus code moves in answer to it - a question
-  opening where its action was, with the focus in its field. The review
-  panel scrolled such a question clear of the decision stuck to its bottom,
-  and brought its buttons under the pointer that had pressed the action.
-  Focus moved after a key is scrolled into sight as usual: whoever pressed
-  the key is not aiming the pointer.
+  itself moves - the review panel scrolls a control focused under its
+  decision clear of it - and not the focus code moves in answer to it: the
+  question "Use on its own" opening in Settings where its action was, with
+  the focus in its field. A scroll then brings something else under the
+  pointer for the next press; when the question was asked in the review
+  panel, its scroll brought the question's yes there. Focus moved after a
+  key is scrolled into sight as usual: whoever pressed the key is not
+  aiming the pointer.
 */
 
 let pressed = false;

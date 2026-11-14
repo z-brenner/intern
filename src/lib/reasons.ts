@@ -121,15 +121,15 @@ const SENTENCES: Record<string, string> = {
   // person checked it (LearnedRule::confirmed in pipeline.rs): an edit's
   // wording cannot always tell a spelling from a decision about one
   // document, so a rule files nothing on its own until a person chooses
-  // "Use on its own" for it - in the review window beside this sentence, or
-  // in Settings. Approving the name checks nothing, so the sentence says
-  // both: approve a right name, and choose Use on its own to stop being
-  // asked. Putting the document's own word back retracts the rule when
-  // nothing else in the name changed; an approval that changes another part
-  // too teaches nothing, so the sentence says when. Not "for the first
-  // time": a spelling an earlier release learned has been used before, and
-  // is unchecked after the update all the same.
-  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits. Until you tell it to use that spelling on its own, a name it changes waits for you. If the name is right, approve it, and choose Use on its own if Intern should stop asking; if not, put the document\'s own words back - when that is the only change, Intern stops using that spelling.',
+  // "Use on its own" for it, in Settings under Learned spellings: the review
+  // window does not ask. Approving the name checks nothing, so the sentence
+  // says both: approve a right name, and choose Use on its own in Settings
+  // to stop being asked. Putting the document's own word back retracts the
+  // rule when nothing else in the name changed; an approval that changes
+  // another part too teaches nothing, so the sentence says when. Not "for
+  // the first time": a spelling an earlier release learned has been used
+  // before, and is unchecked after the update all the same.
+  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits. Until you tell it to use that spelling on its own, a name it changes waits for you. If the name is right, approve it; to stop being asked, choose Use on its own for the spelling in Settings, under Learned spellings. If not, put the document\'s own words back - when that is the only change, Intern stops using that spelling.',
   // Set when a person undoes a rename. The file is back under its original
   // name and the proposal is still here, so the document waits for a decision
   // rather than being renamed again by the next automatic pass.

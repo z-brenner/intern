@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import type { QueueItem } from '../../types';
 import { itemActions } from './actions';
-import { askingNow } from '../../components/UseOnItsOwn';
 import { isTextField } from '../../lib/textField';
 
 /**
@@ -71,13 +70,6 @@ function chordLetter(event: KeyboardEvent): string {
  *   several rows selected, which it would seem to remove as well;
  * - "/" goes to the filter.
  *
- * None of them acts while "Use on its own" asks for a spelling to be typed,
- * wherever the focus is: a character typed anywhere but in another field
- * goes into its field, and no other key is a shortcut (UseOnItsOwnQuestion).
- * A press on its sentence or its waiting yes took the focus off its field,
- * and the K of "Deutsche Bank" moved review to the document before, whose
- * name the next Enter filed.
- *
  * Approve, keep and remove act only while the Details panel is open, and
  * only where it offers the matching button, so a shortcut can never do what
  * a click could not: with the panel closed there is no button to click. The
@@ -96,9 +88,8 @@ export function useReviewShortcuts(options: ReviewShortcutOptions) {
     const onKeyDown = (event: KeyboardEvent) => {
       const { enabled, rows, selected, inspector, onMove, onOpen, onNext, onFilter, selectionSpansRows, onDeleteRefused } = latest.current;
       // A key a field or dialog already handled (Enter in the name, Escape
-      // in the filter) is not a shortcut as well, and while "Use on its own"
-      // asks, no key is one, wherever the focus is.
-      if (!enabled || event.defaultPrevented || event.isComposing || askingNow()) return;
+      // in the filter) is not a shortcut as well.
+      if (!enabled || event.defaultPrevented || event.isComposing) return;
       const target = event.target instanceof Element ? event.target : null;
       const textField = isTextField(target);
       const inPanel = Boolean(target?.closest('.inspector'));

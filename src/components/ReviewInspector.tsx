@@ -10,9 +10,7 @@ import { itemFlaggedFields, itemReasonCodes, nameParts, partyGiven, withParty } 
 import type { ReasonField } from '../lib/reasons';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
-import type { DesktopBridge } from '../lib/bridge';
-import type { HouseRule, LearnedRule, ModelReading, QueueItem } from '../types';
-import { UseOnItsOwnQuestion, askingNow, failureCode, spellingLabel } from './UseOnItsOwn';
+import type { ModelReading, QueueItem } from '../types';
 import { afterAPress } from '../lib/lastInput';
 
 /**
@@ -78,18 +76,6 @@ const decides = (run: () => void) => (event: MouseEvent<HTMLButtonElement>) => {
 /** A key's name beside the button it presses; read out through aria-keyshortcuts instead. */
 const Shortcut = ({ keys }: { keys: string }) => <kbd className="shortcut" aria-hidden="true">{keys}</kbd>;
 
-/** Whether a learned spelling is the one a name used: the same kind, word and spelling, exactly. */
-const sameSpelling = (learned: LearnedRule, used: HouseRule) => learned.kind === used.kind && learned.from === used.from && learned.to === used.to;
-
-/** Why a spelling could not be used on its own, in a sentence. */
-function spellingFailure(failure: unknown): string {
-  const code = failureCode(failure);
-  if (code === 'RULE_CHANGED') return 'This spelling changed - look at it again.';
-  if (code === 'RULE_NOT_FOUND') return 'This spelling was forgotten - look at the name again.';
-  const message = failure instanceof Error ? failure.message : typeof failure === 'object' && failure && 'message' in failure && typeof failure.message === 'string' ? failure.message : '';
-  return message.trim() ? `The spelling could not be used on its own: ${message.trim()}${code ? ` (${code})` : ''}` : 'The spelling could not be used on its own.';
-}
-
 interface Props {
   item: QueueItem;
   /** For the Details toggle's aria-controls. */
@@ -113,20 +99,11 @@ interface Props {
   onUndo(): void;
   onOpen(): void;
   onReveal(): void;
-  /**
-   * The learned spellings, for a document held because a spelling nobody
-   * has checked changed its name (LEARNED_SPELLING_UNCONFIRMED): each such
-   * spelling the name used is offered "Use on its own" here, after the
-   * question Settings asks. Without it, only the pointer to Settings.
-   */
-  spellings?: Pick<DesktopBridge, 'houseRulesList' | 'houseRuleCheck'>;
-  /** A spelling was used on its own from here: the queue may have changed. */
-  onSpellingChecked?(): void;
 }
 /** The name and description being edited, for one item and one revision of its proposal (`for`). */
 interface Draft { for: string; stem: string; description: string; edited: boolean }
 
-export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal, spellings, onSpellingChecked }: Props) {
+export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal }: Props) {
   // Exactly what the backend accepts for this item. Retry on an ordinary
   // review item, and nothing at all for a ready or waiting one, were the
   // two ways this panel used to be wrong (FRONTEND_UX-3, FRONTEND_UX-4).
@@ -159,10 +136,6 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // an edit of the one before.
   const [setAside, setSetAside] = useState<ReadonlyMap<string, Draft>>(() => new Map());
   const [error, setError] = useState('');
-  // "Use on its own" for a held document's spelling: which one is being
-  // asked about, and what came of the last answer.
-  const [askingSpelling, setAskingSpelling] = useState<string>();
-  const [spellingNote, setSpellingNote] = useState<{ failed: boolean; text: string }>();
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   // "Analysis details" - the evidence, the model's own figure, who read it -
@@ -196,7 +169,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     const kept = draft.edited ? new Map(setAside).set(draft.for, draft) : setAside;
     if (kept !== setAside) setSetAside(kept);
     setDraft(kept.get(draftFor) ?? { for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false });
-    setError(''); setMoreOpen(false); setConfirmingRemove(false); setAskingSpelling(undefined); setSpellingNote(undefined);
+    setError(''); setMoreOpen(false); setConfirmingRemove(false);
   }
   // The More menu is drawn only beside Keep original. An item that can no
   // longer be kept - a refresh showing it being read again - took the menu
@@ -271,33 +244,24 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // under it, and the browser scrolls a focused control into view only when
   // none of it is in the panel, under the buttons or not. A control focused
   // under them, or half under them, stayed there: "Analysis details" reached
-  // by Tab, the question "Use on its own" asks with its buttons cut off. A
-  // control focused from the keyboard is scrolled clear of the buttons,
-  // however tall they are now, never so far that its top leaves the panel;
-  // a control of that question brings the whole question clear, and so
-  // does a key typed in it. After a press nothing is scrolled until a key
-  // is pressed (`afterAPress`): not the control the press focused, so that
-  // the press lands on what was pressed, and not the question a press
-  // opened, whose scroll clear of the buttons brought its yes under the
-  // pointer for the press that came next. Left where it opened, though,
-  // that question took the spelling typed into it in a field under the
-  // buttons; the first key brings it clear.
-  const keepFocusInSight = (event: FocusEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
+  // by Tab. A control focused from the keyboard is scrolled clear of the
+  // buttons, however tall they are now, never so far that its top leaves
+  // the panel. After a press nothing is scrolled until a key is pressed
+  // (`afterAPress`): not the control the press focused, so that the press
+  // lands on what was pressed, and nothing else a press sets off moves what
+  // is under the pointer for the press that comes next.
+  const keepFocusInSight = (event: FocusEvent<HTMLElement>) => {
     const panel = inspectorRef.current;
     const decision = actionsRef.current;
-    const focused = event.target as HTMLElement;
+    const focused = event.target;
     if (afterAPress() || !panel || !decision || decision.offsetHeight === 0 || decision.contains(focused)) return;
-    const box = (focused.closest('.rule-confirm') ?? focused).getBoundingClientRect();
+    const box = focused.getBoundingClientRect();
     const under = box.bottom + 12 - decision.getBoundingClientRect().top;
     const room = box.top - 12 - panel.getBoundingClientRect().top;
     if (under > 0 && room > 0) panel.scrollTop += Math.min(under, room);
   };
-  // The drawer puts the caret in the name of the document it shows - but
-  // not while "Use on its own" asks: the window narrowing into a drawer took
-  // the focus out of its field, and the spelling typed next went into the
-  // name, where Enter files it.
   useEffect(() => {
-    if (!drawer || askingNow()) return;
+    if (!drawer) return;
     const filenameInput = filenameRef.current;
     if (filenameInput && !filenameInput.disabled) filenameInput.focus();
     else inspectorRef.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
@@ -386,15 +350,6 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       setMoreOpen(false);
       return;
     }
-    // Then the question "Use on its own" asks, wherever the focus is in the
-    // panel: a press on its sentence let go off the question leaves the
-    // focus on the group around it, and Escape there closed the drawer.
-    if (event.key === 'Escape' && askingSpelling !== undefined && !event.nativeEvent.isComposing) {
-      event.preventDefault();
-      event.stopPropagation();
-      takeBackSpelling(askingSpelling);
-      return;
-    }
     if (!drawer) return;
     if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
     if (event.key !== 'Tab') return;
@@ -410,55 +365,8 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // item's can be, since approving it checks its files first.
   const editable = actions.approve;
   const omitted = item.omittedParties ?? [];
-  /*
-    A document held because a learned spelling nobody has checked changed
-    its name offers, for each such spelling the name used, "Use on its
-    own": the only way a spelling is checked - approving this name checks
-    nothing - after the question Settings asks, with the word and the
-    spelling exactly as the backend will check them. It approves and files
-    nothing: the document still waits for its own decision. Whether a
-    spelling is checked is the backend's list's to say, read again for each
-    item and revision, and after every answer.
-  */
+  // Held because a learned spelling nobody has checked changed the name.
   const heldForSpelling = item.status === 'review' && itemReasonCodes(item).includes('LEARNED_SPELLING_UNCONFIRMED');
-  const usedRules = item.houseRules ?? [];
-  const [learned, setLearned] = useState<LearnedRule[]>();
-  const learnedFor = heldForSpelling && spellings && usedRules.length > 0
-    ? [item.id, item.proposalRevision ?? '', ...usedRules.flatMap((rule) => [rule.kind, rule.from, rule.to])].join('\n')
-    : undefined;
-  useEffect(() => {
-    if (learnedFor === undefined || !spellings) { setLearned(undefined); return; }
-    let active = true;
-    spellings.houseRulesList().then((rules) => { if (active) setLearned(rules); }, () => { if (active) setLearned(undefined); });
-    return () => { active = false; };
-  }, [learnedFor, spellings]);
-  const unchecked = heldForSpelling && learned
-    ? usedRules.flatMap((rule) => learned.filter((candidate) => sameSpelling(candidate, rule) && candidate.active && candidate.confirmed === 0).slice(0, 1))
-    : [];
-  // Answered or taken back, the focus goes back where the action was: its
-  // button, or the group once the spelling is checked and the button gone.
-  const spellingChecks = useRef<HTMLDivElement>(null);
-  const [spellingFocus, setSpellingFocus] = useState<{ rule?: string }>();
-  useEffect(() => {
-    if (!spellingFocus || askingSpelling !== undefined) return;
-    const trigger = [...(spellingChecks.current?.querySelectorAll<HTMLElement>('button[data-rule]') ?? [])].find((button) => button.dataset.rule === spellingFocus.rule);
-    (trigger ?? spellingChecks.current)?.focus();
-    setSpellingFocus(undefined);
-  }, [spellingFocus, askingSpelling, learned]);
-  const takeBackSpelling = (rule: string) => { setAskingSpelling(undefined); setSpellingFocus({ rule }); };
-  const checkSpelling = async (rule: LearnedRule) => {
-    if (!spellings) return;
-    setAskingSpelling(undefined);
-    try {
-      await spellings.houseRuleCheck(rule.id, { kind: rule.kind, from: rule.from, to: rule.to });
-      setSpellingNote({ failed: false, text: `Intern will use \u201c${rule.to}\u201d on its own from now on. This document still waits for you.` });
-      onSpellingChecked?.();
-    } catch (failure) {
-      setSpellingNote({ failed: true, text: spellingFailure(failure) });
-    }
-    await spellings.houseRulesList().then(setLearned, () => undefined);
-    setSpellingFocus({});
-  };
   const completed = item.status === 'completed';
   const filedAs = item.filedName ?? item.proposedFilename;
   const remove = actions.remove;
@@ -513,8 +421,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // The parts of the name being edited that the review is about, as they now read.
   const nameFlags = editable ? flaggedNameParts(joinFilename(stem, extension), flagged) : [];
   const reviewNote = item.reason && (item.status === 'review' || item.status === 'failed');
-  return <aside ref={inspectorRef} id={id} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown} onFocus={keepFocusInSight}
-    onKeyDownCapture={(event) => { if ((event.target as HTMLElement).closest('.rule-confirm')) keepFocusInSight(event); }}>
+  return <aside ref={inspectorRef} id={id} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown} onFocus={keepFocusInSight}>
     {/* A filed document's name is no longer its "current" one; it said so anyway (FRONTEND_UX-8). */}
     {/* Focusable so selecting a row can bring a keyboard user here, past the rest of the queue. */}
     <div className="inspector-title"><h2 ref={headingRef} tabIndex={-1}>{completed ? 'Filed document' : 'Review item'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close review"><Icon icon={X} /></button></div>
@@ -583,22 +490,14 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         Uses your spelling: {item.houseRules.map((rule, index) => <span key={`${rule.kind}-${rule.from}`}>{index > 0 ? '; ' : ''}<q>{rule.from}</q> written as <strong>{rule.to}</strong></span>)}{item.houseRules[item.houseRules.length - 1].to.trimEnd().endsWith('.') ? '' : '.'} Change or forget it under Settings.
       </p>}
       {/*
-        Each action says on screen which spelling it is for whenever the note
-        above lists more than one: a bare "Use on its own" under three
-        spellings, one of them just checked and named in the line below it,
-        read as an action for that one.
+        A name held for a spelling nobody has checked says why it waits, and
+        where "Use on its own" is: in Settings only. The review window asks
+        no question and checks no spelling - a word typed into a question
+        here reached review's own keys, which move on and file names.
       */}
-      {(unchecked.length > 0 || spellingNote) && <div ref={spellingChecks} className="spelling-checks" role="group" aria-label="Use a learned spelling on its own" tabIndex={-1}>
-        {unchecked.map((rule) => askingSpelling === rule.id
-          ? <UseOnItsOwnQuestion key={rule.id} rule={rule} describedBy={`${fieldId}-spelling-${rule.id}`} disabled={busy}
-            note="Choosing this does not approve this document: it still waits for you."
-            onConfirm={() => void checkSpelling(rule)} onCancel={() => takeBackSpelling(rule.id)} />
-          : <div key={rule.id} className="spelling-check">
-            {usedRules.length > 1 && <span><q>{rule.from}</q> written as <strong>{rule.to}</strong></span>}
-            <button type="button" data-rule={rule.id} disabled={busy || askingSpelling !== undefined} aria-label={`Use on its own: ${spellingLabel(rule)}`} onClick={() => { setSpellingNote(undefined); setAskingSpelling(rule.id); }}>Use on its own</button>
-          </div>)}
-        {spellingNote && <p className={spellingNote.failed ? 'form-error' : 'spelling-checked'} role={spellingNote.failed ? 'alert' : 'status'}>{spellingNote.text}</p>}
-      </div>}
+      {heldForSpelling && item.houseRules && item.houseRules.length > 0 && <p className="check-hint held-spelling-hint" role="note" aria-label="Why the name waits">
+        This name waits for you because Intern has not been told to use {item.houseRules.length === 1 ? 'this spelling' : 'every one of these spellings'} on its own: <q>Use on its own</q> is in Settings, under Learned spellings.
+      </p>}
       {/*
         The same for a party the evidence names and the name does not: the
         person's own organization, left out so the name says who the
