@@ -491,6 +491,11 @@ pub(crate) fn deadline_fires_as(
 /// word between them, as a table's start and end columns are, are not read
 /// as a period.
 ///
+/// A period's two ends, when both are in figures, are written alike: the
+/// same separator, the year in the same place and as long. A time written
+/// with dots after a date ("28.01.2024 - 11.30.05") has a date's shape and
+/// ends no period.
+///
 /// A statement in a looser spelling, which only validation's reading of a
 /// date finds ([`read_date_positions`]: "Invoice Date: 08-Jan-24", "Jan
 /// 8,2024", a stamp's "JAN 0 8 2024"), is as much a place of the date's own
@@ -522,6 +527,14 @@ pub(crate) fn only_bounds_a_period<'a>(
                 && (month_then_day(first, second) || month_then_day(second, first))
         }
     };
+    // How a date in figures is written: its separator, whether its year
+    // comes first, and how long its year is.
+    let written = |token: &NumericDate<'_>| {
+        let [first, _, third] = token.parts;
+        let year_first = first.len() == 4;
+        let year = if year_first { 4 } else { third.len() };
+        (token.separator, year_first, year)
+    };
     let mut stated = false;
     for segment in segments {
         for line in wrapped_lines(segment) {
@@ -533,7 +546,8 @@ pub(crate) fn only_bounds_a_period<'a>(
             let statements = date_match_spans(date, &normalized);
             // Every date on the line, as a span: numeric tokens that read
             // as a date, written ones as the evidence check finds them.
-            let mut dates = numeric_dates(&normalized)
+            let tokens = numeric_dates(&normalized);
+            let mut dates = tokens
                 .iter()
                 .filter(|token| reads_as_a_date(token))
                 .map(|token| (token.start, token.end))
@@ -552,10 +566,24 @@ pub(crate) fn only_bounds_a_period<'a>(
             if !read.iter().all(inside_a_date) {
                 return false;
             }
+            // Two spans that are both dates in figures are written alike;
+            // a date in words beside one is asked nothing.
+            let in_figures = |(start, end): (usize, usize)| {
+                tokens
+                    .iter()
+                    .find(|token| token.start == start && token.end == end)
+                    .map(written)
+            };
+            let alike = |one: (usize, usize), other: (usize, usize)| {
+                in_figures(one)
+                    .zip(in_figures(other))
+                    .is_none_or(|(one, other)| one == other)
+            };
             for (start, end) in statements {
                 let bounds = dates.iter().any(|&(other_start, other_end)| {
-                    (other_start >= end && joins(&normalized[end..other_start]))
-                        || (other_end <= start && joins(&normalized[other_end..start]))
+                    alike((start, end), (other_start, other_end))
+                        && ((other_start >= end && joins(&normalized[end..other_start]))
+                            || (other_end <= start && joins(&normalized[other_end..start])))
                 });
                 if !bounds {
                     return false;
@@ -3018,6 +3046,25 @@ This Intercompany Agreement is effective as of April 1, 2026 between Acme and Ac
             "Lot 01/08/24-44.71.2024",
         ] {
             assert!(!only(&[line], "2024-01-08"), "{line}");
+        }
+        // Nor does a dash into a time written with dots, which has a
+        // date's shape: a period's two ends in figures are written alike,
+        // with one separator and a year as long. Beside a date in words
+        // nothing is asked of the figures.
+        for line in [
+            "Data: 08.01.2024 - 11.30.05",
+            "Printed 01/08/24 - 12.30.45",
+            "Printed 2024-01-08 - 11-30-05",
+        ] {
+            assert!(!only(&[line], "2024-01-08"), "{line}");
+        }
+        for line in [
+            "Stay 08.01.2024 - 11.01.2024",
+            "Stay 2024-01-08 - 2024-01-11",
+            "January 8, 2024 - 01/11/24",
+            "01/08/24 through 11 January 2024",
+        ] {
+            assert!(only(&[line], "2024-01-08"), "{line}");
         }
         // Dates side by side, as a table's columns are, or listed with
         // "and", are not said to be a period.
