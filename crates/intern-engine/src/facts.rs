@@ -750,12 +750,12 @@ pub fn validate_facts_at(
         let mut date = replied.to_owned();
         // A date a stamp writes with its day's figures set apart ("SEP 1 8
         // 2015") is read, though less surely than one written out: the
-        // name waits for a person. A reply that took the stamp's first
-        // figure for the day ("2015-09-01") cited the stamp for a date it
-        // does not state; the stamp's own date stands in, when the cited
-        // line states that one date only. A receipt's stamp dates a copy's
-        // arrival, not the document: it is neither read loosely nor
-        // repaired.
+        // name waits for a person. A reply that took one of the stamp
+        // day's two figures for the day ("2015-09-01", "2015-09-08") cited
+        // the stamp for a date it does not state; the stamp's own date
+        // stands in, when the cited line states that one date only. A
+        // receipt's stamp dates a copy's arrival, not the document: it is
+        // neither read loosely nor repaired.
         if found.support == Support::Unsupported {
             let loose = found_at(replied, true);
             if loose.support != Support::Unsupported
