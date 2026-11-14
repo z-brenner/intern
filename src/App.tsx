@@ -399,16 +399,21 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     const { version, element, itemId } = queueFocus;
     if (focusRestoreVersion.current !== version) return;
     const refreshedTrigger = itemId ? rowCell(itemId) : undefined;
-    // Prefer the primary action by name rather than "the first button in the
-    // panel". That positional fallback silently moved the moment the toolbar
-    // gained a second control, sending focus to a destructive Discard button
-    // instead of Apply all ready.
+    // Never a button that acts, and never another row's cell. With its row
+    // gone the focus went to the toolbar's primary action, Rename all ready -
+    // and before that to "the first button in the panel", which became a
+    // destructive Discard the moment the toolbar gained a second control.
+    // But the selected document can leave the queue by itself - its file
+    // taken from the Queue folder, or filed by another machine - while a
+    // person is typing its name or its description, and the next space bar
+    // typed renamed every ready document. On another row's cell, Enter would
+    // open that document's details at its name, where a second Enter files
+    // it. The focus goes to the button of the view already shown, where the
+    // space bar and Enter change nothing; with nothing in the queue at all
+    // there is no such button, and it goes nowhere.
     const target = element?.isConnected
       ? element
-      : refreshedTrigger
-        ?? document.querySelector<HTMLElement>('.queue-panel .queue-actions button.primary:not(:disabled)')
-        ?? document.querySelector<HTMLElement>('.queue-panel .queue-grid [tabindex="0"]')
-        ?? document.querySelector<HTMLElement>('.queue-panel button:not(:disabled)');
+      : refreshedTrigger ?? document.querySelector<HTMLElement>('.queue-panel .view-switch [aria-current="page"]');
     target?.focus();
   }, [queueFocus]);
   useEffect(() => {
