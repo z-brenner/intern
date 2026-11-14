@@ -120,6 +120,31 @@ the same window: the delimiter is the one of comma, semicolon, tab, and pipe
 that splits the leading records most consistently, fields that are not UTF-8
 read as Windows-1252, and a UTF-16 export is transcoded as it streams.
 
+A cell can hold a formula, and what every reader renders is the value the
+formula last worked out. For one kind of formula that value is the file's and
+not the document's: `=TODAY()` or `=NOW()`, alone or inside anything else
+(`=TODAY()+30`, `=TEXT(NOW(),"d mmm yyyy")`), works out another value when the
+workbook is opened on another day. The worker says which cells those are
+without changing a character of the text. Each page carries, beside its text,
+the byte ranges of it that such a formula worked out (`volatile_spans`); a
+page with none is written without the field, so every other document crosses
+the pipe as it did, and the protocol version is unchanged, the worker and the
+host shipping together. The index, the prompt and the request are built from
+the text alone, so a stored or recorded reading still answers the same
+request. An `.xlsx` or `.xlsm` sheet is read a second time for its formulas
+once every sheet's values have been read, up to the last row of its window; a
+formula that does not read ends the marking of its sheet and nothing else. A
+binary `.xls` has its formulas' tokens walked in the record stream before
+they are emptied, shared and array formulas included; only an Excel 97-2003
+stream is walked, and a token whose size was not checked ends the walk of its
+formula with nothing found. An `.ods` is not asked - AnyDoc's model keeps a
+cell's text and not its formula - so none of its cells is ever marked, and a
+CSV has no formulas. Not followed in any format: a cell that only refers to
+one with such a formula (`=B3+30`), and a defined name that stands for one.
+A formula entered over a range as one array marks every cell of the range in
+an `.xls` and only the first in an `.xlsx`, where calamine does not give the
+range.
+
 A page that has to be OCR'd is rendered at 300 DPI or, when that would pass
 the 25-megapixel render cap, at the highest resolution that fits it. A phone
 photo that some tool wrapped in a PDF at 72 DPI is a 4032 × 3024 point page,
@@ -393,7 +418,7 @@ gated on the quoted wrapper and threw away correct dates on half the corpus. Wha
 must be true is that the date is really in the document, and that is what is
 checked. The model's quoted line is still stored and shown to the reviewer.
 
-A date the document states is not yet the document's date, so five more
+A date the document states is not yet the document's date, so six more
 checks read the document around it:
 
 * **Another document's date.** "the Master Services Agreement dated June 2,
@@ -452,6 +477,23 @@ checks read the document around it:
   separator and a year as long). Only an issued document is asked: a
   policy or a lease is dated by the start of its term. The evidence
   pipeline alone raises it.
+* **A spreadsheet formula's today.** An invoice or quote template dates
+  itself with `=TODAY()`, and the cell reads as a stated date like any
+  other: `DATE | 2026-03-03`, the day the copy happened to be saved. When
+  every line that states the chosen date, on every sheet, states it only
+  inside a cell the worker marked as worked out by a formula that calls
+  `TODAY` or `NOW` (see the workbooks above), the date is kept and the
+  proposal goes to review with `DATE_IS_FORMULA`. One statement of the date
+  outside such a cell clears it - another cell, another sheet, a sheet's
+  name, in any spelling validation reads - and a marked cell that shows
+  some other date changes nothing. The check follows validation in both
+  pipelines (`Engine::apply_gates`), because validation reads the text and
+  the marks stand beside it. A document with no marked cell is never held
+  by it: anything that is not an `.xlsx`, `.xlsm` or `.xls` workbook with
+  such a formula in a sheet's window, and any extraction stored or
+  recorded before the worker marked them. The price: a real invoice made
+  from such a template and saved on the day it was issued carries the
+  right date and waits for a person all the same.
 
 All of this is string handling over text nobody controls. A panic in it -
 one slice inside an `é` once panicked on every French invoice - fails that

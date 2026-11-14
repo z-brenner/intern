@@ -134,6 +134,19 @@ identified by its prompt alone, as before, so its recordings stay valid.
   after a date (`28.01.2024 - 11.30.05`) ends no period. A period written
   in a loose spelling at both ends is not read as one.
 
+  One check reads what the worker says beside the text, not the text, and
+  so follows validation (`Engine::apply_gates`, in both pipelines): a date
+  that every line stating it states only inside a spreadsheet cell whose
+  formula calls `TODAY` or `NOW` (`SourcePage::volatile_spans`, byte
+  ranges of the page's text) is what the workbook last worked out, not a
+  date the document was given. The date is kept and the name goes to
+  review with `DATE_IS_FORMULA`. One statement of it outside such a cell
+  clears it, on any sheet and in any spelling validation reads. The units,
+  the prompt and the request are the same with the ranges as without, and
+  an extraction that carries none - everything that is not an Excel
+  workbook with such a formula, and everything recorded before the ranges
+  existed - is never held by it.
+
 Each fact records its `Support`:
 
 - `Cited`: a unit the reply cited for the fact states it.
