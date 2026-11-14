@@ -12728,158 +12728,6 @@ of active General Counsel Memoranda and determined that the following actions ar
         );
     }
 
-    /// real6-memo-02's and real6-memo-05's shape: a memorandum whose
-    /// "To:" line names a post, or the holders of posts, with no person's
-    /// name - whoever holds the post at every body it went to. It is filed
-    /// by the office it comes from: "from" the organization the document
-    /// supports as its issuer, where the cast holds one, and otherwise
-    /// kept and held for a person. A memorandum to File, to a named
-    /// organization, to a firm or to a person named with their post is
-    /// named as before, and so is a letter to a post.
-    #[test]
-    fn a_memorandum_to_a_post_is_named_from_its_office_or_waits() {
-        const MEMO: &str = "Harlow Basin Credit Administration\n\n\
-INFORMATIONAL MEMORANDUM\n\n\
-October 16, 2024\n\n\
-To: Chair, Board of Directors\n\
-From: Odalys Brandt, Director\n\
-Subject: Extending the implementation date of the final rule\n\n\
-We are issuing this informational memorandum to extend the implementation date of the final \
-rule from January 1, 2025, to January 1, 2026.";
-        const POST: &str = "Chair, Board of Directors";
-        let reply = |text: &str, document_type: &str, addressee: &str, office: bool| {
-            facts_for(text, |index| ModelFacts {
-                document_type: Some(document_type.into()),
-                document_date: Some("2024-10-16".into()),
-                date_evidence: vec![id_of(index, "October 16, 2024")],
-                parties: [
-                    office.then(|| {
-                        party(
-                            "Harlow Basin Credit Administration",
-                            Some(PartyRole::Issuer),
-                            &[id_of(index, "Harlow Basin Credit Administration")],
-                        )
-                    }),
-                    Some(party(
-                        addressee,
-                        Some(PartyRole::Addressee),
-                        &[id_of(index, "To:")],
-                    )),
-                    Some(party(
-                        "Odalys Brandt",
-                        Some(PartyRole::Sender),
-                        &[id_of(index, "From:")],
-                    )),
-                ]
-                .into_iter()
-                .flatten()
-                .collect(),
-                ..ModelFacts::default()
-            })
-            .0
-        };
-        // The office on the letterhead is in the cast: the memorandum is
-        // from it, and nothing about its parties waits.
-        let outcome = reply(MEMO, "Informational Memorandum", POST, true);
-        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
-        assert_eq!(
-            outcome.proposal.parties,
-            vec!["Harlow Basin Credit Administration"]
-        );
-        assert!(
-            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
-            "{:?}",
-            outcome.reasons
-        );
-        // No office in the cast: the name is kept, and waits.
-        for holders in [
-            POST,
-            "Academic Deans and Directors",
-            "Chief Executive Officer",
-        ] {
-            let text = MEMO.replace(POST, holders);
-            let outcome = reply(&text, "Informational Memorandum", holders, false);
-            assert_eq!(
-                outcome.proposal.party_relation,
-                PartyRelation::To,
-                "{holders}"
-            );
-            assert_eq!(outcome.proposal.parties, vec![holders]);
-            assert!(
-                outcome.reasons.contains(&ReviewReason::PartyUnsupported),
-                "{holders}: {:?}",
-                outcome.reasons
-            );
-        }
-        // Who a memorandum is to stays where it names an organization, a
-        // firm or a person - the office on the letterhead in the cast or
-        // not - and no party reason is raised.
-        for addressee in [
-            "Corvane Media Group LLC",
-            "Brandt Achterberg Solicitors",
-            "Corbin Vale, Director",
-        ] {
-            for office in [true, false] {
-                let text = MEMO.replace(POST, addressee);
-                let outcome = reply(&text, "Informational Memorandum", addressee, office);
-                assert_eq!(
-                    outcome.proposal.party_relation,
-                    PartyRelation::To,
-                    "{addressee}"
-                );
-                assert_eq!(outcome.proposal.parties.len(), 1, "{addressee}");
-                assert!(
-                    !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
-                    "{addressee}: {:?}",
-                    outcome.reasons
-                );
-            }
-        }
-        // A letter to a post is a letter to it.
-        let letter = MEMO.replace("INFORMATIONAL MEMORANDUM", "LETTER OF INSTRUCTION");
-        let outcome = reply(&letter, "Letter of Instruction", POST, true);
-        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
-        assert_eq!(outcome.proposal.parties, vec![POST]);
-        assert!(
-            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
-            "{:?}",
-            outcome.reasons
-        );
-        for post in [
-            "Chair, Board of Directors",
-            "Chief Executive Officer",
-            "The Secretary",
-            "Director of Regulation",
-            "Academic Deans and Directors",
-            "Counsel",
-        ] {
-            assert!(named_by_a_post(post), "{post}");
-        }
-        for party in [
-            "File",
-            "Board of Directors",
-            "Office of the General Counsel",
-            "Head Office",
-            "Foster and Partners",
-            "Corvane Media Group LLC",
-            "Director of Regulation, Corvane Media Group LLC",
-            "Brandt Achterberg Solicitors",
-            "Summit Wealth Advisors",
-            "Hamptons Estate Agents",
-            "Co-op Funeral Directors",
-            "Kansas City Chiefs",
-            "Julie Heads",
-            "Odalys Brandt",
-            "Corbin Vale, Director",
-            "Corbin Vale, Director and Secretary",
-        ] {
-            assert!(!named_by_a_post(party), "{party}");
-        }
-        assert!(names_a_memorandum("Informational Memorandum"));
-        assert!(names_a_memorandum("Circular Letter"));
-        assert!(!names_a_memorandum("Letter of Instruction"));
-    }
-
     /// A class of recipients opens on "All", "Each" or "Fellow" before a
     /// class noun, or is headed by a class noun - a post or a holding in
     /// the plural, a body of people - that only words saying which members
@@ -13149,6 +12997,158 @@ Routine tsunami messages will be issued under a new header beginning on 22 July 
             "{:?}",
             outcome.reasons
         );
+    }
+
+    /// real6-memo-02's and real6-memo-05's shape: a memorandum whose
+    /// "To:" line names a post, or the holders of posts, with no person's
+    /// name - whoever holds the post at every body it went to. It is filed
+    /// by the office it comes from: "from" the organization the document
+    /// supports as its issuer, where the cast holds one, and otherwise
+    /// kept and held for a person. A memorandum to File, to a named
+    /// organization, to a firm or to a person named with their post is
+    /// named as before, and so is a letter to a post.
+    #[test]
+    fn a_memorandum_to_a_post_is_named_from_its_office_or_waits() {
+        const MEMO: &str = "Harlow Basin Credit Administration\n\n\
+INFORMATIONAL MEMORANDUM\n\n\
+October 16, 2024\n\n\
+To: Chair, Board of Directors\n\
+From: Odalys Brandt, Director\n\
+Subject: Extending the implementation date of the final rule\n\n\
+We are issuing this informational memorandum to extend the implementation date of the final \
+rule from January 1, 2025, to January 1, 2026.";
+        const POST: &str = "Chair, Board of Directors";
+        let reply = |text: &str, document_type: &str, addressee: &str, office: bool| {
+            facts_for(text, |index| ModelFacts {
+                document_type: Some(document_type.into()),
+                document_date: Some("2024-10-16".into()),
+                date_evidence: vec![id_of(index, "October 16, 2024")],
+                parties: [
+                    office.then(|| {
+                        party(
+                            "Harlow Basin Credit Administration",
+                            Some(PartyRole::Issuer),
+                            &[id_of(index, "Harlow Basin Credit Administration")],
+                        )
+                    }),
+                    Some(party(
+                        addressee,
+                        Some(PartyRole::Addressee),
+                        &[id_of(index, "To:")],
+                    )),
+                    Some(party(
+                        "Odalys Brandt",
+                        Some(PartyRole::Sender),
+                        &[id_of(index, "From:")],
+                    )),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        // The office on the letterhead is in the cast: the memorandum is
+        // from it, and nothing about its parties waits.
+        let outcome = reply(MEMO, "Informational Memorandum", POST, true);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Harlow Basin Credit Administration"]
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // No office in the cast: the name is kept, and waits.
+        for holders in [
+            POST,
+            "Academic Deans and Directors",
+            "Chief Executive Officer",
+        ] {
+            let text = MEMO.replace(POST, holders);
+            let outcome = reply(&text, "Informational Memorandum", holders, false);
+            assert_eq!(
+                outcome.proposal.party_relation,
+                PartyRelation::To,
+                "{holders}"
+            );
+            assert_eq!(outcome.proposal.parties, vec![holders]);
+            assert!(
+                outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+                "{holders}: {:?}",
+                outcome.reasons
+            );
+        }
+        // Who a memorandum is to stays where it names an organization, a
+        // firm or a person - the office on the letterhead in the cast or
+        // not - and no party reason is raised.
+        for addressee in [
+            "Corvane Media Group LLC",
+            "Brandt Achterberg Solicitors",
+            "Corbin Vale, Director",
+        ] {
+            for office in [true, false] {
+                let text = MEMO.replace(POST, addressee);
+                let outcome = reply(&text, "Informational Memorandum", addressee, office);
+                assert_eq!(
+                    outcome.proposal.party_relation,
+                    PartyRelation::To,
+                    "{addressee}"
+                );
+                assert_eq!(outcome.proposal.parties.len(), 1, "{addressee}");
+                assert!(
+                    !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+                    "{addressee}: {:?}",
+                    outcome.reasons
+                );
+            }
+        }
+        // A letter to a post is a letter to it.
+        let letter = MEMO.replace("INFORMATIONAL MEMORANDUM", "LETTER OF INSTRUCTION");
+        let outcome = reply(&letter, "Letter of Instruction", POST, true);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec![POST]);
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        for post in [
+            "Chair, Board of Directors",
+            "Chief Executive Officer",
+            "The Secretary",
+            "Director of Regulation",
+            "Academic Deans and Directors",
+            "Counsel",
+        ] {
+            assert!(named_by_a_post(post), "{post}");
+        }
+        for party in [
+            "File",
+            "Board of Directors",
+            "Office of the General Counsel",
+            "Head Office",
+            "Foster and Partners",
+            "Corvane Media Group LLC",
+            "Director of Regulation, Corvane Media Group LLC",
+            "Brandt Achterberg Solicitors",
+            "Summit Wealth Advisors",
+            "Hamptons Estate Agents",
+            "Co-op Funeral Directors",
+            "Kansas City Chiefs",
+            "Julie Heads",
+            "Odalys Brandt",
+            "Corbin Vale, Director",
+            "Corbin Vale, Director and Secretary",
+        ] {
+            assert!(!named_by_a_post(party), "{party}");
+        }
+        assert!(names_a_memorandum("Informational Memorandum"));
+        assert!(names_a_memorandum("Circular Letter"));
+        assert!(!names_a_memorandum("Letter of Instruction"));
     }
 
     /// real5-notice-11's shape: a regulator's enforcement release, its
