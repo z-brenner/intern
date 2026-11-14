@@ -12209,6 +12209,143 @@ Order total: $8,220.00";
         );
     }
 
+    /// A purchase order is issued by the side buying and sent to its
+    /// vendor. The head of its page is no evidence of which is which: the
+    /// vendor's line stands over the "Ship To" as often as the buyer's
+    /// letterhead does. A reply that names the vendor alone is not read as
+    /// naming the order's issuer, whether the document labels the vendor,
+    /// only the reply called it so, or the order also names where it is
+    /// delivered: the vendor is kept with no joining word, and the name
+    /// waits for a person. The party at the head that nothing calls the
+    /// vendor is the order's issuer as before, and an invoice laid out the
+    /// same way is from its vendor.
+    #[test]
+    fn an_order_whose_vendor_heads_its_page_is_not_named_from_the_vendor() {
+        const LABELED: &str = "Thornbury Outdoor Gear Co.\n\n\
+PURCHASE ORDER\n\n\
+PO Number: TOG-PO-4471\n\
+PO Date: June 3, 2026\n\
+Vendor: Ridgewell Textiles Ltd.\n\
+Ship To: Thornbury Outdoor Gear Co., Receiving\n\n\
+Ripstop nylon, 70D, forest green (yards): 1200 at $6.85 = $8,220.00\n\
+Order total: $8,220.00";
+        const UNLABELED: &str = "PURCHASE ORDER\n\n\
+PO Number: TOG-PO-4471\n\
+PO Date: June 3, 2026\n\n\
+Ridgewell Textiles Ltd.\n\
+40 Mill Road\n\
+Dalton\n\n\
+Ship To: Thornbury Outdoor Gear Co., Receiving\n\n\
+Ripstop nylon, 70D, forest green (yards): 1200 at $6.85 = $8,220.00\n\
+Order total: $8,220.00";
+        const DELIVERED: &str = "PURCHASE ORDER\n\n\
+PO Number: TOG-PO-4471\n\
+PO Date: June 3, 2026\n\n\
+Vendor: Ridgewell Textiles Ltd.\n\
+Deliver To: Thornbury Outdoor Gear Co.\n\n\
+Ripstop nylon, 70D, forest green (yards): 1200 at $6.85 = $8,220.00\n\
+Order total: $8,220.00";
+        let read = |text: &str, kind: &str, parties: &[(&str, Option<PartyRole>, &str)]| {
+            facts_for(text, |index| ModelFacts {
+                document_type: Some(kind.into()),
+                type_evidence: vec![id_of(index, &kind.to_uppercase())],
+                document_date: Some("2026-06-03".into()),
+                date_evidence: vec![id_of(index, "Date: June 3")],
+                parties: parties
+                    .iter()
+                    .map(|(name, role, line)| party(name, *role, &[id_of(index, line)]))
+                    .collect(),
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        let vendor = |role| ("Ridgewell Textiles Ltd.", role, "Ridgewell");
+        let delivery = (
+            "Thornbury Outdoor Gear Co.",
+            Some(PartyRole::Recipient),
+            "Deliver To",
+        );
+        for (tag, text, parties) in [
+            (
+                "labelled, the reply's vendor",
+                LABELED,
+                vec![vendor(Some(PartyRole::Vendor))],
+            ),
+            (
+                "labelled, the reply's seller",
+                LABELED,
+                vec![vendor(Some(PartyRole::Seller))],
+            ),
+            ("labelled, no role", LABELED, vec![vendor(None)]),
+            (
+                "the reply's vendor alone",
+                UNLABELED,
+                vec![vendor(Some(PartyRole::Vendor))],
+            ),
+            (
+                "the reply's seller alone",
+                UNLABELED,
+                vec![vendor(Some(PartyRole::Seller))],
+            ),
+            (
+                "with where it is delivered",
+                DELIVERED,
+                vec![vendor(Some(PartyRole::Vendor)), delivery],
+            ),
+        ] {
+            let outcome = read(text, "Purchase Order", &parties);
+            assert_eq!(
+                outcome.proposal.party_relation,
+                PartyRelation::None,
+                "{tag}: {:?}",
+                outcome.facts.as_ref().map(|facts| &facts.relation_basis)
+            );
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["Ridgewell Textiles Ltd."],
+                "{tag}"
+            );
+            assert_eq!(
+                outcome.reasons,
+                vec![ReviewReason::PartyUnsupported],
+                "{tag}"
+            );
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview, "{tag}");
+        }
+
+        // The letterhead's company, which nothing calls the vendor.
+        let outcome = read(
+            LABELED,
+            "Purchase Order",
+            &[("Thornbury Outdoor Gear Co.", None, "Thornbury Outdoor")],
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(outcome.proposal.parties, vec!["Thornbury Outdoor Gear Co."]);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+
+        // An invoice's vendor is its issuer, wherever it stands.
+        for text in [LABELED, UNLABELED] {
+            let invoice = text
+                .replace("PURCHASE ORDER", "INVOICE")
+                .replace("PO Number", "Invoice Number")
+                .replace("PO Date", "Invoice Date");
+            let outcome = read(&invoice, "Invoice", &[vendor(Some(PartyRole::Vendor))]);
+            assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+            assert_eq!(outcome.proposal.parties, vec!["Ridgewell Textiles Ltd."]);
+            assert_eq!(
+                outcome.status,
+                ProposalStatus::Ready,
+                "{:?}",
+                outcome.reasons
+            );
+        }
+    }
+
     /// A notice of a penalty that names the department assessing it and
     /// the company it penalizes only in its text: the reply called the
     /// company the recipient, and no line of the notice addresses it. The
