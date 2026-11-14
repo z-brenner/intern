@@ -678,22 +678,22 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .rule-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .rule-actions button { min-height: 30px; padding: 0 10px; }
 .rule-actions button:disabled { opacity: .5; cursor: default; }
-.learned-rules .rule-confirm { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
-.rule-confirm p { flex: 1 0 100%; margin: 0 0 2px; font-size: 12.5px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+/* The question "Use on its own" asks: what it does, the field the spelling is typed into, then its yes and Cancel. */
+.learned-rules .rule-confirm { grid-column: 1 / -1; }
+.rule-confirm { display: grid; gap: 6px; }
+.rule-confirm p { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
 .rule-confirm q { font-weight: 600; }
-/* What to do after a press "Use on its own" refused: beside its buttons, where the person is looking, taking no room until it says something, and moving nothing under the pointer - the buttons keep their height however many lines it takes. */
-.rule-confirm { align-items: flex-start; }
-.rule-confirm .rule-confirm-buttons { display: inline-flex; gap: 6px; }
-.rule-confirm .rule-confirm-again { flex: 1 1 0; font-size: 12px; line-height: 1.4; color: var(--text-soft); overflow-wrap: anywhere; }
-.rule-confirm .rule-confirm-again:not(:empty) { min-width: 10em; }
+.rule-confirm .rule-confirm-field { display: block; margin: 0; font-size: 12.5px; font-weight: 400; color: var(--text); overflow-wrap: anywhere; }
+.rule-confirm .rule-confirm-field input { margin-top: 4px; padding: 5px 8px; font-size: 13px; }
+.rule-confirm .rule-confirm-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
 .rule-confirm button { min-height: 30px; padding: 0 10px; }
+.rule-confirm button:disabled { opacity: .5; cursor: default; }
 .learned-rules li:focus-visible, .spelling-checks:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* "Use on its own" beside a held document's spelling, in the review window. */
 .spelling-checks { display: grid; gap: 8px; margin: 8px 0 14px; }
 .spelling-checks .spelling-check { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; color: var(--text-muted); }
 .spelling-checks .spelling-check q { font-style: normal; }
 .spelling-checks button { min-height: 30px; padding: 0 10px; font-size: 12.5px; }
-.spelling-checks .rule-confirm { display: flex; flex-wrap: wrap; gap: 6px; }
 .spelling-checks .spelling-checked, .spelling-checks .form-error { margin: 0; font-size: 12px; }
 
 /* The filing a near-duplicate repeats, under the reason for review. */

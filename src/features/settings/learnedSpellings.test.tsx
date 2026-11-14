@@ -1,10 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
-import { PRESS_SETTLES_MS } from '../../components/UseOnItsOwn';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
-import { drawYes, moveTo, offTheYes, onTheYes, pressAt, yesAt } from '../review/pointerTesting';
-import type { Point } from '../review/pointerTesting';
+import { clearField, commitComposition, composeInto, fillWithoutTyping, typeInto } from '../review/typingTesting';
 import type { HouseRule, LearnedRule } from '../../types';
 
 async function openSettings() {
@@ -113,7 +111,8 @@ describe('the spellings Intern has learned', () => {
     fireEvent.click(action());
     const question = within(rows()[2]).getByRole('group', { name: 'Use on its own: Acme written as Acme Widgets International, Inc.' });
     expect(question).toHaveAccessibleDescription('Every later document Intern reads as naming Acme will name Acme Widgets International, Inc. instead, and may be filed under that name without your check. Do this only if that is right for every one of them.');
-    expect(within(question).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    expect(within(question).getByRole('textbox', { name: 'Type Acme Widgets International, Inc. to use it on its own' })).toHaveFocus();
+    expect(within(question).getByRole('button', { name: 'Use on its own' })).toBeDisabled();
     expect(houseRuleCheck).not.toHaveBeenCalled();
 
     // Cancel, and Escape, take the question back, change nothing, and give
@@ -130,6 +129,7 @@ describe('the spellings Intern has learned', () => {
     expect(rows()[2]).toHaveTextContent('In use · asks before filing');
 
     fireEvent.click(action());
+    typeInto(within(rows()[2]).getByRole('textbox'), 'Acme Widgets International, Inc.');
     fireEvent.click(within(rows()[2]).getByRole('button', { name: 'Use on its own' }));
     await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledWith('3', { kind: 'party', from: 'Acme', to: 'Acme Widgets International, Inc.' }));
     await waitFor(() => expect(rows()[2]).not.toHaveTextContent('asks before filing'));
@@ -192,197 +192,122 @@ describe('the spellings Intern has learned', () => {
     expect(forget).toHaveFocus();
   });
 
-  // The same question as in the review window, with the same yes: a press
-  // that is part of a double-click, or comes straight after the question
-  // appeared, is no answer, even from a pointer that came onto it. Only a
-  // press meant for it uses a spelling on its own.
-  it('takes as a yes only a press meant for it', async () => {
-    const clock = { now: 1000 };
-    vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
-    drawYes();
-    try {
-      const unchecked: LearnedRule = { ...learned[1], confirmed: 0 };
-      const base = createInMemoryBridge({ learnedRules: [unchecked] });
-      const houseRuleCheck = vi.fn(base.houseRuleCheck);
-      render(<App bridge={{ ...base, houseRuleCheck }} />);
-      const dialog = await openSettings();
-      const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-      pressAt(within(list).getByRole('button', { name: /Use on its own/ }), offTheYes);
-      const yes = within(list).getByRole('button', { name: 'Use on its own' });
-      moveTo(onTheYes);
-      // A press where the pointer is, on the yes, as Chromium makes one.
-      const press = (presses: number) => {
-        fireEvent.pointerDown(yes, { ...onTheYes, pointerType: 'mouse' });
-        if (fireEvent.mouseDown(yes, onTheYes)) yes.focus();
-        fireEvent.pointerUp(yes, { ...onTheYes, pointerType: 'mouse' });
-        fireEvent.click(yes, { ...onTheYes, detail: presses });
-      };
-      // Straight after the question appeared; the second press of a slow
-      // double-click; straight after a press it did not take.
-      press(1);
-      clock.now += PRESS_SETTLES_MS * 4;
-      press(2);
-      clock.now += PRESS_SETTLES_MS - 1;
-      press(1);
-      expect(within(list).getByRole('button', { name: 'Cancel' })).toHaveFocus();
-      expect(houseRuleCheck).not.toHaveBeenCalled();
-
-      clock.now += PRESS_SETTLES_MS;
-      press(1);
-      await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledOnce());
-      await waitFor(() => expect(within(list).getAllByRole('listitem')[0]).not.toHaveTextContent('asks before filing'));
-    } finally {
-      vi.restoreAllMocks();
-    }
-  });
-
-  // The yes takes a press of the pointer only once the pointer came onto it
-  // after the question appeared. In Settings a press on another spelling's
-  // "Use on its own" closed the question above it, its row moved up, and
-  // the new question opened with its yes under the pointer: a press there
-  // again used the spelling on its own with its sentence never read.
-  it('takes a press only from a pointer that came onto the yes', async () => {
-    const clock = { now: 1000 };
-    vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
-    const box = drawYes();
-    try {
-      const base = createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] });
-      const houseRuleCheck = vi.fn(base.houseRuleCheck);
-      render(<App bridge={{ ...base, houseRuleCheck }} />);
-      const dialog = await openSettings();
-      const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-      const ask = (at: Point, pointerType = 'mouse') => {
-        pressAt(within(list).getByRole('button', { name: /^Use on its own:/ }), at, pointerType);
-        clock.now += PRESS_SETTLES_MS * 2;
-        const question = within(list).getByRole('group');
-        return { question, yes: within(question).getByRole('button', { name: 'Use on its own' }), cancel: within(question).getByRole('button', { name: 'Cancel' }) };
-      };
-      const refused = ({ question, cancel }: ReturnType<typeof ask>) => {
-        expect(question).toBeInTheDocument();
-        expect(cancel).toHaveFocus();
-        expect(houseRuleCheck).not.toHaveBeenCalled();
-      };
-
-      // Opened under a pointer that has not moved since.
-      let asked = ask(onTheYes);
-      pressAt(asked.yes, onTheYes);
-      refused(asked);
-      fireEvent.keyDown(asked.cancel, { key: 'Escape' });
-
-      // The yes moved under a pointer that stayed put: no move, the move a
-      // browser sends to where the pointer was, a pixel's move on the yes.
-      asked = ask(offTheYes);
-      box.current = new DOMRect(100, 160, 120, 30);
-      pressAt(asked.yes, offTheYes);
-      refused(asked);
-      clock.now += PRESS_SETTLES_MS * 2;
-      moveTo(offTheYes);
-      pressAt(asked.yes, offTheYes);
-      refused(asked);
-      clock.now += PRESS_SETTLES_MS * 2;
-      moveTo({ clientX: offTheYes.clientX, clientY: offTheYes.clientY + 1 });
-      pressAt(asked.yes, { clientX: offTheYes.clientX, clientY: offTheYes.clientY + 1 });
-      refused(asked);
-      fireEvent.keyDown(asked.cancel, { key: 'Escape' });
-      box.current = yesAt;
-
-      // A finger: a tap where the tap that opened it was.
-      asked = ask(onTheYes, 'touch');
-      pressAt(asked.yes, { clientX: onTheYes.clientX + 2, clientY: onTheYes.clientY }, 'touch');
-      refused(asked);
-      // A tap on the sentence, then on the yes.
-      clock.now += PRESS_SETTLES_MS * 2;
-      fireEvent.pointerDown(asked.question.querySelector('p')!, { ...offTheYes, pointerType: 'touch' });
-      pressAt(asked.yes, onTheYes, 'touch');
-      await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledOnce());
-    } finally {
-      vi.restoreAllMocks();
-    }
-  });
-
-  // A question opened from the keyboard, its yes appearing a pixel below a
-  // resting mouse, and a hand that drifts two pixels down as it presses; a
-  // mouse found on the yes after the page lost sight of it, over another
-  // window or with Intern behind one. Neither moved onto the yes from away
-  // from it, where the page saw it.
-  it('takes no press from a mouse the yes came beside, nor from one found on it after the page lost sight of it', async () => {
-    const clock = { now: 1000 };
-    vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
-    drawYes();
-    try {
-      const base = createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] });
-      const houseRuleCheck = vi.fn(base.houseRuleCheck);
-      render(<App bridge={{ ...base, houseRuleCheck }} />);
-      const dialog = await openSettings();
-      const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-      moveTo({ clientX: 150, clientY: yesAt.top - 1 });
-      const action = within(list).getByRole('button', { name: /^Use on its own:/ });
-      action.focus();
-      fireEvent.keyDown(action, { key: 'Enter' });
-      fireEvent.click(action, { detail: 0 });
-      const question = within(list).getByRole('group');
-      const yes = within(question).getByRole('button', { name: 'Use on its own' });
-      clock.now += PRESS_SETTLES_MS * 2;
-      const drifted = { clientX: 151, clientY: yesAt.top + 1 };
-      moveTo(drifted);
-      pressAt(yes, drifted);
-      expect(question).toBeInTheDocument();
-      expect(within(question).getByRole('status')).toHaveTextContent('Move well off Use on its own, then back.');
-
-      // Away from it, lost - the window lost the focus, or the mouse left
-      // the page - and found on it.
-      for (const lose of [() => fireEvent.blur(window), () => fireEvent.pointerOut(document.body, { pointerType: 'mouse', relatedTarget: null })]) {
-        clock.now += PRESS_SETTLES_MS * 2;
-        moveTo(offTheYes);
-        lose();
-        moveTo(onTheYes);
-        pressAt(yes, onTheYes);
-        expect(question).toBeInTheDocument();
-      }
-      expect(houseRuleCheck).not.toHaveBeenCalled();
-
-      // Away from it, seen, and onto it.
-      clock.now += PRESS_SETTLES_MS * 2;
-      moveTo(offTheYes);
-      moveTo(onTheYes);
-      pressAt(yes, onTheYes);
-      await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledOnce());
-    } finally {
-      vi.restoreAllMocks();
-    }
-  });
-
-  it('takes a yes from the pointer moved onto it, or from the keyboard at once', async () => {
-    const clock = { now: 1000 };
-    vi.spyOn(performance, 'now').mockImplementation(() => clock.now);
-    drawYes();
-    try {
-      const base = createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }, { id: '3', kind: 'party', from: 'Northwind Traders', to: 'Northwind', seen: 2, active: true, confirmed: 0, learnedAt: 1716369300 }] });
-      const houseRuleCheck = vi.fn(base.houseRuleCheck);
-      render(<App bridge={{ ...base, houseRuleCheck }} />);
-      const dialog = await openSettings();
-      const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
-
-      pressAt(within(list).getByRole('button', { name: /^Use on its own: Quarterly/ }), offTheYes);
-      clock.now += PRESS_SETTLES_MS * 2;
-      moveTo(onTheYes);
-      pressAt(within(list).getByRole('button', { name: 'Use on its own' }), onTheYes);
-      await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledWith('2', { kind: 'document_type', from: 'Quarterly Operations Review', to: 'Meeting Minutes' }));
-
-      // From the keyboard, straight after the question appeared.
-      const action = await within(list).findByRole('button', { name: /^Use on its own: Northwind/ });
-      action.focus();
-      fireEvent.keyDown(action, { key: 'Enter' });
-      fireEvent.click(action, { detail: 0 });
-      const yes = within(list).getByRole('button', { name: 'Use on its own' });
-      fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey: true });
-      yes.focus();
-      fireEvent.keyDown(yes, { key: 'Enter' });
+  // The same question as in the review window: the yes answers only once the
+  // spelling is typed out, which no press does. A press on another
+  // spelling's "Use on its own" closed the question above it and opened the
+  // next with its yes under the pointer, and rules on which presses the yes
+  // would take kept being got round.
+  it('answers only once the spelling is typed out: until then its yes waits and Enter in its field does nothing, and Enter never saves Settings', async () => {
+    const third: LearnedRule = { id: '3', kind: 'party', from: 'Northwind Traders', to: 'Northwind', seen: 2, active: true, confirmed: 0, learnedAt: 1716369300 };
+    const base = createInMemoryBridge({ learnedRules: [learned[0], third] });
+    const houseRuleCheck = vi.fn(base.houseRuleCheck);
+    const saveSettings = vi.fn(base.saveSettings);
+    render(<App bridge={{ ...base, houseRuleCheck, saveSettings }} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    fireEvent.click(within(list).getByRole('button', { name: /^Use on its own:/ }));
+    const question = within(list).getByRole('group', { name: 'Use on its own: Northwind Traders written as Northwind' });
+    const field = within(question).getByRole('textbox', { name: 'Type Northwind to use it on its own' });
+    const yes = within(question).getByRole('button', { name: 'Use on its own' });
+    expect(field).toHaveFocus();
+    for (const typed of ['', 'Northwin', 'Northwinds', 'Northwind Traders']) {
+      clearField(field);
+      typeInto(field, typed);
+      expect(yes, typed).toBeDisabled();
+      fireEvent.pointerDown(yes, { pointerType: 'mouse' });
+      fireEvent.click(yes, { detail: 1 });
       fireEvent.click(yes, { detail: 0 });
-      await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledWith('3', { kind: 'party', from: 'Northwind Traders', to: 'Northwind' }));
-    } finally {
-      vi.restoreAllMocks();
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(question, typed).toBeInTheDocument();
     }
+    clearField(field);
+    typeInto(field, 'northwind');
+    expect(yes).toBeEnabled();
+    // Ctrl+Enter is not Enter.
+    fireEvent.keyDown(field, { key: 'Enter', ctrlKey: true });
+    expect(question).toBeInTheDocument();
+    expect(houseRuleCheck).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: 'Enter' });
+    await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledWith('3', { kind: 'party', from: 'Northwind Traders', to: 'Northwind' }));
+    expect(houseRuleCheck).toHaveBeenCalledOnce();
+    await waitFor(() => expect(within(list).getAllByRole('listitem')[1]).toHaveFocus());
+    expect(dialog).toBeInTheDocument();
+    expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  it('takes the spelling typed in any case, with or without its accents, spaces and punctuation, and not a letter missing or added', async () => {
+    const rules: LearnedRule[] = [
+      { id: '7', kind: 'party', from: 'Contoso Limited', to: 'Contoso Ltd.', seen: 2, active: true, confirmed: 0, learnedAt: 7 },
+      { id: '8', kind: 'party', from: 'Mueller GmbH', to: 'Müller', seen: 2, active: true, confirmed: 0, learnedAt: 8 },
+    ];
+    const base = createInMemoryBridge({ learnedRules: rules });
+    const houseRuleCheck = vi.fn(base.houseRuleCheck);
+    render(<App bridge={{ ...base, houseRuleCheck }} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    for (const [rule, right, wrong] of [[rules[0], 'contoso ltd', ['contoso lt', 'contoso ltdd']], [rules[1], 'Muller', ['Mller', 'Mueller']]] as const) {
+      fireEvent.click(await within(list).findByRole('button', { name: `Use on its own: ${rule.from} written as ${rule.to}` }));
+      const question = within(list).getByRole('group');
+      const field = within(question).getByRole('textbox');
+      const yes = within(question).getByRole('button', { name: 'Use on its own' });
+      for (const typed of wrong) {
+        clearField(field);
+        typeInto(field, typed);
+        expect(yes, typed).toBeDisabled();
+      }
+      clearField(field);
+      typeInto(field, right);
+      expect(yes, right).toBeEnabled();
+      fireEvent.click(yes);
+      await waitFor(() => expect(houseRuleCheck).toHaveBeenLastCalledWith(rule.id, { kind: rule.kind, from: rule.from, to: rule.to }));
+    }
+  });
+
+  it('takes nothing into its field but typing, an input method\'s included, and starts it empty every time it asks', async () => {
+    const rules: LearnedRule[] = [
+      { id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso', seen: 2, active: true, confirmed: 0, learnedAt: 1 },
+      { id: '9', kind: 'party', from: 'Yamada Taro', to: '山田太郎', seen: 2, active: true, confirmed: 0, learnedAt: 9 },
+    ];
+    const base = createInMemoryBridge({ learnedRules: rules });
+    const houseRuleCheck = vi.fn(base.houseRuleCheck);
+    render(<App bridge={{ ...base, houseRuleCheck }} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    const contoso = () => within(list).getByRole('button', { name: 'Use on its own: Contoso Worldwide, Inc. written as Contoso' });
+    const asked = () => {
+      const question = within(list).getByRole('group');
+      return { field: within(question).getByRole('textbox'), yes: within(question).getByRole('button', { name: 'Use on its own' }), cancel: within(question).getByRole('button', { name: 'Cancel' }) };
+    };
+
+    fireEvent.click(contoso());
+    expect(fillWithoutTyping(asked().field, 'Contoso')).toEqual([]);
+    expect(asked().field).toHaveValue('');
+    expect(asked().yes).toBeDisabled();
+    expect(asked().field).toHaveAttribute('autocomplete', 'off');
+    expect(asked().field).toHaveAttribute('spellcheck', 'false');
+    const name = asked().field.getAttribute('name');
+
+    // Typed, then taken back: asked again, the field is empty.
+    typeInto(asked().field, 'Contoso');
+    expect(asked().yes).toBeEnabled();
+    fireEvent.keyDown(asked().field, { key: 'Escape' });
+    fireEvent.click(contoso());
+    expect(asked().field).toHaveValue('');
+    expect(asked().yes).toBeDisabled();
+    expect(asked().field.getAttribute('name')).not.toBe(name);
+    typeInto(asked().field, 'Contoso');
+    fireEvent.click(asked().cancel);
+
+    // Another spelling's question starts empty too, and takes a name composed with an input method.
+    fireEvent.click(within(list).getByRole('button', { name: 'Use on its own: Yamada Taro written as 山田太郎' }));
+    expect(asked().field).toHaveValue('');
+    composeInto(asked().field, ['やまだ', '山田', '山田太郎']);
+    expect(asked().yes).toBeEnabled();
+    commitComposition(asked().field);
+    expect(houseRuleCheck).not.toHaveBeenCalled();
+    fireEvent.keyDown(asked().field, { key: 'Enter' });
+    await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledWith('9', { kind: 'party', from: 'Yamada Taro', to: '山田太郎' }));
+    expect(houseRuleCheck).toHaveBeenCalledOnce();
   });
 
   // As in the review window: while one spelling is asked about, the other
@@ -421,40 +346,39 @@ describe('the spellings Intern has learned', () => {
     for (const button of others) expect(button).toBeEnabled();
   });
 
-  // Opened by a press, the question takes the focus where it is: the
-  // browser scrolled its Cancel into view when it opened past the bottom of
-  // the dialog's body, and brought whatever the scroll brought under the
-  // pointer for the next press. A press on its sentence leaves the focus on
-  // Cancel, not on the row, where Escape closed Settings.
-  it('moves nothing under the pointer that opened the question, and keeps Escape for the question', async () => {
+  // Opened by a press, the question takes the focus in its field where it
+  // is: the browser scrolled the question into view when it opened past the
+  // bottom of the dialog's body, and brought whatever the scroll brought
+  // under the pointer for the next press. Opened from the keyboard, it is
+  // brought into sight.
+  it('moves nothing under the pointer that opened the question, and is brought into sight when a key opened it', async () => {
     const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    // jsdom scrolls nothing, and has no scrollIntoView to call.
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { value: scrollIntoView, configurable: true, writable: true });
     try {
       const unchecked: LearnedRule = { ...learned[1], confirmed: 0 };
-      const base = createInMemoryBridge({ learnedRules: [unchecked] });
-      const houseRuleCheck = vi.fn(base.houseRuleCheck);
-      render(<App bridge={{ ...base, houseRuleCheck }} />);
+      render(<App bridge={createInMemoryBridge({ learnedRules: [unchecked] })} />);
       const dialog = await openSettings();
       const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
       const action = within(list).getByRole('button', { name: /Use on its own/ });
-      fireEvent.pointerDown(action);
+      fireEvent.pointerDown(action, { pointerType: 'mouse' });
       fireEvent.click(action, { detail: 1 });
-      const question = within(list).getByRole('group');
-      const cancel = within(question).getByRole('button', { name: 'Cancel' });
-      expect(cancel).toHaveFocus();
-      expect(focus.mock.calls.filter((_, index) => focus.mock.contexts[index] === cancel).map((call) => call[0])).toEqual([{ preventScroll: true }]);
+      const field = within(list).getByRole('textbox');
+      expect(field).toHaveFocus();
+      expect(focus.mock.calls.filter((_, index) => focus.mock.contexts[index] === field)).toEqual([[{ preventScroll: true }]]);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+      fireEvent.keyDown(field, { key: 'Escape' });
 
-      const sentence = question.querySelector('p')!;
-      // A press on the sentence focuses the row, as it does in Chromium.
-      fireEvent.pointerDown(sentence);
-      within(list).getByRole('listitem').focus();
-      fireEvent.click(sentence, { detail: 1 });
-      expect(cancel).toHaveFocus();
-      fireEvent.keyDown(cancel, { key: 'Escape' });
-      expect(within(list).queryByRole('group')).not.toBeInTheDocument();
-      expect(dialog).toBeInTheDocument();
-      expect(houseRuleCheck).not.toHaveBeenCalled();
+      const again = await within(list).findByRole('button', { name: /Use on its own/ });
+      fireEvent.keyDown(again, { key: 'Enter' });
+      fireEvent.click(again, { detail: 0 });
+      expect(within(list).getByRole('textbox')).toHaveFocus();
+      expect(scrollIntoView.mock.contexts).toEqual([within(list).getByRole('group')]);
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
     } finally {
       focus.mockRestore();
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
     }
   });
 
@@ -476,10 +400,13 @@ describe('the spellings Intern has learned', () => {
       () => within(list).getByRole('listitem').focus(),
       () => names.focus(),
       () => within(dialog).getByRole('button', { name: 'Save settings' }).focus(),
+      () => within(list).getByRole('button', { name: 'Cancel' }).focus(),
     ]) {
-      pressAt(action(), offTheYes);
+      fireEvent.pointerDown(action(), { pointerType: 'mouse' });
+      fireEvent.click(action(), { detail: 1 });
       const question = within(list).getByRole('group');
-      fireEvent.pointerDown(question.querySelector('p')!, { ...offTheYes, pointerType: 'mouse' });
+      typeInto(within(question).getByRole('textbox'), 'Meeting');
+      fireEvent.pointerDown(question.querySelector('p')!, { pointerType: 'mouse' });
       focusElsewhere();
       fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
       expect(question).not.toBeInTheDocument();
@@ -533,6 +460,7 @@ describe('the spellings Intern has learned', () => {
     const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
     current = { ...shown, to: 'Board Minutes' };
     fireEvent.click(within(list).getByRole('button', { name: /Use on its own/ }));
+    typeInto(within(list).getByRole('textbox'), 'Meeting Minutes');
     fireEvent.click(within(list).getByRole('button', { name: 'Use on its own' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('That spelling changed since the list was shown');
     expect(houseRuleCheck).toHaveBeenCalledWith('2', { kind: 'document_type', from: 'Quarterly Operations Review', to: 'Meeting Minutes' });

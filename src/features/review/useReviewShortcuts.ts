@@ -74,6 +74,9 @@ function chordLetter(event: KeyboardEvent): string {
  *   from those fields as well. After every decision the caret is in a name,
  *   where J is a letter, so there was no key for "not this one yet": the
  *   Next undecided link was three presses of Shift+Tab away;
+ * - but none of those three from the field "Use on its own" asks a spelling
+ *   to be typed into, whose keys, but for Tab and Escape, never reach this
+ *   listener (UseOnItsOwnQuestion);
  * - Delete removes, after asking - but not while the table has cells of
  *   several rows selected, which it would seem to remove as well;
  * - "/" goes to the filter.

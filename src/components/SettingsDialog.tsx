@@ -346,18 +346,17 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     "Use on its own" is the only way a learned spelling is checked: no
     approval checks one. It is the one action here that lets Intern file
     names without a person, so it says what it does - for every later
-    document - before it does it, and Cancel holds the focus.
+    document - before it does it, and answers only once the spelling is
+    typed out (UseOnItsOwnQuestion).
 
-    While it asks, the other spellings' actions wait: a press on another
-    "Use on its own" closed the question above it, its row moved up by the
-    height the question had taken, and the new question opened with its
-    yes under the pointer that had pressed the action. The question's yes
-    no longer takes a press from a pointer that did not move to it
-    (UseOnItsOwnQuestion), and nothing in the list moves while it asks, as
-    in the review window. Escape takes back the question, and nothing else,
-    wherever the focus is in the dialog: a press on its sentence let go off
-    the question leaves the focus on the row, and Escape there closed
-    Settings with whatever was not saved.
+    While it asks, the other spellings' actions wait, as in the review
+    window: a press on another "Use on its own" closed the question above
+    it, its row moved up by the height the question had taken, and the new
+    question opened under the pointer that had pressed the action. Nothing
+    in the list moves while it asks. Escape takes back the question, and
+    nothing else, wherever the focus is in the dialog: a press on its
+    sentence leaves the focus on the row, and Escape there closed Settings
+    with whatever was not saved.
 
     A taken-back question gives the focus back to its action. A change that
     takes away the control that had the focus puts it back in the list

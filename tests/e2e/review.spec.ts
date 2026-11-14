@@ -7,9 +7,10 @@ import { openDetails } from './grid';
   original - which sticks to the bottom over whatever is behind it. The
   browser scrolls a focused control into view only when none of it is in
   the panel, so one focused under the buttons, or half under them, stayed
-  there: "Analysis details" reached by Tab, and the Cancel of "Use on its
-  own", with the sentence it answers cut off. A control focused from the
-  keyboard, or from code after a key, is now scrolled clear of the buttons.
+  there: "Analysis details" reached by Tab, and the question "Use on its
+  own" asks, with its buttons cut off. A control focused from the keyboard,
+  or from code after a key, is now scrolled clear of the buttons; a control
+  of that question brings the whole question clear.
   After a press nothing is scrolled until a key is pressed (below).
 */
 
@@ -82,7 +83,7 @@ test('a control is scrolled clear of a taller decision too', async ({ page }) =>
 });
 
 for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) {
-  test(`the question "Use on its own" asks is in sight, Cancel and all, at ${size.width}x${size.height}`, async ({ page }) => {
+  test(`the question "Use on its own" asks is in sight, its field and buttons and all, at ${size.width}x${size.height}`, async ({ page }) => {
     await page.setViewportSize(size);
     await page.goto('/?learnedSpellings=held');
     const panel = await openDetails(page, 'SOW final v3.pdf');
@@ -92,10 +93,10 @@ for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) 
       await panel.getByRole('button', { name: label }).focus();
       await page.keyboard.press('Enter');
       const question = panel.getByRole('group', { name: label });
-      await expect(question.getByRole('button', { name: 'Cancel' })).toBeFocused();
+      await expect(question.getByRole('textbox')).toBeFocused();
       expect(await hiddenFocus(page), label).toBe('');
-      // The sentence it answers, and the yes beside Cancel, are in sight too.
-      for (const part of [question.locator('p'), question.getByRole('button', { name: 'Use on its own' })]) {
+      // The sentence it answers, the yes and Cancel under the field, are in sight too.
+      for (const part of [question.locator('p'), question.getByRole('button', { name: 'Use on its own' }), question.getByRole('button', { name: 'Cancel' })]) {
         const hit = await part.evaluate((element) => {
           const box = element.getBoundingClientRect();
           const bottom = document.elementFromPoint(box.left + box.width / 2, box.bottom - 4);
@@ -162,10 +163,8 @@ test('a press on a control half under the decision lands on it', async ({ page }
   used the spelling on its own with the sentence never read, and from then
   on a name it changed could be filed without anyone looking at it. Now
   nothing a press sets off moves what is under the pointer: the next press
-  lands on the sentence, and leaves the focus on Cancel. The yes takes a
-  press only when it is meant for it: not part of a double-click, and not
-  one begun within a double-click's time of the question appearing or of a
-  press it refused.
+  lands on the sentence. And the yes answers only once the spelling is
+  typed out (useOnItsOwn.spec.ts).
 */
 
 type Pressed = {
@@ -177,8 +176,8 @@ type Pressed = {
   under: string;
   /** Whether the scroller moved. */
   moved: boolean;
-  /** Whether Cancel took the focus. */
-  cancelFocused: boolean;
+  /** Whether the question's field took the focus. */
+  fieldFocused: boolean;
   /** Whether the question reaches past what the scroller shows of it: under the decision, or past the dialog's body. */
   reaches: boolean;
   /** Whether scrolling the question clear of the decision, as the panel used to, would have left its yes under the pointer. */
@@ -226,7 +225,7 @@ async function pressAtEveryScroll(page: Page, scroller: Locator, label: string, 
         const was = opened(yes.getBoundingClientRect());
         scrollWouldBringTheYes = shift > 0 && point.x >= was.left && point.x <= was.right && point.y >= was.top - shift && point.y <= was.bottom - shift;
       }
-      const result = { top: point.top, at: { x: point.x, y: point.y }, under, moved: drift !== 0, cancelFocused: document.activeElement === cancel, reaches, scrollWouldBringTheYes };
+      const result = { top: point.top, at: { x: point.x, y: point.y }, under, moved: drift !== 0, fieldFocused: document.activeElement === question.querySelector('input'), reaches, scrollWouldBringTheYes };
       cancel.click();
       return result;
     }, at));
@@ -234,10 +233,10 @@ async function pressAtEveryScroll(page: Page, scroller: Locator, label: string, 
   return pressed;
 }
 
-/** The presses that left anything but the sentence under the pointer, moved the scroller, or took the focus off Cancel. */
+/** The presses that left anything but the sentence under the pointer, moved the scroller, or left the focus out of the question's field. */
 const wrongPresses = (pressed: Pressed[]) => pressed
-  .filter((press) => press.under !== 'the sentence' || press.moved || !press.cancelFocused)
-  .map((press) => `at ${press.top}: ${press.under}${press.moved ? ', scrolled' : ''}${press.cancelFocused ? '' : ', focus not on Cancel'}`);
+  .filter((press) => press.under !== 'the sentence' || press.moved || !press.fieldFocused)
+  .map((press) => `at ${press.top}: ${press.under}${press.moved ? ', scrolled' : ''}${press.fieldFocused ? '' : ', focus not in the field'}`);
 
 for (const size of [{ width: 1400, height: 900 }, { width: 1024, height: 768 }, { width: 800, height: 600 }]) {
   test(`a press on "Use on its own" moves nothing, and leaves the question's sentence under the pointer, at ${size.width}x${size.height}`, async ({ page }) => {
@@ -334,7 +333,7 @@ for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) 
         await expect(question, `${label}: ${what}`).toBeVisible();
         await page.waitForTimeout(150);
         await expect(checked, `${label}: ${what}`).toHaveCount(0);
-        await expect(question.getByRole('button', { name: 'Cancel' }), `${label}: ${what}`).toBeFocused();
+        await expect(question.getByRole('button', { name: 'Use on its own' }), `${label}: ${what}`).toBeDisabled();
         expect(await panel.evaluate((element) => element.scrollTop), `${label}: ${what}`).toBe(top);
         expect(await page.evaluate(({ x, y }) => Boolean(document.elementFromPoint(x, y)?.closest('.rule-confirm p')), at), `${label}: ${what}`).toBe(true);
         // Escape takes back the question, and the drawer stays open.
@@ -345,50 +344,6 @@ for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) 
     }
   });
 }
-
-// A press aimed at the yes itself is taken only when it is meant for it.
-test('the yes of "Use on its own" takes a press begun once the sentence had time to be read, and no other', async ({ page }) => {
-  await page.setViewportSize({ width: 1400, height: 900 });
-  await page.goto('/?learnedSpellings=held');
-  const panel = await openDetails(page, 'SOW final v3.pdf');
-  const checked = panel.locator('.spelling-checked');
-  const label = (await panel.getByRole('button', { name: /^Use on its own:/ }).first().getAttribute('aria-label'))!;
-  const question = panel.getByRole('group', { name: label });
-  const yes = question.getByRole('button', { name: 'Use on its own' });
-  // A scroll at which the whole question opens above the decision.
-  const pressed = (await pressAtEveryScroll(page, panel, label, 4)).filter((press) => !press.reaches);
-  expect(pressed.length).toBeGreaterThan(0);
-  const { top } = pressed[Math.floor(pressed.length / 2)];
-  // Open the question with a press on its action, and move the pointer to its yes.
-  const ask = async () => {
-    const at = await actionAt(panel, label, top);
-    await page.mouse.click(at.x, at.y);
-    const box = (await yes.boundingBox())!;
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  };
-  const refused: [string, () => Promise<void>][] = [
-    ['a press straight after the question appeared', async () => { await page.mouse.down(); await page.mouse.up(); }],
-    // The system counts a press as the second of a double-click by its own time, however slow it is set.
-    ['a press the system counts as the second of a double-click', async () => { await page.waitForTimeout(700); await page.mouse.down({ clickCount: 2 }); await page.mouse.up({ clickCount: 2 }); }],
-    ['a press begun straight after the question appeared and held past half a second', async () => { await page.waitForTimeout(100); await page.mouse.down(); await page.waitForTimeout(700); await page.mouse.up(); }],
-  ];
-  for (const [what, pressIt] of refused) {
-    await ask();
-    await pressIt();
-    await page.waitForTimeout(150);
-    await expect(question, what).toBeVisible();
-    await expect(checked, what).toHaveCount(0);
-    await expect(question.getByRole('button', { name: 'Cancel' }), what).toBeFocused();
-    await page.keyboard.press('Escape');
-    await expect(question).toHaveCount(0);
-  }
-  // A press on it once the sentence had time to be read is a yes.
-  await ask();
-  await page.waitForTimeout(700);
-  await page.mouse.down(); await page.mouse.up();
-  await expect(checked).toContainText('on its own from now on');
-  await expect(panel.getByRole('button', { name: label })).toHaveCount(0);
-});
 
 // A finger the same: the second tap lands on the sentence.
 test.describe('with a touch screen', () => {

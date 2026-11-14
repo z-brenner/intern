@@ -271,20 +271,20 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // under it, and the browser scrolls a focused control into view only when
   // none of it is in the panel, under the buttons or not. A control focused
   // under them, or half under them, stayed there: "Analysis details" reached
-  // by Tab, the Cancel of "Use on its own" with the sentence it answers cut
-  // off. A control focused from the keyboard is scrolled clear of the
-  // buttons, however tall they are now, never so far that its top leaves
-  // the panel. After a press nothing is scrolled until a key is pressed
-  // (`afterAPress`): not the control the press focused, so that the press
-  // lands on what was pressed, and not the Cancel of the question the press
-  // opened, whose scroll brought the question's yes under the pointer for
-  // the press that came next.
+  // by Tab, the question "Use on its own" asks with its buttons cut off. A
+  // control focused from the keyboard is scrolled clear of the buttons,
+  // however tall they are now, never so far that its top leaves the panel;
+  // a control of that question brings the whole question clear. After a
+  // press nothing is scrolled until a key is pressed (`afterAPress`): not
+  // the control the press focused, so that the press lands on what was
+  // pressed, and not the question a press opened, whose scroll clear of the
+  // buttons brought its yes under the pointer for the press that came next.
   const keepFocusInSight = (event: FocusEvent<HTMLElement>) => {
     const panel = inspectorRef.current;
     const decision = actionsRef.current;
     const focused = event.target;
     if (afterAPress() || !panel || !decision || decision.offsetHeight === 0 || decision.contains(focused)) return;
-    const box = focused.getBoundingClientRect();
+    const box = (focused.closest('.rule-confirm') ?? focused).getBoundingClientRect();
     const under = box.bottom + 12 - decision.getBoundingClientRect().top;
     const room = box.top - 12 - panel.getBoundingClientRect().top;
     if (under > 0 && room > 0) panel.scrollTop += Math.min(under, room);
