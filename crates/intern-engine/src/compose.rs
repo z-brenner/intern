@@ -1821,6 +1821,39 @@ mod tests {
         assert_eq!(determination.parties, vec!["Office of Planning and Review"]);
         assert!(!determination.on_proposed_roles, "{}", determination.basis);
         assert_eq!(determination.basis, "notice: the recipient");
+        // Only "to" gives way to "for". A notice the reply's roles name
+        // from its issuer, or for the party it is about, keeps that word.
+        let hearing = relation_from_roles(
+            DocumentClass::Notice,
+            Some("Notice of Hearing"),
+            &[
+                member("Harrow County Water Court", None, Some(PartyRole::Issuer)),
+                member("Odalys Brandt", None, None),
+            ],
+            cues,
+        );
+        assert_eq!(hearing.relation, PartyRelation::From);
+        assert_eq!(hearing.parties, vec!["Harrow County Water Court"]);
+        assert_eq!(hearing.basis, "notice: the issuer, on the reply's roles");
+        let increase = relation_from_roles(
+            DocumentClass::Notice,
+            Some("Notice of Rent Increase"),
+            &[
+                member(
+                    "Kestrel Point Properties LLC",
+                    None,
+                    Some(PartyRole::Landlord),
+                ),
+                member("Odalys Brandt", None, Some(PartyRole::Tenant)),
+            ],
+            cues,
+        );
+        assert_eq!(increase.relation, PartyRelation::For);
+        assert_eq!(increase.parties, vec!["Odalys Brandt"]);
+        assert_eq!(
+            increase.basis,
+            "notice: the party it is about, on the reply's roles"
+        );
         // A letter and an email are addressed to someone by their kind, and
         // a document of no known class is to the addressee the reply named:
         // only a notice is "for" its recipient.
