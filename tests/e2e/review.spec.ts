@@ -300,15 +300,18 @@ for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) 
 }
 
 /*
-  Narrow, the review drawer opens again for a document it was open for, and
-  puts the caret in its name. Opened again under Settings - the window made
-  narrower while the question asked - it took the focus from the question,
-  and Enter, meant for the question, filed the held document.
+  Narrow, the review drawer opened again for a document it had been open
+  for, and put the caret in its name. Opened again under Settings - the
+  window made narrower while the question asked - it took the focus from the
+  question, and Enter, meant for the question, filed the held document.
+  Nothing behind Settings takes the focus now, and the drawer does not open
+  again by itself at all: it is asked for at the narrow width it opens at.
 */
-test('the review drawer opened again under Settings takes no focus from it', async ({ page }) => {
+test('no review drawer opens again under Settings, and nothing takes the focus from it', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 600 });
   await page.goto('/?learnedSpellings=held');
   const name = (await openDetails(page, HELD)).getByRole('textbox', { name: 'Filename' });
+  const shown = await name.inputValue();
   await page.setViewportSize({ width: 1400, height: 900 });
   const status = () => queueCell(page, HELD, 'status').textContent();
   const before = await status();
@@ -320,20 +323,23 @@ test('the review drawer opened again under Settings takes no focus from it', asy
   await page.keyboard.type('Cont');
   await expect(field).toBeFocused();
   await page.setViewportSize({ width: 800, height: 600 });
-  await expect(page.getByRole('dialog', { name: 'Review item' })).toBeVisible();
   await page.waitForTimeout(300);
+  await expect(page.getByRole('dialog', { name: 'Review item' })).toHaveCount(0);
   await expect(field).toBeFocused();
-  const shown = await name.inputValue();
   await page.keyboard.type('oso');
   await expect(field).toHaveValue('Contoso');
-  await expect(name).toHaveValue(shown);
   await page.keyboard.press('Enter');
   await expect(dialog.getByRole('group', { name: CONTOSO })).toHaveCount(0);
   await expect(dialog).toBeVisible();
   await page.waitForTimeout(300);
   await expect(page.locator('.toasts')).toHaveCount(0);
   expect(await status()).toBe(before);
+  // Asked for again once Settings is closed, the held document's name is as it was.
+  await dialog.getByRole('button', { name: 'Close settings' }).click();
+  await expect(page.getByRole('dialog', { name: 'Review item' })).toHaveCount(0);
+  await openDetails(page, HELD);
   await expect(name).toHaveValue(shown);
+  await expect(page.locator('.toasts')).toHaveCount(0);
 });
 
 /*
@@ -372,11 +378,21 @@ for (const [label, first, second] of [['a wide panel, the window made narrower a
     const status = () => queueCell(page, LEASE, 'status').textContent();
     const before = await status();
 
+    // A drawer opens only when asked for at the narrow width: back there, it
+    // is closed until it is. A wide panel left open is there again.
+    const backAtFirst = async () => {
+      await page.setViewportSize(first);
+      if (first !== NARROW) return;
+      await page.waitForTimeout(200);
+      await expect(panel).toHaveCount(0);
+      await detailsToggle(page).click();
+    };
+
     // At the other width the panel is off screen: narrow, a drawer opens
     // only when asked; wide, the panel was never left open.
     await page.setViewportSize(second);
     await expect(panel).toHaveCount(0);
-    await page.setViewportSize(first);
+    await backAtFirst();
     await stillThere();
 
     // Asked for at the other width, it has what was typed there too.
@@ -384,7 +400,7 @@ for (const [label, first, second] of [['a wide panel, the window made narrower a
     await expect(panel).toHaveCount(0);
     await detailsToggle(page).click();
     await stillThere();
-    await page.setViewportSize(first);
+    await backAtFirst();
     await stillThere();
 
     // Closed by its own button and opened again.
@@ -404,5 +420,48 @@ for (const [label, first, second] of [['a wide panel, the window made narrower a
     await page.getByRole('button', { name: /^Completed/ }).click();
     await expect(queueCell(page, LEASE, 'proposed')).toContainText(`${typed.name}.pdf`);
     await expect(queueCell(page, LEASE, 'description')).toContainText(typed.description);
+  });
+}
+
+/*
+  A drawer is asked for at the narrow width it opens at. Asked for once, it
+  opened again by itself each time the window was next made narrow, over
+  whatever row was selected by then and with the caret in its name - even
+  after Close review at the wide width. The Enter meant for the row's cell,
+  which opens details there, filed the document.
+*/
+for (const closedWide of [false, true]) {
+  test(`a drawer asked for once does not open again by itself when the window is next made narrow${closedWide ? ', after Close review at the wide width' : ''}`, async ({ page }) => {
+    const EMPLOYMENT = 'Employment Agreement - John Smith.pdf';
+    await page.setViewportSize(NARROW);
+    await page.goto('/');
+    const drawer = page.getByRole('dialog', { name: 'Review item' });
+    await queueCell(page, LEASE).click();
+    await page.keyboard.press('Enter');
+    await expect(drawer).toContainText(LEASE);
+
+    await page.setViewportSize(WIDE);
+    await expect(page.locator('#review-panel')).toHaveCount(0);
+    if (closedWide) {
+      await detailsToggle(page).click();
+      await page.locator('#review-panel').getByRole('button', { name: 'Close review' }).click();
+      await expect(page.locator('#review-panel')).toHaveCount(0);
+    }
+    const cell = queueCell(page, EMPLOYMENT);
+    await cell.click();
+    const status = () => queueCell(page, EMPLOYMENT, 'status').textContent();
+    const before = await status();
+
+    await page.setViewportSize(NARROW);
+    await page.waitForTimeout(400);
+    await expect(drawer).toHaveCount(0);
+    await expect(cell).toBeFocused();
+    // The Enter aimed at the cell opens the document's details, and files nothing.
+    await page.keyboard.press('Enter');
+    await expect(drawer).toContainText(EMPLOYMENT);
+    await expect(drawer.getByRole('textbox', { name: 'Filename' })).toBeFocused();
+    await page.waitForTimeout(300);
+    await expect(page.locator('.toasts')).toHaveCount(0);
+    expect(await status()).toBe(before);
   });
 }

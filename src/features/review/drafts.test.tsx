@@ -135,7 +135,11 @@ describe('what was typed in review and not filed', () => {
     // Wide, the panel is open only if it was left open: here it was not.
     window_.resize('wide');
     expect(panel()).not.toBeInTheDocument();
+    // Narrow again, a drawer opens only when asked for at that width: it
+    // used to open by itself here, asked for before the window was widened.
     window_.resize('narrow');
+    expect(panel()).not.toBeInTheDocument();
+    fireEvent.click(detailsToggle());
     expect(await screen.findByRole('dialog', { name: 'Review item' })).toBeInTheDocument();
     expectTyped();
 

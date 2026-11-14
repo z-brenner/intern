@@ -424,6 +424,12 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // A drawer emptied by its item leaving (filed, removed) is closed, not left
   // to spring open again over the next row a person clicks.
   useEffect(() => { if (!selected) setDetailsAskedFor(false); }, [selected]);
+  // A drawer is asked for at the narrow width it opens at. Asked for once, it
+  // opened again by itself each time the window was next made narrow - a snap
+  // to half the screen - over whatever row was selected by then, even after
+  // Close review at the wide width, with the caret in that row's name: the
+  // Enter meant for the row's cell, which opens details there, filed it.
+  useEffect(() => { if (!narrowInspector) setDetailsAskedFor(false); }, [narrowInspector]);
   // With no rows on screen there is no table to clear its own selection; a
   // selection left behind would come back with the next row that arrives.
   const nothingShown = visible.length === 0;
