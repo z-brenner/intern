@@ -8,14 +8,14 @@ export const releaseNotes: readonly ReleaseNotes[] = [
     // window, 800 by 600 (tests/e2e/updates.spec.ts): eight lines of two
     // lines each at most, the rest in docs/releases/v0.1.0-alpha.18.md.
     changes: [
-      'The quicker model holds about 1.3 GB less memory and reads a little faster.',
+      'Fewer wrong names are filed without your check: more kinds of doubtful name wait for a look.',
+      'A name a learned spelling changed waits until you choose “Use on its own” in Settings.',
       'In review, another party the document names is one click from the name.',
+      'Scans whose own text layer reads badly are read again, so dates and names are found more often.',
+      'The quicker model holds about 1.3 GB less memory and reads a little faster.',
       'After an update, Intern no longer reads its model files through again to check them.',
       'At sign-in a checked model waits to load until a document does, and starts as one arrives.',
-      'Scans whose own text layer reads badly are read again, so dates and names are found more often.',
-      'A blank page in a scan is no longer a reason to send the document to review.',
       'Faded single-page photos and faxes are recognised up to four times sooner.',
-      'Re-analyzing an unchanged file reuses the text Intern has just read from it.',
     ],
   },
   {

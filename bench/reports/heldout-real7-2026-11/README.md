@@ -1,8 +1,10 @@
 # The seventh real set, held out, November 2026
 
 What [`prereg.md`](prereg.md) fixed before any model read the set, measured.
-No rule, threshold, prompt or flag in alpha.18 was written from these
-documents, and nothing was chosen by these results.
+As of the run below, no rule, threshold, prompt or flag in alpha.18 was
+written from these documents, and nothing was chosen by these results. One
+more round of engine rules followed it; what that round changed on this set,
+and what it knew of this set, is at the [end](#after-the-last-engine-round-14-november-2026).
 
 ## The run
 
@@ -97,3 +99,63 @@ the sample's own entries for the 54 documents read), and replay:
     intern-bench run --corpus <empty dir> --gold gold.json \
       --replay recording.json --min-token-confidence 0.8 --allow-stale \
       --output report.json
+
+## After the last engine round (14 November 2026)
+
+After the run above, one more round of engine rules was written from the
+development recordings (the rows measured on 2026-11-14 in
+[`docs/accuracy-research-2026-10.md`](../../../docs/accuracy-research-2026-10.md)):
+rules of validation and naming only, with the prompt unchanged, so the same
+recording replays through them. It was replayed once through the merged
+engine (`9aa8204`, gate 0.8, no stale reply), and no rule was changed after
+that replay.
+
+| | Before the round (as above) | After |
+| --- | ---: | ---: |
+| Names right | 19 of 51 | 19 of 51 |
+| Type right | 46 of 54 | 47 of 54 |
+| Date right | 47 of 51 | 47 of 51 |
+| Parties right | 33 of 54 | 33 of 54 |
+| Joining word right | 32 of 54 | 34 of 54 |
+| Filed without review at 0.8, right / wrong | 3 / 1 | 3 / 0 |
+| Held for review | 50 of 54 (93%) | 51 of 54 (94%) |
+
+Seven documents read differently:
+
+| Document | Before | After | |
+| --- | --- | --- | --- |
+| real7-letter-07 | filed: Review of Large Energy Users Connection Policy for Uisce Éireann | in review: Letter from Commission for Regulation of Utilities | wrong both; no longer filed |
+| real7-notice-05 | SBA Procedural Notice to All SBA Employees | SBA Procedural Notice from SBA | wrong, now right; in review |
+| real7-notice-01 | Notice of hearing for ATCO Gas and Pipelines Ltd | Notice of hearing from ATCO Gas and Pipelines Ltd | right, now wrong; in review |
+| real7-notice-04 | Notice of Public Hearing for Murray City Planning Commission | ... from Murray City Planning Commission | right both; in review |
+| real7-notice-02 | Notice of Proposal to Make Cork City for Cork City Council | ... from Cork City Council | wrong both; in review |
+| real7-notice-06 | Notice for Mt. Sterling Water & Sewer | Notice from Mt. Sterling Water & Sewer | not scored; in review |
+| real7-invoice-07 | Document - CONSTANTIN | the same, with `PARTY_UNSUPPORTED` added | wrong both; in review |
+
+What this is, and is not:
+
+- The people and processes that proposed, built and reviewed the round's
+  rules did not open this set, its gold or its replays; the round's brief
+  forbade it and each reported that it had not.
+- **The round's coordinator had read the result above before the round
+  began**, including that real7-letter-07 was filed wrong and why. One of
+  the round's rules (a record at the head of a letter's subject line is the
+  letter's matter, not its type) holds exactly that kind of name. It was
+  proposed from, and tested on, a document of the sixth set with the same
+  shape (real6-letter-12), which is a development set. By the
+  pre-registration's own rule, this set does not count as held out for that
+  rule: its hold on real7-letter-07 is reported here, not claimed as a blind
+  confirmation. The name it now waits under is still not the reference's:
+  the letter is from Uisce Éireann, to the Commission.
+- The other six differences are blind. The rule that names a notice "from"
+  the one party the model called its issuer, where the engine said "for" by
+  default, moved four notices: one right name became wrong, one stayed
+  right, and the joining word became right on two names that are wrong or
+  unscored for other reasons. The rule that names a document addressed to
+  a class of recipients from the office it comes from made one name right.
+  All of them were in review before and after.
+- So on documents the rules were not written from, the round's net effect
+  on names is nothing (one gained, one lost), where the development
+  recordings it was written from show 33 more right of 1,224 readings. The
+  difference is what fitting to a set is, and is why this set is kept.
+
