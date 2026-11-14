@@ -184,8 +184,9 @@ shows it as it now is, and what you had typed is kept beside it, read-only,
 until you discard it. If that happens while you are typing, or the panel
 closes under the cursor, the cursor stays in what you had typed: nothing typed
 after that is taken as a command, Tab included, until you press Escape or
-click. **Back to Intern's proposal**, above the name while it differs, drops
-what you typed for a document. **Rename all ready** leaves alone a ready
+click (two rare cases aside, which the alpha.18 release notes give).
+**Back to Intern's proposal**, above the name while it differs, drops what
+you typed for a document. **Rename all ready** leaves alone a ready
 document whose name or description you typed and did not file, and says so.
 In a window narrower than 1100 pixels the panel is a drawer over the queue,
 and it opens only when you ask for it there. Everything still in progress is

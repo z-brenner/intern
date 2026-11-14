@@ -11,11 +11,11 @@ export const releaseNotes: readonly ReleaseNotes[] = [
       'Fewer wrong names are filed without your check: more kinds of doubtful name wait for a look.',
       'A name a learned spelling changed waits until you choose “Use on its own” in Settings.',
       'In review, another party the document names is one click from the name.',
+      'What you type in review stays with its document, and is kept when Intern reads it again.',
       'Scans whose own text layer reads badly are read again, so dates and names are found more often.',
       'The quicker model holds about 1.3 GB less memory and reads a little faster.',
       'After an update, Intern no longer reads its model files through again to check them.',
       'At sign-in a checked model waits to load until a document does, and starts as one arrives.',
-      'Faded single-page photos and faxes are recognised up to four times sooner.',
     ],
   },
   {
