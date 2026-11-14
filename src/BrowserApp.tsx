@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { App } from './App';
-import { createBrowserSelectionBoundary, createFixtureBatchBridge, createInMemoryBridge, createReviewBatchBridge } from './lib/inMemoryBridge';
+import { createBrowserSelectionBoundary, createFixtureBatchBridge, createInMemoryBridge, createLearnedSpellingBridge, createReviewBatchBridge } from './lib/inMemoryBridge';
 import { TauriBridge, createTauriSelectionBoundary, isTauriRuntime } from './lib/tauriBridge';
 import { WhatsNew } from './features/updates/WhatsNew';
 import packageInfo from '../package.json';
@@ -16,6 +16,8 @@ const previewVersion = async () => packageInfo.version;
  * production build compiles to false and drops), and never in the Tauri
  * runtime, which always talks to the real backend below.
  */
+let changingQueue: ReturnType<typeof createInMemoryBridge> | undefined;
+
 function browserBridge() {
   const params = new URLSearchParams(window.location.search);
   if (params.get('fixtureBatch') === '1') return createFixtureBatchBridge();
@@ -27,6 +29,13 @@ function browserBridge() {
   if (import.meta.env.DEV && params.get('update') === 'available') return createInMemoryBridge({ update: { state: 'available', currentVersion: '0.1.0', version: '0.2.0' } });
   // A morning's scans to clear from the keyboard, six of them undecided.
   if (import.meta.env.DEV && params.get('reviewBatch') === '1') return createReviewBatchBridge();
+  // A document held for learned spellings nobody has checked.
+  if (import.meta.env.DEV && params.get('learnedSpellings') === 'held') return createLearnedSpellingBridge();
+  // The demo's queue, changing with nobody asking: `window.internQueue`
+  // reads a document again, files it elsewhere or takes it out of the queue,
+  // for the Playwright journeys that go on typing while it does. One bridge
+  // a page, so the queue it changes is the one on screen.
+  if (import.meta.env.DEV && params.get('queue') === 'changes') return changingQueue ??= createInMemoryBridge({ liveEvents: true, byItself: (queue) => { (window as unknown as { internQueue: typeof queue }).internQueue = queue; } });
   return undefined;
 }
 

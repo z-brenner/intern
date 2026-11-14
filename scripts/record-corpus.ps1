@@ -83,7 +83,8 @@ $ServerArguments = @(
     "--cache-ram", "0", "-ub", "256", "--prio", "-1", "--poll", "0"
 )
 # And the tier's own flags (tiers::tier_server_flags).
-if ($Tier -eq "accurate") { $ServerArguments += "--no-repack" }
+$TierFlags = @{ accurate = @("--no-repack"); fast = @("--no-repack") }
+$ServerArguments += $TierFlags[$Tier]
 $Server = Start-Process -FilePath $ServerPath -ArgumentList $ServerArguments -PassThru -WindowStyle Hidden
 try {
     $Deadline = (Get-Date).AddMinutes(3)

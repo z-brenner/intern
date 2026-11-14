@@ -16,7 +16,10 @@ none of them used but the IRS (a sample notice in the first, a 1982 records form
 its report lists the issuers that earlier gold names as recipients or traps; or sample-heldout5.json,
 the sixth, 55 letters, notices, forms, memoranda, minutes and invoices from US federal, state and local
 bodies, public bodies of five other countries, universities and archives, gathered after every rule
-written so far, with gold second-read by an independent reader. A live
+written so far, with gold second-read by an independent reader; or sample-heldout6.json, the seventh,
+55 letters, notices, invoices, forms, memoranda, minutes, statements, contracts and receipts from
+42 hosts in ten countries, none used by an earlier sample, gathered after the rules of alpha.17
+and the review gate's choice, with gold second-read by three readers and adjudicated. A live
 run then records and scores it like any corpus, with InternBench's own filename score:
 
     CORPUS=OUT_DIR/corpus GOLD=OUT_DIR/gold.json MANIFEST= MODEL=... LLAMA_SERVER=... \\

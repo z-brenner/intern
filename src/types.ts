@@ -78,6 +78,20 @@ export interface QueueItem {
    * spells them. The evidence still shows them.
    */
   omittedParties?: string[];
+  /**
+   * In review, the other parties the document names, for a reviewer to put
+   * in the name with one click when it gives the wrong one: each found in
+   * the document, none already in the name, at most four, in the order the
+   * model gave them and written as a name writes a party.
+   */
+  partyChoices?: string[];
+  /**
+   * The parties the proposed name gives, exactly as it writes them - one, or
+   * the two sides of a "between" - which a chosen party takes the place of.
+   * Sent with `partyChoices`, and absent when the name is not known to end
+   * with its parties.
+   */
+  nameParties?: string[];
   /** Which local model read the document. Absent for a hosted model and for older readings. */
   readBy?: ModelReading;
   /**
@@ -381,6 +395,14 @@ export interface LearnedRule extends HouseRule {
   seen: number;
   /** Whether Intern applies it: made twice, or told to use it now. */
   active: boolean;
+  /**
+   * How many times a person checked it: chose "Use on its own" for it, in
+   * Settings, as it reads now. Nothing else checks it:
+   * not an approval of a name it changed, and not "Use now". Until then
+   * every name it changes waits in review (LEARNED_SPELLING_UNCONFIRMED);
+   * once is enough, and a new spelling for the same word starts over.
+   */
+  confirmed: number;
   /** Unix seconds of the latest edit that taught it. */
   learnedAt: number;
 }

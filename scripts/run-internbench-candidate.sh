@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 # Runs InternBench live against a candidate model/runtime: like
-# scripts/run-internbench.sh (same app server flags, same corpus checks), plus
-# what a model qualification needs and the app does not do:
+# scripts/run-internbench.sh (the same corpus checks), plus what a model
+# qualification needs and the app does not do. Its llama-server is not the
+# app's launch: it gets the app's core arguments (one slot, CPU only,
+# 8,192-token context, the model's own chat template, no web UI, no
+# projector) but not the flags the app adds to them
+# (crates/intern-engine/src/server.rs MEASURED_FLAGS, its slot folder, and
+# the tier's own from tiers::tier_server_flags, `--no-repack` for either),
+# nor the app's thread count: by default half the logical processors, at
+# least 2 and at most 12, the app's rule only up to alpha.13 (server.rs
+# default_threads now takes every one, at most 8).
 #
-#   LLAMA_SERVER_ARGS  extra llama-server flags appended after the app's own,
+#   THREADS            model threads (default: as above)
+#   LLAMA_SERVER_ARGS  extra llama-server flags appended after those,
 #                      e.g. "--cache-ram 0 -fa on -ub 256"
 #   BENCH_PROFILE      a --bench-profile JSON (needs intern-bench built with
 #                      --features benchmark-transport); the wire captures go
@@ -92,7 +101,7 @@ status=0
 "$INTERN_BENCH" run --corpus "$CORPUS" --gold "$GOLD" ${MANIFEST_ARGUMENTS[@]+"${MANIFEST_ARGUMENTS[@]}"} \
   --worker "$WORKER" --endpoint "http://127.0.0.1:$PORT/v1/chat/completions" --api-key "$KEY" \
   --model-id intern-local --model-path "$MODEL" --server-pid "$SERVER" \
-  --note "llama-server $THREADS threads, 8192 context, ${LLAMA_SERVER_ARGS:-app flags}, $(uname -sm)" \
+  --note "llama-server $THREADS threads, 8192 context, ${LLAMA_SERVER_ARGS:-no extra flags}, $(uname -sm)" \
   ${PROFILE_ARGUMENTS[@]+"${PROFILE_ARGUMENTS[@]}"} \
   --record "$OUT_DIR/recording.json" --output "$OUT_DIR/report.json" --markdown "$OUT_DIR/report.md" \
   "$@" || status=$?

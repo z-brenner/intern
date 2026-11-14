@@ -76,7 +76,11 @@ keep PDFium's text exactly as it has always been read and get blocks built
 cheaply from it; a page whose columns, tables or grids of labeled values
 PDFium would run together is rebuilt from the geometry of its characters,
 and its text becomes those blocks in order; a page with no usable text, or
-an invisible text layer that is a bad prior OCR, is read by OCR; and a large
+an invisible text layer that is a bad prior OCR, is read by OCR, and so is
+somebody else's OCR layer that would not read well - every line repeated,
+or prose torn into a cell per word - on a page where that matters (a page
+OCR reads anyway, or the first two and the last), when OCR reads it at 75
+or more; and a large
 image on a text page that may hold text of its own is cropped and read too.
 Scanned pages are read side by side by a pool of OCR workers. Office files,
 sheets, email and text get blocks from their own structure.
@@ -194,7 +198,10 @@ documented as intent:
   `one_pdf_backend_parses_every_document_in_a_queue` keeps that fixed.
 The rest of this list is how Tesseract, the fallback, reads a page; PP-OCR
 asks its orientation classifier first and then runs the same confidence
-search ([OCR](ocr.md)).
+search, which a reading at no turn that is plainly upright (not on its side,
+twenty words or more, confidence 50 or more) ends ([OCR](ocr.md)). A page
+OCR read nothing on that is blank to the eye - a duplex back, a separator -
+raises no doubt; one with faint marks on it still does ([OCR](ocr.md)).
 
 * A page is read as it came first, in gray: Tesseract binarizes whatever it is
   given, and gray is a third of the bytes to encode for every pass. A reading
@@ -386,7 +393,7 @@ gated on the quoted wrapper and threw away correct dates on half the corpus. Wha
 must be true is that the date is really in the document, and that is what is
 checked. The model's quoted line is still stored and shown to the reviewer.
 
-A date the document states is not yet the document's date, so four more
+A date the document states is not yet the document's date, so five more
 checks read the document around it:
 
 * **Another document's date.** "the Master Services Agreement dated June 2,
@@ -431,6 +438,20 @@ checks read the document around it:
   proposal goes to review with `DATE_AMBIGUOUS`. A date read against the
   order the document does show (`03/04/2026` as 4 March beside a
   `30/01/2026`) goes to review the same way.
+* **One end of a period.** An invoice, a statement or another issued
+  document carries a date of its own, and the period it bills is another
+  matter (`Service Period: 9/1/2017 - 9/30/2017`, a broadcast invoice's
+  flight weeks). When every line that states the chosen date, running
+  lines included, joins it to another date by `to`, `through`, `thru`,
+  `until` or a dash, on either side, the date is kept and the proposal goes
+  to review with `DATE_IS_PERIOD`. One statement of the date outside any
+  period clears it, however loosely it is written (`Invoice Date:
+  08-Jan-24`), and so does a dash that runs into a number that is no date
+  (`Invoice No. 2024-01-08-0457`) or into a time written with dots
+  (`28.01.2024 - 11.30.05`: two ends in figures are written alike, with one
+  separator and a year as long). Only an issued document is asked: a
+  policy or a lease is dated by the start of its term. The evidence
+  pipeline alone raises it.
 
 All of this is string handling over text nobody controls. A panic in it -
 one slice inside an `é` once panicked on every French invoice - fails that
@@ -536,6 +557,9 @@ a digit, an apostrophe, or a `Mc`/`Mac` surname prefix is left alone
 and the description keep the document's casing.
 Names longer than 120 characters shed the second party, then the party clause,
 then truncate the type — detail is lost from the least identifying end first.
+A name whose party is longer than 70 characters waits for review
+(`PARTY_UNSUPPORTED`): such a party is seldom one name, and would be shed here
+without a word.
 Typographic ligatures (`ﬁ`) and full-width letters (`ＡＣＭＥ`) are folded to the
 letters a person types and every segment is composed to NFC, so two spellings
 of one accented name make one filename. Windows-hostile characters, reserved
@@ -681,14 +705,276 @@ into the connector, and a diff would credit it all to one party.
 A rule takes effect on the second identical edit (`EDITS_TO_LEARN`), or at
 once when a person says "Use now" in Settings, and every document still
 waiting is recomposed under it so the queue shows the change immediately -
-every document but one whose name a person approved, the one just approved
-and one approved earlier that is waiting only for a busy queue alike. That
-name is the reviewer's own text and would lose whatever the validated facts
-do not carry, the date they typed with it most of all.
+every document but one whose name a person gave: the one just approved, one
+approved earlier that is waiting only for a busy queue, one whose filing
+failed and one whose rename they took back alike. That name is the
+reviewer's own text and would lose whatever the validated facts do not
+carry, the date they typed with it most of all. A recomposed record is
+written only over the record it was composed from, in the one transaction
+that checks the stored record is unchanged (`replace_proposal_if`), so an
+approval that lands between the read and the write stands and the
+recomposition leaves that document alone.
 Respelling a spelling Intern applied maps back to the document's word - the
 person changed their mind about the word, not about Intern - and restoring
 the document's own spelling retracts the rule. The whole memory is the list
 in Settings; nothing is learned that cannot be seen and forgotten there.
+
+A rule in force is still on probation until a person has checked it. The
+edits it is learned from are read for their wording, and four rounds of
+review kept finding wordings that read as a respelling but were a decision
+about one document - another party joined to the named one ("John Smith,
+Jane Doe"), a short form of another party, a note - each of which, learned,
+renamed every later document giving the word, ready ones filed without
+review. So every name a rule changes waits in review with
+`LEARNED_SPELLING_UNCONFIRMED`, never ready, until a person has checked the
+rule (`LearnedRule::confirmed`, counted in `house_rules.confirmed` for the
+spelling in `house_rules.confirmed_to`).
+
+A rule is checked only by a person's explicit word for it: "Use on its own"
+(`Pipeline::check_rule`). No approval checks a rule, on any document. An
+approval of a name the rule changed shows that the name is right for that
+document; it would show the rule right for every later one only where the
+document did not itself give the words the rule adds, and that cannot be
+read soundly from a document's text: attempts to read it kept missing words
+a document gave - a name OCR split ("J ane"), initials ("L. Smith"),
+look-alike letters from another script, an abbreviation, an OCR misreading,
+a header Intern does not read, a logo, a script written without spaces. So
+however many names a rule changed were approved, the next one waits again.
+
+"Use on its own" is offered in Settings, under Learned spellings, for every
+rule in force nobody has checked, and nowhere else. A held document's review
+panel says, under "Uses your spelling", that its name waits because Intern
+has not been told to use the spelling on its own, and that "Use on its own"
+is in Settings; it asks nothing and checks nothing. The review window does
+not ask because a word typed into a question there kept reaching review's
+own keys - J and K move review, the drawer puts the caret in a document's
+name, Enter files it - and a decision about every later document belongs in
+Settings, beside Use now and Forget. The question first says, in plain
+words, with the document's word and the spelling exactly as they are, that
+every later document Intern reads as naming the word (for a type: reads as
+that type) will be named with the spelling, and may be filed under that
+name without the person's check. Then it asks for the spelling to be typed
+(`UseOnItsOwnQuestion`): its yes stays disabled,
+and Enter in the field does nothing but say why, until what is typed is the
+spelling - the same letters and digits in the same order (`typedOut`). Both
+sides keep only their letters, marks and digits as written (a symbol such
+as ™ is none, though NFKD would spell it "TM", nor is an apostrophe written
+as a letter, ʻ, nor a variation selector); are decomposed (NFKD); lose the
+marks on Latin, Greek, Hebrew and Arabic letters - accents, and the vowel
+points those two scripts as a rule leave unwritten - and keep every other
+mark, which makes another letter or syllable (カ and ガ, И and Й, राम and
+रमा); are lower-cased; and spell the letters no decomposition takes apart
+as a keyboard without them does (ø as o, ß as ss, ł as l, æ as ae, ı as i;
+a final ς as σ). So case, accents, spaces and punctuation do not matter:
+"contoso ltd" is "Contoso Ltd.", "Soren" is "Søren", "Acme" is "Acme™";
+every letter and digit does, and so does a mark that makes another letter.
+A spelling with no letter or digit is typed exactly, spaces at its ends
+aside. Only typing fills the field: a paste, a drop, a suggestion taken, a
+yank, an undo and autofill are refused, and the field asks the browser for
+no suggestions. A key types one character, so text put in outside a
+composition is taken one character at a time, or as many at once as keys
+that type were pressed in the field since its last input: an input method
+that shows no composition commits what its keys spelled, but a word put in
+at once with no keys for it - an input method's or an on-screen keyboard's
+clipboard, an emoji keyboard - is refused. A key that types is a
+character's, an input method's (`Process`, `Unidentified`) or a dead key;
+an arrow, Enter, Home, Backspace, a function key, a modifier and a key held
+with Ctrl or Cmd type nothing and earn nothing - seven arrows, then a word
+put in at once, filled the field. Ctrl with Alt is AltGr on Windows, and
+types. Once the spelling is typed, the yes is an ordinary button, and Enter
+in the field answers.
+
+A check is for good, and the harm it can do is a wrong spelling - "John
+Smith" written as "John Smith, Jane Doe" - filed without review on every
+later document. Typing the spelling makes the person read it, letter by
+letter, and no press types. Earlier rounds let the yes take some presses
+and not others: not part of a double-click, not within half a second of the
+question, only from a pointer that had moved onto it. Each round found
+presses that got through - a slow double-click, a scroll or a change of
+layout that brought the yes under a still pointer, a tap through a menu, a
+window closing over the yes, a pointer that left the page - and the rules
+did not converge. Keys typed in the field stay there, but for Tab and
+Escape: Enter saves no settings. A press on the question's sentence or its
+waiting yes takes the focus off its field, so while a question asks, a
+character typed elsewhere in Settings, or with the focus on nothing, but not
+in another field, moves the focus into the question's field before anything
+else on the page sees the key, and the browser types it there. The space bar
+is left to press the button with the focus, and an input method's keys to
+the input method. While a question asks, no field changes but the one with
+the focus: the browser's undo and redo go to the field edited last,
+wherever the focus is, and take the focus there. Ctrl+Z in the question's
+field, before anything was typed in it, or after a press on its sentence
+took the focus from it, undid an unsaved setting and moved the focus into
+it, and the spelling typed next went into the setting. So while a question
+asks, every input aimed at a field without the focus is refused where the
+browser announces it (`beforeinput`, caught on the document): the undo and
+redo of the keys and of the editing menu among them. The same holds while
+Settings or Rename history is open (`useEditsOnlyInside`): an input aimed
+outside it is refused. Ctrl+Z in a field of Settings with nothing of its own
+to undo undid the review panel's Filename behind the dialog and put the
+caret in it, where Enter filed the document. And in every screen, with a
+question or without, an undo or a redo changes only the field with the
+focus (`useUndoOnlyWhereFocused`): in the review panel, Ctrl+Z in the
+Description, in the queue's filter or after a press on the panel's text
+undid the Filename's last edit and put the caret in it, and the next Enter
+filed the document under the name half undone; in Settings, once a question
+had been answered or taken back, Ctrl+Z on its row undid an unsaved
+setting, which Save then stored. Chromium keeps one undo history for the
+page, so a field's own undo waits until the edits made after it elsewhere
+are undone in their own fields; nothing is lost by the wait. A script's
+`execCommand('undo')` announces nothing and is not refused; no person sends
+one. The field starts empty for every question,
+and again if the spelling it asks about changes while it asks. Cancel and
+Escape take the question back. Escape takes back the question and nothing
+else - not Settings, with what was not saved - wherever the focus is in
+Settings, and the focus goes back to the action; closing the "Learned
+spellings" section takes back a question open in it. While a question asks,
+the other spellings' actions wait: a press on another "Use on its own"
+closed the question above it and opened the next under the pointer. Opened
+by a press, the question opens where the action was, sentence first, with
+the focus in its field, and nothing the press sets off moves what is under
+the pointer (`afterAPress`): Settings does not scroll until a key is
+pressed. Opened from the keyboard, it is brought into sight, and so it is by
+the first key typed into it after a press opened it: the spelling went into
+a field out of sight below Settings' body.
+
+Nothing behind Settings or Rename history takes the focus while it is open,
+so no key typed for it reaches the review window, whose keys move review on
+and file names. The window behind it - the header, the queue, the review
+panel or drawer, an update's note - is inert, out of reach of the focus, the
+keys and a screen reader, as the dialog says it is (`aria-modal`); and Tab
+and Shift+Tab go round the dialog's own controls from wherever the focus is
+(`tabWithin`), the focus on nothing included. A press on the dialog's
+heading or its backdrop left the focus on nothing, and Shift+Tab walked out
+to the review panel's Keep original, Approve & rename and Filename, or,
+narrow, to the queue's row and Rename all ready, where Enter filed documents
+with Settings still open. The queue put the focus back on Rename all ready
+behind Settings when the selected document left the queue by itself (its
+file taken from the Queue folder, or by another machine), and the space bar
+typed next renamed every ready document. A window made narrower opened the
+review drawer again under Settings, and the drawer put the caret in the
+document's name, where Enter, meant for the question, filed it. Once the
+dialog has closed, the focus goes back to what opened it.
+
+With no dialog open, the focus the queue takes back for itself never goes to
+a button that acts, nor to another row's cell. When the row review was
+opened from is gone, it went to the toolbar's primary action, Rename all
+ready, and the next space bar renamed every ready document. It goes to the
+button of the view already shown, where the space bar and Enter file nothing
+(they show that view again, with nothing selected); with nothing in the
+queue at all, it goes nowhere. That is for a row that went by itself. One
+the person has just decided - removed with Delete and Enter on the question,
+or the last one approved - leaves them in the queue, not in the middle of a
+sentence, and the focus goes to the cell the table keeps for Tab (with
+nothing selected, the first row's), where the arrow keys go on; the window
+tells the two apart by whether a decision of the person's is being carried
+out for that document. And the focus is never taken out of a field: a caret
+in the filter, a name or a description is someone typing, and the words
+typed next would land on whatever the focus was moved to.
+
+A name or a description with the caret in it leaves the screen only by
+something the person did. Its field can go by itself: the document is read
+again (`reanalyze_provisional` sends every untouched provisional reading
+back at once when the accurate model becomes usable, and typing is not
+touching), is given another proposal where it waits, is filed from another
+machine, or leaves the queue; or the panel closes as the window changes
+width. The caret went with the field, to nothing, and what the person typed
+next was review's keys: the rest of a sentence moved the selection (J, K),
+opened a document at its name and filed it (Enter, Enter), approved one
+(Ctrl+Enter), kept one (Alt+K) or removed one (Delete, Enter) - documents
+nobody had looked at, one of them held for a spelling nobody had checked.
+The window tells this by what happened to the field, not by a list of
+causes: the field the caret was in as a render began (`typingInReview`) is
+gone from the page once it is committed, and nothing the person did took
+it - they did not choose another row or view, go to the next undecided,
+close the panel or discard a kept text in that commit, and no decision of
+theirs is being carried out for that document (approve, keep, remove, read
+again, retry, cancel, undo). A decision the backend refuses is not one
+being carried out: a document read again just as Enter files its name is
+refused, and has changed by itself. Then what the fields held stays on
+screen, read-only, and the caret goes into it (`TypedKept`): in the panel
+while the panel still shows that document, above the queue otherwise. A
+read-only field is a field, so a letter typed there is nothing; no review
+key acts from one (`useReviewShortcuts`), Ctrl+Enter, Alt+K and Alt+N
+included; and it goes only by its own button. Tab does not take the caret
+out of it either: a person in a name presses Tab to go on to the
+description, and on the button under the text a space typed next would
+press it, and J, K and Ctrl+Enter would be review's keys again. Escape
+moves the focus to that button, and the text says so; a press anywhere is
+the other way out. An add that finishes while a name is being typed does
+not move the selection to the new row, and the queue's filter box stays
+while the caret is in it, however few rows are left.
+
+A drawer is asked for at the narrow width it opens at. Asked for once, it
+used to open again by itself each time the window was next made narrower
+than 1100px, over whatever row was selected by then and with the caret in
+that row's name, even after Close review at the wide width: the Enter meant
+for the row's cell, which opens details there, filed the document.
+
+What a question cannot rule out is a person who means to fill the field
+without reading it. An input method can commit any text through a
+composition - its candidates can include its clipboard - and software that
+sends keys (dictation that types letter by letter, remote control, a
+macro) types. Each takes the person's own doing, and none is a stray
+press. Dictation that puts in a whole word at once, an assistive
+technology's "set value", and a touch keyboard's replacement are refused
+with the paste, so their users type the spelling.
+
+The command (`house_rule_check`) carries the rule's id and the spelling the
+person was shown - its kind, the document's word and the spelling - and the
+repository marks the rule checked, in one statement, only while it exists,
+is in force, and reads exactly that (`PipelineRepository::check_rule`): a
+rule forgotten is refused (`RULE_NOT_FOUND`) and taken out of the list
+Settings shows, and one not in force, or respelled or
+learned from other words since it was shown, is refused (`RULE_CHANGED`)
+and shown again as it now reads. Checking a rule approves
+and files nothing. The
+documents still waiting are restyled as after any change to the rules
+(`restyle_waiting`): the rule is used where their names did not show it, and
+a name held for it loses `LEARNED_SPELLING_UNCONFIRMED` but stays in review,
+since what else held it is not known there; it is filed when a person
+approves it. One check is enough: from then on the names the rule changes
+are filed like any other reading. "Use now" is no check: it puts a rule seen
+once in force, unchecked.
+
+A rule nobody has checked touches only what a person sees: it is used on a
+record only where the name shows it - the name composed with it gives its
+spelling and differs from the name composed without it (`shown_rules`). The
+folder and the filing report are read from the type and the parties, and a
+name can leave out a party a rule respells (a first party shed for length,
+the third of a "between"); such a rule is not used on that record at all,
+which is filed and reported under the checked rules' and the document's own
+words and is not held. So every name held with
+`LEARNED_SPELLING_UNCONFIRMED` shows the spelling it waits on, and no rule is
+left that no name could show a person. Once the rule is checked, it is used everywhere it fires, folder and report
+included: the documents still waiting are composed again then, and a name
+held for it loses the reason.
+
+Putting the document's own word back instead, with nothing else in the name
+changed, retracts the rule (one that changes another part too teaches
+nothing, and the rule stays unchecked), and a third spelling for the same
+word starts the count and the checks over; a release that does not know the
+checks respells without starting them over, so they count only while the
+rule writes the spelling checked. A document whose approved name takes out a
+spelling nobody had checked is filed and reported under the document's own
+words where the name gives them, whatever note or party follows them
+(`ProposalRecord::rejected_rules`); a checked spelling's folder stays the
+party's. The hold is decided wherever a name is composed under the rules in
+force: a new reading, Re-analyze, a validation again after an update, and
+the waiting documents a rule learned or used renames (a ready one goes to
+review in the same write that renames it); and no unapproved name a rule no
+person has checked changed is left ready, however the row came to be ready:
+the queue holds such rows when it opens and on every recovery pass, model or
+no model, paused or not, as well as before the scheduler files anything.
+Whether a row is held is decided again on its record as stored, in the
+transaction that puts it in review, so an approval made in that moment
+stands. Rules learned before alpha.18 were never checked, so after the update
+each of them waits for its check too; a ready row such a rule touched where
+its name does not show it is composed again when the queue opens, rather
+than held. A database a development build of alpha.18 used, when an approval
+could count as the check, starts every rule over unchecked as it opens. The
+wording rules still keep Intern from learning what they recognise; they are
+no longer what keeps a wrong name from being filed.
 
 ### Your organization
 
@@ -718,6 +1004,44 @@ wait. A proposal's revision moves only when its name does: the review panel
 replaces an unapproved draft when it moves, and a document the change leaves
 named as it was keeps whatever the reviewer had typed.
 
+What a reviewer types for a name and a description and does not file is the
+window's, one draft a document (`ReviewDrafts`), not the review panel's. The
+panel leaves the screen without anything being decided - a wide panel when
+the window is made narrower than 1100px, as half of a 1920px screen is, a
+drawer when it is made wider, either by Close review, Escape or the Details
+toggle, and when the selection is cleared - and while the panel kept what
+was typed, each of those brought both fields back as Intern's proposal. The
+panel keeps each edit as it is shown and reads it back whenever it shows the
+document. Outliving the panel, a draft is shown only over the proposal it
+was typed over: the document, and its proposal's revision, name and sentence
+(`proposalOf`). The revision alone does not say which reading a proposal is
+from - a new reading is numbered from 1 again - and under it a name typed
+over one reading would come back over the next. A draft leaves the fields
+once its document is seen with another proposal or none, or can no longer
+be filed under the one it has: read again, even to the same words, a
+document shows its new reading. But only the person drops what they typed.
+Their own decision does - filing the document, keeping its name, removing
+it, Analyze again, or Retry of a document Intern could not read. A change
+nobody asked for used to as well, and a re-reading threw away a name and a
+sentence without a word; it sets the draft aside instead
+(`setAsideOutdatedDrafts`, `EarlierDrafts`), and the panel shows it above
+the document as it now is, read-only, until it is discarded. A document
+missing from a list that could not be read is not a document that changed,
+and keeps its draft. Rename all ready sends Intern's proposal for each
+ready document, so it leaves alone one with something typed and not filed
+(`typedAndNotFiled`) - in its fields or set aside - counts what it will
+rename, and says how many it left; it used to file the proposal over the
+typed name and say "Renamed 3 documents". Typed means differing from the
+proposal: a name typed and taken back, letter by letter, is Intern's again
+and no draft. A field shown again has no undo history, so Ctrl+Z there does
+not go back to the proposal, and Escape, which closes the drawer, no longer
+throws an edit away. "Back to Intern's proposal", in the heading above the
+name while the fields differ from the proposal, does: it drops the draft
+and shows the proposal in fields of their own, so no undo step of the old
+ones is left to put the old text after the new. There is no button that
+puts a set-aside text back into the fields: it is copied from where it is
+kept.
+
 ## Model and runtime
 
 | | |
@@ -726,7 +1050,7 @@ named as it was keeps whatever the reviewer had typed.
 | Runtime | llama.cpp `b11946` (ggml-org), CPU only, in `llama-upstream/` of the sidecar folder; both models run on it |
 | Context | 8,192 tokens |
 | Threads | every logical processor, at most 8, for generation and for prompt processing alike |
-| Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below); `--slot-save-path` ([the instructions across a restart](#the-instructions-across-a-restart)); and for the accurate model `--no-repack` (below) |
+| Server flags | one slot, `--cache-ram 0`, `-ub 256`, `--prio -1 --poll 0` (below); `--slot-save-path` ([the instructions across a restart](#the-instructions-across-a-restart)); and for both models `--no-repack` (below) |
 | Vision | none. No projector is pinned, downloaded, or loaded, and the request type has no field for an image |
 
 The model is text-first. Essentially every business document has usable text,
@@ -754,8 +1078,9 @@ load, neutral on AVX-512. `--prio -1 --poll 0`: low thread priority and no
 spinning between operations, which cost nothing measurable. The server is given
 180 seconds to become healthy; a cold disk took up to 117.
 
-The accurate model alone also runs with `--no-repack`
-(`tiers::tier_server_flags`,
+Both models also run with `--no-repack` (`tiers::tier_server_flags`), the
+9B from alpha.17 and the 4B from alpha.18
+([`bench/reports/speed-linux-cpu-2026-11-12`](../bench/reports/speed-linux-cpu-2026-11-12/README.md),
 [`bench/reports/speed-linux-cpu-2026-11-11`](../bench/reports/speed-linux-cpu-2026-11-11/README.md)):
 llama.cpp otherwise keeps a second, interleaved copy of every Q4_K weight
 matrix for its older x86 GEMM. Without it the 9B's peak resident memory fell
@@ -772,7 +1097,11 @@ token embeddings, where it read 2,726 MiB of the file and the copy before -
 was not measured under a memory limit, so the floors are kept. Where the
 available memory counts the weights as reclaimable (Linux), the bar for
 reading two OCR pages at once counts the whole file now, an upper bound
-(8 GiB, [OCR](ocr.md)).
+(8 GiB, [OCR](ocr.md)). The 4B's peak resident memory fell from
+4,558-4,613 MiB to 3,260-3,315 MiB with it, and its working set right after a
+document on Windows from 4,514 MiB to 3,215 MiB (run 43273956181); a request
+took 8.8% less time on the AVX2 path on Linux and 4% less on Windows on the
+same CPU, and live it gave as many right names as the repacked runs.
 
 ### Two models, one at a time
 
@@ -823,8 +1152,10 @@ one named constant.
 The memory guard: a model is loaded only when the machine reports enough
 available memory for it (`MemAvailable` on Linux, `GlobalMemoryStatusEx` on
 Windows; memory that cannot be read counts as enough): what its server must
-keep resident to read at its speed (Qwen3.5 4B about 4.7 GB, its whole
-resident set; Qwen3.5 9B 6,043 MiB, measured at a 6 GB memory limit in
+keep resident to read at its speed (Qwen3.5 4B 4,700 MiB, its resident set
+with repacked weights, kept as an upper bound now that its peak resident
+set with `--no-repack` is 3,260-3,315 MiB; Qwen3.5 9B 6,043 MiB, measured
+at a 6 GB memory limit in
 `bench/reports/speed-linux-cpu-2026-11-05` with repacked weights: 3,317 MiB
 of anonymous memory and 2,726 MiB of mapped weights it read on every token,
 the rest of the mapped file being the original of what was repacked and
@@ -846,9 +1177,9 @@ only the free, zero and standby lists, and the weights the server has touched
 stay in its working set until it exits or the system trims them. When the
 server cannot be read, an estimate stands in: the resident high-water mark
 less the model file (`tiers::unload_gives_back`), measured with repacked
-weights. On Linux it is about right for the 4B. For the 9B, which runs with
-`--no-repack`, it is about 2 GiB high: its peak resident set less its file is
-about 0.7 GiB, against the 2,883 MiB credited. It is kept for Windows (see
+weights. Both models now run with `--no-repack`, and on Linux it is high for
+both: the 9B's peak resident set less its file is about 0.7 GiB, against the
+2,883 MiB credited, and the 4B's about 0.7 GiB against 2,086. It is kept for Windows (see
 `tiers::resident_estimate`). On Windows that estimate is far short. On a
 16 GiB runner the 9B's working set right after a document was 8,110 MiB with
 repacked weights (5,491 MiB without) where the estimate credits 2,883 MiB. By
@@ -864,16 +1195,18 @@ That figure is not quite alike for the two models: with 2 GiB held it came out
 higher with the 4B loaded than with the 9B right after a document - with
 repacked weights by 404 MiB with the 4B also right after a document and 917 MiB
 with it a minute idle, with the 9B's `--no-repack` by 909 and 1,594 MiB
-(`runtime-speed.yml` run 43063958237). By the same arithmetic a machine near
+(`runtime-speed.yml` run 43063958237), and with both models' by 411 and 754
+MiB (run 43273956181). By the same arithmetic a machine near
 the floor with nothing loaded would still swap them, before every document or
 at every pause. A loaded 4B is therefore asked for
 2,048 MiB more than the floor before it makes way for the 9B
 (`tiers::UPGRADE_MARGIN`, in `tiers::memory_for_plan`): the largest gap
 measured, with room to spare. At 1,024 MiB, the margin of alpha.15 and
-alpha.16, the `--no-repack` numbers would still swap the models at every pause
-on a machine with about 7,763 to 8,333 MiB available before any load. In both
-runs the 4B was probed after the 9B, and part of its figure is the rest of the
-machine releasing memory while it was loaded, so the margin errs toward
+alpha.16, the 9B-only `--no-repack` numbers would still swap the models at
+every pause on a machine with 7,763 to 8,332 MiB available before any load;
+with both models' flags, as alpha.18 launches them, 1,024 MiB would not. In
+every run the 4B was probed after the 9B, and part of its figure is the rest
+of the machine releasing memory while it was loaded, so the margin errs toward
 keeping the smaller model. A loaded 9B is still stood down at the floor
 itself, so the margin keeps the smaller model longer, never the larger, and a
 machine whose memory drifts around the floor is not swapped back and forth
@@ -939,8 +1272,76 @@ generation discipline as every other start and stop, so two models are never
 resident together and a cancel or a hosted model chosen mid-swap behaves as it
 does mid-request. A model unused for ten minutes is unloaded, giving its memory
 back; the next document loads it again without reading the file, since this
-session already checked it. The review panel says which model read a document,
-and that a provisional reading will be read again.
+session already checked it. The unload runs at the top of every scheduler pass,
+and is skipped on a pass that is about to read a document
+(`Pipeline::has_document_waiting`): the pass a new document wakes used to
+unload a model idle for ten minutes and load it again at once. A document the
+last pass put back unread does not count - one the admission guard cannot
+check right now, while Microsoft is out of reach, is put back on every pass
+and is the next to claim each time, and counted, it kept the model loaded for
+as long as that lasted; should a pass read it after all, it costs one load,
+as before. A pass validates again at most one document an earlier release
+read ([a new release and the documents already
+waiting](#a-new-release-and-the-documents-already-waiting)), and the scheduler
+then begins the next pass at once, so the unload, recovery and the
+provisional re-reads run between those documents too
+(`Pipeline::run_until_idle`). Run within one pass, the sweep after an update -
+each document a fresh extraction, about 3 s and up to about 95 s for a long
+scan, with no model in it - kept the model the update's self-test had loaded
+resident until the last document was done: past its ten idle minutes for a
+sweep of more than about two hundred documents at 3 s each. The review
+panel says which model read a document, and that a provisional reading will
+be read again.
+
+A model is started before its document reaches it when one is on its way
+(`RuntimeModel::start_early`): when a scan of the watched folder first sees a
+file arriving - the watcher then waits at least ten seconds for it to hold
+still - and when a person adds documents, which are copied and extracted
+before they are read. A watched folder signals arrivals only when what arrives
+there is this machine's own: a private folder on its own disk, or "my folder"
+(`MicrosoftIntake::admits_arrivals_as_own`). In the shared Inbox a document is
+this machine's only once Microsoft says its account uploaded it, which is not
+asked until the file has settled, and most arrivals are teammates' uploads it
+never reads: signalled, each would load the model on every laptop watching the
+folder. This machine's own uploads there load it when they are claimed, as
+before. A document that came while Intern was not running is not arriving -
+the first scan sees it with everything already there, and it is claimed at
+the next scan, twenty seconds on - but the watcher reports it as coming
+(`IntakeStatus::arrived_unwatched`) when it was not there at the first look
+and no other machine put it there or claimed it, and since that first scan
+comes before setup has read the stamp, an expectation seen before the model is
+ready is kept and acted on once it is (`SetupManager::expect_document`).
+Until alpha.17 the sign-in load covered that document; without this it waited
+for the load. Loading the model and restoring its saved instructions
+then overlap that wait instead of adding to the document's. It is the start
+the document would make, made early: the plan as it stands with the memory
+free then, under the same `lifecycle` lock and generation, self-tested the
+first time a model loads; a hold, a cancel or shutdown in the meantime starts
+nothing, or stops what it loaded, as it would for the document. A document
+that reaches the model meanwhile is planned only once the load is over
+(`RuntimeModel::plan_between_launches`). The server's model is in memory by
+the time it answers, before its engine is in the slot where the plan credits
+it. Planned during the load on a 16 GiB Windows runner with a browser's 2 GiB
+held - 11,461 MiB available before it, less the 9B's working set, 5,229 MiB
+or more with `--no-repack`, about 6,200, under the 8,192 the 9B needs - a
+document went to the 4B, which unloaded the 9B the early start had just
+loaded. Any launch is waited for so, a cancel's restart too, and a stored
+reading is validated again only once it is over. The document waits for that
+self-test as well: an engine is read with only once it has passed, so the
+document is read by the model that passed or, when it fails, planned again
+onto the other, never sent beside the probe to a model not yet shown to read
+right. It never stops a model: one already loaded is only kept from going
+idle, so it cannot interrupt a document being read, and a burst of arrivals
+starts one load. It
+starts nothing while the queue would not read what arrives - the model not
+ready, or the queue paused. A file that turns out not to be a document -
+unsupported, or a duplicate - costs that one load, which goes idle and is
+unloaded ten minutes later like any other. The gain was not
+measured live. It is at most the load and the restore - the 9B took 3.1 to
+5.1 s from start to healthy with its file in the page cache and 44 to 106 ms
+to restore ([`bench/reports/cold-start-linux-cpu-2026-11-09`](../bench/reports/cold-start-linux-cpu-2026-11-09/README.md)),
+and a cold disk takes far longer - off the first document after the model was
+unloaded or never loaded, and no more than the wait it overlaps.
 
 ### The instructions across a restart
 
@@ -950,10 +1351,10 @@ a context checkpoint it takes where the user turn starts - the models are
 hybrids whose recurrent layers cannot be rolled back token by token, so the
 checkpoint is the only way the prefix survives - and every document after the
 first reports 477 cached tokens. The first document of a server lifetime has
-nothing cached and processes the instructions itself: at sign-in, and after
-every ten-minute idle unload. A warm-up request would not help: the app loads
-the model when a document arrives, so a warm-up would race that document for
-the server's one slot and save nothing.
+nothing cached and processes the instructions itself: the server is started
+for a document - when it reaches the model, or when it is first seen on its
+way - and stopped after ten idle minutes. A warm-up request would race that
+document for the server's one slot.
 
 So each server is started with `--slot-save-path`, the `slots` folder in the
 app's local data, and its state is carried across the restart
@@ -1207,20 +1608,45 @@ Launch never reads a model file. Tauri's setup hook asks only whether each is
 there at the size the manifest pins; the digest is checked behind the window,
 on the setup thread, and used to be read twice in the hook, a white window for
 five seconds or more on an office laptop. A model that has passed its digest
-and the semantic self-test is stamped in `models/.verified.json` with its size
-and modification time, the digest it was checked against, the size and date
-of the llama-server binary it runs on, and the version of Intern that checked
-it. The stamp has an entry for each tier's file, and an entry records whether
-that model has passed the self-test or only its digest - the accurate model is
-digest-checked when its download ends and self-tested the first time a
-document loads it. While all of that still matches, the next launch starts the
-server with neither check; when any of it changes, the model is hashed and
-self-tested once and stamped again, and a failed self-test removes its entry.
-Both models run on the one llama-server, so a new build of it sends both
-through the checks again, and so does every update of Intern; a changed model
-file sends only itself. A stamp of an earlier schema - the single-model
-build's, or one that recorded a single server binary for every file - vouches
-for nothing.
+is stamped in `models/.verified.json` (schema 4) with its size and
+modification time and the digest it was checked against, and once it has
+passed the semantic self-test, with the version of Intern that tested it and
+the size and date of the llama-server binary it ran on. The stamp has an entry
+for each tier's file - the accurate model is digest-checked when its download
+ends and self-tested the first time a document loads it. The digest stands
+for as long as the file and the pin do: a new size, date or pin sends that
+file through the digest and the self-test again, and leaves the other tier's
+entry as it is. The self-test stands only for the build and the server binary
+it ran under. An update of Intern changes no byte of a model, but it can
+change the request and the flags the server is started with, and with them
+the code the server runs on this processor; a new llama-server is new code.
+Either sends the model the next document needs through the self-test once,
+before a document depends on it - one that fails is set aside and the other
+reads - and through no digest: until alpha.17 the first launch after every
+update read both models end to end again, 8.4 GB, to find the digests it
+already had. A failed self-test removes its entry, so that file is read in
+full next time. The stamps alpha.13 to alpha.17 wrote (schema 3) are read for
+their digests alone; one of an earlier schema - the single-model build's, or
+one that recorded a single server binary for every file - vouches for nothing.
+A launch that finds both checks standing for the model the next document
+would be read by, and no document waiting, starts nothing: the model is
+marked tested, the queue opens, and the first document loads it. Until
+alpha.17 every sign-in loaded it - the accurate model's 5.7 GB, read from a
+disk that had just booted - and held it until the ten-minute idle unload,
+documents or not. A document waiting at launch, left from the last session,
+has the model started as before. Waiting means what the next run would read
+(`Pipeline::has_document_waiting`): nothing while the queue is paused, not a
+document in doubt that waits for the machine to be shown to work, and not
+one behind a rename left applying. A server that will not start is found by
+the first document instead of at launch. With the other model installed it is
+set aside there, as it would be at launch, and the document read by the other
+model. With one model there is none to read instead: the document is handed
+back to wait, as when no model is loaded, and the queue stops for it once
+that has gone on for four minutes (`MODEL_MISSING_GRACE`), as for a model that
+stopped responding. Either way its stamp entry is dropped, so the next launch
+checks that model in full and setup says why it will not start. The stamp
+records the server binary's size and date, not the libraries beside it, so a
+runtime library quarantined since the last launch is found this way too.
 Within a session the digest is read at most once: restarts - a cancel, a
 recovery, a swap, a reload after idle - start a file that still looks exactly
 as it did when it was checked, and refuse one that does not. The
@@ -1461,6 +1887,84 @@ a date that said "another document". A match sends the document to review with
 `NEAR_DUPLICATE`, named after the filing it repeats and the machine that made
 it; it is never filed on its own, and an undo forgets the fingerprint.
 
+### Reading a document again
+
+A document is often claimed again with the same bytes: put back because no
+model was loaded to ask, given its second attempt after a model failure, sent
+back by Re-analyze, or re-read by the accurate model after a provisional
+reading. Each claim used to extract it again in full, and for a scan that is
+OCR - on the real sets about 3 s a document on average, and up to 95 s for
+one long scan. The queue now keeps the last eight extractions, 32 MiB of them
+at most, in memory (`intern_queue::memo`) and hands back what the reader made
+of a document instead of reading it again, within one run of Intern: the memo
+starts empty, so the first reading after a restart is always a fresh one. An
+entry is keyed by the queue item, the SHA-256 the item was checked against
+just before extraction, and the document's own path, so a file that changed
+never finds one. It is the document's path, not the one read: a document
+admitted on Microsoft's proof is read from a private snapshot made afresh for
+every claim, whose bytes are proven to be the ones the hash names. Canceling
+or removing a document - one at a time, or with Discard waiting or Clear
+history - drops its entry, and what a reading of it still under way would have
+kept; shutdown drops them all, and nothing is written to disk.
+A remembered extraction proves nothing about the reader now, so it clears no
+doubt over a reader crash.
+
+### A new release and the documents already waiting
+
+Most releases change how a reply is validated or a name is composed; few
+change what the model is asked. A rule a release improves used to reach only
+documents read after it, while the documents already waiting in review kept
+the reading the old rules made. So every analysis now records the identity of
+the request its reply answered (`AnalysisTelemetry::request_sha256`, the
+`ModelRequest::sha256` recordings are keyed by), the SHA-256 the manifest
+pins for the model file that answered (`model_sha256`), and the identity of
+the runtime that ran it (`runtime_sha256`, `tiers::runtime_identity`): the
+reply settings every request carries - greedy sampling, the reply limit, the
+prompt cache, the template's thinking switch - the server's launch arguments
+for the tier, the llama.cpp build the release pins for the platform (the
+Windows archive in `runtime-assets.json`, the Linux one in
+`scripts/fetch-linux-assets.sh`), and the version of how the client reads a
+reply (see below). The same request to the same file can be answered
+differently under another reply limit, micro-batch or build. After an update
+each waiting document is validated again from its stored reply, with no model
+call, when all three still hold (`Pipeline::revalidate_waiting`).
+
+The queue does it when it has nothing to read, one document at a time, so a
+document that arrives meanwhile is read first, and considers each document
+once per release (the `revalidations` table). It touches only a document
+nobody has acted on - the test the provisional re-read makes: never approved,
+edited, filed, kept or taken back, no rename of it ever begun - that waits for
+nothing but what its reading said, whose file still has the bytes it was read
+from. The runtime first rules out what it can from the stored reading alone,
+before the document is read (`AnalyzerBoundary::may_revalidate`): the plan
+must have the same tier read it first now, from the same model file, under
+the same runtime, and a launch of that tier must ask for token probabilities
+exactly when the reading has them. An update that changes any of these for
+every document so costs no reading of any. Otherwise the document is
+extracted again - a fresh extraction, since the update restarted Intern: about
+3 s a document on the real sets, up to about 95 s for a long scan - under a
+request of its own that a cancel or a removal meanwhile stops. The request
+that tier's engine would build for the text must then be byte for byte the
+stored one (`Engine::revalidate`, which prepares the document exactly as
+`analyze` does), and in the cascade a quick reading the accurate model would
+read again is declined, since no reply of the accurate model's is stored for
+it. The stored reply - rebuilt from its facts and token figures as the release
+that read it took them off the wire, since validation completed the stored
+copy and the reply itself is not kept (`client::REPLY_READING_VERSION` is part
+of the runtime identity, and is bumped by hand with any change to how a reply
+is read) - then goes through the same validation and composition as a fresh
+one, in about a tenth of a second. A new record replaces the old only when it
+says something different, in a transaction that checks the row and the record
+are still exactly what was read. Its revision moves only when its name or
+sentence changed, so a reviewer's draft survives a change of readiness or
+reasons alone; a document that becomes ready is filed when automatic renaming
+is on, as after any reading. Readings stored before alpha.18 recorded none of
+the three identities and are left alone.
+Replayed over every development recording (989 readings of both models), a
+reading validated again under the same rules is identical to itself, and
+under the 0.8 gate in place of none it is identical to a fresh replay under
+0.8 in all 989, including the 269 whose readiness the gate moved.
+
 ## Measuring it
 
 Every stage after the model is deterministic, which is what makes accuracy
@@ -1485,8 +1989,11 @@ construction, validation and naming times, how many re-distillations fitting
 the prompt took, the prompt's characters and estimated tokens, and, from the
 local server's own reply, `model`: prompt tokens evaluated and reused from
 its cache, and prefill and generation time. `inference_millis` stays the wall
-time of the request. All of it is measurement only: nothing reads it to
-decide anything, and none of it is sent anywhere.
+time of the request. All of it is measurement only, and none of it is sent
+anywhere. The exceptions are the three identities beside it: the request the
+reply answered, the model file that gave it and the runtime that ran it,
+which decide whether a stored reply may be validated again after an update
+(see above).
 
 ## What it costs
 

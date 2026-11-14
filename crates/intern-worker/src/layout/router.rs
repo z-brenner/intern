@@ -321,22 +321,54 @@ pub mod thresholds {
 ///
 /// `needs_ocr` is the scan rule pages have always been routed by
 /// ([`crate::extract::page_needs_ocr`]); it wins outright. A text layer that
-/// is a bad prior OCR of a full-page image is read again. Native text with
-/// a large image no text overlaps gets that image read too. A page whose
-/// text PDFium would run together - side by side flows, table rows,
+/// is somebody else's OCR of a full-page image ([`is_prior_ocr`]) is read
+/// again unless it reads well as it is (see [`route_page_at`]). Native text
+/// with a large image no text overlaps gets that image read too. A page
+/// whose text PDFium would run together - side by side flows, table rows,
 /// labeled grids, overprinted text - is rebuilt from its geometry; every
 /// other page keeps its text exactly as it was read.
 pub fn route_page(signals: &RouteSignals, needs_ocr: bool) -> PageRoute {
-    use thresholds::*;
+    route_page_at(signals, needs_ocr, true)
+}
+
+/// [`route_page`] for a page that is (`key_page`) or is not one of the
+/// pages a document's facts are read from ([`is_key_page`]); `route_page`
+/// routes every page as a key page.
+///
+/// A prior OCR layer is read again when its words look like bad OCR, and
+/// when its text would not read as it is:
+///
+/// * its image would be read as a region and merged in. The layer covers
+///   too little of the page to count as text over the image, so OCR's
+///   reading of the whole page joins the layer's, and every line is on the
+///   page twice. The page is read by OCR either way; read again, it is
+///   read once.
+/// * its words would be rebuilt into a layout. An OCR layer sets each word
+///   on its own, so its prose comes apart into tables of one word to a
+///   cell, and a layer drawn twice over the scan repeats every line. This
+///   costs a page of OCR that would not otherwise be read, so it is done
+///   only on a key page.
+///
+/// A layer that reads as plain text is kept as it is.
+pub fn route_page_at(signals: &RouteSignals, needs_ocr: bool, key_page: bool) -> PageRoute {
     if needs_ocr {
         return PageRoute::Ocr;
     }
-    if signals.invisible >= INVISIBLE_LAYER
-        && signals.image_coverage >= FULL_PAGE_IMAGE
-        && signals.garbage >= GARBAGE_LAYER
+    let as_text = text_route(signals);
+    if is_prior_ocr(signals)
+        && (signals.garbage >= thresholds::GARBAGE_LAYER
+            || as_text == PageRoute::OcrRegions
+            || (as_text == PageRoute::Layout && key_page))
     {
         return PageRoute::Ocr;
     }
+    as_text
+}
+
+/// The route a page's text takes as it is, when OCR does not read it
+/// instead.
+pub fn text_route(signals: &RouteSignals) -> PageRoute {
+    use thresholds::*;
     if signals.image_region >= IMAGE_REGION && signals.chars >= REGION_MIN_CHARS {
         return PageRoute::OcrRegions;
     }
@@ -348,6 +380,29 @@ pub fn route_page(signals: &RouteSignals, needs_ocr: bool) -> PageRoute {
         return PageRoute::Layout;
     }
     PageRoute::Fast
+}
+
+/// Whether a page's text is an invisible layer over a picture of the whole
+/// page: somebody else's OCR of a scan, drawn under it the way OCR tools
+/// make a scan searchable.
+pub fn is_prior_ocr(signals: &RouteSignals) -> bool {
+    signals.invisible >= thresholds::INVISIBLE_LAYER
+        && signals.image_coverage >= thresholds::FULL_PAGE_IMAGE
+}
+
+/// How many pages at the head of a document are key pages
+/// ([`is_key_page`]).
+pub const KEY_LEADING_PAGES: usize = 2;
+
+/// Whether the page at `index` of a document of `pages` is one its facts are
+/// read from: one of its first [`KEY_LEADING_PAGES`], or its last. A
+/// letter, notice or invoice states its type, its parties and its date at
+/// its head, and a date that is not there is at its foot: of the 14
+/// development scans of six or more pages, every one names its type and
+/// parties on page 1, 12 date themselves on page 1 or 2 and one on its last
+/// page (the other's date is not in its text at all).
+pub fn is_key_page(index: usize, pages: usize) -> bool {
+    index < KEY_LEADING_PAGES || index + 1 == pages
 }
 
 /// Whether a route reads the page's characters one by one.
@@ -1071,16 +1126,43 @@ mod tests {
             ..plain
         };
         assert_eq!(route_page(&bad_layer, false), PageRoute::Ocr);
+        let clean_layer = RouteSignals {
+            garbage: 5,
+            ..bad_layer
+        };
+        assert_eq!(
+            route_page(&clean_layer, false),
+            PageRoute::Fast,
+            "a clean invisible layer is kept"
+        );
+        // A clean layer that would not read well as it is is read again:
+        // drawn twice over its scan, or set word by word into columns...
+        let doubled = RouteSignals {
+            overlap: 998,
+            ..clean_layer
+        };
+        assert_eq!(route_page(&doubled, false), PageRoute::Ocr);
+        assert_eq!(text_route(&doubled), PageRoute::Layout);
+        // ...but only on a key page, since it costs a page of OCR...
+        assert_eq!(route_page_at(&doubled, false, false), PageRoute::Layout);
+        // ...while a layer whose scan would be read as a region anyway is
+        // read again on any page, once instead of merged in twice.
+        let sparse = RouteSignals {
+            image_region: 1_000,
+            ..clean_layer
+        };
+        assert_eq!(route_page_at(&sparse, false, false), PageRoute::Ocr);
+        assert_eq!(text_route(&sparse), PageRoute::OcrRegions);
+        // The same signals on visible text are the document's own text.
         assert_eq!(
             route_page(
                 &RouteSignals {
-                    garbage: 5,
-                    ..bad_layer
+                    invisible: 0,
+                    ..doubled
                 },
                 false
             ),
-            PageRoute::Fast,
-            "a clean invisible layer is kept"
+            PageRoute::Layout
         );
         assert_eq!(
             route_page(
@@ -1092,6 +1174,17 @@ mod tests {
             ),
             PageRoute::OcrRegions
         );
+    }
+
+    #[test]
+    fn key_pages_are_the_first_two_and_the_last() {
+        assert!(is_key_page(0, 1));
+        assert!(
+            (0..18)
+                .filter(|index| is_key_page(*index, 18))
+                .eq([0, 1, 17])
+        );
+        assert!((0..3).all(|index| is_key_page(index, 3)));
     }
 
     #[test]

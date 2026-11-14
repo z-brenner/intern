@@ -59,7 +59,7 @@ const reviewBatchItems: QueueItem[] = [
   { id: 'scan-0101', originalFilename: 'Scan 0101.pdf', status: 'review', proposedFilename: '2024-02-01 Engagement Letter with Northwind Traders.pdf', confidence: 0.74, description: 'Engagement letter between Northwind Traders and the firm for 2024 advisory work.', reason: humanizeReason('LOW_CONFIDENCE'), errorCode: 'LOW_CONFIDENCE' },
   { id: 'scan-0102', originalFilename: 'Scan 0102.pdf', status: 'review', proposedFilename: '2024-02-09 Invoice INV-3301 from Fabrikam Inc.pdf', confidence: 0.81, description: 'Invoice INV-3301 from Fabrikam Inc. for February consulting hours.', reason: 'The date is written only as numbers that could be read day-first or month-first. Check which one the document means.', errorCode: 'DATE_AMBIGUOUS' },
   { id: 'scan-0103', originalFilename: 'Scan 0103.pdf', status: 'ready', proposedFilename: '2024-03-14 Notice of Termination to Contoso Ltd.pdf', confidence: 0.95, description: 'Notice terminating the services agreement with Contoso Ltd.' },
-  { id: 'scan-0104', originalFilename: 'Scan 0104.pdf', status: 'review', proposedFilename: '2024-03-30 Statement of Work with Litware Inc.pdf', confidence: 0.69, description: 'Statement of work with Litware Inc. for the spring data migration.', reason: humanizeReason('LOW_CONFIDENCE'), errorCode: 'LOW_CONFIDENCE' },
+  { id: 'scan-0104', originalFilename: 'Scan 0104.pdf', status: 'review', proposedFilename: '2024-03-30 Statement of Work with Litware Inc.pdf', confidence: 0.69, description: 'Statement of work with Litware Inc. for the spring data migration.', reason: humanizeReason('LOW_CONFIDENCE'), errorCode: 'LOW_CONFIDENCE', partyChoices: ['Tailspin Toys'], nameParties: ['Litware Inc'] },
   { id: 'scan-0105', originalFilename: 'Scan 0105.pdf', status: 'ready', proposedFilename: '2024-04-02 Board Resolution of Tailspin Toys.pdf', confidence: 0.97, description: 'Board resolution of Tailspin Toys approving the annual budget.' },
   { id: 'scan-0106', originalFilename: 'Scan 0106.pdf', status: 'review', proposedFilename: '2024-04-18 Lease Amendment for 500 Pine St.pdf', confidence: 0.77, description: 'First amendment to the lease of 500 Pine St.', reason: humanizeReason('LOW_CONFIDENCE'), errorCode: 'LOW_CONFIDENCE' },
   { id: 'scan-0107', originalFilename: 'Scan 0107.pdf', status: 'waiting' },
@@ -101,6 +101,16 @@ function seededName(name: SeedName, own: string[]): Pick<QueueItem, 'proposedFil
   }
   // "between" needs two sides; the one left is "with" it.
   return { proposedFilename: `${name.stem} with ${nameSegment(others[0])}.${name.extension}`, omittedParties: omitted };
+}
+
+/**
+ * An item as the backend lists it (queue_item_dto): the other parties a name
+ * could give, and the words they replace, go only with an item in review,
+ * whose name a person is deciding.
+ */
+function listed({ partyChoices, nameParties, ...item }: QueueItem): QueueItem {
+  if (item.status !== 'review' || !partyChoices?.length) return item;
+  return { ...item, partyChoices: [...partyChoices], ...(nameParties?.length ? { nameParties: [...nameParties] } : {}) };
 }
 
 /** Own names as the backend stores them: trimmed, blank lines left out. */
@@ -154,6 +164,13 @@ export interface InMemoryBridgeOptions {
    * which tests that script the first read do not expect.
    */
   liveEvents?: boolean;
+  /**
+   * Hands over a way to change the queue with nobody asking, as the desktop
+   * backend does: `change` a document - read again, given another proposal,
+   * filed from another machine - or take it out of the queue (`leave`). Each
+   * says the queue changed, so it is for a bridge with `liveEvents`.
+   */
+  byItself?: (queue: QueueByItself) => void;
   /** How long a re-analysis takes before the item is back in review. */
   analysisDelayMs?: number;
   /**
@@ -257,6 +274,9 @@ function numberedName(name: string, index: number): string {
   const dot = name.lastIndexOf('.');
   return dot > 0 ? `${name.slice(0, dot)} (${index})${name.slice(dot)}` : `${name} (${index})`;
 }
+
+/** See `InMemoryBridgeOptions.byItself`. */
+export interface QueueByItself { change(id: string, change: Partial<QueueItem>): void; leave(id: string): void }
 
 function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): DesktopBridge {
   let items = (options.items ?? seedItems).map((item) => ({ ...item }));
@@ -486,6 +506,10 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     replace(checked);
     return checked;
   };
+  options.byItself?.({
+    change: (id, change) => { update(id, change); queueChanged(); },
+    leave: (id) => { items = items.filter((item) => item.id !== id); queueChanged(); },
+  });
   // The seeded proposals still named from their facts. A name a person
   // approved is theirs: it leaves this map and keeps what they typed.
   const composedNames = new Map(options.items ? [] : Object.entries(seedNames));
@@ -667,7 +691,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     return report;
   };
   return {
-    listItems: async () => items.map((item) => ({ ...item })),
+    listItems: async () => items.map(listed),
     copyToInput: async (selection) => copyToInput(selection),
     // What folder setup found in the input folder (`existingDocuments`), queued where it is.
     queueInputFolder: async () => {
@@ -973,7 +997,15 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     },
     houseRuleUse: async (id) => {
       if (!learnedRules.some((rule) => rule.id === id)) throw { code: 'RULE_NOT_FOUND', message: 'learned spelling does not exist' };
+      // In use, not checked: the first name it changes still waits for a person.
       learnedRules = learnedRules.map((rule) => rule.id === id ? { ...rule, seen: Math.max(rule.seen, 2), active: true } : rule);
+    },
+    houseRuleCheck: async (id, shown) => {
+      const rule = learnedRules.find((candidate) => candidate.id === id);
+      if (!rule) throw { code: 'RULE_NOT_FOUND', message: 'learned spelling does not exist' };
+      // Only the spelling the person was shown, exactly, in use.
+      if (!rule.active || rule.kind !== shown.kind || rule.from !== shown.from || rule.to !== shown.to) throw { code: 'RULE_CHANGED', message: 'learned spelling is not in use as it was shown' };
+      learnedRules = learnedRules.map((candidate) => candidate.id === id ? { ...candidate, confirmed: candidate.confirmed + 1 } : candidate);
     },
     ...(options.liveEvents ? {
       subscribeQueue: async (listener: (event: QueueBridgeEvent) => void) => {
@@ -995,6 +1027,35 @@ export function createFixtureBatchBridge(): DesktopBridge {
 /** Seven scans, six of them undecided, for clearing a review queue from the keyboard. */
 export function createReviewBatchBridge(options: InMemoryBridgeOptions = {}): DesktopBridge {
   return createBridge({ items: reviewBatchItems, ...options }, false);
+}
+
+/**
+ * A statement of work held because two of the learned spellings its name
+ * used have not been checked, ahead of the demo's queue, for walking "Use on
+ * its own" in Settings and what the review panel says of such a name: the
+ * browser build's `?learnedSpellings=held`.
+ */
+const heldForSpelling: QueueItem = {
+  id: 'sow', originalFilename: 'SOW final v3.pdf', status: 'review', confidence: 0.93,
+  proposedFilename: '2026-04-01 SOW between Ridgeline Cartography and Contoso.pdf',
+  description: 'Statement of work between Ridgeline Cartography LLC and Contoso Worldwide, Inc. for the 2026 member-map engagement.',
+  evidence: { date: 'effective as of April 1, 2026', type: 'STATEMENT OF WORK', parties: 'Ridgeline Cartography LLC; Contoso Worldwide, Inc.' },
+  errorCode: 'LEARNED_SPELLING_UNCONFIRMED', reasonCodes: ['LEARNED_SPELLING_UNCONFIRMED'], reason: humanizeReason('LEARNED_SPELLING_UNCONFIRMED'),
+  houseRules: [
+    { kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' },
+    { kind: 'party', from: 'Ridgeline Cartography LLC', to: 'Ridgeline Cartography' },
+    { kind: 'document_type', from: 'Statement of Work', to: 'SOW' },
+  ],
+};
+
+const heldForSpellingRules: LearnedRule[] = [
+  { id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso', seen: 2, active: true, confirmed: 0, learnedAt: 1775001600 },
+  { id: '2', kind: 'party', from: 'Ridgeline Cartography LLC', to: 'Ridgeline Cartography', seen: 2, active: true, confirmed: 0, learnedAt: 1775001700 },
+  { id: '3', kind: 'document_type', from: 'Statement of Work', to: 'SOW', seen: 2, active: true, confirmed: 1, learnedAt: 1775001800 },
+];
+
+export function createLearnedSpellingBridge(): DesktopBridge {
+  return createBridge({ items: [heldForSpelling, ...seedItems], learnedRules: heldForSpellingRules }, false);
 }
 
 type BrowserFile = File & { webkitRelativePath?: string };

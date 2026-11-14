@@ -121,6 +121,19 @@ identified by its prompt alone, as before, so its recordings stay valid.
 
   A replacement date is taken only when both views agree on a single one.
 
+  One guard reads every unit, running lines included, and fires only when
+  all of them agree: an invoice's, a statement's or another issued
+  document's date that every line stating it joins to another date by `to`,
+  `through`, `thru`, `until` or a dash (`Service Period: 9/1/2017 -
+  9/30/2017`, `| 01/08/24 to 01/14/24 |`) is one end of a period, not the
+  day the paper was issued. The date is kept and the name goes to review
+  with `DATE_IS_PERIOD`. One statement of the date outside a period clears
+  it, wherever it stands and however loosely it is written (`Invoice Date:
+  08-Jan-24`, a stamp's `JAN 0 8 2024`). Two ends in figures are written
+  alike, with one separator and a year as long, so a time written with dots
+  after a date (`28.01.2024 - 11.30.05`) ends no period. A period written
+  in a loose spelling at both ends is not read as one.
+
 Each fact records its `Support`:
 
 - `Cited`: a unit the reply cited for the fact states it.
@@ -195,10 +208,19 @@ The other checks:
     and, in a letter that greets someone (`Dear`), stands before the
     dateline: the inside address after it is never the letterhead;
   - `Presented by` or `Prepared by`, for a sender;
+  - for an issuer, a vendor or a seller the reply named, the `To:` line of
+    an invoice's payment slip: a line directly under `PAYMENT ADVICE`,
+    where that heading is neither the first heading of the first page nor
+    the document's first line, and the type is no remittance or payment
+    advice. The slip goes back with the payment, so its `To:` names who is
+    paid: the party the line's value opens with, whole. For that party the
+    line labels no recipient or addressee; of anyone else on the line (a
+    customer a reader ran in from the next column) it says nothing;
   - the issuer and customer cues on the same line.
 
-  A role nothing supports never decides how the parties read in the
-  filename. When the reply gives a party no supported role, the role the
+  A role nothing supports never decides by itself how the parties read in
+  the filename: where the reply's roles are read (see the relation table),
+  the name waits for review. When the reply gives a party no supported role, the role the
   document's own wording gives it does (`ValidatedParty::document_role`):
   `Resident:` before the name makes a tenant, `Owner:` a landlord,
   `("Lender")` after it a lender.
@@ -212,7 +234,22 @@ The other checks:
   must be stated whole somewhere in the context, and not as another
   document's name (`Re: Residential Lease Agreement dated ...`), and must
   name a kind of document. The type is then written in the reply's
-  words, title-cased when the reply wrote it all in lower case. A mark (a
+  words, title-cased when the reply wrote it all in lower case. A reply
+  that opens on `this` or `these` copied a sentence (`This letter sets out
+  the decision of ...`) and is not taken for a type, whatever kind it
+  names: the title or the layout stands in, in review. A stated title
+  that still runs into a date box ends before the box's label and the
+  format it asks for (`CERTIFICATE OF LIABILITY INSURANCE DATE
+  (MM/DD/YYYY)` is a Certificate of Liability Insurance). A reply that is
+  the document's own title followed by a copy marking (duplicate, copy,
+  original, reprint) is read as that title when the document prints the
+  marking alone on the line right under the title, with no heading of one
+  line after it: `INVOICE DUPLICATE` of a sheet headed `INVOICE` over a
+  `DUPLICATE` stamp is an Invoice. A marking the reply says first, one
+  printed over the title, one under a heading that is not the document's
+  own title, and one the title states (`DUPLICATE INVOICE` on one line,
+  `Application for Duplicate Title`) stay with the reply, which is read
+  whole. A mark (a
   character that is no letter, digit or space, and no accent on a kept
   letter) is kept only when the line that states the type holds it too,
   and never at either end of the type, but for a bracket closing one the
@@ -226,7 +263,30 @@ The other checks:
   a title of the same kind stands in, for review (`TYPE_INFERRED`), or
   the type is unsupported. A title set in capitals that OCR scattered
   (`DElIvery RECeIPt DR-771`) and the kind a letter's `Re:` line opens
-  with (`Re: Offer of Employment - ...`) are titles too. A title phrase
+  with (`Re: Offer of Employment - ...`) are titles too. A record at the
+  head of a `Re:`, `Subject:`, `Subj:` or `Regarding:` line is not: a
+  review, a report, a plan or minutes is a paper of its own that this one
+  discusses or sends on (`Re: Thematic Review on Early Mortgage Arrears`
+  over `Dear CEO,`), so a type read from there goes to review
+  (`TYPE_UNSUPPORTED`). In a document laid out as a letter it gives way to
+  `Letter`, unless the whole type is a notice, a form or an agreement, a
+  kind a letter can be of its own (`Re: Consent to Assignment of Lease`):
+  that one keeps its name in review, as a type read below the greeting
+  does. Only the last word of the type's opening phrase, before its first
+  `of`, `to`, `for`, `and`, `on` or `under`, is asked: `Re: Approval of
+  Closure Plan`, `Re: Closure Plan Approval` and `Re: Policy Cancellation`
+  are what the letter does, and stay. A record the paper's own heading
+  states too stays as well, whichever of the two lines the reply cited
+  (`SITE INSPECTION REPORT` over `Re: Site Inspection Report - 12 Main
+  Street`): the heading is read above the greeting of a paper that greets
+  someone, and in a heading or a line set in capitals of one that greets
+  no one. An email's `Subject:` is read by the email's own rule. The rule
+  is not a letter's alone. A memorandum, a policy or minutes whose only
+  title is a subject field (`SUBJECT: Travel Policy` under `MEMORANDUM`,
+  `Subject: Hand Hygiene Policy` with no heading) waits for a person under
+  its own type, though the type stands on the line it was read from, and
+  a memorandum that signs off as a letter does becomes `Letter`. A title
+  phrase
   runs back from its noun to the start of the line, a connector, or the
   end of an issuer's name: for most kinds an organization's noun or legal
   form (`WRENFIELD RESTAURANT SUPPLY INVOICE` is an Invoice), for an
@@ -244,7 +304,10 @@ The other checks:
   second name that the layout ran into it (`PrOperty 47 JUniper LOOP Cedar
   Finch Properties Llc`); a legal form ends an organization's name. A name
   that is the end of an organization a unit names (`MANUFACTURING LLC` of
-  `EMBer POSt MANUFACtURInG LLC`) is completed to it. Capitals OCR
+  `EMBer POSt MANUFACtURInG LLC`) is completed to it, whether or not a
+  line of the document holds the reply's words alone: such a line is as
+  often the second line of a wrapped name or a column's heading as a name
+  set out whole, and nothing in a layout tells them apart. Capitals OCR
   scattered are read as capitals. A first name on its own is unsupported.
   A name keeps what stands before an address that runs on to its city
   (`John Smith, 1420 Fielder Lane, Cedar Rapids, IA 52402`).
@@ -255,7 +318,19 @@ The other checks:
   document names only by the job they do for it: after a staff label or a
   column header naming a job (`Examined by`, `Winemaker`, `Crew lead`, an
   issued document's `Buyer:`), the `Name:` of a `By:`/`Title:` block, or
-  with a post right beside the name (`Beckett Halloran (President)`). A bare
+  with a post right beside the name (`Beckett Halloran (President)`). Not
+  the person whose name opens the answering side of a court caption that
+  labels both sides: the first name right after `v.`, a comma or a
+  semicolon ending it (`v. DOUG BURGUM, SECRETARY OF THE INTERIOR; ...`),
+  where every organization the reply named stands on the bringing side.
+  An official sued in their office is that side of the case. Anyone else
+  the caption names keeps the standing their post gives them: the second
+  official, everyone on the bringing side, and the officer of an agency
+  the reply named too, which is then the party, when the agency's name
+  reads as an organization's to the engine (it ends on, or is headed
+  before "of" by, a word such as Authority, Department or Bureau). An
+  agency whose name does not read so (`National Park Service`, `United
+  States of America`) does not keep its officer out. A bare
   signature mark (`/s/`, a `Signature` column) counts only outside letters
   and emails, and never for the one the document labels as its sender:
   anyone signs their own letter. A label or column header that names the one the
@@ -274,6 +349,27 @@ The other checks:
   whose reply names no one it is addressed to takes as its addressee the
   name its first page's `To:` field opens with; an `Attn:` line names the
   person who reads it for the addressee and never does.
+- **A party that waits.** Two names go to review with
+  `PARTY_UNSUPPORTED` for the party they give:
+  - a party longer than 70 characters. It is far more often a run of text
+    than a name (a `To:` list's recipients in a row), and the filename
+    sheds a party that does not fit. The name is unchanged. A real name of
+    that length waits too;
+  - a letter, or a notice or a document of no known kind laid out as one,
+    named to an organization read from one coined word in its inside
+    address: two or more capitalized
+    parts of at least three letters each, run together or joined by dots
+    (`PacifiCorp`, `Public.Resource.Org`), with no figure and no
+    surname's particle, whose parts set apart read as an organization's
+    line. The word is read only under the addressee with the street's
+    line right under it, and only for a name that waits already and would
+    give that person and no one else, where the document supports no one
+    else as its sender or issuer: the reply is then read a second time
+    with the word as the organization (`validate_facts_at`). A name that
+    would be filed, or that gives anyone else (the office a letter comes
+    from), is never renamed by it. A note or a person the extraction ran
+    together has the same shape (`HandDelivered`, `JaneDoe`), so the name
+    is never filed on it.
 - **Roles** a party keeps are the ones the document supports: the reply's,
   else the one the document's wording gives, else none
   (`ValidatedParty::proposed_role` keeps what the reply said).
@@ -318,8 +414,8 @@ and an addendum is an amendment.
 
 ### The relation table
 
-`relation_from_roles` uses supported roles only. Parties are taken in the
-order the document first names them.
+`relation_from_roles` reads the roles the document supports. Parties are
+taken in the order the document first names them.
 
 Before the table, a court document is filed under its case: when the
 document has a court's, a tribunal's or an arbitration's heading on its
@@ -329,10 +425,11 @@ appellee right beside its name ("Plaintiff Gilchrist Harbor Marine Supply,
 LLC", "Tavistock Boatworks, Inc., Defendant"), the filename reads `between`
 them, the side bringing the case first. A letter or an email about a case
 keeps the table's correspondence rules, and an invoice or a statement for it
-still comes from its issuer. A role's or a field's own label is never part
-of a name: the index's "Plaintiff Gilchrist Harbor Marine Supply, LLC" does
-not complete the reply's "Gilchrist Harbor Marine Supply, LLC", nor "Account
-Name Calm.com, Inc." its "Calm.com, Inc.".
+still comes from its issuer. A role's or a field's own label, a side's in
+the plural ("Defendants") and a bankruptcy's "Debtor" or "Debtors" too, is
+never part of a name: the index's "Plaintiff Gilchrist Harbor Marine Supply,
+LLC" does not complete the reply's "Gilchrist Harbor Marine Supply, LLC", nor
+"Account Name Calm.com, Inc." its "Calm.com, Inc.".
 
 An agreement or an amendment that names only one party goes to review with
 `PARTY_MISSING`: an agreement has two sides at least, so the reply lost one.
@@ -345,7 +442,7 @@ affiliate) gives none, nor does any clause when no party is left.
 | Class | Relation |
 | --- | --- |
 | Agreement, amendment | `between` the first two parties; one party, `with` |
-| Issued | `from` the issuer; for a purchase order, the side buying (buyer, client or customer), never its vendor; otherwise the vendor, seller or sender; then the party the issuer and customer cues name, or the one party at the head of the first page before any customer cue; then the side opposite a supported customer. The customer alone is never the filename's party. A reply that proposed a type but named no one who could issue it takes the one organization at the head of the first page as the issuer, read before the kind of document its line names ("Halvorsen Fixture Works LLC INVOICE"), even when the type had to come from the title |
+| Issued | `from` the issuer; for a purchase order, the side buying (buyer, client or customer), never its vendor; otherwise the vendor, seller or sender; then the party the issuer and customer cues name, or the one party at the head of the first page before any customer cue; then the side opposite a supported customer. Neither of those last two names a purchase order from a party the document or the reply calls its vendor or seller: the vendor's line heads an order's page as often as the buyer's letterhead does. Where the party at the head is set aside as the vendor, the side opposite a supported customer is not read either: an order is addressed to its vendor, so that customer may be the vendor itself, and the party opposite the buyer on one order and a carrier on the next. The order then names no issuer: a party is kept with no joining word (the vendor, or the first party the document does not mark as receiving), or no party where the first is one the reply called the customer, and the name waits for review. The customer alone is never the filename's party. A reply that proposed a type but named no one who could issue it takes the one organization at the head of the first page as the issuer, read before the kind of document its line names ("Halvorsen Fixture Works LLC INVOICE"), even when the type had to come from the title |
 | Notice | `for` the party it is about; else `to` the recipient; else `from` the issuer; else `for` the counterpart of a provider; else `from` the provider; two parties marked other read `between` |
 | Letter | `to` the addressee; else `from` the sender; else `for` the party it is about, or the provider's counterpart; else `from` the provider |
 | Email | `from` the sender; else `to` the addressee |
@@ -358,8 +455,47 @@ borrower, licensee or buyer. In a record or a notice, a reply's bare
 "recipient" or "addressee" gives way to such a role when the document's own
 label gives it one: a report "Prepared for Cobalt Basin Water Authority" is
 `for` the authority, not `to` it, whoever else the reply named. When nothing settles the relation, the first
-party is kept with no joining word (`Invoice - Acme`). A relation is never
-guessed.
+party is kept with no joining word (`Invoice - Acme`), and the name waits
+for review with `PARTY_UNSUPPORTED`: the party is in the document, but
+whether the document is from it, to it or for it is not. A relation is never
+guessed without saying so.
+
+Where the supported roles settle nothing, or only a default, the roles the
+reply gave are read in their place (never for an agreement, and not where a
+role the document gives a party contradicts the reply's). A name that rests
+on them waits for review with `PARTY_UNSUPPORTED`. Two readings differ
+from the table there:
+
+* A notice's recipient that only the reply named is `for` it, not `to` it:
+  `to` says the notice was addressed to the party, and neither a `To:` label
+  nor an address block names it. A recipient the document labels
+  (`To: ...`) keeps `to` on the document's word. One named in the address
+  block of a notice written as a letter (the lines above its greeting,
+  after its dateline when it has one, read as a letter's inside address is)
+  keeps `to` on the
+  reply's roles, and waits for review: a notice of a mass layoff sent to a
+  state office is not `for` that office. An address block with no greeting
+  under it is not read. A claim keeps `to` as well (it is made to the party
+  it is sent to), and so does a type that names a letter, a memorandum or
+  an email beside its notice ("Notification Letter"), which is written to
+  its addressee.
+* A notice naming one party is `for` it by default, and a record whose
+  roles settle nothing is `for` the first party no role sets aside. When
+  the reply called that party the issuer or sender, it is named `from`
+  instead, on the reply's roles. A provider's counterpart stays `for`, and
+  waits for review when the reply called it the issuer or sender too.
+
+A document `to` or `for` a class of recipients ("All Staff", "Fellow
+Shareholders") waits for review with `PARTY_UNSUPPORTED`, since a class is
+no party to file by. When another party is supported as the issuer or
+sender, or, the document giving it no role, was called so by the reply, the
+name says `from` that party. A class, or a person named with the post they
+hold ("Jane Doe, Acting General Counsel"), is never taken as that party, nor
+is one the document gives another role, and the name then stays as it was.
+It also stays where the document, or failing that the reply, calls the named
+party the one the document is about (a certificate's "Insured: All Pro
+Suppliers"): such a party is no class of recipients, though its name opens
+like one. It waits for review either way.
 
 `tests/relation_gold.rs` checks the table against every InternBench gold
 document. Each party is given every role its gold allows, in both orders

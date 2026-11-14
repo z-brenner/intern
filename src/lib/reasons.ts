@@ -11,24 +11,48 @@ const SENTENCES: Record<string, string> = {
   DATE_MISSING: 'No date that defines the document was found.',
   DATE_UNSUPPORTED: 'The proposed date does not appear verbatim in the document.',
   TYPE_MISSING: 'No specific document type was identified.',
-  TYPE_UNSUPPORTED: 'The proposed document type does not appear verbatim in the document.',
-  TYPE_INFERRED: 'The model gave no document type, so the document\'s own title was used; check that it names the document.',
+  // Both are raised in more cases than their first (ReviewReason in
+  // domain.rs; raised in facts.rs and validate.rs). TYPE_UNSUPPORTED: a
+  // type the document does not state; and a type it does state, but only
+  // where it says what it is about - a "Re:" or "Subject:" line a record
+  // heads ("Subject: Annual Audit Report", the line itself shown as the
+  // evidence), or a letter's text below its greeting. TYPE_INFERRED: a
+  // title of the document in place of a type the model did not give or the
+  // document did not support; and the kind the layout shows - "Letter" for
+  // a letter typed by its matter, "Email" for a header block, "Notice" for
+  // a heading that opens on it - whether or not the model gave a type.
+  // Neither sentence says the type is absent or that the model gave none.
+  TYPE_UNSUPPORTED: 'The document does not confirm the proposed type as its own. The type does not appear verbatim in the document, or appears only where the document says what it is about, such as a subject line or the text of a letter. Check the type.',
+  TYPE_INFERRED: 'Intern supplied the type in this name: the document\'s own title, or the kind its layout shows, such as “Letter” or “Email”. Check that it names the document.',
   // Both are raised in more cases than a party missing from the text
   // (ReviewReason in domain.rs; raised in facts.rs and validate.rs, on the
   // relation compose.rs reads). PARTY_UNSUPPORTED: most often a name that
   // rests on sides only the model's reading gave, the document's wording
-  // saying nothing of them (Relation::on_proposed_roles; 99 of the 160 in
-  // the 9B's replays of InternBench and the real sets, 70 of the 107 in the
-  // 4B's of InternBench and real sets 1-4); then a party the model named
-  // that the document does not contain, a placeholder, or one capitalized
-  // word such as a first name, each left out of the name, which may then
-  // have no party at all; a default the model's own reading speaks
-  // against - a document "for" the party the model called its issuer or
+  // saying nothing of them (Relation::on_proposed_roles; counted before the
+  // relation rules of November 2026, 99 of the 160 in the 9B's replays of
+  // InternBench and the real sets, 70 of the 107 in the 4B's of InternBench
+  // and real sets 1-4) - since those rules also a notice or a record
+  // "from" the party it names by default, where the model called that
+  // party its issuer or sender; a party no rule could join to the
+  // document, named after a dash with no "from", "to" or "for" ("Purchase
+  // Order - Kestrel Instruments Ltd"); then a party the model named that
+  // the document does not contain, a placeholder, or one capitalized word
+  // such as a first name, each left out of the name, which may then have
+  // no party at all; a default the model's own reading speaks against - a
+  // provider's document "for" the party the model called its issuer or
   // sender, or the first of several parties the model told no further
   // apart, kept only for coming first (Relation::doubtful); a release named
   // between two of its parties, by their order alone or as a published
-  // release whose text sets out two sides; and a name to or for a group of
-  // recipients such as "all staff", in its parties or in its type.
+  // release whose text sets out two sides; a document addressed to a
+  // group of recipients such as "all staff" - named to or for the group,
+  // in its parties or in its type, or, where the cast holds the party it
+  // comes from, from that party in the group's place, so the group is
+  // then nowhere in the name; a name whose party is longer than 70
+  // characters (MAX_PARTY_NAME_CHARS in facts.rs), most often a run of
+  // text read as one name, which the filename drops when it does not
+  // fit; and a letter or a notice named to an organization read from one
+  // coined word under the addressee ("PacifiCorp"; is_coined_name in
+  // facts.rs), a shape that words the extraction ran together share.
   // PARTY_MISSING: an agreement or an amendment naming one side, an
   // invoice, a receipt or an order left naming no one, or any document left
   // naming no one because every party the model gave was set aside (copied,
@@ -38,7 +62,7 @@ const SENTENCES: Record<string, string> = {
   // each model's replays), though PARTY_UNSUPPORTED mostly comes without
   // it, and the place to look, PARTY_CHECK below, follows the last of them
   // only.
-  PARTY_UNSUPPORTED: 'Intern could not confirm from the document which party this name should give. Most often the document does not say which side a party is on, so the side rests on the model\'s reading alone. A party the model named may also be absent from the document, or be one word such as a first name, and is then left out of the name. Or the name may give a party picked only for coming first or against the model\'s own reading, a release between two of its parties, or a group of recipients such as “all staff”.',
+  PARTY_UNSUPPORTED: 'Intern could not confirm from the document which party this name should give. Most often the document does not say which side a party is on, so the side rests on the model\'s reading alone or is left out of the name. A party the model named may also be absent from the document, or be one word such as a first name, and is then left out of the name. Or the name may give a party picked only for coming first or against the model\'s own reading, or a release between two of its parties, or the document may be addressed to a group of recipients such as “all staff”. A party more than 70 characters long is held as well: it is rarely one name, and the filename may have had to leave it out. So is an organization Intern read from one word under the addressee\'s name, such as “PacifiCorp”.',
   PARTY_MISSING: 'The name lacks a party it needs, such as the other side of an agreement or who issued the document.',
   DESCRIPTION_UNSUPPORTED: 'The description asserts something the document does not contain.',
   DESCRIPTION_INVALID: 'The description was not a single usable sentence.',
@@ -54,6 +78,12 @@ const SENTENCES: Record<string, string> = {
   DATE_IMPLAUSIBLE: 'The date\'s year looks wrong for a document, often a misread such as 2625 for 2025. Check it against the document.',
   DATE_IS_DEADLINE: 'The date the model chose is a due, renewal, or expiry date, not the date the document was issued. Check the date.',
   DATE_AMBIGUOUS: 'The date is written only as numbers that could be read day-first or month-first. Check which one the document means.',
+  // An invoice, a statement or another issued document whose chosen date
+  // stands, on every line that states it, joined to another date by "to",
+  // "through", "until" or a dash: one end of a period it bills or covers,
+  // not the day it was issued (ReviewReason::DateIsPeriod). The name keeps
+  // the date.
+  DATE_IS_PERIOD: 'The date is written only as the start or end of a period, such as a billing or service period. Check which date the document itself carries.',
   // The quick model read it. Its readings are never filed on their own; the
   // accurate model reads the document again when it can, unless a person has
   // acted on it first.
@@ -117,6 +147,19 @@ const SENTENCES: Record<string, string> = {
   // already filed - a second scan, a re-export, a copy saved again. The
   // inspector names that filing beside this sentence.
   NEAR_DUPLICATE: 'This looks like a document that was filed already. Approve to file it as well, keep the original, or remove it.',
+  // Set on a name a spelling learned from review edits changed before a
+  // person checked it (LearnedRule::confirmed in pipeline.rs): an edit's
+  // wording cannot always tell a spelling from a decision about one
+  // document, so a rule files nothing on its own until a person chooses
+  // "Use on its own" for it, in Settings under Learned spellings: the review
+  // window does not ask. Approving the name checks nothing, so the sentence
+  // says both: approve a right name, and choose Use on its own in Settings
+  // to stop being asked. Putting the document's own word back retracts the
+  // rule when nothing else in the name changed; an approval that changes
+  // another part too teaches nothing, so the sentence says when. Not "for
+  // the first time": a spelling an earlier release learned has been used
+  // before, and is unchecked after the update all the same.
+  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits. Until you tell it to use that spelling on its own, a name it changes waits for you. If the name is right, approve it; to stop being asked, choose Use on its own for the spelling in Settings, under Learned spellings. If not, put the document\'s own words back - when that is the only change, Intern stops using that spelling.',
   // Set when a person undoes a rename. The file is back under its original
   // name and the proposal is still here, so the document waits for a decision
   // rather than being renamed again by the next automatic pass.
@@ -219,10 +262,11 @@ const SHORT: Record<string, string> = {
   DATE_UNSUPPORTED: 'Date not in document',
   DATE_AMBIGUOUS: 'Date could be day- or month-first',
   DATE_IS_DEADLINE: 'Date is a deadline',
+  DATE_IS_PERIOD: 'Date is a period\'s start or end',
   DATE_IMPLAUSIBLE: 'Year looks wrong',
   TYPE_MISSING: 'No document type',
-  TYPE_UNSUPPORTED: 'Type not in document',
-  TYPE_INFERRED: 'Type taken from its title',
+  TYPE_UNSUPPORTED: 'Type uncertain',
+  TYPE_INFERRED: 'Type supplied by Intern',
   PARTY_UNSUPPORTED: 'Party uncertain',
   PARTY_MISSING: 'Party missing',
   DESCRIPTION_UNSUPPORTED: 'Description not supported',
@@ -245,6 +289,7 @@ const SHORT: Record<string, string> = {
   MODEL_INPUT_TOO_LARGE: 'Too long for the model',
   DUPLICATE: 'Already filed',
   NEAR_DUPLICATE: 'Possible duplicate',
+  LEARNED_SPELLING_UNCONFIRMED: 'Learned spelling',
   EXACT_COPY: 'Exact copy',
   UNDONE: 'Rename undone',
   ALREADY_NAMED: 'Already had this name',

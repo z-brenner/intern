@@ -325,6 +325,21 @@ impl MicrosoftIntake {
         shared
     }
 
+    /// Whether a document turning up in the watched folder is this
+    /// machine's to read without asking anyone: a private folder on this
+    /// computer's own disk, or "my folder" - the watched folders
+    /// [`Self::scope`] admits without Microsoft. In the shared Inbox a
+    /// document is this machine's only once Microsoft says the connected
+    /// account uploaded it, which nobody asks while the file is still
+    /// arriving, and most arrivals there are teammates' uploads this machine
+    /// never reads. What the watcher's early start of the model asks.
+    pub fn admits_arrivals_as_own(&self) -> bool {
+        let Ok(settings) = self.admission_settings() else {
+            return false;
+        };
+        let folder = settings.intake_folder.trim();
+        !folder.is_empty() && matches!(self.scope(Path::new(folder), &settings), Ok(None))
+    }
     /// Why documents in the watched folder are held even though intake is
     /// saved as private and local, if that is what is wrong. Read by
     /// `intake_status`, so the reason reaches Settings rather than only the
@@ -2051,6 +2066,67 @@ mod tests {
                 .scope(&data.join("Inbox").join("a.pdf"), &settings)
                 .is_err()
         );
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    /// A model is loaded early for a file seen arriving only where what
+    /// arrives is this machine's own: a private local folder, or "my
+    /// folder". Not the shared Inbox, where most arrivals are teammates'
+    /// uploads only Microsoft can tell apart, once they have settled - each
+    /// would load the 9B on every laptop watching it - and not a folder saved
+    /// as local that is shared after all.
+    #[test]
+    fn only_a_folder_whose_arrivals_are_this_machines_own_expects_documents() {
+        let local =
+            std::env::temp_dir().join(format!("intern-microsoft-own-{}", std::process::id()));
+        let private = AppSettings {
+            intake_folder: local.to_string_lossy().into_owned(),
+            intake_enabled: true,
+            intake_local_only: true,
+            ..AppSettings::default()
+        };
+        let (data, intake) = configured("own-local", &private);
+        assert!(intake.admits_arrivals_as_own());
+        let _ = fs::remove_dir_all(&data);
+
+        let mine = AppSettings {
+            intake_local_only: false,
+            intake_my_folder: true,
+            ..private.clone()
+        };
+        let (data, intake) = configured("own-mine", &mine);
+        assert!(intake.admits_arrivals_as_own());
+        let _ = fs::remove_dir_all(&data);
+
+        let shared = AppSettings {
+            intake_folder: r"\\fileserver\legal\intake".into(),
+            ..private.clone()
+        };
+        let (data, intake) = configured("own-shared", &shared);
+        assert!(!intake.admits_arrivals_as_own(), "saved as local, shared");
+        let _ = fs::remove_dir_all(&data);
+
+        let unwatched = AppSettings {
+            intake_folder: String::new(),
+            ..private
+        };
+        let (data, intake) = configured("own-none", &unwatched);
+        assert!(!intake.admits_arrivals_as_own());
+        let _ = fs::remove_dir_all(&data);
+
+        let data =
+            std::env::temp_dir().join(format!("intern-microsoft-own-team-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&data);
+        fs::create_dir_all(&data).unwrap();
+        let inbox = AppSettings {
+            intake_folder: data.join("Inbox").to_string_lossy().into_owned(),
+            intake_enabled: true,
+            ..AppSettings::default()
+        };
+        let store = SettingsStore::new(data.join("settings.json"));
+        store.save(&inbox).unwrap();
+        let intake = MicrosoftIntake::with_deployment(store, data.clone(), Ok(test_deployment()));
+        assert!(!intake.admits_arrivals_as_own(), "the team Inbox");
         let _ = fs::remove_dir_all(&data);
     }
 

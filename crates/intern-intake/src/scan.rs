@@ -261,6 +261,12 @@ pub struct IntakeStatus {
     /// Files that turned up or changed while being watched and have not yet
     /// held still long enough to be claimed.
     pub arriving: u32,
+    /// Files that turned up while the folder was not watched - Intern was
+    /// not running - and that this machine takes once they have held still:
+    /// not there at the first look, claimed by no machine, and put here by
+    /// no other. A scan sees them first, unsettled, as it sees everything
+    /// already there; this tells the host a document is coming all the same.
+    pub arrived_unwatched: u32,
     pub claimed_by_others: u32,
     /// Done-by-us claims seen.
     pub processed_here: u32,
@@ -283,6 +289,7 @@ impl IntakeStatus {
             unreadable_documents: 0,
             unreadable_folders: 0,
             arriving: 0,
+            arrived_unwatched: 0,
             claimed_by_others: 0,
             processed_here: 0,
             machines: Vec::new(),
@@ -302,6 +309,7 @@ impl IntakeStatus {
             || self.unreadable_documents != other.unreadable_documents
             || self.unreadable_folders != other.unreadable_folders
             || self.arriving != other.arriving
+            || self.arrived_unwatched != other.arrived_unwatched
             || self.claimed_by_others != other.claimed_by_others
             || self.processed_here != other.processed_here
             || self.machines != other.machines

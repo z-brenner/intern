@@ -49,7 +49,11 @@ write to. ONNX Runtime's telemetry is turned off.
    The detector's boxes give it away - most of the text runs down the
    page - and the search turns it a quarter. Without the classifier the
    page is read upright first and turned only when that reading is
-   unconvincing.
+   unconvincing. A reading at no turn that is plainly the right way up -
+   not on its side, twenty words or more, at a confidence of 50 or more,
+   which no page read the wrong way up reaches (below) - ends the search
+   too: a faded fax or carbon reads like that upright, and a wrong turn,
+   which reads as gibberish, cannot beat it.
 2. **Detection.** The page is shrunk so its longer side is 960 pixels and
    the detector marks every text line on it. Each line becomes the smallest
    rectangle, at any angle, around its blob, grown back to the ink the
@@ -86,6 +90,21 @@ character, and that is how Tesseract's word confidences behave too, so the
 the same pages read upside down score 23-46. The recognizer's own line
 score, the mean over every character, crowds every real reading into
 98-100 and could not tell them apart.
+
+**A blank page** - the back of a sheet a duplex scanner kept, a separator -
+reads as nothing, at confidence 0. So does a page with writing too faint or
+too rough for the detector to find a line in, which a person may still
+read, and only that one is in doubt. A page OCR read nothing on is blank
+only if it looks it: all but one pixel in 10,000 within 6 levels of gray of
+its paper, its commonest shade (`extract::page_is_blank`). A blank page
+reports no confidence and raises no `LOW_OCR_CONFIDENCE`, which would send
+the whole document to review; it still becomes the page image if no page
+before it did, as before. A page with marks on it - grain, shadow,
+bleed-through, a faded carbon - reads at 0 and raises the warning as it
+always has. Of the 448 development files one page is blank,
+real3-letter-07's last, rendered flat white; synthetic fax pages printed at
+gray 200-235 and blurred 3-5 pixels, on which the detector finds no line,
+are not.
 
 **Threads and memory.** Each page's networks use two intra-op threads. On a
 machine with four or more logical processors a second page is read at the
@@ -286,6 +305,23 @@ the passes the search would spend:
 
 Both strategies read both documents exactly as well. The classifier is
 6.8 MB, and it ships.
+
+A poor scan read the right way up - a faded invoice photographed on a
+counter, a fax - comes back at 50-74, under the bar, and the search used to
+read it at the three other turns as well; none of those passes could win,
+since a wrong turn reads as gibberish under 50 and the more confident
+reading is kept. A reading at no turn that is plainly upright now ends the
+search (`paddle::orientation::plainly_upright`: not on its side, 20 words
+or more, confidence 50 or more). Over every development document - real1-6,
+InternBench and the generated fixtures, 448 files - it saves 30 of 616
+recognition passes, on 10 documents: eight single-page images go from four
+passes to one (2.2-10.3 s to 0.7-2.6 s each on a 4-core machine), and the
+113- and 36-page scans real4-letter-06 and real4-letter-13 (66 and 35 pages
+read by OCR) save three passes each - a few seconds, which two runs of each
+cannot tell from the spread between runs (51-67 s for real4-letter-13).
+Every one of the 448 reads byte-for-byte as before. The pages still
+searched, on 11 documents (the fixtures' rotated scan and image files among
+them), are not plainly upright.
 
 ### Skew
 

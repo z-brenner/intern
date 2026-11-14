@@ -110,9 +110,10 @@ $Arguments = @(
     # The flags every app launch adds (MEASURED_FLAGS in server.rs).
     "--cache-ram", "0", "-ub", "256", "--prio", "-1", "--poll", "0"
 )
-# The tier's own flags (tiers::tier_server_flags): the accurate model reads
-# its weights in place rather than from a repacked copy.
-if ($Tier -eq "accurate") { $Arguments += "--no-repack" }
+# The tier's own flags (tiers::tier_server_flags): both models read their
+# weights in place rather than from a repacked copy.
+$TierFlags = @{ accurate = @("--no-repack"); fast = @("--no-repack") }
+$Arguments += $TierFlags[$Tier]
 $ServerLog = Join-Path $ModelDirectory "llama-server.log"
 $Process = Start-Process -FilePath $Server -ArgumentList $Arguments -PassThru -NoNewWindow -RedirectStandardOutput $ServerLog -RedirectStandardError "$ServerLog.err"
 

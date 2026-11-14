@@ -17,9 +17,9 @@ export function leadingDate(filename: string): string | undefined {
   return real ? `${match[1]}-${match[2]}-${match[3]}` : undefined;
 }
 
-/** `filename` with `date` leading it, replacing any date already there. */
+/** `filename` with `date` leading it, replacing any date already there - one half typed ("2012-6-1") too. */
 export function withLeadingDate(filename: string, date: string): string {
-  const rest = filename.trim().replace(/^\d{4}-\d{2}-\d{2}(?![0-9A-Za-z])[\s_-]*/, '');
+  const rest = filename.trim().replace(/^\d{4}-\d{1,2}-\d{1,2}(?![0-9A-Za-z])[\s_-]*/, '');
   return rest ? `${date} ${rest}` : date;
 }
 

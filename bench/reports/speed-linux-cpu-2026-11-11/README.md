@@ -128,10 +128,11 @@ Measured after the release candidate's QA, because that run's model
 evaluation decoded at half the rate of alpha.15's QA on another runner
 (2.12-2.29 against 4.16-4.48 tokens a second) while prefill got faster.
 `runtime-speed.yml` with `probe: no-repack` (run 43113377135,
-`windows-no-repack.json`) launches the 9B as the app does, alternately
-without and with `--no-repack`, twice each, on every third recorded
-request, on one runner: an Intel Xeon Platinum 8370C (AVX-512, no AMX),
-four logical processors, two server threads.
+`windows-no-repack.json`) launches the 9B with the app's flags but two
+server threads where the app would take four, alternately without and with
+`--no-repack`, twice each, on every third recorded request, on one runner:
+an Intel Xeon Platinum 8370C (AVX-512, no AMX) with four logical
+processors.
 
 | Run | Time per request | Prefill (median) | Decode (median) |
 | --- | ---: | ---: | ---: |

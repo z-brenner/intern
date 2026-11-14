@@ -396,12 +396,21 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .suggestion p svg { flex: none; margin-top: 2px; }
 .suggestion-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .suggestion-actions button { min-height: 34px; }
-.date-choices { margin: 0 0 16px; }
-.date-choices .field-label { margin-bottom: 8px; }
+.date-choices, .party-choices { margin: 0 0 16px; }
+.date-choices .field-label, .party-choices .field-label { margin-bottom: 8px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { min-height: 30px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; cursor: pointer; }
 .chip:hover:not(:disabled) { background: var(--surface-subtle); border-color: var(--text-muted); }
 .chip--file { color: var(--text-muted); }
+/* The party a name now gives, among the others it could: chosen, not alarming. */
+.chip[aria-pressed='true'] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+/* A party is as long as the document makes it, and one with no space in it
+   (OCR-glued words, a web address) made a chip 385px wide, past the edge of
+   the 370px panel and, at 800 by 600, of the window. It wraps inside the
+   panel instead, anywhere if it must, with room above and below its lines.
+   Its corners are half its least height, so a one-line chip is still a pill
+   and one that wraps is a rounded box whose text clears its border. */
+.party-choices .chip { max-width: 100%; overflow-wrap: anywhere; text-align: start; padding-block: 4px; line-height: 1.3; border-radius: 15px; }
 /* The model's figure for its own reading, kept for anyone who wants it but
    set as a detail: what is wrong, said above, is what decides a review. The
    selector outweighs ".inspector section p", whose zero margin used to butt
@@ -446,6 +455,15 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .note p + p { margin-top: 6px; }
 .note .update-actions { margin-top: 10px; }
 .inspector section p { margin: 0; line-height: 1.5; }
+/* A name and a description as a person had them, kept where typing changes nothing (TypedKept): in the panel, or above the queue. */
+/* "Back to Intern's proposal" in the heading's own line, so the fields do not move when it comes and goes. */
+.proposal-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.proposal-heading .link-button { flex: none; font-size: 12.5px; }
+.typed-kept { margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--review-edge); border-left: 3px solid var(--review); border-radius: var(--radius-md); background: var(--review-surface); }
+.typed-kept p { margin: 0 0 8px; font-size: 13px; line-height: 1.5; color: var(--text-soft); }
+.typed-kept q { font-style: normal; }
+.typed-kept textarea { width: 100%; display: block; min-height: 72px; margin: 0 0 10px; padding: 9px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-subtle); font: inherit; font-size: 14px; line-height: 1.45; resize: vertical; overflow-wrap: anywhere; }
+.queue-panel > .typed-kept { margin: 0 0 12px; }
 .settled-description { color: var(--text-soft); }
 .copy-description { margin-top: 12px; min-height: 34px; }
 
@@ -653,15 +671,31 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
   .inspector { width: min(370px, 100vw); }
 }
 
-/* Spellings Intern has learned: one row per rule, the change in the middle, its state and actions at the end. */
+/* Spellings Intern has learned: one row per rule, the kind and the change on the first line, its state and actions under the change. The list sits in a dialog about 410px wide at every window size, where state and actions beside the change ran past the dialog's edge and cut off "Forget". */
 .learned-rules { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 8px; }
-.learned-rules li { display: grid; grid-template-columns: auto 1fr auto auto; gap: 12px; align-items: center; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-subtle); font-size: 13px; }
-.learned-rules q, .house-style-hint q, .own-names-hint q { font-style: normal; }
+.learned-rules li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; align-items: center; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-subtle); font-size: 13px; }
+.learned-rules .rule-change { overflow-wrap: anywhere; }
+.learned-rules .rule-state, .learned-rules .rule-actions { grid-column: 2; }
+.learned-rules q, .house-style-hint q, .held-spelling-hint q, .own-names-hint q { font-style: normal; }
 .rule-kind { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-soft); }
 .rule-state { font-size: 12px; color: var(--text-soft); white-space: nowrap; }
-.rule-actions { display: flex; gap: 6px; }
+.rule-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .rule-actions button { min-height: 30px; padding: 0 10px; }
-@media (max-width: 640px) { .learned-rules li { grid-template-columns: auto 1fr; } .rule-state, .rule-actions { grid-column: 2; } }
+.rule-actions button:disabled { opacity: .5; cursor: default; }
+/* The question "Use on its own" asks: what it does, the field the spelling is typed into, then its yes and Cancel. */
+.learned-rules .rule-confirm { grid-column: 1 / -1; }
+.rule-confirm { display: grid; gap: 6px; }
+.rule-confirm p { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+.rule-confirm q { font-weight: 600; }
+.rule-confirm .rule-confirm-field { display: block; margin: 0; font-size: 12.5px; font-weight: 400; color: var(--text); overflow-wrap: anywhere; }
+.rule-confirm .rule-confirm-field input { margin-top: 4px; padding: 5px 8px; font-size: 13px; }
+.rule-confirm .rule-confirm-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Said after an Enter the field did not answer; empty, it takes no room, and a screen reader still hears what comes into it. */
+.rule-confirm .rule-confirm-not-yet { display: block; font-size: 12px; line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
+.rule-confirm .rule-confirm-not-yet:empty { margin-top: -6px; }
+.rule-confirm button { min-height: 30px; padding: 0 10px; }
+.rule-confirm button:disabled { opacity: .5; cursor: default; }
+.learned-rules li:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* The filing a near-duplicate repeats, under the reason for review. */
 .near-duplicate { margin: 8px 0 0; font-size: 13px; }

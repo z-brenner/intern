@@ -205,12 +205,21 @@ pub(crate) fn head_noun(words: &[String]) -> Option<&str> {
     if let Some((_, word)) = by_kind {
         return Some(word.as_str());
     }
+    opening_phrase(words).last().map(String::as_str)
+}
+
+/// The words a phrase opens with, before the first connector past its
+/// first word: "Thematic Review" of "Thematic Review on Early Mortgage
+/// Arrears", "Approval" of "Approval of Closure Plan", and all of "Closure
+/// Plan Approval", which no connector cuts. Its last word is what the
+/// phrase calls itself before anything completes it.
+pub(crate) fn opening_phrase(words: &[String]) -> &[String] {
     let end = words
         .iter()
         .skip(1)
         .position(|word| CONNECTORS.contains(&word.as_str()))
         .map_or(words.len(), |at| at + 1);
-    words[..end].last().map(String::as_str)
+    &words[..end]
 }
 
 /// Whether a phrase names a kind of document anywhere in it: "Assignment
@@ -298,6 +307,71 @@ const WEEKDAYS: &[&str] = &[
 /// Words a title's complement can open with that complete nothing by
 /// themselves: a complement cut right after one ends without it.
 const ARTICLES: &[&str] = &["the", "a", "an"];
+
+/// Words that label a number on a title's line: "No.", "Number".
+const NUMBER_LABELS: &[&str] = &["no", "nos", "number", "num"];
+
+/// Words that name what a reference number on a title's line belongs to,
+/// standing before its label: a case, a docket, a file, a matter, a cause
+/// or an index (what some courts number a case by), a project, a
+/// reference, a control or a tracking number. Only these: any other word
+/// before a number is read as the title's own ("Notice of Lease
+/// *Violation* No. 4", "Contract *Modification* No. P00003").
+const NUMBER_HOLDERS: &[&str] = &[
+    "case",
+    "docket",
+    "file",
+    "matter",
+    "cause",
+    "index",
+    "project",
+    "reference",
+    "ref",
+    "control",
+    "tracking",
+];
+
+/// Whether the token before `label` names what the number there belongs
+/// to, rather than ending the title before them: one of
+/// [`NUMBER_HOLDERS`], before "No.", "Number" or a "#" set apart from its
+/// figure - with a colon or without - and a figure (or the line's end,
+/// where the figure wrapped), or before a "#" figure, right after a kind of
+/// document or after a stop - "Notice of Civil Penalty Assessment and
+/// Order *Case* No. WQ-SW-WR-2023-626", "... and Order *Case* #
+/// WQ-SW-WR-2023-626", "... and Order *Case* #: WQ-SW-WR-2023-626",
+/// "Notice of Violation and Order *Docket* No. 24-0113", "Notice of Intent
+/// to Revoke Permit *File* #4471", "Notice of Violation, *Case* No.
+/// 24-0113". The number is the case's, the docket's or the file's, not the
+/// document's, and the title ends before the word. After any other word
+/// the same word can be the title's own - "Notice of Related Case No. 3",
+/// "Order to Show Cause No. 2024-15" - and stays, as it does where a stop
+/// sets it apart from the number ("Notice of Intent to Close Permit File,
+/// No. 2024-15") or no figure follows ("... Permit File No Further Action
+/// Required").
+fn labels_the_number(tokens: &[&str], label: usize) -> bool {
+    let core = |token: &str| -> String {
+        normalize(token)
+            .trim_matches(|character: char| !character.is_alphanumeric())
+            .to_owned()
+    };
+    let (Some(number), Some(word), Some(before)) = (
+        tokens.get(label),
+        label.checked_sub(1).and_then(|at| tokens.get(at)),
+        label.checked_sub(2).and_then(|at| tokens.get(at)),
+    ) else {
+        return false;
+    };
+    let has_digit = |token: &str| token.chars().any(|character| character.is_ascii_digit());
+    let stops = |token: &str| token.ends_with([',', ';', ':', '.']);
+    let numbered = ((NUMBER_LABELS.contains(&core(number).as_str())
+        || number.trim_end_matches(':') == "#")
+        && tokens.get(label + 1).is_none_or(|next| has_digit(next)))
+        || (number.starts_with('#') && has_digit(number));
+    numbered
+        && NUMBER_HOLDERS.contains(&core(word).as_str())
+        && !stops(word)
+        && (stops(before) || names_a_kind(&core(before)))
+}
 
 /// The type a title line states for a document whose kind is `head`:
 /// the run of the line's words around that noun - back to anything with a
@@ -473,6 +547,14 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
     {
         end -= 2;
     }
+    // A complement that ran up to a number's label ends before the word
+    // that names what the number belongs to ([`labels_the_number`]):
+    // "Notice of Civil Penalty Assessment and Order Case No.
+    // WQ-SW-WR-2023-626" is a "Notice of Civil Penalty Assessment and
+    // Order".
+    if end >= at + 3 && labels_the_number(&tokens, end) {
+        end -= 1;
+    }
     // A comma inside the title is the title's own ("Software License,
     // Customization and Maintenance Agreement"); only its ends lose
     // punctuation.
@@ -565,6 +647,7 @@ pub(crate) fn without_identifier(value: &str) -> String {
         .last()
         .is_none_or(|previous| core(previous) != "purchase");
     let mut end = tokens.len();
+    let mut held = false;
     for at in head + 1..tokens.len() {
         if numbered_kind && identifier_word(tokens[at]) {
             break;
@@ -576,10 +659,22 @@ pub(crate) fn without_identifier(value: &str) -> String {
         let dashed = matches!(token, "-" | "\u{2013}" | "\u{2014}") && at + 1 < tokens.len();
         if introduces || numbered || dashed {
             end = at;
+            // The word that names what the number belongs to goes with it
+            // ([`labels_the_number`]): "... and Order Case No. 626",
+            // "Notice of Violation, Case No. 24-0113".
+            if (introduces || numbered) && at >= head + 2 && labels_the_number(&tokens, at) {
+                end = at - 1;
+                held = true;
+            }
             break;
         }
     }
     let kept = tokens[start..end].join(" ");
+    let kept = if held {
+        kept.trim_end_matches([',', ';', ':', '.']).to_owned()
+    } else {
+        kept
+    };
     if kept.is_empty() || !has_a_kind(&words(&kept)) {
         return value.to_owned();
     }
@@ -1291,6 +1386,21 @@ mod tests {
     }
 
     #[test]
+    fn a_phrase_opens_with_its_words_before_the_first_connector() {
+        let opening = |text: &str| opening_phrase(&w(text)).join(" ");
+        assert_eq!(
+            opening("Thematic Review on Early Mortgage Arrears"),
+            "thematic review"
+        );
+        assert_eq!(opening("Approval of Closure Plan"), "approval");
+        // No connector cuts a compound: all of it opens the phrase.
+        assert_eq!(opening("Closure Plan Approval"), "closure plan approval");
+        // A connector that is the first word joins nothing yet.
+        assert_eq!(opening("On Call Report"), "on call report");
+        assert_eq!(opening(""), "");
+    }
+
+    #[test]
     fn a_phrase_is_found_whole_and_a_reference_is_told_apart() {
         let text = w("Re: Residential Lease Agreement dated August 1, 2024 for Apartment 4C");
         let phrase = w("Residential Lease Agreement");
@@ -1510,5 +1620,219 @@ mod tests {
         assert!(!begins_a_sentence(&w("Notice hereby given"), 1));
         assert!(!begins_a_sentence(&w("Report on the Consultation"), 1));
         assert!(!begins_a_sentence(&w("Report"), 1));
+    }
+
+    /// A word that names what a number belongs to - a case, a docket, a
+    /// file, an index - standing between a title's kind (or a stop) and
+    /// the number's label is no part of the title, on the line or on a
+    /// type copied from it. Any other word there is the title's own, and
+    /// so is a case or a cause after a word that is no kind ("Notice of
+    /// Related Case", "Order to Show Cause"), set apart from the number by
+    /// a stop, or before a "No" that labels no figure.
+    #[test]
+    fn a_numbers_label_is_no_part_of_the_title_before_it() {
+        for (line, head, phrase) in [
+            (
+                "Re: Notice of Civil Penalty Assessment and Order Case No. WQ-SW-WR-2023-626",
+                "notice",
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            (
+                "Re: Notice of Civil Penalty Assessment and Order Case No.",
+                "notice",
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            // A label written apart from its figure, or with a colon.
+            (
+                "Re: Notice of Civil Penalty Assessment and Order Case # WQ-SW-WR-2023-626",
+                "notice",
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            (
+                "Re: Notice of Civil Penalty Assessment and Order Case #: WQ-SW-WR-2023-626",
+                "notice",
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            (
+                "Re: Notice of Civil Penalty Assessment and Order Case No: WQ-SW-WR-2023-626",
+                "notice",
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            (
+                "Re: Notice of Civil Penalty Assessment and Order Case Number: WQ-SW-WR-2023-626",
+                "notice",
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            (
+                "Re: Notice of Civil Penalty Assessment and Order Case #",
+                "notice",
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            (
+                "NOTICE OF VIOLATION AND ORDER CASE # CE2024-0123",
+                "notice",
+                "Notice of Violation and Order",
+            ),
+            (
+                "Notice of Violation and Order File # 4471",
+                "notice",
+                "Notice of Violation and Order",
+            ),
+            (
+                "Notice of Violation and Order Docket #: 24-0113",
+                "notice",
+                "Notice of Violation and Order",
+            ),
+            (
+                "NOTICE OF VIOLATION AND ORDER DOCKET NO. 24-0113",
+                "notice",
+                "Notice of Violation and Order",
+            ),
+            (
+                "Notice of Intent to Revoke Permit File #4471",
+                "notice",
+                "Notice of Intent to Revoke Permit",
+            ),
+            (
+                "Notice of Motion Index No. 652113/2024",
+                "notice",
+                "Notice of Motion",
+            ),
+            // After a stop, whatever the word before it.
+            (
+                "Notice of Violation, Case No. 24-0113",
+                "notice",
+                "Notice of Violation",
+            ),
+            (
+                "Notice of Violation and Order, Case No. 24-0113",
+                "notice",
+                "Notice of Violation and Order",
+            ),
+            // The title's own word after a kind, before a number.
+            (
+                "Notice of Lease Violation No. 4",
+                "notice",
+                "Notice of Lease Violation",
+            ),
+            (
+                "NOTICE OF CONTRACT AWARD NO. 2025-15",
+                "notice",
+                "Notice of Contract Award",
+            ),
+            (
+                "NOTICE OF LICENSE SUSPENSION NO. 2025-0412",
+                "notice",
+                "Notice of License Suspension",
+            ),
+            (
+                "Notice of Permit Violation No. 12",
+                "notice",
+                "Notice of Permit Violation",
+            ),
+            (
+                "Notice of Prior Authorization Approval No. 12345",
+                "notice",
+                "Notice of Prior Authorization Approval",
+            ),
+            (
+                "Notice of Policy Cancellation No. 7",
+                "notice",
+                "Notice of Policy Cancellation",
+            ),
+            (
+                "Report of Audit Findings No. 2",
+                "report",
+                "Report of Audit Findings",
+            ),
+            // A case or a cause after a word that is no kind.
+            (
+                "Notice of Related Case No. 3:21-cv-00412",
+                "notice",
+                "Notice of Related Case",
+            ),
+            (
+                "Order to Show Cause No. 2024-15",
+                "order",
+                "Order to Show Cause",
+            ),
+            (
+                "Notice of Related Case # 3:21-cv-00412",
+                "notice",
+                "Notice of Related Case",
+            ),
+            (
+                "Order to Show Cause #: 2024-15",
+                "order",
+                "Order to Show Cause",
+            ),
+            // Set apart from the number, or before a "No" with no figure.
+            (
+                "Notice of Intent to Close Permit File, No. 2024-15",
+                "notice",
+                "Notice of Intent to Close Permit File",
+            ),
+            (
+                "Notice of Intent to Close Permit File, # 2024-15",
+                "notice",
+                "Notice of Intent to Close Permit File",
+            ),
+            (
+                "Notice of Intent to Close Permit File No Further Action Required",
+                "notice",
+                "Notice of Intent to Close Permit File",
+            ),
+            (
+                "Statement of Account No. 1182",
+                "statement",
+                "Statement of Account",
+            ),
+            ("Notice of Claim No. 77", "notice", "Notice of Claim"),
+            (
+                "Notice of Default and Reservation of Rights No. 5",
+                "notice",
+                "Notice of Default and Reservation of Rights",
+            ),
+        ] {
+            assert_eq!(title_phrase(line, head).as_deref(), Some(phrase), "{line}");
+        }
+        for (value, kind) in [
+            (
+                "Notice of Civil Penalty Assessment and Order Case No. WQ/M-ER-2024-037",
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            (
+                "Notice of Violation and Order Docket No. 24-0113",
+                "Notice of Violation and Order",
+            ),
+            (
+                "Notice of Violation and Order, Case No. 24-0113",
+                "Notice of Violation and Order",
+            ),
+            (
+                "Notice of Intent to Revoke Permit File #4471",
+                "Notice of Intent to Revoke Permit",
+            ),
+            ("Purchase Order Reference No. 55", "Purchase Order"),
+            ("Notice of Related Case No. 3", "Notice of Related Case"),
+            ("Statement of Account No. 1182", "Statement of Account"),
+            ("Capital Call Notice No. 7", "Capital Call Notice"),
+            // The type's own word after a kind, before a number.
+            (
+                "Notice of Contract Award No. 2025-15",
+                "Notice of Contract Award",
+            ),
+            ("Contract Modification No. P00003", "Contract Modification"),
+            ("Purchase Order Change No. 3", "Purchase Order Change"),
+            ("Invoice Adjustment No. 3", "Invoice Adjustment"),
+            ("Lease Extension No. 2", "Lease Extension"),
+            ("Permit Modification No. 4", "Permit Modification"),
+            ("Policy Endorsement No. 3", "Policy Endorsement"),
+            ("Policy Cancellation No. 9", "Policy Cancellation"),
+        ] {
+            assert_eq!(without_identifier(value), kind, "{value}");
+        }
+        // A kind numbered as its kind keeps its number, whatever precedes.
+        assert_eq!(without_identifier("Amendment No. 3"), "Amendment No. 3");
     }
 }

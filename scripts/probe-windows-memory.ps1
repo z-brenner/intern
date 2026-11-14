@@ -227,12 +227,13 @@ foreach ($Tier in $Models.Keys) {
     $Samples.Add((Get-Sample $Tier "before-load" $null))
     $ApiKey = -join (1..32 | ForEach-Object { "{0:x2}" -f (Get-Random -Maximum 256) })
     # server.rs arguments_for with no projector, then the tier's own flags
-    # (tiers::tier_server_flags: --no-repack for the accurate model).
+    # (tiers::tier_server_flags: --no-repack for both).
     $Arguments = @("--host", "127.0.0.1", "--port", "$Port", "--api-key", $ApiKey, "--model", $Model,
         "--parallel", "1", "--ctx-size", "8192", "--n-gpu-layers", "0",
         "--threads", "$Threads", "--threads-batch", "$Threads", "--jinja", "--no-webui",
         "--cache-ram", "0", "-ub", "256", "--prio", "-1", "--poll", "0", "--no-mmproj")
-    if ($Tier -eq "accurate") { $Arguments += "--no-repack" }
+    $TierFlags = @{ accurate = @("--no-repack"); fast = @("--no-repack") }
+    $Arguments += $TierFlags[$Tier]
     $Process = Start-Process -FilePath $ServerPath -ArgumentList $Arguments -WorkingDirectory (Split-Path $ServerPath) `
         -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $Out "$Tier-server.out.log") `
         -RedirectStandardError (Join-Path $Out "$Tier-server.log")

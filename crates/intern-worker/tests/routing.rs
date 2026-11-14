@@ -6,9 +6,9 @@ use std::sync::{
 
 use image::{DynamicImage, GenericImageView, Rgb, RgbImage};
 use intern_worker::extract::{
-    CancellationToken, ExtractionError, OcrBackend, OcrResult, PageSource, PdfBackend,
-    PdfPageInspection, RenderedPage, apply_detected_rotation, extract_pdf, normalize_vision_image,
-    page_needs_ocr,
+    CancellationToken, ExtractionError, ExtractionWarning, OcrBackend, OcrResult, PageSource,
+    PdfBackend, PdfPageInspection, RenderedPage, apply_detected_rotation, extract_pdf,
+    normalize_vision_image, page_needs_ocr,
 };
 use intern_worker::limits::{
     MAX_PAGE_MEGAPIXELS, MAX_PAGE_PIXELS, MIN_OCR_DPI, RENDER_DPI, ResourceLimits,
@@ -222,6 +222,92 @@ fn low_ocr_confidence_selects_exactly_one_first_triggering_image() {
             .count(),
         1
     );
+}
+
+/// Renders as [`FakePdf`] does, except that its second page is white paper
+/// with rows of faint gray strokes on it: writing too faded for OCR to find
+/// a line in, that a person can still read.
+struct FadedSecondPage(FakePdf);
+
+impl PdfBackend for FadedSecondPage {
+    fn inspect(
+        &self,
+        path: &Path,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
+        self.0.inspect(path, cancel)
+    }
+
+    fn render_within(
+        &self,
+        path: &Path,
+        page_index: usize,
+        max_pixels: u64,
+        cancel: &CancellationToken,
+    ) -> Result<RenderedPage, ExtractionError> {
+        let rendered = self.0.render_within(path, page_index, max_pixels, cancel)?;
+        if page_index != 1 {
+            return Ok(rendered);
+        }
+        let (width, height) = rendered.image.dimensions();
+        let mut faded = RgbImage::from_pixel(width, height, Rgb([255, 255, 255]));
+        for (x, y, pixel) in faded.enumerate_pixels_mut() {
+            if y % 12 < 3 && x % 4 < 2 {
+                *pixel = Rgb([228, 228, 228]);
+            }
+        }
+        Ok(RenderedPage::new(
+            page_index,
+            DynamicImage::ImageRgb8(faded),
+        ))
+    }
+}
+
+/// A page OCR read nothing on raises the low-confidence warning only if it
+/// may hold something. A flat page - the back of a sheet, a separator - is
+/// blank: it has no reading to be unsure of, so no confidence, and the
+/// warning that would send the document to review is not raised for it.
+/// A page with marks on it that OCR found no line in is as unsure as ever.
+#[test]
+fn a_blank_page_raises_no_doubt_and_a_faded_one_still_does() {
+    let pages = (0..2)
+        .map(|index| PdfPageInspection {
+            page_index: index,
+            ..page("", 1.0)
+        })
+        .collect::<Vec<_>>();
+    let ocr = FakeOcr {
+        results: vec![
+            OcrResult::new("FACSIMILE COVER SHEET To: Hanford Dairy", 98.0),
+            OcrResult::new("", 0.0),
+        ],
+    };
+    let read = |pdf: &dyn PdfBackend| {
+        extract_pdf(
+            Path::new("fixture.pdf"),
+            pdf,
+            &ocr,
+            &ResourceLimits::default(),
+            &CancellationToken::new(),
+        )
+        .unwrap()
+    };
+
+    let blank = read(&FakePdf::new(pages.clone()));
+    assert_eq!(blank.pages[1].source, PageSource::Ocr);
+    assert_eq!(blank.pages[1].text, "");
+    assert_eq!(blank.pages[1].ocr_confidence, None);
+    assert!(blank.warnings.is_empty(), "{:?}", blank.warnings);
+
+    let faded = read(&FadedSecondPage(FakePdf::new(pages)));
+    assert_eq!(faded.pages[1].text, "");
+    assert_eq!(faded.pages[1].ocr_confidence, Some(0.0));
+    assert_eq!(faded.warnings, [ExtractionWarning::LowOcrConfidence]);
+    // Either way the page that could not be read as text is the page image,
+    // as it always was.
+    for document in [&blank, &faded] {
+        assert_eq!(document.optional_image.as_ref().unwrap().page_number, 2);
+    }
 }
 
 #[test]

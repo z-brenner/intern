@@ -90,6 +90,10 @@ interface QueueItemDto {
   keptOriginal?: boolean;
   parked?: boolean;
   omittedParties?: string[];
+  // In review: the other parties the document names, and the words of the
+  // name a chosen one replaces. An older backend omits both.
+  partyChoices?: string[];
+  nameParties?: string[];
   // Which local model read the document. The backend leaves it out for a
   // hosted model and for a reading stored before it was recorded.
   readBy?: Partial<ModelReading> | null;
@@ -262,6 +266,7 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
   houseRulesList(): Promise<LearnedRule[]> { return this.transport.invoke('house_rules_list'); }
   houseRuleForget(id: string): Promise<void> { return this.transport.invoke('house_rule_forget', { id }); }
   houseRuleUse(id: string): Promise<void> { return this.transport.invoke('house_rule_use', { id }); }
+  houseRuleCheck(id: string, shown: HouseRule): Promise<void> { return this.transport.invoke('house_rule_check', { id, kind: shown.kind, from: shown.from, to: shown.to }); }
 
   // Same shape as subscribeIntake: synchronous unsubscribe over an async
   // listen, dropping events until the listener is registered.
@@ -643,6 +648,8 @@ function normalizeItem(item: QueueItemDto): QueueItem {
     ...(item.nearDuplicateOf === undefined ? {} : { nearDuplicateOf: item.nearDuplicateOf }),
     ...(item.fileModifiedDate === undefined ? {} : { fileModifiedDate: item.fileModifiedDate }),
     ...(item.omittedParties?.length ? { omittedParties: [...item.omittedParties] } : {}),
+    ...(item.partyChoices?.length ? { partyChoices: [...item.partyChoices] } : {}),
+    ...(item.partyChoices?.length && item.nameParties?.length ? { nameParties: [...item.nameParties] } : {}),
     ...(reading ? { readBy: reading } : {}),
     ...(typeof item.copyOf === 'string' ? { copyOf: item.copyOf } : {}),
   };

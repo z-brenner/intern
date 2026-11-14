@@ -526,6 +526,56 @@ fn restart_with_persisted_backlog_processes_files_added_while_off() {
     );
 }
 
+/// A document that turned up while the folder was not watched is not
+/// arriving - the first scan after a restart sees it with everything else
+/// already there - but this machine takes it once it settles, so the host is
+/// told one is coming: the model that will read it can load meanwhile. Not
+/// what was there at the first look, what another machine put here, or what
+/// another machine has claimed.
+#[test]
+fn a_document_that_came_while_unwatched_is_reported_as_coming() {
+    let rig = Rig::start(false, &["pre.pdf"]);
+    rig.step();
+    rig.step();
+    assert_eq!(rig.watcher.status().arrived_unwatched, 0);
+
+    let rig = rig.restart_with(|folder, _| {
+        fs::write(
+            folder.join("while-off.pdf"),
+            b"scanned while Intern was off",
+        )
+        .unwrap();
+        fs::write(folder.join("theirs.pdf"), b"put here by another machine").unwrap();
+        fs::write(folder.join("taken.pdf"), b"claimed by another machine").unwrap();
+        let other = ClaimStore::new(folder, identity("other-machine", "elsewhere")).unwrap();
+        other
+            .write_origin(&facts_for(folder, "theirs.pdf"))
+            .unwrap();
+        assert!(matches!(
+            other.acquire(&facts_for(folder, "taken.pdf")),
+            intern_intake::AcquireOutcome::Acquired
+        ));
+    });
+    let status = rig.watcher.status();
+    assert_eq!((status.arriving, status.arrived_unwatched), (0, 1));
+    assert!(
+        rig.host
+            .statuses
+            .lock()
+            .unwrap()
+            .last()
+            .is_some_and(|told| told.arrived_unwatched == 1),
+        "the host is told"
+    );
+
+    rig.step();
+    assert_eq!(
+        rig.host.enqueued(),
+        vec![rig.temp.path().join("while-off.pdf")]
+    );
+    assert_eq!(rig.watcher.status().arrived_unwatched, 0);
+}
+
 /// The backlog is keyed by document, not by name. A scanner that writes every
 /// scan as "Scan.pdf", or a person replacing a document with a new version,
 /// puts a new document under an old name, and that used to be held as though

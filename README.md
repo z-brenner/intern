@@ -65,7 +65,7 @@ extraction nor OCR can read goes to review rather than being guessed at.
 
 ## Install and first run
 
-Windows 10 or 11, x86-64. Download `Intern_0.1.0-alpha.17_x64-setup.exe` from the
+Windows 10 or 11, x86-64. Download `Intern_0.1.0-alpha.18_x64-setup.exe` from the
 [latest release](https://github.com/z-brenner/intern/releases/latest) and run it;
 earlier versions are on the [releases page](https://github.com/z-brenner/intern/releases).
 It installs per-user, so it does not ask for administrator rights, and
@@ -86,7 +86,7 @@ carries a keyless Sigstore build-provenance attestation naming the repository,
 workflow, and commit that produced those exact bytes:
 
 ```sh
-gh attestation verify Intern_0.1.0-alpha.17_x64-setup.exe --repo z-brenner/intern \
+gh attestation verify Intern_0.1.0-alpha.18_x64-setup.exe --repo z-brenner/intern \
   --signer-workflow z-brenner/intern/.github/workflows/release.yml
 ```
 
@@ -175,8 +175,23 @@ from the description.
 
 Clicking a row selects it; the **Details** button above the table opens the
 review panel for the selected row, and it stays open, following the selection,
-until it is closed. Everything still in progress is in **Queue**, with a count
-of what needs review in its toolbar. The table selects cells like a
+until it is closed. A name or a description typed there and not filed stays
+with its document - through closing the panel, making the window narrower or
+wider, and going on to other documents - until you file the document, decide
+it some other way, have it read again, or close Intern. If the document
+changes by itself meanwhile - Intern reads it again, or another computer
+files it - the panel
+shows it as it now is, and what you had typed is kept beside it, read-only,
+until you discard it. If that happens while you are typing, or the panel
+closes under the cursor, the cursor stays in what you had typed: nothing typed
+after that is taken as a command, Tab included, until you press Escape or
+click (two rare cases aside, which the alpha.18 release notes give).
+**Back to Intern's proposal**, above the name while it differs, drops what
+you typed for a document. **Rename all ready** leaves alone a ready
+document whose name or description you typed and did not file, and says so.
+In a window narrower than 1100 pixels the panel is a drawer over the queue,
+and it opens only when you ask for it there. Everything still in progress is
+in **Queue**, with a count of what needs review in its toolbar. The table selects cells like a
 spreadsheet (click, Shift+click, drag, Ctrl+A), and Ctrl+C or **Copy** puts
 them on the clipboard as both tab-separated text and an HTML table, so they
 paste into Excel or Google Sheets one value to a cell. Status is never copied.
@@ -241,7 +256,7 @@ themselves. Install a package from a CI run's `intern-linux-…` artifact, or
 build one, with apt:
 
 ```sh
-sudo apt install ./Intern_0.1.0-alpha.17_amd64.deb
+sudo apt install ./Intern_0.1.0-alpha.18_amd64.deb
 ```
 
 apt brings what it depends on (WebKitGTK, AppIndicator, `tesseract-ocr`,
@@ -457,15 +472,51 @@ what was left on the table.
 ### Spellings Intern learns from you
 
 The document says "Contoso Worldwide, Inc."; you call it "Contoso". Respell a
-party or a document type in review and Intern remembers it. The second time
-you make the same change it becomes the spelling Intern uses, in the name, the
-layout folder, and the description record, for every later document that
-names the same thing. One edit is a decision about one document; two are a
-preference. Settings lists everything learned, with "Use now" for a spelling
-you want at once and "Forget" for one you do not, and the review panel says
-"Uses your spelling" whenever a name differs from the evidence under it. The
-evidence itself always keeps the document's own words: a learned spelling
-changes what Intern calls a thing, never what it found.
+party or a document type in review and Intern remembers it. The second time you
+make the same change it becomes the spelling Intern uses. One edit is a
+decision about one document; two are a preference.
+
+A spelling in use still fills in names, but every name it changes waits for
+you in review, even with automatic renaming on, until you choose "Use on its
+own" for that spelling. Approving a name the spelling changed does not count:
+the name may be right for that document - an agreement that names Jane Doe
+itself is rightly "John Smith, Jane Doe" - and still be wrong for the next,
+and Intern cannot tell that reliably from a document's text. So a name it
+changes keeps waiting, document after document, until you say the spelling is
+right for every one of them. If a name is right, approve it; if it is not,
+put the document's own word back, changing nothing else, and Intern forgets
+the spelling. Until you choose "Use on its own", a spelling is used only where
+the name shows it: a document whose name leaves out the party it respells (a
+long party left out for length, the third party of a "between") is filed and
+reported under the document's own words, and does not wait for it.
+
+"Use on its own" is in Settings, under Learned spellings, for every spelling in
+use that you have not chosen it for. A name waiting for such a spelling says so
+in the review window, under "Uses your spelling", and points you to Settings;
+the review window itself does not ask, so nothing typed while you review can
+reach it. "Use on its own" first says, in plain words, what it does - every
+later document Intern reads as naming the word will be named with the spelling,
+and may be filed under that name without your check. You then type the spelling
+to confirm it; "Use on its own" stays off until you have, so no stray click can
+choose it, and a paste does not count. While it asks, what you type in Settings
+goes into it unless you are typing in another field. Case, accents, spaces and
+punctuation do not matter: "contoso ltd" confirms "Contoso Ltd.", and "Soren"
+confirms "Søren". A mark that makes another letter does: "カトウ" does not confirm
+"ガトウ". Cancel or Escape takes the question back. It checks the spelling exactly
+as it was shown to you; one that changed in the meantime is refused, and shown
+again as it now reads. It approves and files no document: the names waiting for
+the spelling still wait for your decision. Once chosen, the spelling is used in
+the name, the layout folder, and the description record, for every later
+document that names the same thing, and those names are filed like any other. A
+different spelling for the same word, learned later, waits for its own choice.
+Spellings learned before alpha.18 wait for one too.
+
+Settings lists everything learned, with "Use now" for a spelling seen once
+that you want at once (the names it changes still wait until you choose "Use
+on its own"), "Use on its own", and "Forget" for one you do not want. The
+review panel says "Uses your spelling" whenever a name differs from the
+evidence under it. The evidence itself always keeps the document's own words:
+a learned spelling changes what Intern calls a thing, never what it found.
 
 ## Development
 
@@ -571,7 +622,7 @@ from a release that put a build there deletes it (the installer hooks,
 Tauri produces a per-user NSIS installer. To smoke-test a clean installer:
 
 ```powershell
-./scripts/smoke-installer.ps1 -InstallerPath target/release/bundle/nsis/Intern_0.1.0-alpha.17_x64-setup.exe
+./scripts/smoke-installer.ps1 -InstallerPath target/release/bundle/nsis/Intern_0.1.0-alpha.18_x64-setup.exe
 ```
 
 The smoke test also starts the installed server with `--version` from its own

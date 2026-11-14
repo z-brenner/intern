@@ -62,10 +62,12 @@ over while inspection already has the page open:
 * **`ocr`** — the scan rule pages have always been routed by
   (`page_needs_ocr`: almost no meaningful characters under heavy image
   coverage, a stamp-only text layer on a full-page image, or more than 3%
-  replacement glyphs), plus one new case: an *invisible* text layer over a
-  full-page image whose words look like a bad prior OCR. That page is read
-  again, and the fresh reading replaces the layer only if it is confident
-  (mean ≥ 75) or has fewer OCR-error words; otherwise the layer is kept. The
+  replacement glyphs), plus somebody else's OCR: an *invisible* text layer
+  over a full-page image, read again when its words look like a bad prior
+  OCR or when it would not read well as it is (below, *Somebody else's
+  OCR*). The fresh reading replaces the layer only if it is confident
+  (mean ≥ 75) or, for a layer read again for its OCR errors, has fewer of
+  them; otherwise the layer is kept, read as its text routes it. The
   engine's lines go through the same analysis as a `layout` page's runs, and
   the page text is the blocks' linearization. An engine's own text reads an
   unruled table down its columns or across a row of boxes and pairs no label
@@ -193,7 +195,7 @@ So the thresholds (`layout::router::thresholds`) are:
 | `ALIGNED_ROWS` | 3 | Zero on every page that does not need layout; 3 or more on 136 that do. Kept as its own trigger for a table whose columns are too close for a band (no page in this corpus depends on it alone). |
 | `KEY_VALUE_GRID` | 2 | Every page with two or more such lines needs layout; three pages with one do not. The first draft routed on `key_values ≥ 6` (one label to a line); that sent the corpus invoice and the statement of work's signature page to the layout route, which gained nothing - the fast route's blocks already pair one label to a line - and tore the invoice's unaligned line items apart. |
 | `OVERLAP` | 100 ‰ | No page in either corpus has any overlap; the guard is for overprinted text, which no fast reading can order. |
-| `INVISIBLE_LAYER`, `FULL_PAGE_IMAGE`, `GARBAGE_LAYER` | 500 ‰, 900 ‰, 40 ‰ | The OCR-corrupted invoice: invisible 1000, image coverage 1000, garbage 127. On all 371 native pages `garbage` is at most 3 and `invisible` is 0, so a clean layer is never re-read. Its fresh reading (95% confident) replaces it: `Wexcornbe Mi11work` becomes `Wexcombe Millwork`, `O3/lO/2O26` becomes `03/10/2026`. |
+| `INVISIBLE_LAYER`, `FULL_PAGE_IMAGE`, `GARBAGE_LAYER` | 500 ‰, 900 ‰, 40 ‰ | The OCR-corrupted invoice: invisible 1000, image coverage 1000, garbage 127. On all 371 native pages `garbage` is at most 3 and `invisible` is 0, so a clean layer is never re-read for its words. Its fresh reading (95% confident) replaces it: `Wexcornbe Mi11work` becomes `Wexcombe Millwork`, `O3/lO/2O26` becomes `03/10/2026`. A layer is also read again when it would not read well as it is (*Somebody else's OCR*, below). |
 | `IMAGE_REGION`, `REGION_MIN_CHARS` | 150 ‰, 20 chars | No InternBench or corpus page has native text beside a large image (the spec's "mixed PDF" documents are not in the corpus yet). Verified on a synthetic page: native amendment text with the scanned signature block of `scan-clean-lease-2p.pdf` pasted below it (21.8% of the page) routes `ocr_regions`; the landlord, tenant, names and title come back as OCR key-value blocks after the native text, and the whole page takes 0.37 s. |
 
 What the router gets wrong on this corpus, all on the fast route:
@@ -221,6 +223,92 @@ the assignment and services agreement).
 
 Per page, over all 414: 211 fast, 160 layout, 43 OCR (every scanned page,
 plus the corrupted invoice's re-read), and the synthetic page `ocr_regions`.
+
+## Somebody else's OCR
+
+A searchable scan carries the OCR its scanner or another tool made of it: an
+invisible text layer (render mode 3) under a picture of the whole page
+(`invisible` ≥ 500 ‰ and `image_coverage` ≥ 900 ‰). Such a layer used to be
+read again only when its words looked like bad OCR (`garbage` ≥ 40 ‰, the
+corrupted invoice above); otherwise it was taken for the page's own text and
+routed like any other. The development sets (real1-6) have 32 documents with
+such a layer, on 1 to 25 pages each, and no page of them reaches 40 ‰. What
+their layers became:
+
+* **`fast`**: the layer as PDFium reads it. That reads well - a letter's
+  prose, line by line - and is kept.
+* **`layout`**: an OCR layer sets each word as its own text object, so the
+  geometry analysis finds tables in prose and writes a letter one word to a
+  cell (`| John | E. | Pilcher, | Esq. |`, down the whole page). Four
+  civil penalty notices in real4 and a notice in real6 have a layer drawn
+  two to four times over their scans (`overlap` 920-1000 ‰): every line
+  comes two to four times, and a date is split across the copies
+  (`June 1 7,`, `1 7, 2025`).
+* **`ocr_regions`**: the layer of a short page covers less than a tenth of
+  the scan under it, so the scan counts as an image no text overlaps. OCR
+  read the whole page as a region and merged it into the layer: every line
+  twice.
+
+So a prior OCR layer that would be read on the `layout` route is read again
+on a key page - the first two pages and the last, where a letter, notice or
+invoice states its type, parties and date (`router::is_key_page`; of the 14
+scans in real1-4 with six or more OCR pages, every one names its type and
+parties on page 1, 12 date themselves on page 1 or 2 and one on its last
+page, and the other's date is not in its text at all) - and one that would
+be read as a region is read again on any page, at
+no extra cost: OCR read that page either way, and now reads it once. A layer
+that reads as plain text is kept. The fresh reading replaces the layer only
+if it is confident (mean ≥ 75): these layers' words show no more OCR errors
+than a fresh reading does, so having fewer of them proves nothing
+(`route_page_at`, `reread_is_better`). A layer kept reads as it did before.
+One whose scan would have been read as a region has the fresh reading
+merged in as that region's was, and is only as sure as it, so an unsure
+reading (60-74) still raises `LOW_OCR_CONFIDENCE` and sends the document to
+review. The reading is of the whole page now, not of the region cut from
+it; on 23 of the 26 development pages read again this way the two scored
+the same to the last digit. One that would have been rebuilt into a layout
+is that layout, with no page image or warning it did not have. And a page
+that cannot be rendered to be read again - a sheet over the render cap - is
+read as its text routes it, its characters read for that route.
+
+Measured with PP-OCR (ONNX Runtime 1.30.0 and the pinned models, PDFium
+chromium/7881) on every development document - real1-6, InternBench's 77
+and the 25 generated fixtures, 448 files - against the worker before the
+change:
+
+* 28 documents read differently, all of them prior OCR layers; the other
+  420, InternBench and the fixtures included, are byte-identical (text,
+  source, confidence, layout, warnings, page image). Kept as they were: the
+  four whose layers read as plain text (real3-notice-05, real4-letter-09,
+  real5-memo-07, real6-letter-10) and the corrupted invoice.
+* 52 pages were read again, 26 that went to a layout and 26 that went to
+  a region. Every fresh reading was confident (81.0-99.1), so each took its
+  page. Of the 32 documents, the gold date reaches the evidence the model
+  is given (`intern-bench run --extract-only`, `context_date_recall`) in 26
+  instead of 22 - real4-letter-10's `June \\,20\5` reads `June 11, 2015`,
+  and real5-form-01, real5-form-02 and real6-notice-07 - and the gold
+  party in 30 instead of 23 (among them real3-letter-09 and
+  real4-notice-13). None lost either.
+* OCR reads 26 more pages, on 18 documents: 550 → 576 over all 448 files,
+  at most 3 on a document (the civil penalty notices, whose doubled layers
+  run to 7,400-8,700 characters on page 1 against 2,000-2,600 read again).
+  The 10 others only had pages read once instead of merged twice. On a
+  4-core machine, two alternating runs each, the 28 take 60.2 s to
+  extract before and 116.5 s after: 0.5-5.5 s more on each of the 18, and
+  up to 1.1 s less on the 10.
+* Read live by Qwen3.5 9B (real3-6, which hold 27 of the 28) and compared
+  with alpha.17's own recordings: 9 names right instead of 7, and 4 filed
+  without review, all right, instead of 1
+  ([`bench/reports/ocr-layer-live-2026-11`](../bench/reports/ocr-layer-live-2026-11/README.md)).
+  The run first showed a wrong one: the clean text joined a subject line to
+  its case number, and the type took "Case" from "Case No."; the engine now
+  leaves a number's label out of a type (`phrases::labels_the_number`).
+
+What it cannot do: a stamp or a date written by hand that the layer missed,
+PP-OCR often misses too - read again, real3-letter-09's stamp reads
+`DEC 2 4 1992`, and in a run that read every layer page again,
+real3-notice-05's reads `RECD. SP 2 2 2008` - and a page past the key pages
+keeps a layer that would come apart in a layout.
 
 ## What the fast route keeps
 

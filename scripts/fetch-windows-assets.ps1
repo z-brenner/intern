@@ -183,7 +183,7 @@ function Get-PackagedRuntimePath {
 function Get-RuntimePackages {
     param([Parameter(Mandatory = $true)][string]$Path)
     $Leaf = Split-Path -Leaf $Path
-    if ($Leaf -eq "intern-worker-$TargetTriple.exe") { return @([ordered]@{ name = "Intern"; version = "0.1.0-alpha.17" }) }
+    if ($Leaf -eq "intern-worker-$TargetTriple.exe") { return @([ordered]@{ name = "Intern"; version = "0.1.0-alpha.18" }) }
     if ($RuntimePackages.ContainsKey($Path)) { return @($RuntimePackages[$Path]) }
     throw "No package identity for staged runtime file: $Path"
 }
