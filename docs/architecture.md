@@ -399,12 +399,7 @@ checks read the document around it:
 * **Another document's date.** "the Master Services Agreement dated June 2,
   2023" dates somebody else's agreement. A date stated only that way is
   withheld, or replaced by the one date the document states on an effective
-  or commencement line. A line whose only such cue is an "entered into"
-  that names another document - an article and a document noun after it,
-  as in "entered into a written agreement under section 57" - is no such
-  line: its date is when that other paper was made. "entered into as of
-  ..." and "entered into this Agreement on ..." still are. The determiner
-  on the nearest document noun decides:
+  or commencement line. The determiner on the nearest document noun decides:
   `This Consulting Agreement dated`, and a defined term like `(the
   "Agreement")` standing for it, are the document dating itself. Document
   nouns are whole words, plural and `sub-` forms included (`the Loan

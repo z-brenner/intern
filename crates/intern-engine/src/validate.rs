@@ -379,9 +379,7 @@ pub(crate) fn date_is_tainted_as(
 
 /// The dates other than `date` that `digest` states cleanly on an
 /// effective or commencement line, each once with the line it stands on:
-/// the candidates to replace a tainted date with. A line whose only cue is
-/// an "entered into" that names another document
-/// ([`enters_another_document`]) is no such line.
+/// the candidates to replace a tainted date with.
 pub(crate) fn effective_alternates(digest: &impl Segments, date: &str) -> Vec<(String, String)> {
     let lines: Vec<&str> = digest
         .segments()
@@ -391,12 +389,7 @@ pub(crate) fn effective_alternates(digest: &impl Segments, date: &str) -> Vec<(S
     let mut alternates: Vec<(String, String)> = Vec::new();
     for line in &lines {
         let normalized = normalize(line);
-        let cued = EFFECTIVE_CUES.iter().any(|cue| {
-            normalized.match_indices(cue).any(|(at, _)| {
-                *cue != "entered into" || !enters_another_document(&normalized[at + cue.len()..])
-            })
-        });
-        if !cued {
+        if !EFFECTIVE_CUES.iter().any(|cue| normalized.contains(cue)) {
             continue;
         }
         for found in extract_stated_dates(line) {
@@ -412,40 +405,6 @@ pub(crate) fn effective_alternates(digest: &impl Segments, date: &str) -> Vec<(S
         }
     }
     alternates
-}
-
-/// Whether the words after an "entered into" name a document other than
-/// the one being read: an article and, within a few words and the same
-/// clause, a document noun - "entered into a written agreement under
-/// section 57", "entered into the Agreement on 3 January 2020" in an
-/// amendment's recital. The date on such a line is when that other paper
-/// was made. A document that says it was itself entered into writes "this
-/// Agreement" or goes straight on to the date ("entered into as of ..."),
-/// and keeps its date.
-fn enters_another_document(after: &str) -> bool {
-    /// How many words may stand between the article and the noun: "the
-    /// Master Software Licence and Support Agreement".
-    const REACH: usize = 6;
-    let mut words = after.split_whitespace();
-    let core = |word: &str| {
-        word.trim_matches(|character: char| !character.is_alphanumeric())
-            .to_owned()
-    };
-    if !words
-        .next()
-        .is_some_and(|word| matches!(core(word).as_str(), "a" | "an" | "the"))
-    {
-        return false;
-    }
-    for word in words.take(REACH) {
-        if is_document_noun(&core(word)) {
-            return true;
-        }
-        if word.ends_with([',', ';', '.', ':', ')']) {
-            return false;
-        }
-    }
-    false
 }
 
 /// What became of a date the document states only as a deadline.
@@ -1577,47 +1536,6 @@ with services commencing on October 1, 2026",
         let outcome = validate(candidate, &digest_of(&document));
         assert!(outcome.proposal.document_date.is_none());
         assert!(outcome.reasons.contains(&ReviewReason::DateUnsupported));
-    }
-
-    /// A date beside "entered into a written agreement" or "entered into
-    /// the Agreement" is when that other paper was made: it is no
-    /// candidate to replace a date with. A document that says it was
-    /// itself entered into - "entered into as of ...", "entered into this
-    /// Agreement on ..." - still offers its date, and so does a line with a
-    /// cue of its own beside the other paper's.
-    #[test]
-    fn a_date_another_document_was_entered_into_on_is_no_alternate() {
-        let alternates = |text: &str| {
-            effective_alternates(&digest_of(text), "2001-07-31")
-                .into_iter()
-                .map(|(date, _)| date)
-                .collect::<Vec<_>>()
-        };
-        for other in [
-            "On 1 June 2001 the Commonwealth and Harrowgate Telecom Limited entered into a \
-             written agreement under section 57 of the Act.",
-            "The parties entered into the Agreement on 1 June 2001.",
-            "On 1 June 2001 the Lessor and the Lessee entered into a lease agreement \
-             (\"Lease\") for the premises.",
-            "Whereas the parties entered into an Amended and Restated Master Supply Contract \
-             on June 1, 2001;",
-        ] {
-            assert!(alternates(other).is_empty(), "{other}");
-        }
-        for own in [
-            "This Agreement is made and entered into as of June 1, 2001 by and between the \
-             parties.",
-            "The parties entered into this Agreement on 1 June 2001.",
-            "This Amendment is entered into by the Contractor and the Client, effective June \
-             1, 2001.",
-            // The other paper's clause ends before the date's own cue.
-            "The parties entered into the Agreement, which this Amendment changes effective \
-             June 1, 2001.",
-            // No document is named: what was entered into is a period.
-            "The licence entered into the renewal term commencing June 1, 2001.",
-        ] {
-            assert_eq!(alternates(own), vec!["2001-06-01"], "{own}");
-        }
     }
 
     /// A PDF breaks the referencing phrase wherever the margin falls, and

@@ -188,8 +188,7 @@ impl ScopeView {
 /// anywhere in the document but a line item's ([`date_fields`]). The model
 /// need not have been shown it: retrieval can leave a header line out. An
 /// exhibit or a schedule attached after the document carries its own
-/// "Dated:", and it is never this document's ([`attachments_from`]); nor is
-/// the "Date:" an event is announced under ([`dates_an_event`]).
+/// "Dated:", and it is never this document's ([`attachments_from`]).
 fn own_date_field(scope: &ValidationScope<'_>, date: &str) -> Option<(String, String)> {
     let order = numeric_date_order(scope.document());
     let rows = |units: &[&EvidenceUnit]| {
@@ -241,50 +240,9 @@ fn own_date_field(scope: &ValidationScope<'_>, date: &str) -> Option<(String, St
         }
     }
     match own.as_slice() {
-        // The one field may be an event's, set over when and where it is
-        // held: the day of a hearing, never the day the notice was given.
-        [(_, line)] if dates_an_event(&own_pages, line) => None,
         [only] => Some(only.clone()),
         _ => None,
     }
-}
-
-/// Whether `line`, a "Date:" field, stands in the block an event is
-/// announced in: among the two lines before it and the two after it on its
-/// page, blank lines aside, a "Venue:" field, or a "Time:" field and a
-/// "Place:" or "Location:" field - "Date: 24th July 2025 / Time: 09:00 /
-/// Venue: Mayoral Chamber" in a notice of a hearing. That date says when
-/// the event is held. A date with only a place beside it is how a signed
-/// paper dates itself ("Place: Leeds / Date: 4 March 2024"), and one with
-/// only a time is a receipt's or a transmission's own stamp: neither is
-/// an event's. Wherever the line stands in such a block, it is one.
-fn dates_an_event(units: &[&EvidenceUnit], line: &str) -> bool {
-    /// How many lines on either side belong to the field's block.
-    const REACH: usize = 2;
-    let lines = units
-        .iter()
-        .flat_map(|unit| unit.text.lines().map(move |text| (unit.page, text.trim())))
-        .filter(|(_, text)| !text.is_empty())
-        .collect::<Vec<_>>();
-    let label = |text: &str| {
-        text.split_once(':').map(|(label, _)| {
-            normalize(label)
-                .trim_matches(|character: char| !character.is_alphanumeric())
-                .to_owned()
-        })
-    };
-    lines.iter().enumerate().any(|(at, (page, text))| {
-        if *text != line.trim() || label(text).as_deref() != Some("date") {
-            return false;
-        }
-        let beside = lines[at.saturating_sub(REACH)..(at + 1 + REACH).min(lines.len())]
-            .iter()
-            .filter(|(other, _)| other == page)
-            .filter_map(|(_, text)| label(text))
-            .collect::<Vec<_>>();
-        let has = |wanted: &[&str]| beside.iter().any(|label| wanted.contains(&label.as_str()));
-        has(&["venue"]) || (has(&["time"]) && has(&["place", "location"]))
-    })
 }
 
 /// The first page after the first that opens as an attachment - "EXHIBIT
@@ -14562,74 +14520,6 @@ Tidewater Buying LLC / POL\nAttention: Accounts Payable\n41 Wharf Street\nGilchr
         assert_ne!(
             outcome.proposal.document_date.as_deref(),
             Some("2009-08-07")
-        );
-    }
-
-    /// A notice of a hearing announces it in a block: "Date: 24th July
-    /// 2025" over "Time: 09:00" and "Venue: Mayoral Chamber". That field
-    /// is the hearing's, and never replaces the day the notice was given,
-    /// which stands by its signature with no label. A "Date:" field with
-    /// no such block under it is still the document's own.
-    #[test]
-    fn an_events_date_field_never_dates_the_notice() {
-        let dated = |block: &str, replied: &str| {
-            let text = format!(
-                "HARBOUR CITY COUNCIL\n\nNOTICE OF PUBLIC HEARING\n\nThe Accounts Committee \
-                 will hold a public hearing on the register of irregular spending as \
-                 follows:\n\n{block}\n\nThe public is invited to attend as observers.\n\n\
-                 Mara Quill, Speaker of Council, signed 9 July 2025"
-            );
-            let (outcome, _) = facts_for(&text, |index| ModelFacts {
-                document_type: Some("Notice of Public Hearing".into()),
-                type_evidence: vec![id_of(index, "NOTICE OF PUBLIC HEARING")],
-                document_date: Some(replied.into()),
-                date_evidence: vec![id_of(index, "signed 9 July 2025")],
-                ..ModelFacts::default()
-            });
-            outcome.proposal.document_date
-        };
-        for block in [
-            "Date: 24th July 2025\n\nTime: 09:00\nVenue: Mayoral Chamber",
-            "Date: 24th July 2025\nVenue: Mayoral Chamber",
-            "DATE: 24th July 2025\n\nTime: 09:00\nPlace: Mayoral Chamber, Civic Centre",
-            "Date: 24th July 2025\nLocation: Mayoral Chamber\nTime: 09:00",
-            // The block's fields in another order.
-            "Time: 09:00\nVenue: Mayoral Chamber\n\nDate: 24th July 2025",
-        ] {
-            assert_eq!(
-                dated(block, "2025-07-09").as_deref(),
-                Some("2025-07-09"),
-                "{block}"
-            );
-        }
-        // The same field with no event's block around it is the notice's
-        // own date field, and the date the reply read by the signature
-        // gives way to it as before: alone, beside another field, with only
-        // the place a paper is signed at, with only the time a system
-        // stamped it, or with the event's fields further off.
-        for block in [
-            "Date: 24th July 2025",
-            "Date: 24th July 2025\n\nReference: HC/2025/14",
-            "Place: Brackenridge\nDate: 24th July 2025",
-            "Date: 24th July 2025\nTime: 09:00",
-            "Date: 24th July 2025\n\nReference: HC/2025/14\nContact: the Clerk\n\
-             Time: 09:00\nVenue: Mayoral Chamber",
-        ] {
-            assert_eq!(
-                dated(block, "2025-07-09").as_deref(),
-                Some("2025-07-24"),
-                "{block}"
-            );
-        }
-        // A reply that took the hearing's day is not corrected by this
-        // rule: its date has a field, and stands as it did.
-        assert_eq!(
-            dated(
-                "Date: 24th July 2025\n\nTime: 09:00\nVenue: Mayoral Chamber",
-                "2025-07-24"
-            )
-            .as_deref(),
-            Some("2025-07-24")
         );
     }
 
