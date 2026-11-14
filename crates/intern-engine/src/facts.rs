@@ -1196,6 +1196,11 @@ pub fn validate_facts_at(
                 // "Tenant:") outranks a signature or a post, and keeps the
                 // others' staff from taking them along.
                 Standing::Subject
+            } else if opens_a_caption_side(scope, &party.name) {
+                // So does a court caption that opens a side of its case
+                // with their name: "v. DOUG BURGUM, SECRETARY OF THE
+                // INTERIOR" is sued in that office, not staff of it.
+                Standing::Subject
             } else {
                 standing_of(scope, &party.name, class)
             }
@@ -7505,6 +7510,8 @@ struct CaptionLayout {
     /// Whether the answering side's label closes its names: a caption with
     /// no label sets out its sides, but nothing says where the second ends.
     answering_closed: bool,
+    /// Whether the bringing side's label closes its names, before "v.".
+    bringing_closed: bool,
 }
 
 impl CaptionLayout {
@@ -7582,8 +7589,74 @@ impl CaptionLayout {
             bringing: start..bringing_end,
             answering: versus..answering_end,
             answering_closed: answering_label.is_some(),
+            bringing_closed: bringing_label.is_some(),
         })
     }
+}
+
+/// Whether a person's name opens a side of the case a court document's
+/// caption sets out: the first name after "v.", or the first under the
+/// forum's heading, in a caption that closes each side with its label. An
+/// official sued, or suing, in their office is written so - "v. DOUG
+/// BURGUM, SECRETARY OF THE INTERIOR; ...", "JULIE A. SU, Acting Secretary
+/// of Labor, Plaintiff," - and is that side of the case, whatever post
+/// follows the name: cases are cited by the names that open their sides.
+///
+/// Anyone else a caption names keeps the standing their post gives them:
+/// the second official on a side, a judge a reader ran into the caption's
+/// column, the officer a state appears "by and through". A court form
+/// that labels no sides sets out none to open.
+fn opens_a_caption_side(scope: &ValidationScope<'_>, name: &str) -> bool {
+    let caption = caption_units(scope);
+    let text = caption_text(&caption);
+    let Some(layout) = CaptionLayout::of(&text, &caption) else {
+        return false;
+    };
+    if !(layout.bringing_closed && layout.answering_closed) {
+        return false;
+    }
+    let loose = normalize_loosely(name);
+    if loose.is_empty() {
+        return false;
+    }
+    let opens = |stretch: &str| {
+        stretch
+            .trim_start_matches(|character: char| !character.is_alphanumeric())
+            .strip_prefix(loose.as_str())
+            .is_some_and(|rest| !rest.starts_with(char::is_alphanumeric))
+    };
+    // The answering side opens right after the versus word.
+    let answering = text[layout.answering.start..]
+        .split_once(' ')
+        .is_some_and(|(_, rest)| opens(rest));
+    // The bringing side opens in the first line, or cell, under the
+    // forum's heading - the lines that name the court and where it sits.
+    let names_court = |words: &[&str]| {
+        words.iter().any(|word| {
+            let word = caption_word(word);
+            FORUM_WORDS.contains(&word.as_str())
+                || word
+                    .strip_suffix('s')
+                    .is_some_and(|word| FORUM_WORDS.contains(&word))
+        })
+    };
+    let cells = caption_cells(&caption);
+    let bringing = cells
+        .iter()
+        .position(|(_, words)| names_court(words))
+        .and_then(|forum| {
+            // A line of the heading ends on no comma; a party's does
+            // ("STATE OF OHIO,"), though it reads like where a court sits.
+            cells[forum + 1..]
+                .iter()
+                .find(|(_, words)| {
+                    words.last().is_some_and(|last| last.ends_with(','))
+                        || !names_a_forum(&normalize_loosely(&words.join(" ")))
+                })
+                .map(|(_, words)| normalize_loosely(&words.join(" ")))
+        })
+        .is_some_and(|cell| opens(&cell));
+    answering || bringing
 }
 
 /// How far after "v." a caption's answering side and its label can run.
@@ -15651,6 +15724,116 @@ Rickmansworth,
             outcome.proposal.parties[0]
                 .to_lowercase()
                 .contains("bramble"),
+            "{:?}",
+            outcome.proposal
+        );
+    }
+
+    /// real4-notice-02's shape: a notice of appeal in a suit against
+    /// officials, each written as a name and an office. The person whose
+    /// name opens a side - the first after "v.", or the first under the
+    /// court's heading - is that side of the case, though a post follows
+    /// the name: the notice is between the two sides. The second official
+    /// on a side, the officer a state appears through and a person named
+    /// in a caption that labels no sides keep the standing their post
+    /// gives them.
+    #[test]
+    fn the_person_who_opens_a_side_of_a_caption_is_a_party() {
+        const NOTICE: &str = "IN THE UNITED STATES DISTRICT COURT\n\
+FOR THE EASTERN DISTRICT OF PENNSYLVANIA\n\n\
+CITY OF MILLBROOK,\n\nPlaintiff,\n\nv.\n\n\
+ODALYS BRANDT, SECRETARY OF THE\nINTERIOR; HARLOW BASIN WATER AUTHORITY;\n\
+CORBIN VALE, ACTING DIRECTOR\nOF THE NATIONAL PARK SERVICE; and\nNATIONAL PARK SERVICE,\n\n\
+Defendants.\n\nNOTICE OF APPEAL\n\n\
+Defendants hereby appeal this Court's February 16, 2026 memorandum opinion to the United \
+States Court of Appeals for the Third Circuit.\n\nDated: February 17, 2026";
+        let reply = |text: &str, first: &str, second: &str| {
+            let (outcome, _) = facts_for(text, |index| ModelFacts {
+                document_type: Some("Notice of Appeal".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF APPEAL")],
+                document_date: Some("2026-02-17".into()),
+                date_evidence: vec![id_of(index, "Dated")],
+                parties: vec![
+                    party(first, Some(PartyRole::Client), &[]),
+                    party(second, Some(PartyRole::Employer), &[]),
+                ],
+                ..ModelFacts::default()
+            });
+            outcome
+        };
+        let outcome = reply(NOTICE, "CITY OF MILLBROOK", "ODALYS BRANDT");
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::Between,
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["CITY OF MILLBROOK", "ODALYS BRANDT"]
+        );
+        // The second official the caption names on that side is no side of
+        // the case.
+        let outcome = reply(NOTICE, "CITY OF MILLBROOK", "CORBIN VALE");
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|name| name.contains("VALE")),
+            "{:?}",
+            outcome.proposal
+        );
+        // An official who brings the case opens its first side.
+        const ENFORCEMENT: &str = "UNITED STATES DISTRICT COURT\nDISTRICT OF OREGON\n\n\
+ODALYS BRANDT, Acting Secretary of Labor,\n\nPlaintiff,\n\nv.\n\n\
+TAVISTOCK BOATWORKS, INC.,\n\nDefendant.\n\nNOTICE OF APPEAL\n\n\
+Defendant hereby appeals from the judgment entered February 16, 2026.\n\n\
+Dated: February 17, 2026";
+        let outcome = reply(ENFORCEMENT, "Tavistock Boatworks, Inc.", "Odalys Brandt");
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::Between,
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Odalys Brandt", "Tavistock Boatworks, Inc."]
+        );
+        // Who opens a side, read on the caption alone. The officer a state
+        // appears through, the second official on a side and a judge a
+        // reader ran into the caption's column open none; nor does anyone
+        // in a caption that labels no sides.
+        let opens = |text: &str, name: &str| {
+            let index = index_of(text);
+            let context = whole(&index);
+            opens_a_caption_side(&ValidationScope::new(&index, &context, &[]), name)
+        };
+        assert!(opens(NOTICE, "ODALYS BRANDT"));
+        assert!(opens(NOTICE, "Odalys Brandt"));
+        assert!(!opens(NOTICE, "CORBIN VALE"));
+        assert!(opens(ENFORCEMENT, "Odalys Brandt"));
+        let through = ENFORCEMENT.replace(
+            "ODALYS BRANDT, Acting Secretary of Labor,",
+            "STATE OF OHIO,\nby and through ODALYS BRANDT, Attorney General,",
+        );
+        assert!(!opens(&through, "Odalys Brandt"));
+        let judged = ENFORCEMENT.replace("Plaintiff,", "Plaintiff, JUDGE ODESSA WREN");
+        assert!(opens(&judged, "Odalys Brandt"));
+        assert!(!opens(&judged, "Odessa Wren"));
+        assert!(!opens(&judged, "Judge Odessa Wren"));
+        let unlabeled = NOTICE
+            .replace("Plaintiff,\n\n", "")
+            .replace("Defendants.\n\n", "");
+        assert!(!opens(&unlabeled, "ODALYS BRANDT"));
+        let outcome = reply(&unlabeled, "CITY OF MILLBROOK", "ODALYS BRANDT");
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|name| name.contains("BRANDT")),
             "{:?}",
             outcome.proposal
         );
