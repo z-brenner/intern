@@ -12216,7 +12216,10 @@ Order total: $8,220.00";
     /// naming the order's issuer, whether the document labels the vendor,
     /// only the reply called it so, or the order also names where it is
     /// delivered: the vendor is kept with no joining word, and the name
-    /// waits for a person. The party at the head that nothing calls the
+    /// waits for a person. Nor does setting the vendor aside at the head
+    /// make whoever else the order names its issuer: an order addressed to
+    /// its vendor there keeps the one other party it names with no joining
+    /// word, and waits too. The party at the head that nothing calls the
     /// vendor is the order's issuer as before, and an invoice laid out the
     /// same way is from its vendor.
     #[test]
@@ -12311,6 +12314,95 @@ Order total: $8,220.00";
                 "{tag}"
             );
             assert_eq!(outcome.status, ProposalStatus::NeedsReview, "{tag}");
+        }
+
+        // An order addressed "To:" its vendor at the head of the page, with
+        // one other party named under the delivery address. The vendor set
+        // aside, nothing shows that the other party issued the order - it
+        // is the buyer on one order and the carrier on the next - so the
+        // order is not named from it: it is kept with no joining word, and
+        // the name waits for a person.
+        for other in [
+            "Thornbury Outdoor Gear Co.",
+            "Redgate Interstate Freight Inc.",
+        ] {
+            let addressed = format!(
+                "PURCHASE ORDER\n\n\
+PO Number: TOG-PO-4471\n\
+PO Date: June 3, 2026\n\n\
+To: Ridgewell Textiles Ltd.\n\
+40 Mill Road\n\
+Dalton\n\n\
+Ship To: Receiving Dock 4, 12 Canal Street, Harrow\n\n\
+Ship via {other}\n\n\
+Ripstop nylon, 70D, forest green (yards): 1200 at $6.85 = $8,220.00\n\
+Order total: $8,220.00"
+            );
+            for (role, second) in [
+                (PartyRole::Vendor, None),
+                (PartyRole::Vendor, Some(PartyRole::Buyer)),
+                (PartyRole::Seller, Some(PartyRole::Other)),
+            ] {
+                let outcome = read(
+                    &addressed,
+                    "Purchase Order",
+                    &[vendor(Some(role)), (other, second, other)],
+                );
+                let tag = format!("{other}, {role:?}, {second:?}");
+                assert_eq!(
+                    outcome.proposal.party_relation,
+                    PartyRelation::None,
+                    "{tag}: {:?}",
+                    outcome.facts.as_ref().map(|facts| &facts.relation_basis)
+                );
+                assert_eq!(outcome.proposal.parties, vec![other], "{tag}");
+                assert_eq!(
+                    outcome.reasons,
+                    vec![ReviewReason::PartyUnsupported],
+                    "{tag}"
+                );
+                assert_eq!(outcome.status, ProposalStatus::NeedsReview, "{tag}");
+            }
+        }
+        // Where no party stands alone at the head - the order's text names
+        // its buyer before any delivery address - nothing is set aside, and
+        // the order is from the party on the other side of the vendor its
+        // "To:" names, as before.
+        const ORDERED: &str = "PURCHASE ORDER\n\n\
+PO Number: TOG-PO-4471\n\
+PO Date: June 3, 2026\n\n\
+To: Ridgewell Textiles Ltd.\n\
+40 Mill Road\n\
+Dalton\n\n\
+Please supply the goods below to Thornbury Outdoor Gear Co. at its Dalton warehouse.\n\n\
+Ripstop nylon, 70D, forest green (yards): 1200 at $6.85 = $8,220.00\n\
+Order total: $8,220.00";
+        for second in [None, Some(PartyRole::Buyer)] {
+            let outcome = read(
+                ORDERED,
+                "Purchase Order",
+                &[
+                    vendor(Some(PartyRole::Vendor)),
+                    ("Thornbury Outdoor Gear Co.", second, "Thornbury Outdoor"),
+                ],
+            );
+            assert_eq!(
+                outcome.proposal.party_relation,
+                PartyRelation::From,
+                "{second:?}: {:?}",
+                outcome.facts.as_ref().map(|facts| &facts.relation_basis)
+            );
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["Thornbury Outdoor Gear Co."],
+                "{second:?}"
+            );
+            assert_eq!(
+                outcome.status,
+                ProposalStatus::Ready,
+                "{second:?}: {:?}",
+                outcome.reasons
+            );
         }
 
         // The letterhead's company, which nothing calls the vendor.

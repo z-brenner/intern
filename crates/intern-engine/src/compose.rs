@@ -716,9 +716,9 @@ fn relation_from_supported_roles(
             // delivered to is as often the buyer's own dock as its customer.
             // A party the document calls the vendor or the seller, or that
             // the reply called so, is the side the order is sent to: it is
-            // left for the rows after, which name no issuer - the party with
-            // no joining word, or no party - and the name waits for a
-            // person.
+            // left for the rows after the two, which name no issuer - the
+            // party with no joining word, or no party - and the name waits
+            // for a person.
             let sent_the_order = |party: &CastMember| {
                 order
                     && [party.supported_role(), party.proposed_role]
@@ -726,18 +726,28 @@ fn relation_from_supported_roles(
                         .flatten()
                         .any(|role| matches!(role, PartyRole::Vendor | PartyRole::Seller))
             };
-            if let Some(index) = cues.issuer
-                && let Some(issuer) = parties.get(index)
+            let head = cues.issuer.and_then(|index| parties.get(index));
+            if let Some(issuer) = head
                 && !sent_the_order(issuer)
             {
                 return one(PartyRelation::From, issuer, "the issuer's cues");
             }
+            // A vendor set aside at the head leaves the second row no
+            // issuer to name either. The party the document marks as
+            // receiving may be that vendor itself - an order is addressed
+            // to its vendor - or the dock beside it, and the row would name
+            // whoever stands opposite as the issuer, with nothing to show
+            // that party issued the order and no word that the name rests
+            // on so little.
+            let vendor_at_the_head = head.is_some_and(sent_the_order);
             let receiving = |party: &CastMember| {
                 party
                     .supported_role()
                     .is_some_and(|role| RECEIVING.contains(&role))
             };
-            if let [a, b, ..] = parties {
+            if let [a, b, ..] = parties
+                && !vendor_at_the_head
+            {
                 match (receiving(a), receiving(b)) {
                     (true, false) if !sent_the_order(b) => {
                         return one(PartyRelation::From, b, "the other side of the customer");
@@ -2542,6 +2552,62 @@ mod tests {
                 relation.basis
             );
         }
+        // Set aside at the head, the vendor leaves the row after it no
+        // issuer to name either. The party the document marks as receiving
+        // may be that vendor itself - an order is addressed to its vendor -
+        // or stand beside it, and nothing then shows that the party
+        // opposite issued the order: it is kept with no joining word.
+        let buyer = member("Thornbury Outdoor Gear Co.", None, None);
+        let addressed = member(
+            "Ridgewell Textiles Ltd.",
+            Some(PartyRole::Recipient),
+            Some(PartyRole::Vendor),
+        );
+        for (cast, head) in [
+            (vec![addressed.clone(), buyer.clone()], 0),
+            (vec![buyer.clone(), addressed.clone()], 1),
+            (
+                vec![
+                    member("Harrow Receiving Dock", Some(PartyRole::Recipient), None),
+                    buyer.clone(),
+                    member("Ridgewell Textiles Ltd.", None, Some(PartyRole::Vendor)),
+                ],
+                2,
+            ),
+        ] {
+            let relation = relation_from_roles(
+                DocumentClass::Issued,
+                Some("Purchase Order"),
+                &cast,
+                RelationCues {
+                    issuer: Some(head),
+                    ..RelationCues::default()
+                },
+            );
+            assert_eq!(
+                relation.relation,
+                PartyRelation::None,
+                "{head}: {}",
+                relation.basis
+            );
+            assert_eq!(
+                relation.parties,
+                vec!["Thornbury Outdoor Gear Co."],
+                "{head}"
+            );
+            assert_eq!(relation.basis, "issued: unresolved", "{head}");
+        }
+        // With no cue at the head, an order its document addresses to the
+        // vendor is from the party on the other side, as before.
+        let relation = relation_from_roles(
+            DocumentClass::Issued,
+            Some("Purchase Order"),
+            &[addressed, buyer],
+            RelationCues::default(),
+        );
+        assert_eq!(relation.relation, PartyRelation::From);
+        assert_eq!(relation.parties, vec!["Thornbury Outdoor Gear Co."]);
+        assert_eq!(relation.basis, "issued: the other side of the customer");
         // Nor is the vendor the issuer as the other side of the party the
         // order is delivered to, which is as often the buyer's own dock.
         let delivered = relation_from_roles(
