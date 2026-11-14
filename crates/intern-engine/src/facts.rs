@@ -5196,10 +5196,26 @@ fn without_trading_name(name: &str) -> String {
 /// LLC" of "EMBer POSt MANUFACtURInG LLC" - when a unit of the context names
 /// the organization, as the document writes it. `None` when the name is no
 /// organization's end, or names it whole.
+///
+/// A name the document sets out on a line or in a table's cell of its own
+/// ([`stands_on_its_own`]) is whole already: the end of a name stands
+/// after the words that complete it, and what stands before a whole name
+/// elsewhere is that place's own word - a caption's side ("Defendants
+/// Tavistock Boatworks, Inc."), a sentence's first ("If Tavistock
+/// Boatworks, Inc. believes ..."), a citation's signal, a field's label, a
+/// stray mark of the scan. The price is a name wrapped over two lines
+/// whose second line the reply gave alone: it is no longer completed from
+/// a place that writes it on one.
 fn completed_name(scope: &ValidationScope<'_>, name: &str) -> Option<String> {
     let loose = normalize_loosely(name);
     let last = loose.split_whitespace().last()?;
     if !crate::cues::ORGANIZATION_ENDINGS.contains(&last) {
+        return None;
+    }
+    if scope
+        .context_units()
+        .any(|unit| stands_on_its_own(unit, &loose))
+    {
         return None;
     }
     scope.context_units().find_map(|unit| {
@@ -5226,6 +5242,19 @@ fn completed_name(scope: &ValidationScope<'_>, name: &str) -> Option<String> {
         })?;
         written_span(unit, organization)
     })
+}
+
+/// Whether a unit sets a name out on its own: a line of it, or a cell of
+/// a table's row, reads loosely as `loose` and nothing else, a comma, a
+/// semicolon or a colon closing it or not - a caption's "TAVISTOCK
+/// BOATWORKS, INC.,", an address block's line, a cell. A line of running
+/// text that merely opens with the name is none: a paragraph breaks its
+/// lines anywhere.
+fn stands_on_its_own(unit: &EvidenceUnit, loose: &str) -> bool {
+    unit.text
+        .lines()
+        .flat_map(|line| line.split('|'))
+        .any(|cell| normalize_loosely(cell.trim().trim_end_matches([',', ';', ':'])) == loose)
 }
 
 /// A subject with any run of capitalized words the document does not state
@@ -7169,10 +7198,16 @@ fn between_cue(context: &ScopeView, cast: &[CastMember]) -> bool {
 }
 
 /// Whether a word is a role's own label - "Tenant", "Buyer", "Plaintiff" -
-/// or a field's - "Name", "Account" - which names no one.
+/// or a field's - "Name", "Account" - which names no one. A side of a case
+/// is labeled in the plural as often as not ("Defendants", "Debtors").
 fn is_role_word(word: &str) -> bool {
-    BRINGING_SIDE.contains(&word)
-        || ANSWERING_SIDE.contains(&word)
+    let side = |word: &str| {
+        BRINGING_SIDE.contains(&word)
+            || ANSWERING_SIDE.contains(&word)
+            || DEBTOR_LABELS.contains(&word)
+    };
+    side(word)
+        || word.strip_suffix('s').is_some_and(side)
         || matches!(word, "name" | "account")
         || crate::cues::PARTY_LABELS.contains(&word)
         || PartyRole::ALL
@@ -11419,6 +11454,155 @@ Date of notice: August 12, 2026";
         assert_eq!(
             outcome.proposal.parties,
             vec!["EMBER POST MANUFACTURING LLC"]
+        );
+    }
+
+    /// real4-notice-15's and real6-letter-07's shape: a letter whose inside
+    /// address sets the company's name out on a line of its own, and whose
+    /// text elsewhere runs another word into it - a sentence's first, a
+    /// parent's own name, a stray mark of the scan. The reply's name is
+    /// whole, and is not lengthened by that word. A name the document
+    /// never sets out so is completed as before, though a line of running
+    /// text happens to open with it.
+    #[test]
+    fn a_name_the_document_sets_out_whole_is_not_completed() {
+        const LETTER: &str = "HARLOW BASIN WATER AUTHORITY\n\n\
+May 2, 2019\n\n\
+Ms. Odalys Brandt\n\
+Tavistock Boatworks, Inc.\n\
+3000 Lakeview Avenue\n\
+Millbrook, OR 97232\n\n\
+Dear Ms. Brandt:\n\n\
+VIOLATION NOTICE\n\n\
+On April 24, 2019, the Authority inspected the yard at 3000 Lakeview Avenue.";
+        let names = |text: &str, name: &str| {
+            let (outcome, _) = facts_for(text, |_| ModelFacts {
+                document_type: Some("Notice".into()),
+                document_date: Some("2019-05-02".into()),
+                parties: vec![party(name, Some(PartyRole::Recipient), &[])],
+                ..ModelFacts::default()
+            });
+            outcome
+                .facts
+                .expect("facts")
+                .parties
+                .into_iter()
+                .map(|party| party.name)
+                .collect::<Vec<_>>()
+        };
+        for sentence in [
+            "If Tavistock Boatworks, Inc. believes these observations are inaccurate, it may reply.",
+            "OTLO Tavistock Boatworks, Inc.",
+            "A copy goes to its parent, North Tavistock Boatworks, Inc., in Dalton.",
+        ] {
+            let text = format!("{LETTER}\n\n{sentence}");
+            assert_eq!(
+                names(&text, "Tavistock Boatworks, Inc."),
+                vec!["Tavistock Boatworks, Inc."],
+                "{sentence}"
+            );
+            // Where no line sets the name out, the word before it is
+            // taken for the name's own, as it was.
+            let unset = text.replace("Tavistock Boatworks, Inc.\n3000", "3000");
+            assert_ne!(
+                names(&unset, "Tavistock Boatworks, Inc."),
+                vec!["Tavistock Boatworks, Inc."],
+                "{sentence}"
+            );
+        }
+        // A table's cell sets a name out as a line does, a caption's comma
+        // closing it.
+        const CAPTION: &str = "SUPERIOR COURT OF THE STATE OF WASHINGTON\n\n\
+| GILCHRIST HARBOR MARINE SUPPLY, LLC, | ) | No. 24-2-01234-5 |\n\
+| Plaintiff, | ) | |\n\
+| v. | ) | NOTICE OF DEPOSITION |\n\
+| TAVISTOCK BOATWORKS, INC., | ) | |\n\
+| Defendant. | ) | |\n\n\
+Please take notice that on May 2, 2019 counsel will take the deposition of See Tavistock \
+Boatworks, Inc. at the offices of counsel.";
+        assert!(
+            names(CAPTION, "Tavistock Boatworks, Inc.")
+                .contains(&"Tavistock Boatworks, Inc.".to_owned())
+        );
+        // A cell the name only opens sets out another, longer name, and
+        // the word before the reply's elsewhere is taken as it was.
+        let longer = CAPTION.replace(
+            "| TAVISTOCK BOATWORKS, INC., |",
+            "| TAVISTOCK BOATWORKS, INC. AND OTHERS, |",
+        );
+        assert!(
+            names(&longer, "Tavistock Boatworks, Inc.")
+                .contains(&"See Tavistock Boatworks, Inc.".to_owned())
+        );
+        // The end of a name the document writes whole on one line only is
+        // completed, though a paragraph's line breaks before it.
+        const ORDER: &str = "PURCHASE ORDER PO-310\n\nMay 2, 2019\n\n\
+Issued by Ember Post Manufacturing LLC\n\n\
+This order is placed by Ember Post\n\
+Manufacturing LLC under the supply agreement of 2 March 2019.";
+        let (outcome, _) = facts_for(ORDER, |index| ModelFacts {
+            document_type: Some("Purchase Order".into()),
+            type_evidence: vec![id_of(index, "PURCHASE")],
+            parties: vec![party(
+                "Manufacturing LLC",
+                Some(PartyRole::Issuer),
+                &[id_of(index, "Issued by")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Ember Post Manufacturing LLC"]
+        );
+    }
+
+    /// real2-notice-04's and real3-notice-08's shape: a court notice whose
+    /// text names a side by its label in the plural, "Defendants Tavistock
+    /// Boatworks, Inc. and ...". The label is no part of the name, as the
+    /// singular never was.
+    #[test]
+    fn a_side_labeled_in_the_plural_is_no_part_of_the_name_it_labels() {
+        for label in [
+            "plaintiffs",
+            "defendants",
+            "appellants",
+            "respondents",
+            "petitioners",
+            "appellees",
+            "claimants",
+            "debtor",
+            "debtors",
+        ] {
+            assert!(is_role_word(label), "{label}");
+        }
+        for word in ["holdings", "partners", "s", "calms"] {
+            assert!(!is_role_word(word), "{word}");
+        }
+        const NOTICE: &str = "SUPERIOR COURT OF THE STATE OF WASHINGTON\n\n\
+NOTICE OF DEPOSITION\n\n\
+May 2, 2019\n\n\
+Please take notice that Plaintiff will take the deposition upon oral examination of \
+Defendants Tavistock Boatworks, Inc. d/b/a Harbor Yard and Corvane Marine LLC.";
+        let (outcome, _) = facts_for(NOTICE, |index| ModelFacts {
+            document_type: Some("Notice of Deposition".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF DEPOSITION")],
+            document_date: Some("2019-05-02".into()),
+            date_evidence: vec![id_of(index, "May 2, 2019")],
+            parties: vec![party(
+                "Tavistock Boatworks, Inc.",
+                Some(PartyRole::Recipient),
+                &[id_of(index, "Please take notice")],
+            )],
+            ..ModelFacts::default()
+        });
+        let facts = outcome.facts.expect("facts");
+        assert_eq!(
+            facts
+                .parties
+                .iter()
+                .map(|party| party.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Tavistock Boatworks, Inc."]
         );
     }
 
