@@ -295,10 +295,10 @@ pub struct RelationCues {
     /// The recipient the reply named that the document's own address block
     /// names: the first party of the cast, with no role the document
     /// supports, that the reply called its recipient or addressee and that
-    /// stands in the inside address of the first page - the lines between
-    /// its dateline and its greeting, where a notice written as a letter
-    /// says who it was sent to with no "To:" label - by its place in the
-    /// cast.
+    /// stands in the inside address of the first page - the lines above
+    /// its greeting, after its dateline when it has one, where a notice
+    /// written as a letter says who it was sent to with no "To:" label -
+    /// by its place in the cast.
     pub addressed: Option<usize>,
 }
 

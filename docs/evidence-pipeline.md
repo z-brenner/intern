@@ -470,8 +470,9 @@ from the table there:
   `to` says the notice was addressed to the party, and neither a `To:` label
   nor an address block names it. A recipient the document labels
   (`To: ...`) keeps `to` on the document's word. One named in the address
-  block of a notice written as a letter (the lines between its dateline and
-  its greeting, read as a letter's inside address is) keeps `to` on the
+  block of a notice written as a letter (the lines above its greeting,
+  after its dateline when it has one, read as a letter's inside address is)
+  keeps `to` on the
   reply's roles, and waits for review: a notice of a mass layoff sent to a
   state office is not `for` that office. An address block with no greeting
   under it is not read. A claim keeps `to` as well (it is made to the party
