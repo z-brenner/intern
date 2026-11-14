@@ -8,8 +8,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::domain::{
-    DateRole, ModelProposal, PartyRelation, ProposalStatus, ReviewReason, ValidatedProposal,
-    ValidationOutcome,
+    DateRole, DocumentSource, ModelProposal, PartyRelation, ProposalStatus, ReviewReason,
+    SourcePage, ValidatedProposal, ValidationOutcome,
 };
 use crate::evidence::{
     DateSpelling, NumericDate, NumericOrder, Segments, date_match_positions, date_match_spans,
@@ -593,6 +593,85 @@ pub(crate) fn only_bounds_a_period<'a>(
         }
     }
     stated
+}
+
+/// Whether the document states `date` only where a spreadsheet formula that
+/// calls TODAY or NOW shows it ([`SourcePage::volatile_spans`]) - and
+/// states it there at least once. Such a cell holds what its formula last
+/// worked out from the day the workbook was open, and works out another
+/// when it is opened on another day, so the date is the file's and not one
+/// the document was given: an invoice template's "DATE | 2026-03-03" over
+/// `=TODAY()`.
+///
+/// Each page is read twice, line by line as a sheet's rows are written:
+/// as it is, and with every such cell left empty. A date that some page
+/// still states with those cells empty is one a person typed - in another
+/// cell, on another sheet, in the sheet's name - and is supported as it
+/// always was. A formula cell that shows some other date takes nothing
+/// from this one. On each line the date is read as validation reads the
+/// reply's in each unit ([`read_date_positions`]: written out, or in a
+/// scan's looser spellings), so a typed statement in any of those
+/// spellings clears it. A date that only runs across two lines is not
+/// read on either reading, and is not held.
+///
+/// A document none of whose pages carries a marked cell - every document
+/// but an Excel 2007 workbook with such a formula, and every extraction
+/// stored or recorded before the worker marked them - is never held here.
+/// A range that is no stretch of its page's text is not read.
+pub(crate) fn stated_only_by_volatile_formulas(source: &DocumentSource, date: &str) -> bool {
+    if source
+        .pages
+        .iter()
+        .all(|page| page.volatile_spans.is_empty())
+    {
+        return false;
+    }
+    let states = |text: &str| {
+        text.lines()
+            .any(|line| !read_date_positions(date, &normalize(line)).is_empty())
+    };
+    let mut shown_by_a_formula = false;
+    for page in &source.pages {
+        match without_volatile_cells(page) {
+            Some(typed) => {
+                if states(&typed) {
+                    return false;
+                }
+                shown_by_a_formula = shown_by_a_formula || states(&page.text);
+            }
+            None => {
+                if states(&page.text) {
+                    return false;
+                }
+            }
+        }
+    }
+    shown_by_a_formula
+}
+
+/// A page's text with every stretch a TODAY or NOW formula worked out left
+/// out, so its cell reads as an empty one; `None` for a page with no such
+/// stretch. The ranges come from outside the engine - the worker, a stored
+/// extraction - so one that is not a stretch of this text (past its end,
+/// inside a character, overlapping the one before) is passed over rather
+/// than trusted.
+fn without_volatile_cells(page: &SourcePage) -> Option<String> {
+    let mut spans = page.volatile_spans.clone();
+    spans.sort_unstable();
+    let mut typed = String::with_capacity(page.text.len());
+    let mut from = 0;
+    for (start, end) in spans {
+        if start < from || end <= start || page.text.get(start..end).is_none() {
+            continue;
+        }
+        typed.push_str(&page.text[from..start]);
+        from = end;
+    }
+    if from == 0 {
+        return None;
+    }
+    typed.push_str(&page.text[from..]);
+    Some(typed)
 }
 
 /// The dates other than `date` that `digest` labels as the date of issue,
@@ -2972,6 +3051,225 @@ This Intercompany Agreement is effective as of April 1, 2026 between Acme and Ac
             );
             assert_eq!(outcome.proposal.document_date, None, "{footer}");
             assert_eq!(outcome.reasons, vec![ReviewReason::DateIsDeadline]);
+        }
+    }
+
+    /// A sheet's page from text in which `«` and `»` stand around each
+    /// cell a TODAY or NOW formula worked out: the text without the marks,
+    /// and the marked stretches as the worker gives them.
+    fn sheet(number: usize, marked: &str) -> SourcePage {
+        let mut page = SourcePage::new(number, "", crate::domain::PageOrigin::Office);
+        let mut opened = 0;
+        for piece in marked.split_inclusive(['«', '»']) {
+            let text = piece.trim_end_matches(['«', '»']);
+            page.text.push_str(text);
+            if piece.ends_with('«') {
+                opened = page.text.len();
+            } else if piece.ends_with('»') {
+                page.volatile_spans.push((opened, page.text.len()));
+            }
+        }
+        page
+    }
+
+    fn workbook(pages: &[&str]) -> DocumentSource {
+        DocumentSource::from_pages(
+            pages
+                .iter()
+                .enumerate()
+                .map(|(index, text)| sheet(index + 1, text))
+                .collect(),
+        )
+    }
+
+    const TEMPLATE: &str = "## FREE-FORM INVOICE\n\n\
+                            |  | INVOICE |  |\n\
+                            | --- | --- | --- |\n\
+                            | DATE | «2026-03-03» | Enter the Date if other than today |\n\
+                            | INVOICE # |  |  |\n";
+
+    /// An invoice template in the real sets dates itself with `=TODAY()`
+    /// on two of its sheets, and nowhere else. A date the document states
+    /// only in such cells is the day the file was last saved.
+    #[test]
+    fn a_date_only_a_today_formula_shows_is_stated_by_formulas_alone() {
+        let template = workbook(&[TEMPLATE, "## Terms\n\n| Term | Net 30 |\n| --- | --- |\n"]);
+        assert_eq!(
+            &template.pages[0].text
+                [template.pages[0].volatile_spans[0].0..template.pages[0].volatile_spans[0].1],
+            "2026-03-03"
+        );
+        assert!(stated_only_by_volatile_formulas(&template, "2026-03-03"));
+
+        // On every sheet that states it, and in whatever spelling the
+        // formula writes it.
+        let catalog = TEMPLATE.replace("FREE-FORM", "CATALOG");
+        assert!(stated_only_by_volatile_formulas(
+            &workbook(&[TEMPLATE, &catalog]),
+            "2026-03-03"
+        ));
+        for shown in [
+            "March 3, 2026",
+            "03/03/2026",
+            "3-Mar-26",
+            "2026-03-03 09:14:00",
+        ] {
+            let written = TEMPLATE.replace("«2026-03-03»", &format!("«{shown}»"));
+            assert!(
+                stated_only_by_volatile_formulas(&workbook(&[&written]), "2026-03-03"),
+                "{shown}"
+            );
+        }
+    }
+
+    /// One statement of the date that no such formula worked out - in
+    /// another cell of the row, on another row, on another sheet, in a
+    /// sheet's name, in a looser spelling - is a date somebody typed, and
+    /// the date is supported as it always was.
+    #[test]
+    fn a_date_somebody_also_typed_is_not_a_formulas_alone() {
+        for (what, pages) in [
+            (
+                "another cell of the row",
+                vec![TEMPLATE.replace("Enter the Date if other than today", "Issued 2026-03-03")],
+            ),
+            (
+                "another row",
+                vec![format!("{TEMPLATE}| Service date | March 3, 2026 |  |\n")],
+            ),
+            (
+                "another sheet",
+                vec![
+                    TEMPLATE.to_owned(),
+                    "## Log\n\n| Sent | 03/03/2026 |\n| --- | --- |\n".to_owned(),
+                ],
+            ),
+            (
+                "a sheet's name",
+                vec![TEMPLATE.replace("## FREE-FORM INVOICE", "## Invoice 2026-03-03")],
+            ),
+            (
+                "a looser spelling",
+                vec![format!("{TEMPLATE}| Received | 03-Mar-26 |  |\n")],
+            ),
+            (
+                "the same sheet, read before the formula's cell",
+                vec![format!("| Printed 3 March 2026 |  |  |\n{TEMPLATE}")],
+            ),
+        ] {
+            let pages = pages.iter().map(String::as_str).collect::<Vec<_>>();
+            assert!(
+                !stated_only_by_volatile_formulas(&workbook(&pages), "2026-03-03"),
+                "{what}"
+            );
+        }
+    }
+
+    /// A formula's cell that shows some other date says nothing about the
+    /// one chosen: a typed invoice date beside a `=TODAY()+30` due date, a
+    /// date the document does not state at all.
+    #[test]
+    fn a_formula_that_shows_another_date_takes_nothing_from_the_one_chosen() {
+        let invoice = workbook(&[
+            "| Invoice Date | 2026-02-14 |\n| --- | --- |\n| Printed | «2026-03-03» |\n\
+             | Due | «2026-04-02» |\n",
+        ]);
+        assert!(!stated_only_by_volatile_formulas(&invoice, "2026-02-14"));
+        assert!(!stated_only_by_volatile_formulas(&invoice, "2026-05-01"));
+        assert!(!stated_only_by_volatile_formulas(&invoice, "not a date"));
+        // The two the formulas show are theirs alone.
+        assert!(stated_only_by_volatile_formulas(&invoice, "2026-03-03"));
+        assert!(stated_only_by_volatile_formulas(&invoice, "2026-04-02"));
+        // A date is not pieced together across a formula's cell and the
+        // typed ones beside it, with the cell or without it.
+        let pieced = workbook(&["| March | «3» | 2026 |\n| --- | --- | --- |\n"]);
+        assert!(!stated_only_by_volatile_formulas(&pieced, "2026-03-03"));
+    }
+
+    /// Nothing is held for a document no page of which carries a marked
+    /// cell: a letter, a workbook of typed dates, and every extraction
+    /// stored or recorded before the worker marked them, which reads back
+    /// with none.
+    #[test]
+    fn a_document_with_no_marked_cell_is_never_a_formulas_alone() {
+        let unmarked = TEMPLATE.replace(['«', '»'], "");
+        assert!(!stated_only_by_volatile_formulas(
+            &workbook(&[&unmarked]),
+            "2026-03-03"
+        ));
+        assert!(!stated_only_by_volatile_formulas(
+            &source_from_text("Dated March 3, 2026\n\nDear Ms. Okafor,"),
+            "2026-03-03"
+        ));
+        let recorded: DocumentSource = serde_json::from_value(serde_json::json!({
+            "pages": [{
+                "page_number": 1,
+                "text": unmarked,
+                "origin": "office",
+                "ocr_confidence": null,
+            }],
+            "parser_warnings": [],
+            "page_image": null,
+        }))
+        .unwrap();
+        assert!(recorded.pages[0].volatile_spans.is_empty());
+        assert!(!stated_only_by_volatile_formulas(&recorded, "2026-03-03"));
+        // And a page with none is stored without the field.
+        assert!(
+            !serde_json::to_string(&recorded)
+                .unwrap()
+                .contains("volatile")
+        );
+        let marked = serde_json::to_string(&workbook(&[TEMPLATE])).unwrap();
+        assert!(marked.contains(r#""volatile_spans":[["#), "{marked}");
+        let read_back: DocumentSource = serde_json::from_str(&marked).unwrap();
+        assert_eq!(read_back, workbook(&[TEMPLATE]));
+    }
+
+    /// The ranges come from outside the engine. One that is no stretch of
+    /// its page's text - past the end, back to front, empty, inside a
+    /// character, overlapping the one before - is passed over, and what is
+    /// left decides.
+    #[test]
+    fn a_range_that_is_no_stretch_of_the_text_is_passed_over() {
+        let page = |spans: &[(usize, usize)]| {
+            let mut page = SourcePage::new(
+                1,
+                "| Café | 2026-03-03 |\n| --- | --- |\n",
+                crate::domain::PageOrigin::Office,
+            );
+            page.volatile_spans = spans.to_vec();
+            DocumentSource::from_pages(vec![page])
+        };
+        // "é" is two bytes, so the date stands at 10..20.
+        assert_eq!(&page(&[]).pages[0].text[10..20], "2026-03-03");
+        assert!(stated_only_by_volatile_formulas(
+            &page(&[(10, 20)]),
+            "2026-03-03"
+        ));
+        for spans in [
+            vec![(10, 4_000)],
+            vec![(4_000, 4_010)],
+            vec![(20, 10)],
+            vec![(10, 10)],
+            vec![(5, 6)],
+            vec![(usize::MAX - 1, usize::MAX)],
+        ] {
+            assert!(
+                !stated_only_by_volatile_formulas(&page(&spans), "2026-03-03"),
+                "{spans:?}"
+            );
+        }
+        // Beside ranges that are no stretch of it, a good one still counts,
+        // in whatever order they come.
+        for spans in [
+            vec![(10, 20), (12, 14), (5, 6), (20, 10), (30, 4_000)],
+            vec![(30, 4_000), (10, 20), (2, 4)],
+        ] {
+            assert!(
+                stated_only_by_volatile_formulas(&page(&spans), "2026-03-03"),
+                "{spans:?}"
+            );
         }
     }
 

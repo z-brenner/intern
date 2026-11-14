@@ -39,6 +39,16 @@ pub struct SourcePage {
     /// [`crate::structure::structured`] segments those from their text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<PageLayout>,
+    /// The stretches of `text`, as byte ranges, that show what a
+    /// spreadsheet formula calling TODAY or NOW last worked out, as the
+    /// parser worker found them: a value that follows the day the workbook
+    /// is opened, which no one typed. The text is the same with or without
+    /// them, so the index, the prompt and the request are too; only
+    /// [`crate::validate::stated_only_by_volatile_formulas`] reads them.
+    /// Empty, and not written, for every page without such a cell and for
+    /// every page stored or recorded before the worker looked for them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volatile_spans: Vec<(usize, usize)>,
 }
 
 impl SourcePage {
@@ -49,6 +59,7 @@ impl SourcePage {
             origin,
             ocr_confidence: None,
             layout: None,
+            volatile_spans: Vec::new(),
         }
     }
 }
@@ -746,6 +757,10 @@ pub enum ReviewReason {
     /// only as the first or the last day of a period - a billing or
     /// service period, a flight week - and never on its own.
     DateIsPeriod,
+    /// The document states the date only in spreadsheet cells whose
+    /// formula calls TODAY or NOW: what the formula last worked out from
+    /// the day the workbook was open, not a date the document was given.
+    DateIsFormula,
     /// The quick local model read the document while its readings were
     /// always held for a person, in builds before both models were judged
     /// alike. Kept so an analysis stored by one of them still reads.
@@ -771,6 +786,7 @@ impl ReviewReason {
             Self::DateIsDeadline => "DATE_IS_DEADLINE",
             Self::DateAmbiguous => "DATE_AMBIGUOUS",
             Self::DateIsPeriod => "DATE_IS_PERIOD",
+            Self::DateIsFormula => "DATE_IS_FORMULA",
             Self::FastModelReading => "FAST_MODEL_READING",
         }
     }

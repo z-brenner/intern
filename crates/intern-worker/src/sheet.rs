@@ -6,20 +6,33 @@
 //! heading, then the used range as a pipe table. Output is capped at
 //! [`MAX_SHEET_ROWS`] × [`MAX_SHEET_COLS`] per sheet with an explicit elision
 //! marker, so a hundred-thousand-row workbook cannot flood distillation.
-//! Formula cells surface as their cached values (calamine reads values, not
-//! formulas), and empty cells collapse to empty table cells.
+//! Formula cells surface as their cached values, and empty cells collapse
+//! to empty table cells.
+//!
+//! One kind of cached value is not the document's own: what a formula that
+//! calls TODAY or NOW last worked out, which is another day's whenever the
+//! workbook is opened on another day. An Excel 2007 sheet is read a second
+//! time for those formulas, and where their cells stand in the page's text
+//! is given beside it ([`ExtractedPage::volatile_spans`]); the text itself
+//! is the first reading's, unchanged. The other workbooks are not asked:
+//! a binary workbook's formulas are emptied before calamine sees them (see
+//! [`blank_formula_expressions`]), and anydoc's OpenDocument model keeps a
+//! cell's text and not its formula.
 //!
 //! anydoc's Markdown renders every cell of every sheet into a single page with
 //! no row or column cap, so spreadsheets route through this capped renderer
 //! instead - an OpenDocument one as anydoc parsed it, before it is rendered.
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
 use anydoc::model::{Block, CellSlot, Table, inlines_to_plain_text};
-use calamine::{Data, DataRef, Range, Reader, Xls, XlsError, XlsOptions, Xlsx};
+use calamine::{
+    Data, DataRef, Range, Reader, Xls, XlsError, XlsOptions, Xlsx, XlsxFormulaMetadata,
+};
 
 use crate::extract::{
     CancellationToken, ExtractedDocument, ExtractedPage, ExtractionError, ExtractionWarning,
@@ -93,6 +106,9 @@ pub(crate) struct CappedSheet {
     cells: Vec<(u32, u32, String)>,
     start: (u32, u32),
     end: (u32, u32),
+    /// Absolute `(row, column)` of the cells a formula that calls TODAY or
+    /// NOW worked out, where the reader asked (see [`mark_volatile_cells`]).
+    volatile: Vec<(u32, u32)>,
 }
 
 /// Collects the cells of one sheet, keeping only those the window can show
@@ -133,6 +149,7 @@ impl WindowBuilder {
             cells: self.cells,
             start,
             end: self.end,
+            volatile: Vec::new(),
         })
     }
 }
@@ -175,7 +192,192 @@ pub fn extract_xlsx(
         })??;
         sheets.push((Some(name), sheet));
     }
+    mark_volatile_cells(&mut workbook, &mut sheets, cancel)?;
     workbook_document(sheets)
+}
+
+/// Finds, in every sheet already read, the cells of its window that a
+/// formula calling TODAY or NOW worked out.
+///
+/// This is a second reading of each sheet, begun only once every sheet's
+/// values have been read, so nothing it does - an error, a panic - can
+/// change a character of the text: that was all read by then, by the calls
+/// that always read it. It asks calamine for each cell's formula as the
+/// file states it, which the first reading skips, and it can fail where
+/// that one did not (a shared formula with no index, a range that does not
+/// parse). A sheet whose formulas do not read keeps the cells found up to
+/// there and the rest go unmarked, as every cell did before; after a panic
+/// the workbook is not read again, so the sheets after it go unmarked too.
+/// Only cancellation is passed on.
+fn mark_volatile_cells(
+    workbook: &mut Xlsx<BufReader<File>>,
+    sheets: &mut [(Option<String>, Option<CappedSheet>)],
+    cancel: &CancellationToken,
+) -> Result<(), ExtractionError> {
+    for (name, sheet) in sheets {
+        let (Some(name), Some(sheet)) = (name, sheet) else {
+            continue;
+        };
+        cancel.check()?;
+        let start = sheet.start;
+        // One answer for each cell of the window, row by row.
+        let mut found = vec![false; MAX_SHEET_ROWS * MAX_SHEET_COLS];
+        let read = catch_unwind(AssertUnwindSafe(|| {
+            volatile_cells(workbook, name, start, cancel, &mut found)
+        }));
+        sheet.volatile = found
+            .iter()
+            .enumerate()
+            .filter(|(_, volatile)| **volatile)
+            .map(|(at, _)| {
+                (
+                    start.0 + (at / MAX_SHEET_COLS) as u32,
+                    start.1 + (at % MAX_SHEET_COLS) as u32,
+                )
+            })
+            .collect();
+        match read {
+            Ok(Ok(())) => {}
+            Ok(Err(canceled)) => return Err(canceled),
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
+/// Reads one sheet's formulas and marks in `found` - one answer for each
+/// cell of the window whose top-left corner is `start`, row by row - the
+/// cells that a formula calling TODAY or NOW worked out. The only error is
+/// cancellation; a sheet that does not read keeps the answers it has.
+///
+/// A cell that shares its formula with the cells around it carries no
+/// formula of its own, only the group's index, and takes the answer of the
+/// cell that stated the formula. calamine is asked for that index rather
+/// than for each cell's formula spelled out: spelling them out makes it
+/// keep a slot for every index up to the largest the file names, and the
+/// file names what it likes.
+///
+/// Rows are read in the order the file gives them and reading stops at the
+/// first row past the window, so a ledger of a hundred thousand rows is
+/// not parsed twice. In a file that puts a row of the window after a row
+/// past it, that row goes unmarked. Where a file states one cell twice,
+/// the last statement that has a value is the one asked.
+fn volatile_cells(
+    workbook: &mut Xlsx<BufReader<File>>,
+    name: &str,
+    start: (u32, u32),
+    cancel: &CancellationToken,
+    found: &mut [bool],
+) -> Result<(), ExtractionError> {
+    let Ok(mut reader) = workbook.worksheet_cells_reader(name) else {
+        return Ok(());
+    };
+    // The shared formulas that call TODAY or NOW, by their index in the
+    // sheet. No more are remembered than a window has cells.
+    let mut volatile_groups = HashSet::new();
+    let mut seen = 0_u64;
+    while let Ok(Some(cell)) = reader.next_cell_with_formula_metadata() {
+        if seen % 1_024 == 0 {
+            cancel.check()?;
+        }
+        seen += 1;
+        let (row, column) = cell.pos;
+        if row >= start.0 && row - start.0 >= MAX_SHEET_ROWS as u32 {
+            break;
+        }
+        let volatile = match &cell.formula {
+            None => false,
+            Some(XlsxFormulaMetadata::Normal { formula }) => calls_today_or_now(formula),
+            Some(XlsxFormulaMetadata::Shared {
+                shared_index,
+                formula,
+                ..
+            }) => {
+                let volatile = calls_today_or_now(formula);
+                if !volatile {
+                    volatile_groups.remove(shared_index);
+                } else if volatile_groups.len() < MAX_SHEET_ROWS * MAX_SHEET_COLS {
+                    volatile_groups.insert(*shared_index);
+                }
+                volatile
+            }
+            Some(XlsxFormulaMetadata::SharedDerived { shared_index }) => {
+                volatile_groups.contains(shared_index)
+            }
+            // A kind of formula this reader does not know is not said to
+            // be one that calls TODAY.
+            Some(_) => false,
+        };
+        let shown = row >= start.0
+            && column >= start.1
+            && in_window(row, column, start)
+            && !matches!(cell.value, DataRef::Empty);
+        if shown {
+            let at = (row - start.0) as usize * MAX_SHEET_COLS + (column - start.1) as usize;
+            if let Some(answer) = found.get_mut(at) {
+                *answer = volatile;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether a formula, as an Excel 2007 sheet states it, calls TODAY or
+/// NOW: the name on its own, in any case, with its opening parenthesis
+/// after it - `TODAY()`, `today()+30`, `IF(A1="",NOW(),A1)`. The same
+/// letters inside a string (`"due TODAY()"`), a quoted sheet name, a
+/// bracketed table column or a longer name (`ISNOW(`, `MY.TODAY(`) call
+/// nothing.
+///
+/// What it does not see: a defined name that stands for such a formula
+/// (`=InvoiceDate`), and a cell that only refers to one that calls it
+/// (`=B3+30`).
+fn calls_today_or_now(formula: &str) -> bool {
+    let bytes = formula.as_bytes();
+    let names =
+        |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.') || byte >= 0x80;
+    let mut brackets = 0_usize;
+    let mut at = 0;
+    while at < bytes.len() {
+        let byte = bytes[at];
+        if brackets > 0 {
+            match byte {
+                b'[' => brackets += 1,
+                b']' => brackets -= 1,
+                _ => {}
+            }
+            at += 1;
+        } else if matches!(byte, b'"' | b'\'') {
+            // To the closing quote; a doubled quote inside reads as one
+            // quoted stretch ending and the next beginning.
+            at += 1;
+            while at < bytes.len() && bytes[at] != byte {
+                at += 1;
+            }
+            at += 1;
+        } else if byte == b'[' {
+            brackets = 1;
+            at += 1;
+        } else if names(byte) {
+            let word = at;
+            while at < bytes.len() && names(bytes[at]) {
+                at += 1;
+            }
+            let name = &bytes[word..at];
+            if name.eq_ignore_ascii_case(b"TODAY") || name.eq_ignore_ascii_case(b"NOW") {
+                let mut after = at;
+                while bytes.get(after) == Some(&b' ') {
+                    after += 1;
+                }
+                if bytes.get(after) == Some(&b'(') {
+                    return true;
+                }
+            }
+        } else {
+            at += 1;
+        }
+    }
+    false
 }
 
 /// Reads an OpenDocument spreadsheet (`.ods`) through the same window as
@@ -802,14 +1004,16 @@ fn workbook_document(
         let Some(sheet) = sheet else {
             continue;
         };
-        let (text, sheet_elided) = render_sheet(name.as_deref(), &sheet);
-        elided |= sheet_elided;
-        pages.push(ExtractedPage::of_text_within(
+        let rendered = render_sheet(name.as_deref(), &sheet);
+        elided |= rendered.elided;
+        let mut page = ExtractedPage::of_text_within(
             pages.len() + 1,
-            text,
+            rendered.text,
             PageSource::AnyDoc,
             &mut budget,
-        ));
+        );
+        page.volatile_spans = rendered.volatile_spans;
+        pages.push(page);
     }
     if pages.is_empty() {
         return Err(ExtractionError::unsupported(
@@ -880,14 +1084,25 @@ fn prune_to_window(cells: &mut Vec<(u32, u32, String)>, start: (u32, u32)) {
     cells.retain(|(row, column, _)| in_window(*row, *column, start));
 }
 
+/// One sheet as a page's text.
+pub(crate) struct RenderedSheet {
+    pub(crate) text: String,
+    /// Whether any rows or columns past the window were left out.
+    pub(crate) elided: bool,
+    /// Where in `text` the sheet's volatile cells stand ([`CappedSheet`]),
+    /// each as the byte range of its cell's text, in reading order. A cell
+    /// that renders as nothing has no range.
+    pub(crate) volatile_spans: Vec<(usize, usize)>,
+}
+
 /// Renders one sheet as a pipe table - under `## name` when it has one -
-/// returning the text and whether any rows or columns were elided.
+/// and says whether any rows or columns were elided.
 ///
 /// Rows and columns past the last cell inside the window count as elided
 /// rather than being drawn as empty table cells: a sheet whose used range
 /// runs out to one stray far-away cell would otherwise render two hundred
 /// blank rows before admitting it left anything out.
-pub(crate) fn render_sheet(name: Option<&str>, sheet: &CappedSheet) -> (String, bool) {
+pub(crate) fn render_sheet(name: Option<&str>, sheet: &CappedSheet) -> RenderedSheet {
     let height = u64::from(sheet.end.0 - sheet.start.0) + 1;
     let width = u64::from(sheet.end.1 - sheet.start.1) + 1;
     let shown_rows = sheet
@@ -907,12 +1122,45 @@ pub(crate) fn render_sheet(name: Option<&str>, sheet: &CappedSheet) -> (String, 
         grid[(row - sheet.start.0) as usize][(column - sheet.start.1) as usize] = value.clone();
     }
 
+    // The volatile cells that show something, by their row and column in
+    // the grid, in reading order.
+    let mut volatile = sheet
+        .volatile
+        .iter()
+        .filter(|(row, column)| *row >= sheet.start.0 && *column >= sheet.start.1)
+        .map(|(row, column)| {
+            (
+                (row - sheet.start.0) as usize,
+                (column - sheet.start.1) as usize,
+            )
+        })
+        .filter(|&(row, column)| {
+            grid.get(row)
+                .and_then(|cells| cells.get(column))
+                .is_some_and(|cell| !cell.is_empty())
+        })
+        .collect::<Vec<_>>();
+    volatile.sort_unstable();
+    volatile.dedup();
+    let mut volatile = volatile.into_iter().peekable();
+    let mut volatile_spans = Vec::new();
+
     let mut text = match name {
         Some(name) => format!("## {}\n\n", sanitize_cell(name)),
         None => String::new(),
     };
     for (index, row) in grid.iter().enumerate() {
+        let line = text.len();
         text.push_str(&format!("| {} |\n", row.join(" | ")));
+        while let Some((_, column)) = volatile.next_if(|(at, _)| *at == index) {
+            // "| " opens the line, and " | " stands between two cells.
+            let before = row[..column]
+                .iter()
+                .map(|cell| cell.len() + 3)
+                .sum::<usize>();
+            let start = line + 2 + before;
+            volatile_spans.push((start, start + row[column].len()));
+        }
         if index == 0 {
             text.push_str(&format!("| {} |\n", vec!["---"; shown_cols].join(" | ")));
         }
@@ -931,7 +1179,11 @@ pub(crate) fn render_sheet(name: Option<&str>, sheet: &CappedSheet) -> (String, 
         text.push_str(&marker);
         text.push('\n');
     }
-    (text, elided)
+    RenderedSheet {
+        text,
+        elided,
+        volatile_spans,
+    }
 }
 
 fn cell_text(data: &Data) -> String {
@@ -989,6 +1241,64 @@ mod tests {
         assert_eq!(cell_text(&Data::Int(-3)), "-3");
         assert_eq!(cell_text(&Data::Float(1.5)), "1.5");
         assert_eq!(cell_text(&Data::Bool(true)), "TRUE");
+    }
+
+    /// TODAY or NOW is called where its name stands on its own with its
+    /// parenthesis after it, however it is cased and whatever is around
+    /// it. The same letters in a string, a quoted sheet name, a table's
+    /// column or a longer name call nothing, and neither does a name
+    /// without its parenthesis.
+    #[test]
+    fn a_formula_calls_today_or_now_only_where_the_name_stands_on_its_own() {
+        for formula in [
+            "TODAY()",
+            "NOW()",
+            "today()",
+            "Now()",
+            "TODAY()+30",
+            "30+TODAY()",
+            "-NOW()",
+            "INT(NOW())",
+            "A1-TODAY()",
+            "EOMONTH(TODAY(),0)",
+            "IF(A1=\"\",TODAY(),A1)",
+            "TEXT(TODAY(),\"mmmm d, yyyy\")",
+            "\"Dated \"&TEXT(NOW(),\"d mmm\")",
+            "'Rates TODAY'!B2*NOW()",
+            "Table1[Amount]*TODAY()",
+            "TODAY ()",
+            "@TODAY()",
+        ] {
+            assert!(calls_today_or_now(formula), "{formula}");
+        }
+        for formula in [
+            "",
+            "A1+1",
+            "B3+30",
+            "TODAY",
+            "NOW+1",
+            "\"TODAY()\"",
+            "\"Pay by \"\"NOW()\"\" please\"",
+            "\"due \"&\"TODAY()\"",
+            "'NOW()'!A1",
+            "'It''s TODAY()'!B2",
+            "Table1[TODAY()]",
+            "Table1[[#This Row],[NOW()]]",
+            "ISNOW(A1)",
+            "KNOW()",
+            "SNOW(1)",
+            "TODAYS()",
+            "TODAY2()",
+            "2NOW()",
+            "_TODAY()",
+            "MY.TODAY()",
+            "TODAY.X()",
+            "NOWÉ()",
+            "ÉNOW()",
+            "DATE(2026,3,3)",
+        ] {
+            assert!(!calls_today_or_now(formula), "{formula}");
+        }
     }
 
     #[test]

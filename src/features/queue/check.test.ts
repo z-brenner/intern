@@ -24,7 +24,7 @@ describe('the Check column', () => {
       'DATE_MISSING', 'DATE_UNSUPPORTED', 'TYPE_MISSING', 'TYPE_UNSUPPORTED', 'TYPE_INFERRED',
       'PARTY_UNSUPPORTED', 'PARTY_MISSING', 'DESCRIPTION_UNSUPPORTED', 'DESCRIPTION_INVALID',
       'LOW_CONFIDENCE', 'MODEL_REQUESTED_REVIEW', 'PARSER_WARNING', 'DATE_IMPLAUSIBLE',
-      'DATE_IS_DEADLINE', 'DATE_AMBIGUOUS', 'DATE_IS_PERIOD', 'FAST_MODEL_READING',
+      'DATE_IS_DEADLINE', 'DATE_AMBIGUOUS', 'DATE_IS_PERIOD', 'DATE_IS_FORMULA', 'FAST_MODEL_READING',
     ];
     for (const code of codes) expect(shortReason([code]), code).toBeDefined();
     expect(shortReason(['PARTY_MISSING'])).toEqual({ text: 'Party missing', more: 0 });
@@ -32,6 +32,9 @@ describe('the Check column', () => {
     // A date that is only one end of a period leads over the model's doubt, and marks the date.
     expect(shortReason(['LOW_CONFIDENCE', 'DATE_IS_PERIOD'])).toEqual({ text: 'Date is a period\'s start or end', more: 1 });
     expect(itemFlaggedFields(review({ reasonCodes: ['DATE_IS_PERIOD'] }))).toEqual(['date']);
+    // So does a date that only a TODAY or NOW formula shows.
+    expect(shortReason(['LOW_CONFIDENCE', 'DATE_IS_FORMULA'])).toEqual({ text: 'Date comes from a formula', more: 1 });
+    expect(itemFlaggedFields(review({ reasonCodes: ['DATE_IS_FORMULA'] }))).toEqual(['date']);
   });
 
   it('says what to check for a review, and that the checks passed for a ready row', () => {

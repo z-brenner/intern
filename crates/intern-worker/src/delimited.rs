@@ -65,10 +65,10 @@ pub fn extract_delimited(
             "delimited file contains no readable fields",
         ));
     };
-    let (text, elided) = render_sheet(None, &sheet);
+    let rendered = render_sheet(None, &sheet);
     Ok(elided_document(
-        vec![ExtractedPage::of_text(1, text, PageSource::AnyDoc)],
-        elided,
+        vec![ExtractedPage::of_text(1, rendered.text, PageSource::AnyDoc)],
+        rendered.elided,
     ))
 }
 

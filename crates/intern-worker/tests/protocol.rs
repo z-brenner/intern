@@ -426,6 +426,13 @@ fn a_page_longer_than_the_cap_is_truncated_before_it_is_emitted() {
                     ocr_confidence: None,
                     vision_escalated: false,
                     layout: Some(intern_worker::layout::PageLayout::of_text(1, "é")),
+                    // Marked stretches of the text, in bytes: one that is
+                    // kept whole, one the cut runs through, one past it.
+                    volatile_spans: vec![
+                        (4, 8),
+                        (2 * MAX_PAGE_CHARS - 2, 2 * MAX_PAGE_CHARS + 2),
+                        (2 * MAX_PAGE_CHARS + 10, 2 * MAX_PAGE_CHARS + 12),
+                    ],
                 },
                 intern_worker::extract::ExtractedPage::of_text(
                     2,
@@ -465,6 +472,10 @@ fn a_page_longer_than_the_cap_is_truncated_before_it_is_emitted() {
     let pages = &parsed["event"]["document"]["pages"];
     assert!(pages[0].get("layout").is_none(), "{}", pages[0]["layout"]);
     assert_eq!(pages[1]["layout"]["blocks"][0]["id"], "p2.b1");
+    // A marked stretch names bytes of the text, so only one that is still
+    // inside the cut text goes out; a page with none says nothing of them.
+    assert_eq!(pages[0]["volatile_spans"], serde_json::json!([[4, 8]]));
+    assert!(pages[1].get("volatile_spans").is_none(), "{}", pages[1]);
 }
 
 /// Layouts have a budget of their own, in the bytes they are written as: a
@@ -577,6 +588,7 @@ fn layouts_get_only_what_escaped_text_and_the_page_image_leave_of_the_line() {
                     2 => layout(number, MAX_LAYOUT_BYTES - 64 * 1024),
                     _ => layout(number, 1_000),
                 },
+                volatile_spans: Vec::new(),
             })
             .collect();
         Ok(ExtractedDocument {
@@ -708,6 +720,7 @@ fn page(number: usize, text: String) -> intern_worker::extract::ExtractedPage {
         ocr_confidence: None,
         vision_escalated: false,
         layout: None,
+        volatile_spans: Vec::new(),
     }
 }
 
