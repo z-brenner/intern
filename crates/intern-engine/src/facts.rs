@@ -9236,6 +9236,103 @@ Payment terms: net 30. Remit to Halvorsen Fixture Works LLC.";
             "{:?}",
             outcome.reasons
         );
+        // So is a lease, an agreement: its term starts on its date.
+        let (outcome, _) = facts_for(
+            "LEASE AGREEMENT\n\nThis Lease Agreement is made between Hollowmere Estates LLC \
+             (\"Landlord\") and Fernvale Craft Brewing Cooperative (\"Tenant\").\n\n\
+             Term: January 1, 2026 through December 31, 2026",
+            |index| ModelFacts {
+                document_type: Some("Lease Agreement".into()),
+                type_evidence: vec![id_of(index, "LEASE AGREEMENT")],
+                document_date: Some("2026-01-01".into()),
+                date_evidence: vec![id_of(index, "Term:")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-01-01")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::DateIsPeriod),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// The index keeps the first of a line that repeats from page to page
+    /// and sets the others aside as running lines. A date one of those
+    /// states on its own - the second of three months' invoices scanned as
+    /// one file, each under the same "Billed" line - is stated on its own
+    /// all the same, and is no period's end only.
+    #[test]
+    fn a_date_a_running_line_states_on_its_own_is_no_periods_end_only() {
+        let scan = |billed: &str| {
+            let page = |billed: &str, lines: &str| {
+                format!(
+                    "Quillon Therapy Services LLC\n12 Quay Street, Brackenridge\n\nINVOICE\n\n\
+                     Billed {billed}\n\nBill To: Brackenridge Public Schools\n\n{lines}"
+                )
+            };
+            EvidenceIndex::build(&DocumentSource::from_pages(
+                [
+                    page(
+                        "08/01/2017",
+                        "Speech therapy sessions in July, 80 at $1.00, $80.00",
+                    ),
+                    page(
+                        billed,
+                        "Service Period: 9/1/2017- 9/30/2017\n\n\
+                         Speech therapy sessions, 76 at $1.00, $76.00",
+                    ),
+                    page(
+                        "10/01/2017",
+                        "Occupational therapy assessments, 4 at $16.00, $64.00",
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(at, text)| {
+                    crate::domain::SourcePage::new(at + 1, text, PageOrigin::PlainText)
+                })
+                .collect(),
+            ))
+        };
+        let held = |billed: &str| {
+            let index = scan(billed);
+            // The second page's "Billed" line is a running line.
+            assert!(
+                index
+                    .units()
+                    .iter()
+                    .any(|unit| unit.running && unit.text.contains(billed)),
+                "{billed}"
+            );
+            let facts = ModelFacts {
+                document_type: Some("Invoice".into()),
+                type_evidence: vec![id_of(&index, "INVOICE")],
+                document_date: Some("2017-09-01".into()),
+                date_evidence: vec![id_of(&index, "Service Period")],
+                parties: vec![party(
+                    "Quillon Therapy Services LLC",
+                    Some(PartyRole::Issuer),
+                    &[id_of(&index, "Quillon Therapy")],
+                )],
+                ..ModelFacts::default()
+            };
+            let outcome = check(facts, &whole(&index), &index);
+            assert_eq!(
+                outcome.proposal.document_date.as_deref(),
+                Some("2017-09-01"),
+                "{billed}: {:?}",
+                outcome.reasons
+            );
+            outcome.reasons.contains(&ReviewReason::DateIsPeriod)
+        };
+        assert!(!held("09/01/2017"));
+        // The running line gives another day: the date stands only as the
+        // period's first.
+        assert!(held("09/02/2017"));
     }
 
     /// InternBench's mixed-signature-region, as its text reads: the
@@ -17652,6 +17749,8 @@ Held on March 3, 2024 at the offices of Corvane Media Group LLC.";
             ("Meeting Minutes", true),
             ("Consent to Assignment of Lease", true),
             ("Review Letter", false),
+            // A kind of letter, though a record ends its opening phrase.
+            ("Letter Report on Site Investigation", false),
             ("Approval of Closure Plan", false),
             ("EPA Approval of Closure Plan", false),
             ("Closure Plan Approval", false),
