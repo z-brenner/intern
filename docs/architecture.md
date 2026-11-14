@@ -842,14 +842,57 @@ dialog has closed, the focus goes back to what opened it.
 With no dialog open, the focus the queue takes back for itself never goes to
 a button that acts, nor to another row's cell. When the row review was
 opened from is gone, it went to the toolbar's primary action, Rename all
-ready; and the selected document can leave the queue by itself - its file
-taken from the Queue folder, or filed by another machine - while a person is
-typing its name or its description, so the next space bar typed renamed
-every ready document. It goes to the button of the view already shown, where
-the space bar and Enter change nothing; with nothing in the queue at all, it
-goes nowhere. What is typed after that is no longer stopped: J and K select a
-row and put the focus on its cell, as from anywhere outside a field, and
-Enter there opens the row's details at its name.
+ready, and the next space bar renamed every ready document. It goes to the
+button of the view already shown, where the space bar and Enter file nothing
+(they show that view again, with nothing selected); with nothing in the
+queue at all, it goes nowhere. That is for a row that went by itself. One
+the person has just decided - removed with Delete and Enter on the question,
+or the last one approved - leaves them in the queue, not in the middle of a
+sentence, and the focus goes to the cell the table keeps for Tab (with
+nothing selected, the first row's), where the arrow keys go on; the window
+tells the two apart by whether a decision of the person's is being carried
+out for that document. And the focus is never taken out of a field: a caret
+in the filter, a name or a description is someone typing, and the words
+typed next would land on whatever the focus was moved to.
+
+A name or a description with the caret in it leaves the screen only by
+something the person did. Its field can go by itself: the document is read
+again (`reanalyze_provisional` sends every untouched provisional reading
+back at once when the accurate model becomes usable, and typing is not
+touching), is given another proposal where it waits, is filed from another
+machine, or leaves the queue; or the panel closes as the window changes
+width. The caret went with the field, to nothing, and what the person typed
+next was review's keys: the rest of a sentence moved the selection (J, K),
+opened a document at its name and filed it (Enter, Enter), approved one
+(Ctrl+Enter), kept one (Alt+K) or removed one (Delete, Enter) - documents
+nobody had looked at, one of them held for a spelling nobody had checked.
+The window tells this by what happened to the field, not by a list of
+causes: the field the caret was in as a render began (`typingInReview`) is
+gone from the page once it is committed, and nothing the person did took
+it - they did not choose another row or view, go to the next undecided,
+close the panel or discard a kept text in that commit, and no decision of
+theirs is being carried out for that document (approve, keep, remove, read
+again, retry, cancel, undo). A decision the backend refuses is not one
+being carried out: a document read again just as Enter files its name is
+refused, and has changed by itself. Then what the fields held stays on
+screen, read-only, and the caret goes into it (`TypedKept`): in the panel
+while the panel still shows that document, above the queue otherwise. A
+read-only field is a field, so a letter typed there is nothing; no review
+key acts from one (`useReviewShortcuts`), Ctrl+Enter, Alt+K and Alt+N
+included; and it goes only by its own button. Tab does not take the caret
+out of it either: a person in a name presses Tab to go on to the
+description, and on the button under the text a space typed next would
+press it, and J, K and Ctrl+Enter would be review's keys again. Escape
+moves the focus to that button, and the text says so; a press anywhere is
+the other way out. An add that finishes while a name is being typed does
+not move the selection to the new row, and the queue's filter box stays
+while the caret is in it, however few rows are left.
+
+A drawer is asked for at the narrow width it opens at. Asked for once, it
+used to open again by itself each time the window was next made narrower
+than 1100px, over whatever row was selected by then and with the caret in
+that row's name, even after Close review at the wide width: the Enter meant
+for the row's cell, which opens details there, filed the document.
 
 What a question cannot rule out is a person who means to fill the field
 without reading it. An input method can commit any text through a
@@ -956,13 +999,31 @@ document. Outliving the panel, a draft is shown only over the proposal it
 was typed over: the document, and its proposal's revision, name and sentence
 (`proposalOf`). The revision alone does not say which reading a proposal is
 from - a new reading is numbered from 1 again - and under it a name typed
-over one reading would come back over the next. A draft is forgotten once
-its document is seen with another proposal or none (`forgetOutdatedDrafts`):
-sent back by Analyze again or read again by itself, even to the same words,
-a document shows its new reading. A document missing from a list that could
-not be read is not a document that changed, and keeps its draft. A field
-shown again has no undo history, so Ctrl+Z there does not go back to the
-proposal; the queue's row still shows it.
+over one reading would come back over the next. A draft leaves the fields
+once its document is seen with another proposal or none, or can no longer
+be filed under the one it has: read again, even to the same words, a
+document shows its new reading. But only the person drops what they typed.
+Their own decision does - filing the document, keeping its name, removing
+it, Analyze again, or Retry of a document Intern could not read. A change
+nobody asked for used to as well, and a re-reading threw away a name and a
+sentence without a word; it sets the draft aside instead
+(`setAsideOutdatedDrafts`, `EarlierDrafts`), and the panel shows it above
+the document as it now is, read-only, until it is discarded. A document
+missing from a list that could not be read is not a document that changed,
+and keeps its draft. Rename all ready sends Intern's proposal for each
+ready document, so it leaves alone one with something typed and not filed
+(`typedAndNotFiled`) - in its fields or set aside - counts what it will
+rename, and says how many it left; it used to file the proposal over the
+typed name and say "Renamed 3 documents". Typed means differing from the
+proposal: a name typed and taken back, letter by letter, is Intern's again
+and no draft. A field shown again has no undo history, so Ctrl+Z there does
+not go back to the proposal, and Escape, which closes the drawer, no longer
+throws an edit away. "Back to Intern's proposal", in the heading above the
+name while the fields differ from the proposal, does: it drops the draft
+and shows the proposal in fields of their own, so no undo step of the old
+ones is left to put the old text after the new. There is no button that
+puts a set-aside text back into the fields: it is copied from where it is
+kept.
 
 ## Model and runtime
 
