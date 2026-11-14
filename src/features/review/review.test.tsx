@@ -4,6 +4,7 @@ import { App } from '../../App';
 import { ReviewInspector } from '../../components/ReviewInspector';
 import { detailsToggle, openDetails, openRow, queueCell, selectRow as selectByName } from '../queue/gridTesting';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
+import type { QueueEventSource } from '../../lib/tauriBridge';
 import type { QueueItem } from '../../types';
 
 describe('review actions', () => {
@@ -663,6 +664,61 @@ describe('review actions', () => {
       for (const button of within(queue).getAllByRole('button')) expect(button).not.toHaveFocus();
     });
   }
+
+  // That rule is for a row that went by itself. A document the person has
+  // just removed from the keyboard - Delete, and Enter on the question -
+  // leaves them in the queue, and the focus used to land on a cell, where the
+  // arrow keys go on; under the rule above it landed on the view's button,
+  // where they move nothing. The queue says it changed while the command is
+  // still answering, as the desktop backend's does.
+  it('moves focus to the table\'s own cell, not the view\'s button, when the person removes the document from the keyboard', async () => {
+    const base = createInMemoryBridge({ liveEvents: true }) as ReturnType<typeof createInMemoryBridge> & QueueEventSource;
+    let queueChanged = () => {};
+    const bridge = {
+      ...base,
+      subscribeQueue: (listener: Parameters<QueueEventSource['subscribeQueue']>[0]) => { queueChanged = () => listener({ type: 'changed' }); return base.subscribeQueue(listener); },
+      remove: vi.fn(async (id: string) => { await base.remove(id); queueChanged(); await new Promise((resolve) => setTimeout(resolve, 20)); }),
+      approve: vi.fn(base.approve),
+    };
+    render(<App bridge={bridge} />);
+    await screen.findByRole('grid', { name: 'Queue' });
+    await openDetails('Lease Agreement - 123 Main St.pdf');
+    screen.getByRole('heading', { name: 'Review item' }).focus();
+    fireEvent.keyDown(document.activeElement!, { key: 'Delete' });
+    const question = await screen.findByRole('group', { name: 'Confirm removal' });
+    fireEvent.click(within(question).getByRole('button', { name: 'Remove from queue' }));
+    await waitFor(() => expect(bridge.remove).toHaveBeenCalledWith('lease'));
+
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Review item' })).not.toBeInTheDocument());
+    // The cell the table keeps for Tab: with nothing selected, the first row's.
+    const cell = queueCell('Employment Agreement - John Smith.pdf');
+    await waitFor(() => expect(cell).toHaveFocus());
+    expect(cell).toHaveAttribute('tabindex', '0');
+    expect(screen.getByRole('button', { name: /^Queue, \d+$/ })).not.toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Rename all ready' })).not.toHaveFocus();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(cell).toHaveFocus();
+    expect(bridge.approve).not.toHaveBeenCalled();
+  });
+
+  // The same after the last decision there is to make: the row has left the
+  // view by the person's own approval, and nothing is left to move on to.
+  it('moves focus to the table\'s own cell when the last undecided document is approved and leaves the view', async () => {
+    const base = createInMemoryBridge({ items: [
+      { id: 'waiting', originalFilename: 'Still waiting.pdf', status: 'waiting' },
+      { id: 'lease', originalFilename: 'Lease.pdf', status: 'review', proposedFilename: '2023-09-15 Lease Agreement.pdf', confidence: 0.72, description: 'A lease.' },
+    ] });
+    const bridge = { ...base, approve: vi.fn(base.approve) };
+    render(<App bridge={bridge} />);
+    await screen.findByRole('grid', { name: 'Queue' });
+    await openDetails('Lease.pdf');
+    fireEvent.keyDown(screen.getByLabelText('Filename'), { key: 'Enter', ctrlKey: true });
+    await waitFor(() => expect(bridge.approve).toHaveBeenCalledWith('lease', '2023-09-15 Lease Agreement.pdf', 'A lease.'));
+    await waitFor(() => expect(screen.queryByRole('gridcell', { name: 'Lease.pdf' })).not.toBeInTheDocument());
+    const cell = queueCell('Still waiting.pdf');
+    await waitFor(() => expect(cell).toHaveFocus());
+    expect(screen.getByRole('button', { name: /^Queue, \d+$/ })).not.toHaveFocus();
+  });
 
   it('saves the automatic high-confidence rename setting', async () => {
     const base = createInMemoryBridge();

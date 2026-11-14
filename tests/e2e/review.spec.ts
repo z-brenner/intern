@@ -770,3 +770,29 @@ test('a name spoiled and kept through Escape is taken back with "Back to Intern\
   await page.getByRole('button', { name: /^Completed/ }).click();
   await expect(queueCell(page, LEASE, 'proposed')).toContainText(`${proposed}.pdf`);
 });
+
+/*
+  A document removed from the keyboard - Delete, and Enter on the question -
+  leaves the focus in the table, where the arrow keys go on. It had come to
+  land on the view's button, where they move nothing: that is where the focus
+  goes when a document leaves by itself, and nowhere else.
+*/
+for (const size of [WIDE, NARROW]) {
+  test(`a document removed from the keyboard leaves the focus on a cell of the table, at ${size.width}x${size.height}`, async ({ page }) => {
+    const EMPLOYMENT = 'Employment Agreement - John Smith.pdf';
+    const NDA = 'NDA - Acme Corp.docx';
+    await page.setViewportSize(size);
+    await page.goto('/?queue=changes');
+    const panel = await openDetails(page, LEASE);
+    await panel.locator('h2').focus();
+    await page.keyboard.press('Delete');
+    await expect(panel.getByRole('group', { name: 'Confirm removal' })).toBeVisible();
+    await page.keyboard.press('Enter');
+    await expect(queueCell(page, LEASE)).toHaveCount(0);
+    await expect(page.locator('#review-panel')).toHaveCount(0);
+    await expect(queueCell(page, EMPLOYMENT)).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(queueCell(page, NDA)).toBeFocused();
+    await expect(page.locator('.queue-grid tr[aria-current="true"]')).toContainText(NDA);
+  });
+}

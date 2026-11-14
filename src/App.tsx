@@ -494,18 +494,19 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // row being filed was still on screen a moment before it left the view, and
   // every toolbar button was still disabled for the action in flight - so
   // focus went to <body> whenever there was no next item to go to.
-  const [queueFocus, setQueueFocus] = useState<{ version: number; element?: HTMLElement; itemId?: string }>();
+  const [queueFocus, setQueueFocus] = useState<{ version: number; element?: HTMLElement; itemId?: string; decided?: boolean }>();
   // `itemId`: a row to go to instead, once it is on screen - the document an
-  // undo has just put back in the queue.
-  const restoreQueueFocus = (itemId?: string) => {
+  // undo has just put back in the queue. `decided`: the row has gone by the
+  // person's own decision - approved, kept, removed - not by itself.
+  const restoreQueueFocus = (itemId?: string, decided = false) => {
     const invocation = reviewTrigger.current;
     reviewTrigger.current = null;
-    setQueueFocus({ version: ++focusRestoreVersion.current, ...(itemId ? { itemId } : { element: invocation?.element, itemId: invocation?.itemId }) });
+    setQueueFocus({ version: ++focusRestoreVersion.current, decided, ...(itemId ? { itemId } : { element: invocation?.element, itemId: invocation?.itemId }) });
   };
   useEffect(() => {
     if (!queueFocus) return;
     setQueueFocus(undefined);
-    const { version, element, itemId } = queueFocus;
+    const { version, element, itemId, decided } = queueFocus;
     if (focusRestoreVersion.current !== version) return;
     // Never out of a field. The queue takes the focus back when what had it
     // has gone; a field with the caret in it - the filter, a name, what is
@@ -525,15 +526,25 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     // it. The focus goes to the button of the view already shown, where the
     // space bar and Enter file nothing; with nothing in the queue at all
     // there is no such button, and it goes nowhere.
+    //
+    // That is for a row that went by itself. One the person has just decided
+    // - Delete and Enter on the question, or the last approval - leaves them
+    // in the queue, not in the middle of a sentence: the focus goes to the
+    // cell the table keeps for Tab (with nothing selected, the first row's),
+    // as it did before that rule, and the arrow keys go on from there. From
+    // the view's button they moved nothing.
     const target = element?.isConnected
       ? element
-      : refreshedTrigger ?? document.querySelector<HTMLElement>('.queue-panel .view-switch [aria-current="page"]');
+      : refreshedTrigger
+        ?? (decided ? document.querySelector<HTMLElement>('.queue-panel .queue-grid [tabindex="0"]') : null)
+        ?? document.querySelector<HTMLElement>('.queue-panel .view-switch [aria-current="page"]');
     target?.focus();
   }, [queueFocus]);
   useEffect(() => {
     if (!selectedId || selected) return;
     setSelectedId(undefined);
-    restoreQueueFocus();
+    // Gone from the queue: by the person's own decision if one is being carried out for it.
+    restoreQueueFocus(undefined, own.deciding === selectedId);
   }, [selected, selectedId]);
   // A drawer emptied by its item leaving (filed, removed) is closed, not left
   // to spring open again over the next row a person clicks.
@@ -638,7 +649,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     const next = nextUndecided(before, item.id, shown(fresh ?? items));
     if (!next) {
       setSelectedId(undefined);
-      restoreQueueFocus();
+      restoreQueueFocus(undefined, true);
       return;
     }
     // A selection change of its own, so the focus restore that a disappearing
