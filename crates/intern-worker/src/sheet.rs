@@ -907,7 +907,10 @@ fn legacy_sheet_volatile_cells(stream: &[u8], offset: usize, room: usize) -> Vec
                     continue;
                 };
                 if !tokens_call_today_or_now(tokens) {
+                    // Stated again for a cell an earlier formula was
+                    // stated for: this one is the cell's, and its cells'.
                     volatile_anchors.remove(&anchor);
+                    volatile.remove(&cell);
                 } else if volatile_anchors.len() < MAX_LEGACY_VOLATILE_CELLS {
                     volatile_anchors.insert(anchor);
                     if volatile.len() < room {
@@ -2175,6 +2178,15 @@ mod tests {
             formula(31, 1, &pointer_at(30, 1)),
             formula(32, 1, &pointer_at(32, 1)),
             array_formula(32..=32, 1, &B1_PLUS_ONE),
+            // Rows 50 and 51 share TODAY(). Then a formula that calls
+            // neither is stated for the same cell, under row 52, and row
+            // 53 points at it: the last one stated is theirs.
+            formula(50, 1, &pointer_at(50, 1)),
+            shared_formula(50..=51, 1, &TODAY),
+            formula(51, 1, &pointer_at(50, 1)),
+            formula(52, 1, &pointer_at(50, 1)),
+            shared_formula(52..=53, 1, &B1_PLUS_ONE),
+            formula(53, 1, &pointer_at(50, 1)),
         ];
         let second = vec![number_cell(0, 0), formula(2, 1, &NOW)];
         let stream = biff8_workbook_of(&[first.clone(), second.clone()]);
@@ -2182,7 +2194,16 @@ mod tests {
         assert_eq!(
             legacy_volatile_cells(&stream),
             [
-                vec![(2, 1), (10, 1), (11, 1), (12, 1), (30, 1), (31, 1)],
+                vec![
+                    (2, 1),
+                    (10, 1),
+                    (11, 1),
+                    (12, 1),
+                    (30, 1),
+                    (31, 1),
+                    (50, 1),
+                    (51, 1)
+                ],
                 vec![(2, 1)]
             ]
         );
@@ -2204,7 +2225,16 @@ mod tests {
         assert_eq!(
             legacy_volatile_cells(&one_older),
             [
-                vec![(2, 1), (10, 1), (11, 1), (12, 1), (30, 1), (31, 1)],
+                vec![
+                    (2, 1),
+                    (10, 1),
+                    (11, 1),
+                    (12, 1),
+                    (30, 1),
+                    (31, 1),
+                    (50, 1),
+                    (51, 1)
+                ],
                 vec![]
             ]
         );
