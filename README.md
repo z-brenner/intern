@@ -178,8 +178,9 @@ review panel for the selected row, and it stays open, following the selection,
 until it is closed. A name or a description typed there and not filed stays
 with its document - through closing the panel, making the window narrower or
 wider, and going on to other documents - until you file the document, decide
-it some other way, or have it read again. If the document changes by itself
-meanwhile - Intern reads it again, or another computer files it - the panel
+it some other way, have it read again, or close Intern. If the document
+changes by itself meanwhile - Intern reads it again, or another computer
+files it - the panel
 shows it as it now is, and what you had typed is kept beside it, read-only,
 until you discard it. If that happens while you are typing, or the panel
 closes under the cursor, the cursor stays in what you had typed: nothing typed

@@ -136,7 +136,20 @@ What this is, and is not:
 
 - The people and processes that proposed, built and reviewed the round's
   rules did not open this set, its gold or its replays; the round's brief
-  forbade it and each reported that it had not.
+  forbade it and each reported that it had not. They did not work blind to
+  it, though, because the brief they worked from was written by the round's
+  coordinator, who had read the result above:
+  - the brief to the analysts of names filed without review described the
+    class the wrong name of this set belongs to ("a letter whose 'Re:' line
+    names what the letter is about (a consultation, a review, another
+    document)"), giving two development documents as its known instances;
+  - the brief to the analysts of types and dates quoted two wrong names
+    from this set's readings as examples of mechanisms ("Attachment B
+    Invoice", real7-invoice-04; "OrdinanceResolution", real7-form-04). The
+    analyst found neither in the development recordings and proposed no
+    rule from them; both readings are unchanged;
+  - seven of the twelve analysts and skeptics reported having seen this
+    set's totals in the subject of the commit that added the report above.
 - **The round's coordinator had read the result above before the round
   began**, including that real7-letter-07 was filed wrong and why. One of
   the round's rules (a record at the head of a letter's subject line is the
@@ -156,6 +169,8 @@ What this is, and is not:
   All of them were in review before and after.
 - So on documents the rules were not written from, the round's net effect
   on names is nothing (one gained, one lost), where the development
-  recordings it was written from show 33 more right of 1,224 readings. The
+  recordings it was written from show 33 more right of 1,224 readings
+  (three of them after the reference accepted one party's name as its
+  document spells it, a change made after seeing the result). The
   difference is what fitting to a set is, and is why this set is kept.
 
