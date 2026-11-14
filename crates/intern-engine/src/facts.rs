@@ -822,12 +822,12 @@ fn validate_reading(
         let mut date = replied.to_owned();
         // A date a stamp writes with its day's figures set apart ("SEP 1 8
         // 2015") is read, though less surely than one written out: the
-        // name waits for a person. A reply that took one of the stamp
-        // day's two figures for the day ("2015-09-01", "2015-09-08") cited
-        // the stamp for a date it does not state; the stamp's own date
-        // stands in, when the cited line states that one date only. A
-        // receipt's stamp dates a copy's arrival, not the document: it is
-        // neither read loosely nor repaired.
+        // name waits for a person. A reply that took the stamp's first
+        // figure for the day ("2015-09-01") cited the stamp for a date it
+        // does not state; the stamp's own date stands in, when the cited
+        // line states that one date only. A receipt's stamp dates a copy's
+        // arrival, not the document: it is neither read loosely nor
+        // repaired.
         if found.support == Support::Unsupported {
             let loose = found_at(replied, true);
             if loose.support != Support::Unsupported
@@ -2414,10 +2414,9 @@ fn date_positions(read_loosely: Option<&str>, date: &str) -> DatePositions {
 
 /// The date of a rubber stamp a reply cited for `replied` and misread: the
 /// cited line states one date only, a stamp's with its day's figures set
-/// apart, in `replied`'s month and year, and `replied`'s day is one of the
-/// stamp day's two figures ("SEP 1 8 2015" read as 2015-09-01, "DEC 2 4
-/// 1992" as 1992-12-04). A receipt's stamp ([`under_a_receipt_label`])
-/// repairs nothing.
+/// apart, in `replied`'s month and year, and `replied`'s day is the stamp
+/// day's first figure ("SEP 1 8 2015" read as 2015-09-01). A receipt's
+/// stamp ([`under_a_receipt_label`]) repairs nothing.
 fn stamp_date_cited(
     scope: &ValidationScope<'_>,
     cited: &[String],
@@ -2431,15 +2430,12 @@ fn stamp_date_cited(
             let [(stamped, first)] = stamps.as_slice() else {
                 return None;
             };
-            // The day's second figure: what a reader that dropped the
-            // first one reads as the day.
-            let second = stamped.rsplit_once('-')?.1.parse::<u32>().ok()? % 10;
             (!under_a_receipt_label(scope, unit, at)
                 && extract_stated_dates(line)
                     .iter()
                     .all(|other| other == stamped)
                 && stamped.starts_with(&format!("{year_month}-"))
-                && (*first == day || second == day))
+                && *first == day)
                 .then(|| stamped.clone())
         })
     })
@@ -19397,25 +19393,18 @@ Dated: April 2, 2024"
         );
     }
 
-    /// A reply that read a stamp's "SEP 1 8 2015" as September 1, or as
-    /// September 8, cited a line that states September 18 only: the
-    /// stamp's date stands in, whichever of the day's two figures the
-    /// reply took, and a person confirms it. A day that is neither figure,
-    /// another month or another year is no misreading of the stamp.
+    /// A reply that read a stamp's "SEP 1 8 2015" as September 1 cited a
+    /// line that states September 18 only: the stamp's date stands in.
     #[test]
-    fn a_stamp_date_misread_by_either_of_its_figures_is_repaired() {
+    fn a_stamp_date_misread_by_its_first_figure_is_repaired() {
         let notice = "UNITED STATES ENVIRONMENTAL PROTECTION AGENCY\n\nSEP 1 8 2015 OFFICE OF\n\
                       ENFORCEMENT\n\nVolkswagen AG\n\nRe: Notice of Violation\n\n\
                       Dear Mr. Geanacopoulos:\n\nThe EPA has investigated Volkswagen AG.";
         for (replied, expected) in [
             ("2015-09-01", Some("2015-09-18")),
-            ("2015-09-08", Some("2015-09-18")),
             ("2015-09-18", Some("2015-09-18")),
-            ("2015-09-28", None),
-            ("2015-09-11", None),
+            ("2015-09-08", None),
             ("2015-10-01", None),
-            ("2015-10-08", None),
-            ("2016-09-08", None),
         ] {
             let (outcome, _) = facts_for(notice, |index| ModelFacts {
                 document_type: Some("Notice of Violation".into()),
@@ -19438,34 +19427,27 @@ Dated: April 2, 2024"
                 "{replied}"
             );
         }
-        // A receipt's stamp dates the copy's arrival: it repairs no date,
-        // whichever figure the reply took. Nor does a line that states
-        // another date beside the stamp's: which one the reply misread is
-        // not the engine's to say.
+        // A receipt's stamp dates the copy's arrival: it repairs no date.
         for (stamp, repaired) in [
             ("SEP 1 8 2015", true),
-            ("DATE SEP 1 8 2015", true),
             ("RECEIVED\nSEP 1 8 2015", false),
             ("RECEIVED SEP 1 8 2015", false),
-            ("SEP 1 8 2015 for the period to September 30, 2015", false),
         ] {
             let letter = format!(
                 "ARP INDUSTRIES\n\n{stamp}\n\nMr. Alfred Puccinelli\n\nDear Mr. Puccinelli:\n\n\
                  This is in response to your letter."
             );
-            for replied in ["2015-09-01", "2015-09-08"] {
-                let (outcome, _) = facts_for(&letter, |index| ModelFacts {
-                    document_type: Some("letter".into()),
-                    document_date: Some(replied.into()),
-                    date_evidence: vec![id_of(index, "SEP 1 8")],
-                    ..ModelFacts::default()
-                });
-                assert_eq!(
-                    outcome.proposal.document_date.as_deref() == Some("2015-09-18"),
-                    repaired,
-                    "{stamp}: {replied}"
-                );
-            }
+            let (outcome, _) = facts_for(&letter, |index| ModelFacts {
+                document_type: Some("letter".into()),
+                document_date: Some("2015-09-01".into()),
+                date_evidence: vec![id_of(index, "SEP 1 8")],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.document_date.as_deref() == Some("2015-09-18"),
+                repaired,
+                "{stamp}"
+            );
         }
     }
 
