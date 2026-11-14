@@ -750,11 +750,16 @@ aside. Only typing fills the field: a paste, a drop, a suggestion taken, a
 yank, an undo and autofill are refused, and the field asks the browser for
 no suggestions. A key types one character, so text put in outside a
 composition is taken one character at a time, or as many at once as keys
-were pressed in the field since its last input: an input method that shows
-no composition commits what its keys spelled, but a word put in at once
-with no keys for it - an input method's or an on-screen keyboard's
-clipboard, an emoji keyboard - is refused. Once the spelling is typed, the
-yes is an ordinary button, and Enter in the field answers.
+that type were pressed in the field since its last input: an input method
+that shows no composition commits what its keys spelled, but a word put in
+at once with no keys for it - an input method's or an on-screen keyboard's
+clipboard, an emoji keyboard - is refused. A key that types is a
+character's, an input method's (`Process`, `Unidentified`) or a dead key;
+an arrow, Enter, Home, Backspace, a function key, a modifier and a key held
+with Ctrl or Cmd type nothing and earn nothing - seven arrows, then a word
+put in at once, filled the field. Ctrl with Alt is AltGr on Windows, and
+types. Once the spelling is typed, the yes is an ordinary button, and Enter
+in the field answers.
 
 A check is for good, and the harm it can do is a wrong spelling - "John
 Smith" written as "John Smith, Jane Doe" - filed without review on every

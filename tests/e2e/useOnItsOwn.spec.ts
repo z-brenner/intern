@@ -335,6 +335,11 @@ test('a word put in at once with no keys for it puts nothing in the field, and a
   await cdp.send('Input.insertText', { text: 'Contoso' });
   await keysTaken(2);
   await cdp.send('Input.insertText', { text: 'Contoso' });
+  // Nor after keys that type nothing: an arrow, Enter, Home, Ctrl+A.
+  for (const key of ['ArrowLeft', 'Enter', 'Home', 'Control+A']) {
+    for (let pressed = 0; pressed < 7; pressed += 1) await page.keyboard.press(key);
+    await cdp.send('Input.insertText', { text: 'Contoso' });
+  }
   await page.waitForTimeout(100);
   await expect(field).toHaveValue('');
   await expect(yes).toBeDisabled();

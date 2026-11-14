@@ -78,7 +78,8 @@ function characters(text: string): number {
  * composition, a deletion. A key types one character, and an input method
  * that shows no composition commits what its keys spelled, so text put in
  * outside a composition is taken one character at a time, or as many at
- * once as keys were pressed for it since the last input (`keys`). Not a
+ * once as keys that type (`typesText`) were pressed for it since the last
+ * input (`keys`) - an arrow, Enter or Ctrl+A earns nothing. Not a
  * paste, a drop, a suggestion taken (a spelling, an autocorrection,
  * autofill, which says no input type at all), a yank, an undo, nor a word
  * put in at once with no keys for it: an input method's clipboard, an
@@ -90,8 +91,19 @@ const typing = (event: InputEvent, keys: number) => {
   return type === 'insertCompositionText' || type === 'insertFromComposition' || type.startsWith('delete');
 };
 
-/** Keys that type nothing on their own. */
-const MODIFIERS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 'CapsLock', 'Fn', 'FnLock', 'NumLock', 'ScrollLock', 'Hyper', 'Super', 'Symbol', 'SymbolLock']);
+/** A key's name, not the character it types: Enter, ArrowLeft, F5, Shift, Process. */
+const NAMED_KEY = /^[A-Z][A-Za-z0-9]+$/;
+/** The named keys an input method or a dead key types with. */
+const TYPING_KEYS = new Set(['Process', 'Unidentified', 'Dead']);
+
+/**
+ * Whether a key types: a character key, or an input method's key or a
+ * dead key - not an arrow, Enter, Home, Backspace, a function key or a
+ * modifier, nor a key held with Ctrl or Cmd (Ctrl with Alt is AltGr on
+ * Windows, which types). Only these earn the text put in at once (`typing`).
+ */
+const typesText = (event: { key: string; ctrlKey: boolean; altKey: boolean; metaKey: boolean }) =>
+  (!NAMED_KEY.test(event.key) || TYPING_KEYS.has(event.key)) && (!event.ctrlKey || event.altKey) && !event.metaKey;
 
 /**
  * The question "Use on its own" asks before it checks a spelling, where the
@@ -193,7 +205,7 @@ function Question({ rule, describedBy, note, disabled, onConfirm, onCancel }: Qu
         onPaste={(event) => event.preventDefault()}
         onDrop={(event) => event.preventDefault()}
         onKeyDown={(event) => {
-          if (!MODIFIERS.has(event.key)) keys.current += 1;
+          if (typesText(event)) keys.current += 1;
           // An input method's keys, the Enter that commits what it composed among them.
           const composing = event.nativeEvent.isComposing || event.keyCode === 229;
           if ((event.key === 'Tab' || event.key === 'Escape') && !composing) return;

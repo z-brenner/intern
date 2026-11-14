@@ -443,6 +443,27 @@ describe('using a held document\'s spelling on its own', () => {
         expect(field, `${keys} keys`).toHaveValue('');
         expect(yes, `${keys} keys`).toBeDisabled();
       }
+      // Keys that type nothing earn nothing: an arrow, Enter, Home, a
+      // function key, Backspace, a modifier, a key held with Ctrl or Cmd.
+      const typeNothing = [
+        { key: 'ArrowLeft' }, { key: 'ArrowLeft', repeat: true }, { key: 'Enter' }, { key: 'Home' }, { key: 'F5' },
+        { key: 'Backspace' }, { key: 'Shift' }, { key: 'a', ctrlKey: true }, { key: 'v', metaKey: true },
+      ];
+      for (const key of typeNothing) {
+        for (let pressed = 0; pressed < 7; pressed += 1) fireEvent.keyDown(field, key);
+        insertAtOnce(field, 'Contoso', 0);
+        expect(field, JSON.stringify(key)).toHaveValue('');
+      }
+      // A character key does, and so do an input method's keys, a dead key, Alt (Option) and AltGr (Ctrl+Alt).
+      const typeSomething = [
+        { key: 'c' }, { key: ' ' }, { key: 'Unidentified', keyCode: 229 }, { key: 'Dead' }, { key: 'å', altKey: true }, { key: 'ł', ctrlKey: true, altKey: true },
+      ];
+      for (const key of typeSomething) {
+        for (let pressed = 0; pressed < 7; pressed += 1) fireEvent.keyDown(field, key);
+        insertAtOnce(field, 'Contoso', 0);
+        expect(field, JSON.stringify(key)).toHaveValue('Contoso');
+        clearField(field);
+      }
       // Keys pressed before a character went in are spent on it.
       for (let key = 0; key < 7; key += 1) fireEvent.keyDown(field, { key: 'Process', keyCode: 229 });
       typeInto(field, 'C');
