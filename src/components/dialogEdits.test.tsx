@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { App } from '../App';
 import { createInMemoryBridge } from '../lib/inMemoryBridge';
+import type { DesktopBridge } from '../lib/bridge';
+import type { QueueBridgeEvent, QueueEventSource } from '../lib/tauriBridge';
 import { openRow } from '../features/queue/gridTesting';
 import type { QueueItem } from '../types';
 
@@ -72,6 +74,123 @@ describe('a dialog over the review window', () => {
       expect(allowed(behind, 'historyUndo')).toBe(true);
     } finally {
       behind.remove();
+    }
+  });
+});
+
+/**
+ * jsdom has no inert: focus() puts the focus in an inert subtree. A browser
+ * refuses it, and so does this, for the tests below; restored after each.
+ */
+function focusRefusedWhereInert() {
+  const focus = HTMLElement.prototype.focus;
+  return vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+    if (!this.closest('[inert]')) focus.call(this, options);
+  });
+}
+
+/*
+  Nothing behind Settings or Rename history takes the focus while it is
+  open. Shift+Tab after a press on the dialog's heading walked out to the
+  review panel's Approve & rename; the queue put the focus on Rename all
+  ready behind Settings when the selected document left it by itself; the
+  review drawer, opened again under Settings by a narrower window, put the
+  caret in the document's name. The keys typed next - the space bar,
+  Enter, a spelling - filed documents with Settings still open.
+*/
+describe('the window behind a dialog', () => {
+  it('is inert while Settings or Rename history is open, and the focus goes back to what opened it', async () => {
+    const refused = focusRefusedWhereInert();
+    try {
+      const { container } = render(<App bridge={createInMemoryBridge({ items: [filed, { id: 'lease', originalFilename: 'Lease Agreement - 123 Main St.pdf', status: 'review', proposedFilename: '2023-09-15 Lease.pdf' }] })} />);
+      await openRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+      const header = container.querySelector('.app-header')!;
+      const workspace = container.querySelector('.workspace')!;
+      const settings = screen.getAllByRole('button', { name: 'Settings' })[0];
+      settings.focus();
+      fireEvent.click(settings);
+      const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+      expect(header).toHaveAttribute('inert');
+      expect(workspace).toHaveAttribute('inert');
+      expect(dialog.closest('[inert]')).toBeNull();
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+      await waitFor(() => expect(dialog).not.toBeInTheDocument());
+      expect(header).not.toHaveAttribute('inert');
+      expect(workspace).not.toHaveAttribute('inert');
+      expect(settings).toHaveFocus();
+
+      fireEvent.click(await screen.findByRole('button', { name: /^Completed/ }));
+      const history = await screen.findByRole('button', { name: 'History' });
+      history.focus();
+      fireEvent.click(history);
+      const historyDialog = await screen.findByRole('dialog', { name: 'Rename history' });
+      expect(header).toHaveAttribute('inert');
+      expect(workspace).toHaveAttribute('inert');
+      expect(historyDialog.closest('[inert]')).toBeNull();
+      fireEvent.click(within(historyDialog).getByRole('button', { name: 'Close history' }));
+      await waitFor(() => expect(historyDialog).not.toBeInTheDocument());
+      expect(workspace).not.toHaveAttribute('inert');
+      expect(history).toHaveFocus();
+    } finally {
+      refused.mockRestore();
+    }
+  });
+
+  it('keeps the focus in Settings when the selected document leaves the queue by itself', async () => {
+    const refused = focusRefusedWhereInert();
+    try {
+      const base = createInMemoryBridge({ liveEvents: true }) as DesktopBridge & QueueEventSource;
+      let changed: ((event: QueueBridgeEvent) => void) | undefined;
+      const bridge = { ...base, subscribeQueue: async (listener: (event: QueueBridgeEvent) => void) => { changed = listener; return base.subscribeQueue(listener); } };
+      render(<App bridge={bridge} />);
+      const panel = await openRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+      await waitFor(() => expect(changed).toBeDefined());
+      fireEvent.click(screen.getAllByRole('button', { name: 'Settings' })[0]);
+      const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+      const machine = within(dialog).getByRole('textbox', { name: "This machine's name" });
+      machine.focus();
+      // Its file taken from the Queue folder, by a person or another machine.
+      await base.remove('lease');
+      act(() => changed!({ type: 'changed' }));
+      await waitFor(() => expect(panel).not.toBeInTheDocument());
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+      expect(machine).toHaveFocus();
+      expect(screen.getByRole('button', { name: 'Rename all ready' })).not.toHaveFocus();
+    } finally {
+      refused.mockRestore();
+    }
+  });
+
+  it('keeps Tab and Shift+Tab in the dialog from nothing and from behind it', async () => {
+    render(<App bridge={createInMemoryBridge({ items: [filed, { id: 'lease', originalFilename: 'Lease Agreement - 123 Main St.pdf', status: 'review', proposedFilename: '2023-09-15 Lease.pdf' }] })} />);
+    const panel = await openRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    const name = within(panel).getByRole('textbox', { name: 'Filename' });
+    for (const [label, open] of [
+      ['Settings', () => fireEvent.click(screen.getAllByRole('button', { name: 'Settings' })[0])],
+      ['Rename history', async () => { fireEvent.click(await screen.findByRole('button', { name: /^Completed/ })); fireEvent.click(await screen.findByRole('button', { name: 'History' })); }],
+    ] as const) {
+      await open();
+      const dialog = await screen.findByRole('dialog', { name: label });
+      // Its first control is Close, and Shift+Tab from it goes round to its last.
+      const first = within(dialog).getAllByRole('button')[0];
+      first.focus();
+      fireEvent.keyDown(first, { key: 'Tab', shiftKey: true });
+      const last = document.activeElement;
+      expect(dialog.contains(last) && last !== first).toBe(true);
+      for (const [where, focusOn] of [
+        ['on nothing, after a press on its heading', () => (document.activeElement as HTMLElement).blur()],
+        ['behind it', () => (label === 'Settings' ? name : screen.getByRole('button', { name: /^Queue/ })).focus()],
+      ] as const) {
+        focusOn();
+        expect(dialog.contains(document.activeElement), where).toBe(false);
+        fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Tab', shiftKey: true });
+        expect(document.activeElement, `Shift+Tab ${where}, in ${label}`).toBe(last);
+        focusOn();
+        fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Tab' });
+        expect(document.activeElement, `Tab ${where}, in ${label}`).toBe(first);
+      }
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+      await waitFor(() => expect(dialog).not.toBeInTheDocument());
     }
   });
 });

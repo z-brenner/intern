@@ -13,6 +13,7 @@ import { tooShortOwnNames } from '../lib/ownNames';
 import type { DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateProgressListener, UpdateStatus } from '../lib/bridge';
 import { installingLabel } from '../lib/format';
 import { useEditsOnlyInside } from '../lib/dialogEdits';
+import { tabWithin } from '../lib/dialogTab';
 import { folderSaveProblem, inputFolderProblem, keepsDescriptionColumn, outputFolderProblem } from '../features/intake/folderProblems';
 import { INPUT_FOLDER_HINT, OUTPUT_FOLDER_HINT } from './FolderSetupFlow';
 import { Icon } from './Icon';
@@ -514,11 +515,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         }
         return true;
       });
-      if (!focusable.length) return;
-      const current = document.activeElement;
-      const index = focusable.indexOf(current as HTMLElement);
-      const nextIndex = event.shiftKey ? (index <= 0 ? focusable.length - 1 : index - 1) : (index === focusable.length - 1 ? 0 : index + 1);
-      if (index !== -1) { event.preventDefault(); focusable[nextIndex].focus(); }
+      tabWithin(event, focusable);
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);

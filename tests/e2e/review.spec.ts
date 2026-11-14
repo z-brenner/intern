@@ -186,3 +186,90 @@ for (const size of [{ width: 1400, height: 900 }, { width: 1280, height: 720 }])
     expect(await status()).toBe(before);
   });
 }
+
+/*
+  Nothing behind Settings takes the focus while it is open: the window
+  behind it is inert, and Tab and Shift+Tab go round its own controls from
+  wherever the focus is. A press on its heading or its backdrop left the
+  focus on nothing, and Shift+Tab walked out of Settings to the review
+  panel behind it - Keep original, Approve & rename, the Filename - where
+  Enter filed the held document with Settings still open; narrow, to the
+  queue's row and to Rename all ready.
+*/
+const HELD = 'SOW final v3.pdf';
+const CONTOSO = 'Use on its own: Contoso Worldwide, Inc. written as Contoso';
+const focusInSettings = (page: Page) => page.evaluate(() => Boolean(document.activeElement?.closest('[role="dialog"][aria-label="Settings"]')));
+
+for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) {
+  test(`Tab and Shift+Tab stay in Settings after a press on its heading or its backdrop, at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await page.goto('/?learnedSpellings=held');
+    // Wide, the held document open in review with its name edited; narrow, its row selected.
+    if (size.width > 1100) {
+      const name = (await openDetails(page, HELD)).getByRole('textbox', { name: 'Filename' });
+      await name.click();
+      await page.keyboard.press('End');
+      await page.keyboard.type(' DRAFT');
+    } else await queueCell(page, HELD).click();
+    const statuses = () => page.locator('.queue-grid [data-column="status"]').allTextContents();
+    const before = await statuses();
+    await page.getByRole('button', { name: 'Settings' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Settings' });
+    await dialog.locator('summary', { hasText: 'Learned spellings' }).click();
+    for (const asking of [false, true]) {
+      if (asking) {
+        await dialog.getByRole('button', { name: CONTOSO }).click();
+        await page.keyboard.type('Cont');
+      }
+      for (const [where, press] of [['its heading', () => dialog.locator('.dialog-head h2').click()], ['its backdrop', () => page.mouse.click(4, 4)]] as const) {
+        for (const key of ['Shift+Tab', 'Tab']) {
+          await press();
+          for (let step = 1; step <= 7; step += 1) {
+            await page.keyboard.press(key);
+            expect(await focusInSettings(page), `${key} ${step} after a press on ${where}${asking ? ', the question asking' : ''}`).toBe(true);
+          }
+        }
+      }
+    }
+    await expect(dialog).toBeVisible();
+    await expect(page.locator('.toasts')).toHaveCount(0);
+    expect(await statuses()).toEqual(before);
+  });
+}
+
+/*
+  Narrow, the review drawer opens again for a document it was open for, and
+  puts the caret in its name. Opened again under Settings - the window made
+  narrower while the question asked - it took the focus from the question,
+  and Enter, meant for the question, filed the held document.
+*/
+test('the review drawer opened again under Settings takes no focus from it', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.goto('/?learnedSpellings=held');
+  const name = (await openDetails(page, HELD)).getByRole('textbox', { name: 'Filename' });
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const status = () => queueCell(page, HELD, 'status').textContent();
+  const before = await status();
+  await page.getByRole('button', { name: 'Settings' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  await dialog.locator('summary', { hasText: 'Learned spellings' }).click();
+  await dialog.getByRole('button', { name: CONTOSO }).click();
+  const field = dialog.getByRole('group', { name: CONTOSO }).getByRole('textbox');
+  await page.keyboard.type('Cont');
+  await expect(field).toBeFocused();
+  await page.setViewportSize({ width: 800, height: 600 });
+  await expect(page.getByRole('dialog', { name: 'Review item' })).toBeVisible();
+  await page.waitForTimeout(300);
+  await expect(field).toBeFocused();
+  const shown = await name.inputValue();
+  await page.keyboard.type('oso');
+  await expect(field).toHaveValue('Contoso');
+  await expect(name).toHaveValue(shown);
+  await page.keyboard.press('Enter');
+  await expect(dialog.getByRole('group', { name: CONTOSO })).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await page.waitForTimeout(300);
+  await expect(page.locator('.toasts')).toHaveCount(0);
+  expect(await status()).toBe(before);
+  await expect(name).toHaveValue(shown);
+});
