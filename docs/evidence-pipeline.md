@@ -310,7 +310,11 @@ The other checks:
   An official sued in their office is that side of the case. Anyone else
   the caption names keeps the standing their post gives them: the second
   official, everyone on the bringing side, and the officer of an agency
-  the reply named too, which is then the party. A bare
+  the reply named too, which is then the party, when the agency's name
+  reads as an organization's to the engine (it ends on, or is headed
+  before "of" by, a word such as Authority, Department or Bureau). An
+  agency whose name does not read so (`National Park Service`, `United
+  States of America`) does not keep its officer out. A bare
   signature mark (`/s/`, a `Signature` column) counts only outside letters
   and emails, and never for the one the document labels as its sender:
   anyone signs their own letter. A label or column header that names the one the

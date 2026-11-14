@@ -7794,9 +7794,13 @@ impl CaptionLayout {
 /// the name: cases are cited by the names that open their sides.
 ///
 /// Only where the reply named no organization for that side:
-/// `organizations` are the cast's, and each must stand on the bringing
-/// side of the caption. An agency the reply named beside its officer is
-/// the party, as it always was.
+/// `organizations` are the cast's parties whose names read as an
+/// organization's (`is_organization_name`: "... Water Authority",
+/// "Department of ..."), and each must stand on the bringing side of the
+/// caption. An agency so named beside its officer is the party, as it
+/// always was. One whose name does not read so ("National Park Service",
+/// "United States of America") does not keep its officer out: the name
+/// is then between the bringing side and the officer.
 ///
 /// Anyone else a caption names keeps the standing their post gives them:
 /// the second official on a side, a judge a reader ran into the caption's
