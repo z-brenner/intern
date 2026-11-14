@@ -17093,6 +17093,83 @@ Held on March 3, 2024 at the offices of Corvane Media Group LLC.";
         );
     }
 
+    /// What an authority decides a question with is headed by what it is:
+    /// "Determination of a Protected Mooring". The reply that copied the
+    /// heading states the document's type. A notice of a determination is
+    /// still a notice, and a letter sent to an office that makes such
+    /// decisions is no determination.
+    #[test]
+    fn a_determination_is_typed_by_the_title_it_heads() {
+        const GAZETTE: &str = "HARBOUR GAZETTE\n\nDetermination of a Protected Mooring\n\n\
+Pursuant to section 26 of the Harbours Act 1996, the Harbour Markets Authority hereby \
+determines that the mooring at Sluice Lane is not a protected mooring for the purpose of the \
+Act.\n\nDated at Brackenridge this 3rd day of November 2026.\n\n\
+MARA QUILL, Chair, decision-making committee of the Authority.";
+        let (outcome, _) = facts_for(GAZETTE, |index| ModelFacts {
+            document_type: Some("Determination of a Protected Mooring".into()),
+            type_evidence: vec![id_of(index, "Determination of a Protected")],
+            document_date: Some("2026-11-03".into()),
+            date_evidence: vec![id_of(index, "Dated at Brackenridge")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Determination of a Protected Mooring")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        const NOTICE: &str = "CITY OF BRACKENRIDGE\n\nNOTICE OF DETERMINATION\n\n\
+Date: February 23, 2026\n\nThe City has approved the Sluice Lane mooring project and \
+determined that it will not have a significant effect on the environment.";
+        let (outcome, _) = facts_for(NOTICE, |index| ModelFacts {
+            document_type: Some("NOTICE OF DETERMINATION".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF DETERMINATION")],
+            document_date: Some("2026-02-23".into()),
+            date_evidence: vec![id_of(index, "February 23")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Notice of Determination")
+        );
+        assert_eq!(
+            DocumentClass::of(outcome.proposal.document_type.as_deref()),
+            DocumentClass::Notice
+        );
+        // The inside address's office is whom the letter is to.
+        let (outcome, _) = facts_for(
+            "Northgate Borough Council\n\nWARNING LETTER\n\nMarch 4, 2024\n\n\
+             Ms. Dana Whitlock\nOperations Manager\nDisability Determination Services\n\
+             200 Mill Road\n\nDear Ms. Whitlock:\n\nAn officer of the Council inspected the \
+             stewarding of the summer fair.",
+            |index| ModelFacts {
+                document_type: Some("Warning Letter".into()),
+                type_evidence: vec![id_of(index, "WARNING LETTER")],
+                document_date: Some("2024-03-04".into()),
+                date_evidence: vec![id_of(index, "March 4, 2024")],
+                parties: vec![party(
+                    "Dana Whitlock",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Ms. Dana Whitlock")],
+                )],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Warning Letter")
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Disability Determination Services"],
+            "{:?}",
+            outcome.proposal
+        );
+    }
+
     /// "Response", "Citation", "Notification" and "Circular" are words a
     /// name is as readily made of as a title: a line of an inside address
     /// that holds one is still an organization's, and the letter is to it.
@@ -17101,6 +17178,13 @@ Held on March 3, 2024 at the offices of Corvane Media Group LLC.";
     fn a_kind_word_a_name_holds_leaves_an_organizations_line_alone() {
         assert!(organization_line("First Response Security"));
         assert!(organization_line("Circular Economy Scotland"));
+        for office in [
+            "Disability Determination Services",
+            "Determinations Unit",
+            "Office of Eligibility Determination",
+        ] {
+            assert!(organization_line(office), "{office}");
+        }
         assert!(!organization_line("Final Notice Scotland"));
         let (outcome, _) = facts_for(
             "Northgate Borough Council\n\nWARNING LETTER\n\nMarch 4, 2024\n\n\
@@ -17177,6 +17261,8 @@ Held on March 3, 2024 at the offices of Corvane Media Group LLC.";
             "First Response Security Ltd",
             "Circular Economy Scotland",
             "Rapid Response Plumbing",
+            "Disability Determination Services",
+            "Determinations Unit",
         ] {
             let (outcome, _) = facts_for(&letter(company), reply(company, true));
             assert_eq!(

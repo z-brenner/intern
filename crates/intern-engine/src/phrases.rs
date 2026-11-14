@@ -166,11 +166,19 @@ const MORE_KINDS: &[&str] = &[
 /// Kinds a title names with a word a name is as readily made of: what an
 /// agency answers a request with ("Response to an Official Information Act
 /// Request"), cites an employer with ("Citation and Notification of
-/// Penalty") or sends its offices ("Circular 002/2014"). A type is read
-/// with them like any other kind; a name is not told from a title by them
-/// ([`sets_a_name_apart`]): "First Response Security", "Circular Economy
-/// Scotland".
-const KINDS_A_NAME_HOLDS: &[&str] = &["response", "citation", "notification", "circular"];
+/// Penalty"), sends its offices ("Circular 002/2014") or decides a question
+/// put to it with ("Determination of a New Organism", "Determination and
+/// Findings"). A type is read with them like any other kind; a name is not
+/// told from a title by them ([`sets_a_name_apart`]): "First Response
+/// Security", "Circular Economy Scotland", "Disability Determination
+/// Services".
+const KINDS_A_NAME_HOLDS: &[&str] = &[
+    "response",
+    "citation",
+    "notification",
+    "circular",
+    "determination",
+];
 
 /// Whether `word` names a kind of document.
 pub(crate) fn names_a_kind(word: &str) -> bool {
@@ -1484,6 +1492,57 @@ mod tests {
             .as_deref()
             .map(|phrase| phrase.starts_with("direction")),
             Some(true)
+        );
+    }
+
+    /// A determination is a kind where it heads a title: what an authority
+    /// decides a question with. It is a word a name holds too - the
+    /// offices that make such decisions are called by it - so it sets no
+    /// name apart, and before a name's next word it is no kind. Under a
+    /// notice's title the notice is still the head.
+    #[test]
+    fn a_determination_is_a_kind_where_it_heads_a_title() {
+        assert!(names_a_kind("determination"));
+        assert!(!sets_a_name_apart("determination"));
+        for (line, phrase) in [
+            (
+                "Determination of a New Organism",
+                "Determination of a New Organism",
+            ),
+            ("DETERMINATION AND FINDINGS", "Determination and Findings"),
+            ("FINAL DETERMINATION NO. 2024-15", "Final Determination"),
+        ] {
+            assert_eq!(head_noun(&words(line)), Some("determination"), "{line}");
+            assert_eq!(
+                title_phrase(line, "determination").as_deref(),
+                Some(phrase),
+                "{line}"
+            );
+            assert!(has_a_kind(&words(line)), "{line}");
+        }
+        assert_eq!(head_noun(&words("NOTICE OF DETERMINATION")), Some("notice"));
+        assert_eq!(
+            title_phrase("NOTICE OF DETERMINATION", "notice").as_deref(),
+            Some("Notice of Determination")
+        );
+        assert_eq!(head_noun(&words("Determination Letter")), Some("letter"));
+        // An office's name: another word follows, or the word is a plural
+        // no title is headed by.
+        for name in [
+            "Disability Determination Services",
+            "Determinations Unit",
+            "Determination Appeals Team",
+        ] {
+            assert!(!has_a_kind(&words(name)), "{name}");
+        }
+        assert_eq!(
+            title_phrase("DISABILITY DETERMINATION SERVICES", "determination"),
+            None
+        );
+        // A field the word labels titles nothing.
+        assert_eq!(
+            title_phrase("DETERMINATION: Approved with conditions", "determination"),
+            None
         );
     }
 
