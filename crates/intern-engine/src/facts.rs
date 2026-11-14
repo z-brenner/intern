@@ -613,14 +613,16 @@ pub fn validate_facts_at(
     // of its own that this one discusses or sends on ("Re: Thematic Review
     // on Early Mortgage Arrears" over "Dear CEO,"): the name waits for a
     // person, and a letter is a "Letter", for a person to complete, as one
-    // typed by what it talks about is.
+    // typed by what it talks about is. As there, a type that is whole a
+    // notice, a form or an agreement keeps its kind ("Re: Consent to
+    // Assignment of Lease"): a letter can be one.
     if let Some(value) = document_type.as_deref()
         && type_line
             .as_deref()
             .is_some_and(|line| matter_opens_on_a_record(scope, value, line))
     {
         push(&mut reasons, ReviewReason::TypeUnsupported);
-        if layout.laid_out_as_letter(scope) {
+        if layout.laid_out_as_letter(scope) && no_kind_of_its_own(Some(value)) {
             document_type = Some("Letter".to_owned());
             type_title = None;
             type_line = None;
@@ -677,12 +679,12 @@ pub fn validate_facts_at(
     if document_type.is_none() {
         // A title read below a letter's salutation is the letter talking,
         // as above, and one read from its subject line that opens on a
-        // record is the letter's matter.
+        // record is the letter's matter - unless, either way, it is a
+        // kind a letter can be of its own.
         let inferred = title_of(scope).filter(|(inferred, line)| {
             !(layout.laid_out_as_letter(scope)
-                && ((no_kind_of_its_own(Some(inferred))
-                    && unit_holding(scope, line)
-                        .is_some_and(|unit| talking(unit, line, inferred)))
+                && no_kind_of_its_own(Some(inferred))
+                && (unit_holding(scope, line).is_some_and(|unit| talking(unit, line, inferred))
                     || matter_opens_on_a_record(scope, inferred, line)))
         });
         match inferred {
@@ -17297,6 +17299,106 @@ Held on March 3, 2024 at the offices of Corvane Media Group LLC.";
                 "{kind}: {:?}",
                 outcome.reasons
             );
+        }
+    }
+
+    /// A consent to an assignment of a lease is an agreement, an
+    /// application a form, a notice a notice: a kind a letter can be of
+    /// its own. Under a record at the head of its subject line the name
+    /// waits for a person and keeps that kind, above the greeting as below
+    /// it; only what is a record or no known kind gives way to "Letter".
+    #[test]
+    fn a_subject_lines_record_that_is_a_kind_of_its_own_is_held_under_its_own_name() {
+        let letter = |above: &str, below: &str| {
+            format!(
+                "Northgate Estates Ltd\n14 Mill Lane, Harrowby\n\n3 March 2024\n\n\
+                 Mr. Alan Reyes\nReyes Developments Ltd\n2 Dock Road, Harrowby\n\n\
+                 {above}Dear Mr. Reyes,\n\n{below}We refer to your request of 12 February and \
+                 confirm the landlord's decision on the terms set out below.\n\n\
+                 Yours sincerely,\n\nPriya Nand\nDirector"
+            )
+        };
+        let typed = |kind: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some(kind.into()),
+                type_evidence: vec![id_of(index, "Re: ")],
+                document_date: Some("2024-03-03".into()),
+                date_evidence: vec![id_of(index, "3 March 2024")],
+                ..ModelFacts::default()
+            }
+        };
+        let held = |outcome: &ValidationOutcome| {
+            outcome
+                .reasons
+                .iter()
+                .filter(|reason| **reason == ReviewReason::TypeUnsupported)
+                .count()
+        };
+        for kind in [
+            "Consent to Assignment of Lease",
+            "Certificate of Occupancy Application",
+            "Summary of Benefits and Coverage Notice",
+        ] {
+            let subject = format!("Re: {kind}\n\n");
+            for text in [letter(&subject, ""), letter("", &subject)] {
+                let (outcome, _) = facts_for(&text, typed(kind));
+                assert_eq!(
+                    outcome.proposal.document_type.as_deref(),
+                    Some(kind),
+                    "{text}: {:?}",
+                    outcome.reasons
+                );
+                assert_eq!(held(&outcome), 1, "{text}: {:?}", outcome.reasons);
+                assert!(
+                    !outcome.reasons.contains(&ReviewReason::TypeInferred),
+                    "{text}: {:?}",
+                    outcome.reasons
+                );
+                assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+            }
+        }
+        // A record and nothing more is the letter's matter on either side
+        // of the greeting, and is said to be unsupported once.
+        let subject = "Re: Certificate of Insurance\n\n";
+        for text in [letter(subject, ""), letter("", subject)] {
+            let (outcome, _) = facts_for(&text, typed("Certificate of Insurance"));
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Letter"),
+                "{text}: {:?}",
+                outcome.reasons
+            );
+            assert_eq!(held(&outcome), 1, "{text}: {:?}", outcome.reasons);
+            for reason in [ReviewReason::TypeInferred, ReviewReason::TypeMissing] {
+                assert!(
+                    outcome.reasons.contains(&reason),
+                    "{text}: {:?}",
+                    outcome.reasons
+                );
+            }
+        }
+        // A reply that gave no type: the subject line's phrase is the
+        // title to confirm when it is a kind of its own, and no title when
+        // it is a record.
+        for (kind, inferred) in [
+            ("Consent to Assignment of Lease", true),
+            ("Certificate of Insurance", false),
+        ] {
+            let (outcome, _) = facts_for(&letter(&format!("Re: {kind}\n\n"), ""), |index| {
+                ModelFacts {
+                    document_type: None,
+                    type_evidence: Vec::new(),
+                    ..typed(kind)(index)
+                }
+            });
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some(if inferred { kind } else { "Letter" }),
+                "{kind}: {:?}",
+                outcome.reasons
+            );
+            assert!(outcome.reasons.contains(&ReviewReason::TypeInferred));
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview);
         }
     }
 
