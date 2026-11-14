@@ -12383,6 +12383,64 @@ Klamath Falls, OR 97601",
         );
     }
 
+    /// A freight claim names the carrier it is made to in its text, and
+    /// the reply called the carrier the recipient. A claim is made to the
+    /// party it is sent to: the name stays "to" the carrier, on the reply's
+    /// reading, and waits for a person. It is not "for" the carrier, as a
+    /// notice of a penalty is for the company it penalizes.
+    #[test]
+    fn a_claim_stays_to_the_party_only_its_reply_called_the_recipient() {
+        const CLAIM: &str = "NOTICE OF FREIGHT CLAIM\n\n\
+Date: April 27, 2026\n\n\
+Hollin Brook Furniture Gallery hereby gives notice to Redgate Interstate Freight Inc. of its claim \
+for damage to a shipment of dining chairs delivered on April 20, 2026 under pro number 7741-220. \
+Six cartons arrived crushed. We claim $2,340.00.";
+        for sender_role in [Some(PartyRole::Sender), None] {
+            let (outcome, _) = facts_for(CLAIM, |index| ModelFacts {
+                document_type: Some("Notice of Freight Claim".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF FREIGHT")],
+                document_date: Some("2026-04-27".into()),
+                date_evidence: vec![id_of(index, "Date: April 27")],
+                parties: vec![
+                    party(
+                        "Hollin Brook Furniture Gallery",
+                        sender_role,
+                        &[id_of(index, "Hollin Brook")],
+                    ),
+                    party(
+                        "Redgate Interstate Freight Inc.",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "Hollin Brook")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.party_relation,
+                PartyRelation::To,
+                "{sender_role:?}"
+            );
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["Redgate Interstate Freight Inc."],
+                "{sender_role:?}"
+            );
+            assert_eq!(
+                outcome.reasons,
+                vec![ReviewReason::PartyUnsupported],
+                "{sender_role:?}"
+            );
+            assert_eq!(
+                outcome
+                    .facts
+                    .as_ref()
+                    .map(|facts| facts.relation_basis.as_str()),
+                Some("notice: the recipient, on the reply's roles"),
+                "{sender_role:?}"
+            );
+        }
+    }
+
     /// real5-memo-01's shape: a memorandum whose "TO:" line names the
     /// class of officials it is sent to. The label supports the reply's
     /// addressee, but a class of recipients is no party a document is

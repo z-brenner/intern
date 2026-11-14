@@ -52,6 +52,13 @@ const AGREEMENT_WORDS: &[&str] = &[
     "waiver",
 ];
 
+/// Words that make a type an email.
+const EMAIL_WORDS: &[&str] = &["email", "e-mail"];
+
+/// Words that make a type a letter: correspondence written to an
+/// addressee.
+const LETTER_WORDS: &[&str] = &["letter", "memo", "memorandum"];
+
 /// Parties the reply gave no role at all, of which a default that kept the
 /// first is doubtful: a list - the people a meeting's minutes record, the
 /// lenders a notice goes to - that nothing told apart. Two such parties are
@@ -106,9 +113,9 @@ impl DocumentClass {
             Self::Agreement
         } else if published {
             Self::Record
-        } else if has(&["email", "e-mail"]) {
+        } else if has(EMAIL_WORDS) {
             Self::Email
-        } else if has(&["letter", "memo", "memorandum"]) {
+        } else if has(LETTER_WORDS) {
             Self::Letter
         } else if has(&[
             "form",
@@ -302,10 +309,13 @@ pub struct RelationCues {
 /// names them; `cues` what the document's layout and wording say besides
 /// (see [`RelationCues`]).
 ///
-/// Only a supported role counts. When nothing settles the question the
-/// first party is kept with no joining word ([`PartyRelation::None`]): the
-/// names are the document's, and the relation is not guessed at. Validation
-/// sends such a name to a person.
+/// A supported role decides. Where none settles the question, the roles
+/// the reply gave are read in their place, and the relation says so
+/// ([`Relation::on_proposed_roles`]) for the name to wait for a person.
+/// Where they settle nothing either, the first party is kept with no
+/// joining word ([`PartyRelation::None`]): the names are the document's,
+/// and the relation is not guessed at. Validation sends such a name to a
+/// person too.
 pub fn relation_from_roles(
     class: DocumentClass,
     document_type: Option<&str>,
@@ -379,19 +389,30 @@ pub fn relation_from_roles(
     // company a penalty notice penalizes, the firm a notice of hearing
     // names: the notice is "for" it, as a notice's one party the reply
     // called its recipient already is. Either name waits for a person, as
-    // every name here does.
+    // every name here does. The party named "to" here is always one the
+    // document supports no role for: a recipient it supports is named by
+    // the rules above, on the document's word.
     let addressed = cues.addressed.and_then(|index| parties.get(index));
+    // Two kinds sort with the notices and give notice of nothing that
+    // bears on their recipient. A claim is made to the party it is sent
+    // to - the carrier a freight claim goes to, the insurer, the estate -
+    // and is the claimant's. A type that names a letter, a memorandum or
+    // an email beside the notice it gives ("Notification Letter") is
+    // correspondence, written to its addressee as any letter is. Both keep
+    // "to".
+    let lowered = document_type.unwrap_or_default().to_lowercase();
+    let made_to_its_recipient = contains_word(&lowered, "claim")
+        || LETTER_WORDS
+            .iter()
+            .chain(EMAIL_WORDS)
+            .any(|word| contains_word(&lowered, word));
     let for_its_recipient = class == DocumentClass::Notice
         && fallback.relation == PartyRelation::To
+        && !made_to_its_recipient
         && !fallback
             .parties
             .iter()
-            .any(|name| addressed.is_some_and(|party| party.name == *name))
-        && fallback.parties.iter().all(|name| {
-            parties
-                .iter()
-                .any(|party| party.name == *name && party.supported_role().is_none())
-        });
+            .any(|name| addressed.is_some_and(|party| party.name == *name));
     let (word, basis) = if for_its_recipient {
         (
             PartyRelation::For,
@@ -1782,16 +1803,19 @@ mod tests {
         assert_eq!(determination.parties, vec!["Office of Planning and Review"]);
         assert!(!determination.on_proposed_roles, "{}", determination.basis);
         assert_eq!(determination.basis, "notice: the recipient");
-        // A letter and an email are addressed to someone by their kind.
-        for (class, kind) in [
-            (DocumentClass::Letter, "Letter"),
-            (DocumentClass::Email, "Email"),
+        // A letter and an email are addressed to someone by their kind, and
+        // a document of no known class is to the addressee the reply named:
+        // only a notice is "for" its recipient.
+        for (class, kind, receiving) in [
+            (DocumentClass::Letter, "Letter", PartyRole::Recipient),
+            (DocumentClass::Email, "Email", PartyRole::Recipient),
+            (DocumentClass::Unknown, "Circular", PartyRole::Addressee),
         ] {
             let written = relation_from_roles(
                 class,
                 Some(kind),
                 &[
-                    member("Calder Freight LLC", None, Some(PartyRole::Recipient)),
+                    member("Calder Freight LLC", None, Some(receiving)),
                     member("Odalys Brandt", None, None),
                 ],
                 cues,
@@ -1799,6 +1823,11 @@ mod tests {
             assert_eq!(written.relation, PartyRelation::To, "{kind}");
             assert_eq!(written.parties, vec!["Calder Freight LLC"], "{kind}");
             assert!(written.on_proposed_roles, "{kind}: {}", written.basis);
+            assert!(
+                written.basis.ends_with(", on the reply's roles"),
+                "{kind}: {}",
+                written.basis
+            );
         }
     }
 
@@ -1854,6 +1883,81 @@ mod tests {
             assert_eq!(
                 about.basis,
                 "notice: the recipient, for it on the reply's roles"
+            );
+        }
+    }
+
+    /// A claim is made to the party it is sent to - the carrier a freight
+    /// claim goes to, the insurer, the debtor's estate - and a letter or a
+    /// memorandum is written to its addressee, whatever else its title calls
+    /// it: neither is "for" the recipient the reply named. Each sorts with
+    /// the notices by a word of its type and keeps "to", on the reply's
+    /// roles; a notice proper is for the party it bears on.
+    #[test]
+    fn a_claim_and_a_letter_titled_a_notice_stay_to_the_recipient_the_reply_named() {
+        let member = |name: &str, proposed: PartyRole| CastMember {
+            name: name.to_owned(),
+            role: None,
+            role_supported: false,
+            proposed_role: Some(proposed),
+        };
+        let cast = [
+            member("Hollin Brook Furniture Gallery", PartyRole::Sender),
+            member("Redgate Interstate Freight Inc.", PartyRole::Recipient),
+        ];
+        let named = |kind: &str| {
+            assert_eq!(
+                DocumentClass::of(Some(kind)),
+                DocumentClass::Notice,
+                "{kind}"
+            );
+            relation_from_roles(
+                DocumentClass::Notice,
+                Some(kind),
+                &cast,
+                RelationCues::default(),
+            )
+        };
+        for kind in [
+            "Freight Claim",
+            "Notice of Freight Claim",
+            "Insurance Claim",
+            "Expense Claim",
+            "Warranty Claim",
+            "Proof of Claim",
+            "Grant Claim",
+            "Claim Form",
+            "Notification Letter",
+            "Notice Letter",
+            "Letter of Notification",
+            "Notification Memorandum",
+            "Email Notification",
+        ] {
+            let relation = named(kind);
+            assert_eq!(relation.relation, PartyRelation::To, "{kind}");
+            assert_eq!(
+                relation.parties,
+                vec!["Redgate Interstate Freight Inc."],
+                "{kind}"
+            );
+            assert!(relation.on_proposed_roles, "{kind}");
+            assert_eq!(
+                relation.basis, "notice: the recipient, on the reply's roles",
+                "{kind}"
+            );
+        }
+        for kind in [
+            "Notice of Violation",
+            "Notice of Mass Layoff",
+            "Notice of Hearing",
+            "Notification of Award",
+            "Penalty Notice",
+        ] {
+            let relation = named(kind);
+            assert_eq!(relation.relation, PartyRelation::For, "{kind}");
+            assert_eq!(
+                relation.basis, "notice: the recipient, for it on the reply's roles",
+                "{kind}"
             );
         }
     }
