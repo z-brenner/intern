@@ -360,10 +360,35 @@ pub fn relation_from_roles(
     {
         return relation;
     }
+    // "To" says a notice was addressed to the party, which a recipient the
+    // document labels shows ("To: ...") and the rules above then name. A
+    // recipient only the reply named is a party the notice bears on - the
+    // company a penalty notice penalizes, the firm a notice of hearing
+    // names - with no address seen: the notice is "for" it, as a notice's
+    // one party the reply called its recipient already is, and waits for a
+    // person as every name here does.
+    let for_its_recipient = class == DocumentClass::Notice
+        && fallback.relation == PartyRelation::To
+        && fallback.parties.iter().all(|name| {
+            parties
+                .iter()
+                .any(|party| party.name == *name && party.supported_role().is_none())
+        });
+    let (word, basis) = if for_its_recipient {
+        (
+            PartyRelation::For,
+            format!("{}, for it on the reply's roles", fallback.basis),
+        )
+    } else {
+        (
+            fallback.relation,
+            format!("{}, on the reply's roles", fallback.basis),
+        )
+    };
     Relation {
-        relation: fallback.relation,
+        relation: word,
         parties: fallback.parties,
-        basis: format!("{}, on the reply's roles", fallback.basis),
+        basis,
         on_proposed_roles: true,
         defaulted: false,
         doubtful: false,
@@ -1677,6 +1702,85 @@ mod tests {
         );
         assert_eq!(agreement.relation, PartyRelation::Between);
         assert!(!agreement.on_proposed_roles);
+    }
+
+    /// "To" says a notice was addressed to a party. A recipient only the
+    /// reply named was shown no address in the document: the notice is
+    /// "for" it, as a notice's one party the reply called its recipient is,
+    /// and the name says it rests on the reply's roles. A recipient the
+    /// document itself labels keeps "to" and rests on nothing of the
+    /// reply's - a notice of determination sent to a filing office is not
+    /// for that office - and a letter or an email is written to the
+    /// addressee the reply named, as before.
+    #[test]
+    fn a_notice_is_for_the_party_only_the_reply_called_its_recipient() {
+        let cues = RelationCues::default();
+        let member =
+            |name: &str, role: Option<PartyRole>, proposed: Option<PartyRole>| CastMember {
+                name: name.to_owned(),
+                role,
+                role_supported: role.is_some(),
+                proposed_role: proposed,
+            };
+        for receiving in [PartyRole::Recipient, PartyRole::Addressee] {
+            let penalty = relation_from_roles(
+                DocumentClass::Notice,
+                Some("Notice of Civil Penalty Assessment"),
+                &[
+                    member(
+                        "Meriden Department of Environmental Quality",
+                        None,
+                        Some(PartyRole::Issuer),
+                    ),
+                    member("Calder Freight LLC", None, Some(receiving)),
+                ],
+                cues,
+            );
+            assert_eq!(penalty.relation, PartyRelation::For, "{receiving:?}");
+            assert_eq!(penalty.parties, vec!["Calder Freight LLC"]);
+            assert!(penalty.on_proposed_roles, "{}", penalty.basis);
+            assert_eq!(
+                penalty.basis,
+                "notice: the recipient, for it on the reply's roles"
+            );
+        }
+        // The document's own "To:" names the office the notice was sent
+        // to, whatever the reply made of the party that gives it.
+        let determination = relation_from_roles(
+            DocumentClass::Notice,
+            Some("Notice of Determination"),
+            &[
+                member(
+                    "Office of Planning and Review",
+                    Some(PartyRole::Recipient),
+                    Some(PartyRole::Recipient),
+                ),
+                member("Harrow County", None, Some(PartyRole::Issuer)),
+            ],
+            cues,
+        );
+        assert_eq!(determination.relation, PartyRelation::To);
+        assert_eq!(determination.parties, vec!["Office of Planning and Review"]);
+        assert!(!determination.on_proposed_roles, "{}", determination.basis);
+        assert_eq!(determination.basis, "notice: the recipient");
+        // A letter and an email are addressed to someone by their kind.
+        for (class, kind) in [
+            (DocumentClass::Letter, "Letter"),
+            (DocumentClass::Email, "Email"),
+        ] {
+            let written = relation_from_roles(
+                class,
+                Some(kind),
+                &[
+                    member("Calder Freight LLC", None, Some(PartyRole::Recipient)),
+                    member("Odalys Brandt", None, None),
+                ],
+                cues,
+            );
+            assert_eq!(written.relation, PartyRelation::To, "{kind}");
+            assert_eq!(written.parties, vec!["Calder Freight LLC"], "{kind}");
+            assert!(written.on_proposed_roles, "{kind}: {}", written.basis);
+        }
     }
 
     /// A form's first party is as often the organization whose form it is

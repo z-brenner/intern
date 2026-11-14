@@ -12093,6 +12093,68 @@ Order total: $8,220.00";
         );
     }
 
+    /// A notice of a penalty that names the department assessing it and
+    /// the company it penalizes only in its text: the reply called the
+    /// company the recipient, and no line of the notice addresses it. The
+    /// notice is named "for" the company, on the reply's reading, and waits
+    /// for a person. The same notice with a "To:" line is addressed to the
+    /// company on the document's own word: it is named "to" it and files.
+    #[test]
+    fn a_notice_for_a_recipient_only_its_reply_named_goes_to_review() {
+        const BODY: &str = "The Meriden Department of Environmental Quality has assessed a civil \
+penalty of $4,800 against Calder Freight LLC for operating a transfer station without a permit. \
+The penalty is due within thirty days of this notice.";
+        let notice = |heading: &str| {
+            let text = format!("NOTICE OF CIVIL PENALTY ASSESSMENT\n\n{heading}\n\n{BODY}");
+            facts_for(&text, |index| ModelFacts {
+                document_type: Some("Notice of Civil Penalty Assessment".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF CIVIL")],
+                document_date: Some("2025-09-04".into()),
+                date_evidence: vec![id_of(index, "Date: 4 September")],
+                parties: vec![
+                    party(
+                        "Meriden Department of Environmental Quality",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "has assessed")],
+                    ),
+                    party(
+                        "Calder Freight LLC",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "has assessed")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        let outcome = notice("Date: 4 September 2025");
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(outcome.proposal.parties, vec!["Calder Freight LLC"]);
+        assert_eq!(
+            outcome.reasons,
+            vec![ReviewReason::PartyUnsupported],
+            "{:?}",
+            outcome.facts
+        );
+        assert_eq!(
+            outcome
+                .facts
+                .as_ref()
+                .map(|facts| facts.relation_basis.as_str()),
+            Some("notice: the recipient, for it on the reply's roles")
+        );
+
+        let outcome = notice("Date: 4 September 2025\nTo: Calder Freight LLC");
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["Calder Freight LLC"]);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
     /// real5-memo-01's shape: a memorandum whose "TO:" line names the
     /// class of officials it is sent to. The label supports the reply's
     /// addressee, but a class of recipients is no party a document is
