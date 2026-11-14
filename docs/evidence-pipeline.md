@@ -121,6 +121,15 @@ identified by its prompt alone, as before, so its recordings stay valid.
 
   A replacement date is taken only when both views agree on a single one.
 
+  One guard reads every unit, running lines included, and fires only when
+  all of them agree: an invoice's, a statement's or another issued
+  document's date that every line stating it joins to another date by `to`,
+  `through`, `thru`, `until` or a dash (`Service Period: 9/1/2017 -
+  9/30/2017`, `| 01/08/24 to 01/14/24 |`) is one end of a period, not the
+  day the paper was issued. The date is kept and the name goes to review
+  with `DATE_IS_PERIOD`. One statement of the date outside a period clears
+  it, wherever it stands.
+
 Each fact records its `Support`:
 
 - `Cited`: a unit the reply cited for the fact states it.
@@ -226,7 +235,17 @@ The other checks:
   a title of the same kind stands in, for review (`TYPE_INFERRED`), or
   the type is unsupported. A title set in capitals that OCR scattered
   (`DElIvery RECeIPt DR-771`) and the kind a letter's `Re:` line opens
-  with (`Re: Offer of Employment - ...`) are titles too. A title phrase
+  with (`Re: Offer of Employment - ...`) are titles too. A record at the
+  head of a `Re:`, `Subject:` or `Regarding:` line is not: a review, a
+  report, a plan or minutes is a paper of its own that this one discusses
+  or sends on (`Re: Thematic Review on Early Mortgage Arrears` over `Dear
+  CEO,`), so a type read from there goes to review (`TYPE_UNSUPPORTED`)
+  and, in a document laid out as a letter, gives way to `Letter`. Only the
+  last word of the type's opening phrase, before its first `of`, `to`,
+  `for`, `and`, `on` or `under`, is asked: `Re: Approval of Closure Plan`,
+  `Re: Closure Plan Approval` and `Re: Policy Cancellation` are what the
+  letter does, and stay. An email's `Subject:` is read by the email's own
+  rule. A title phrase
   runs back from its noun to the start of the line, a connector, or the
   end of an issuer's name: for most kinds an organization's noun or legal
   form (`WRENFIELD RESTAURANT SUPPLY INVOICE` is an Invoice), for an
