@@ -285,6 +285,14 @@ pub struct RelationCues {
     /// caption names it ("In re: Delta Mills, Inc., et al., Debtors."), by
     /// its place in the cast.
     pub debtor: Option<usize>,
+    /// The recipient the reply named that the document's own address block
+    /// names: the first party of the cast, with no role the document
+    /// supports, that the reply called its recipient or addressee and that
+    /// stands in the inside address of the first page - the lines between
+    /// its dateline and its greeting, where a notice written as a letter
+    /// says who it was sent to with no "To:" label - by its place in the
+    /// cast.
+    pub addressed: Option<usize>,
 }
 
 /// The filename's parties and joining word, from the document's class and
@@ -360,15 +368,25 @@ pub fn relation_from_roles(
     {
         return relation;
     }
-    // "To" says a notice was addressed to the party, which a recipient the
-    // document labels shows ("To: ...") and the rules above then name. A
-    // recipient only the reply named is a party the notice bears on - the
+    // "To" says a notice was addressed to the party. The document shows
+    // that where a label names its recipient ("To: ..."), and the rules
+    // above then name it; or where the notice is written as a letter and
+    // its address block, over the greeting, names the recipient the reply
+    // named ([`RelationCues::addressed`]): the name then keeps "to" - a
+    // notice of a mass layoff sent to the state's workforce office is not
+    // for that office. A recipient only the reply named, which neither a
+    // label nor such a block names, is a party the notice bears on - the
     // company a penalty notice penalizes, the firm a notice of hearing
-    // names - with no address seen: the notice is "for" it, as a notice's
-    // one party the reply called its recipient already is, and waits for a
-    // person as every name here does.
+    // names: the notice is "for" it, as a notice's one party the reply
+    // called its recipient already is. Either name waits for a person, as
+    // every name here does.
+    let addressed = cues.addressed.and_then(|index| parties.get(index));
     let for_its_recipient = class == DocumentClass::Notice
         && fallback.relation == PartyRelation::To
+        && !fallback
+            .parties
+            .iter()
+            .any(|name| addressed.is_some_and(|party| party.name == *name))
         && fallback.parties.iter().all(|name| {
             parties
                 .iter()
@@ -1705,13 +1723,14 @@ mod tests {
     }
 
     /// "To" says a notice was addressed to a party. A recipient only the
-    /// reply named was shown no address in the document: the notice is
-    /// "for" it, as a notice's one party the reply called its recipient is,
-    /// and the name says it rests on the reply's roles. A recipient the
-    /// document itself labels keeps "to" and rests on nothing of the
-    /// reply's - a notice of determination sent to a filing office is not
-    /// for that office - and a letter or an email is written to the
-    /// addressee the reply named, as before.
+    /// reply named, with no label of the document's to say so, is the party
+    /// the notice bears on: the notice is "for" it, as a notice's one party
+    /// the reply called its recipient is, and the name says it rests on the
+    /// reply's roles (one its address block names keeps "to": the next
+    /// test). A recipient the document itself labels keeps "to" and rests
+    /// on nothing of the reply's - a notice of determination sent to a
+    /// filing office is not for that office - and a letter or an email is
+    /// written to the addressee the reply named, as before.
     #[test]
     fn a_notice_is_for_the_party_only_the_reply_called_its_recipient() {
         let cues = RelationCues::default();
@@ -1780,6 +1799,62 @@ mod tests {
             assert_eq!(written.relation, PartyRelation::To, "{kind}");
             assert_eq!(written.parties, vec!["Calder Freight LLC"], "{kind}");
             assert!(written.on_proposed_roles, "{kind}: {}", written.basis);
+        }
+    }
+
+    /// A notice written as a letter shows who it was sent to in its address
+    /// block. Where that block names the recipient the reply named, the
+    /// document did show an address: the notice stays "to" the party - a
+    /// notice of a mass layoff sent to the state's workforce office is not
+    /// for that office - and waits for a person as before, the role being
+    /// the reply's. A recipient the block does not name is still the party
+    /// the notice bears on.
+    #[test]
+    fn a_notice_stays_to_the_recipient_its_address_block_names() {
+        let member = |name: &str, proposed: PartyRole| CastMember {
+            name: name.to_owned(),
+            role: None,
+            role_supported: false,
+            proposed_role: Some(proposed),
+        };
+        let cast = [
+            member("Calder Foods LLC", PartyRole::Employer),
+            member(
+                "Meriden Department of Workforce Development",
+                PartyRole::Recipient,
+            ),
+        ];
+        let layoff = |addressed: Option<usize>| {
+            relation_from_roles(
+                DocumentClass::Notice,
+                Some("Notice of Mass Layoff"),
+                &cast,
+                RelationCues {
+                    addressed,
+                    ..RelationCues::default()
+                },
+            )
+        };
+        let sent = layoff(Some(1));
+        assert_eq!(sent.relation, PartyRelation::To);
+        assert_eq!(
+            sent.parties,
+            vec!["Meriden Department of Workforce Development"]
+        );
+        assert!(sent.on_proposed_roles, "{}", sent.basis);
+        assert_eq!(sent.basis, "notice: the recipient, on the reply's roles");
+        // The block names another party, or there is none.
+        for addressed in [Some(0), None] {
+            let about = layoff(addressed);
+            assert_eq!(about.relation, PartyRelation::For, "{addressed:?}");
+            assert_eq!(
+                about.parties,
+                vec!["Meriden Department of Workforce Development"]
+            );
+            assert_eq!(
+                about.basis,
+                "notice: the recipient, for it on the reply's roles"
+            );
         }
     }
 

@@ -1800,6 +1800,20 @@ pub fn validate_facts_at(
             cast.iter()
                 .position(|party| normalize_loosely(&party.name) == name)
         }),
+        // A notice written as a letter - a penalty notice to a manager at
+        // the company, a layoff notice to the state's workforce office -
+        // names who it was sent to in its address block, over the greeting,
+        // with no "To:" label for the rules to read a recipient from. The
+        // block says nothing of the party's role, so validation supports
+        // none by it; it does show the address of a party the reply called
+        // the recipient.
+        addressed: cast.iter().position(|party| {
+            party.role.is_none()
+                && party
+                    .proposed_role
+                    .is_some_and(|role| ADDRESSED_ROLES.contains(&role))
+                && layout.addresses(scope, &party.name)
+        }),
     };
     // A release the type names as published - an enforcement release, a
     // press release - is a record of what it announces, about its subject
@@ -12231,6 +12245,141 @@ The penalty is due within thirty days of this notice.";
             ProposalStatus::Ready,
             "{:?}",
             outcome.reasons
+        );
+    }
+
+    /// A notice written as a letter says who it was sent to in its address
+    /// block, with no "To:" label: a notice of a mass layoff sent to the
+    /// state's workforce office, a penalty notice sent to a manager at the
+    /// company it penalizes. The reply called the party in that block the
+    /// recipient, and the document shows the address: the notice is named
+    /// "to" it, and waits for a person, the role being the reply's. The
+    /// layoff notice is not "for" the office it informs. A company that
+    /// only the "Re:" line and the text name was shown no address: the
+    /// notice is "for" it.
+    #[test]
+    fn a_notice_stays_to_the_party_its_address_block_names() {
+        const LAYOFF: &str = "September 3, 2025\n\n\
+Meriden Department of Workforce Development\n\
+Dislocated Worker Unit\n\
+10 North Senate Avenue\n\
+Meriden, IN 46204\n\n\
+Re: Notice of Mass Layoff\n\n\
+To whom it may concern:\n\n\
+This notice is given under the Worker Adjustment and Retraining Notification Act. Calder Foods LLC \
+will permanently lay off 112 employees at its Washington plant beginning November 3, 2025.\n\n\
+Sincerely,\n\
+Ashley Gatlin\n\
+Human Resources Manager";
+        for company_role in [
+            Some(PartyRole::Employer),
+            Some(PartyRole::Issuer),
+            Some(PartyRole::Sender),
+            None,
+        ] {
+            let (outcome, _) = facts_for(LAYOFF, |index| ModelFacts {
+                document_type: Some("Notice of Mass Layoff".into()),
+                type_evidence: vec![id_of(index, "Notice of Mass Layoff")],
+                document_date: Some("2025-09-03".into()),
+                date_evidence: vec![id_of(index, "September 3, 2025")],
+                parties: vec![
+                    party(
+                        "Calder Foods LLC",
+                        company_role,
+                        &[id_of(index, "Calder Foods")],
+                    ),
+                    party(
+                        "Meriden Department of Workforce Development",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "Meriden Department")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.party_relation,
+                PartyRelation::To,
+                "{company_role:?}"
+            );
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["Meriden Department of Workforce Development"],
+                "{company_role:?}"
+            );
+            assert_eq!(
+                outcome.reasons,
+                vec![ReviewReason::PartyUnsupported],
+                "{company_role:?}"
+            );
+            assert_eq!(
+                outcome
+                    .facts
+                    .as_ref()
+                    .map(|facts| facts.relation_basis.as_str()),
+                Some("notice: the recipient, on the reply's roles"),
+                "{company_role:?}"
+            );
+        }
+
+        let penalty = |address: &str| {
+            let text = format!(
+                "July 22, 2025\n\n{address}\n\n\
+Re: Notice of Civil Penalty Assessment and Order - Calder Plywood Corporation\n\n\
+Dear Ms. Brandt:\n\n\
+The Meriden Department of Environmental Quality has assessed a civil penalty of $2,600 against \
+Calder Plywood Corporation for releasing hydraulic oil.\n\n\
+Sincerely,\n\
+Imogen Wexley\n\
+Interim Manager"
+            );
+            facts_for(&text, |index| ModelFacts {
+                document_type: Some("Notice of Civil Penalty Assessment and Order".into()),
+                type_evidence: vec![id_of(index, "Notice of Civil Penalty")],
+                document_date: Some("2025-07-22".into()),
+                date_evidence: vec![id_of(index, "July 22, 2025")],
+                parties: vec![
+                    party(
+                        "Calder Plywood Corporation",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "has assessed")],
+                    ),
+                    party(
+                        "Meriden Department of Environmental Quality",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "has assessed")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        let basis = |outcome: &ValidationOutcome| {
+            outcome
+                .facts
+                .as_ref()
+                .map(|facts| facts.relation_basis.clone())
+        };
+        // The company stands in the address block, under the manager.
+        let outcome = penalty(
+            "Odalys Brandt\nPlant Manager\nCalder Plywood Corporation\n400 Mill Road\n\
+Klamath Falls, OR 97601",
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["Calder Plywood Corporation"]);
+        assert_eq!(outcome.reasons, vec![ReviewReason::PartyUnsupported]);
+        assert_eq!(
+            basis(&outcome).as_deref(),
+            Some("notice: the recipient, on the reply's roles")
+        );
+        // The block names the manager at home: the company stands in the
+        // "Re:" line and the text only.
+        let outcome = penalty("Odalys Brandt\n400 Mill Road\nKlamath Falls, OR 97601");
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(outcome.proposal.parties, vec!["Calder Plywood Corporation"]);
+        assert_eq!(outcome.reasons, vec![ReviewReason::PartyUnsupported]);
+        assert_eq!(
+            basis(&outcome).as_deref(),
+            Some("notice: the recipient, for it on the reply's roles")
         );
     }
 
