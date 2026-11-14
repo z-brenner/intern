@@ -29,6 +29,9 @@ const SENTENCES: Record<string, string> = {
   // between two of its parties, by their order alone or as a published
   // release whose text sets out two sides; a name to or for a group of
   // recipients such as "all staff", in its parties or in its type; a
+  // memorandum to a post or to the holders of posts ("Chair, Board of
+  // Directors"; named_by_a_post in facts.rs) when no organization the
+  // document supports as its issuer is there to name it from; a
   // name whose party is longer than 70 characters (MAX_PARTY_NAME_CHARS in
   // facts.rs), most often a run of text read as one name, which the
   // filename drops when it does not fit; and a letter named to an
@@ -44,7 +47,7 @@ const SENTENCES: Record<string, string> = {
   // each model's replays), though PARTY_UNSUPPORTED mostly comes without
   // it, and the place to look, PARTY_CHECK below, follows the last of them
   // only.
-  PARTY_UNSUPPORTED: 'Intern could not confirm from the document which party this name should give. Most often the document does not say which side a party is on, so the side rests on the model\'s reading alone. A party the model named may also be absent from the document, or be one word such as a first name, and is then left out of the name. Or the name may give a party picked only for coming first or against the model\'s own reading, a release between two of its parties, or a group of recipients such as “all staff”. A party more than 70 characters long is held as well: it is rarely one name, and the filename may have had to leave it out. So is an organization Intern took from a single run-together word under the addressee\'s name.',
+  PARTY_UNSUPPORTED: 'Intern could not confirm from the document which party this name should give. Most often the document does not say which side a party is on, so the side rests on the model\'s reading alone. A party the model named may also be absent from the document, or be one word such as a first name, and is then left out of the name. Or the name may give a party picked only for coming first or against the model\'s own reading, a release between two of its parties, a group of recipients such as “all staff”, or a memorandum\'s addressee named only by a post. A party more than 70 characters long is held as well: it is rarely one name, and the filename may have had to leave it out. So is an organization Intern took from a single run-together word under the addressee\'s name.',
   PARTY_MISSING: 'The name lacks a party it needs, such as the other side of an agreement or who issued the document.',
   DESCRIPTION_UNSUPPORTED: 'The description asserts something the document does not contain.',
   DESCRIPTION_INVALID: 'The description was not a single usable sentence.',

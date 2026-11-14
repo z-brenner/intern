@@ -1835,6 +1835,79 @@ pub fn validate_facts_at(
         class
     };
     let relation = relation_from_roles(class, document_type.as_deref(), &cast, cues);
+    // A memorandum's "To:" line that names a post, or the holders of
+    // posts - "To: Chair, Board of Directors", "To: Academic Deans and
+    // Directors" - says who it went to, at every body that has such a
+    // post: no party it can be filed by, as a class of recipients is none
+    // ([`names_a_class_of_recipients`], held below, which this leaves
+    // alone). It is filed by the office it comes from: where the cast
+    // holds an organization the document supports as its issuer or sender,
+    // the name is "from" it; where it holds none, the name is kept and
+    // waits for a person. "Memorandum to File" names no post. Whatever
+    // doubt the name it replaces carried is kept: this renames, and
+    // releases nothing.
+    let to_a_post = class == DocumentClass::Letter
+        && document_type.as_deref().is_some_and(names_a_memorandum)
+        && matches!(relation.relation, PartyRelation::To | PartyRelation::For)
+        && matches!(relation.parties.as_slice(), [name]
+            if named_by_a_post(name) && !names_a_class_of_recipients(name));
+    let office = to_a_post
+        .then(|| {
+            cast.iter().find(|party| {
+                party.role_supported
+                    && matches!(party.role, Some(PartyRole::Issuer | PartyRole::Sender))
+                    && !relation.parties.contains(&party.name)
+                    && !named_by_a_post(&party.name)
+                    && (is_organization_name(&party.name)
+                        || named_as_an_organization(scope, &party.name))
+            })
+        })
+        .flatten();
+    let relation = match office {
+        Some(office) => Relation {
+            relation: PartyRelation::From,
+            parties: vec![office.name.clone()],
+            basis: format!(
+                "{}, a post, so from the {} the document names",
+                relation.basis,
+                office.role.map_or("issuer", PartyRole::as_str)
+            ),
+            on_proposed_roles: relation.on_proposed_roles,
+            defaulted: false,
+            doubtful: relation.doubtful,
+        },
+        None => relation,
+    };
+    if to_a_post && office.is_none() {
+        push(&mut reasons, ReviewReason::PartyUnsupported);
+    }
+    // A party too long to be a name waits for a person. A name is a few
+    // words; what runs past [`MAX_PARTY_NAME_CHARS`] is far more often a
+    // run of text the reply took for one - the recipients of a "To:" list
+    // in a row, a clause - and the filename, which sheds a party that does
+    // not fit ([`crate::naming`]), would be filed without it and without a
+    // word. The name is not changed. A real name of that length - a
+    // trustee's "..., as Trustee for ...", a union's local with its
+    // federation - waits too, though right.
+    if relation
+        .parties
+        .iter()
+        .any(|name| name.chars().count() > MAX_PARTY_NAME_CHARS)
+    {
+        push(&mut reasons, ReviewReason::PartyUnsupported);
+    }
+    // So does a name that gives an organization read from one coined word
+    // under the addressee: its place and its shape say it is the
+    // organization ("PacifiCorp"), and a word the extraction ran together
+    // has the same shape in the same place.
+    if read_by_shape.is_some_and(|shaped| {
+        relation
+            .parties
+            .iter()
+            .any(|name| normalize_loosely(name) == shaped)
+    }) {
+        push(&mut reasons, ReviewReason::PartyUnsupported);
+    }
     // A name that rests on roles the document did not support waits for
     // a person: the reply read the sides, the document did not say. So
     // does one the reply's own reading speaks against
@@ -1892,33 +1965,6 @@ pub fn validate_facts_at(
             }
         });
     if to_a_class || document_type.as_deref().is_some_and(memorandum_to_a_class) {
-        push(&mut reasons, ReviewReason::PartyUnsupported);
-    }
-    // A party too long to be a name waits for a person. A name is a few
-    // words; what runs past [`MAX_PARTY_NAME_CHARS`] is far more often a
-    // run of text the reply took for one - the recipients of a "To:" list
-    // in a row, a clause - and the filename, which sheds a party that does
-    // not fit ([`crate::naming`]), would be filed without it and without a
-    // word. The name is not changed. A real name of that length - a
-    // trustee's "..., as Trustee for ...", a union's local with its
-    // federation - waits too, though right.
-    if relation
-        .parties
-        .iter()
-        .any(|name| name.chars().count() > MAX_PARTY_NAME_CHARS)
-    {
-        push(&mut reasons, ReviewReason::PartyUnsupported);
-    }
-    // So does a name that gives an organization read from one coined word
-    // under the addressee: its place and its shape say it is the
-    // organization ("PacifiCorp"), and a word the extraction ran together
-    // has the same shape in the same place.
-    if read_by_shape.is_some_and(|shaped| {
-        relation
-            .parties
-            .iter()
-            .any(|name| normalize_loosely(name) == shaped)
-    }) {
         push(&mut reasons, ReviewReason::PartyUnsupported);
     }
 
@@ -6530,6 +6576,51 @@ fn memorandum_to_a_class(document_type: &str) -> bool {
             .is_some_and(|next| matches!(next.as_str(), "for" | "to"))
             && names_a_class_of_recipients(&type_words[at + 2..].join(" "))
     })
+}
+
+/// Whether a type names a memorandum or a circular.
+fn names_a_memorandum(document_type: &str) -> bool {
+    words(document_type).iter().any(|word| {
+        matches!(
+            word.as_str(),
+            "memorandum" | "memoranda" | "memo" | "circular"
+        )
+    })
+}
+
+/// Whether a party is named by a post, or as the holders of posts, with no
+/// person's name before it: its first part - what stands before a comma
+/// or an "and" - opens on a post ("Chair, Board of Directors", "Chief
+/// Executive Officer", "The Secretary"), or one of its parts is a post in
+/// the plural and nothing else ("Academic Deans and Directors"). An
+/// organization's name is neither ("Board of Directors", "Foster and
+/// Partners"); nor is a person named with their post ("Kevin Kramp,
+/// Director"), whose name comes first, or a firm whose name ends on a
+/// plural post ("Brandt Achterberg Solicitors").
+fn named_by_a_post(name: &str) -> bool {
+    if is_organization_name(name) {
+        return false;
+    }
+    let is_post = |word: &str| JOB_TITLE_WORDS.contains(&word) || is_plural_post(word);
+    let lowered = normalize(name);
+    let parts = lowered
+        .split(',')
+        .flat_map(|part| part.split(" and "))
+        .map(|part| {
+            words(part)
+                .into_iter()
+                .skip_while(|word| word == "the")
+                .collect::<Vec<_>>()
+        })
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    parts
+        .first()
+        .and_then(|part| part.first())
+        .is_some_and(|word| is_post(word))
+        || parts
+            .iter()
+            .any(|part| matches!(part.as_slice(), [only] if is_plural_post(only)))
 }
 
 /// The longest a party in a name may be before the name waits for a
@@ -12635,6 +12726,158 @@ of active General Counsel Memoranda and determined that the following actions ar
             "{:?}",
             outcome.reasons
         );
+    }
+
+    /// real6-memo-02's and real6-memo-05's shape: a memorandum whose
+    /// "To:" line names a post, or the holders of posts, with no person's
+    /// name - whoever holds the post at every body it went to. It is filed
+    /// by the office it comes from: "from" the organization the document
+    /// supports as its issuer, where the cast holds one, and otherwise
+    /// kept and held for a person. A memorandum to File, to a named
+    /// organization, to a firm or to a person named with their post is
+    /// named as before, and so is a letter to a post.
+    #[test]
+    fn a_memorandum_to_a_post_is_named_from_its_office_or_waits() {
+        const MEMO: &str = "Harlow Basin Credit Administration\n\n\
+INFORMATIONAL MEMORANDUM\n\n\
+October 16, 2024\n\n\
+To: Chair, Board of Directors\n\
+From: Odalys Brandt, Director\n\
+Subject: Extending the implementation date of the final rule\n\n\
+We are issuing this informational memorandum to extend the implementation date of the final \
+rule from January 1, 2025, to January 1, 2026.";
+        const POST: &str = "Chair, Board of Directors";
+        let reply = |text: &str, document_type: &str, addressee: &str, office: bool| {
+            facts_for(text, |index| ModelFacts {
+                document_type: Some(document_type.into()),
+                document_date: Some("2024-10-16".into()),
+                date_evidence: vec![id_of(index, "October 16, 2024")],
+                parties: [
+                    office.then(|| {
+                        party(
+                            "Harlow Basin Credit Administration",
+                            Some(PartyRole::Issuer),
+                            &[id_of(index, "Harlow Basin Credit Administration")],
+                        )
+                    }),
+                    Some(party(
+                        addressee,
+                        Some(PartyRole::Addressee),
+                        &[id_of(index, "To:")],
+                    )),
+                    Some(party(
+                        "Odalys Brandt",
+                        Some(PartyRole::Sender),
+                        &[id_of(index, "From:")],
+                    )),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        // The office on the letterhead is in the cast: the memorandum is
+        // from it, and nothing about its parties waits.
+        let outcome = reply(MEMO, "Informational Memorandum", POST, true);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Harlow Basin Credit Administration"]
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // No office in the cast: the name is kept, and waits.
+        for holders in [
+            POST,
+            "Academic Deans and Directors",
+            "Chief Executive Officer",
+        ] {
+            let text = MEMO.replace(POST, holders);
+            let outcome = reply(&text, "Informational Memorandum", holders, false);
+            assert_eq!(
+                outcome.proposal.party_relation,
+                PartyRelation::To,
+                "{holders}"
+            );
+            assert_eq!(outcome.proposal.parties, vec![holders]);
+            assert!(
+                outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+                "{holders}: {:?}",
+                outcome.reasons
+            );
+        }
+        // Who a memorandum is to stays where it names an organization, a
+        // firm or a person - the office on the letterhead in the cast or
+        // not - and no party reason is raised.
+        for addressee in [
+            "Corvane Media Group LLC",
+            "Brandt Achterberg Solicitors",
+            "Corbin Vale, Director",
+        ] {
+            for office in [true, false] {
+                let text = MEMO.replace(POST, addressee);
+                let outcome = reply(&text, "Informational Memorandum", addressee, office);
+                assert_eq!(
+                    outcome.proposal.party_relation,
+                    PartyRelation::To,
+                    "{addressee}"
+                );
+                assert_eq!(outcome.proposal.parties.len(), 1, "{addressee}");
+                assert!(
+                    !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+                    "{addressee}: {:?}",
+                    outcome.reasons
+                );
+            }
+        }
+        // A letter to a post is a letter to it.
+        let letter = MEMO.replace("INFORMATIONAL MEMORANDUM", "LETTER OF INSTRUCTION");
+        let outcome = reply(&letter, "Letter of Instruction", POST, true);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec![POST]);
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        for post in [
+            "Chair, Board of Directors",
+            "Chief Executive Officer",
+            "The Secretary",
+            "Director of Regulation",
+            "Academic Deans and Directors",
+            "Counsel",
+        ] {
+            assert!(named_by_a_post(post), "{post}");
+        }
+        for party in [
+            "File",
+            "Board of Directors",
+            "Office of the General Counsel",
+            "Head Office",
+            "Foster and Partners",
+            "Corvane Media Group LLC",
+            "Director of Regulation, Corvane Media Group LLC",
+            "Brandt Achterberg Solicitors",
+            "Summit Wealth Advisors",
+            "Hamptons Estate Agents",
+            "Co-op Funeral Directors",
+            "Kansas City Chiefs",
+            "Julie Heads",
+            "Odalys Brandt",
+            "Corbin Vale, Director",
+            "Corbin Vale, Director and Secretary",
+        ] {
+            assert!(!named_by_a_post(party), "{party}");
+        }
+        assert!(names_a_memorandum("Informational Memorandum"));
+        assert!(names_a_memorandum("Circular Letter"));
+        assert!(!names_a_memorandum("Letter of Instruction"));
     }
 
     /// A class of recipients opens on "All", "Each" or "Fellow" before a
