@@ -185,7 +185,11 @@ shows it as it now is, and what you had typed is kept beside it, read-only,
 until you discard it. If that happens while you are typing, or the panel
 closes under the cursor, the cursor stays in what you had typed: nothing typed
 after that is taken as a command, Tab included, until you press Escape or
-click (two rare cases aside, which the alpha.18 release notes give).
+click (two rare cases aside, which the alpha.18 release notes give). A click
+or a tap does nothing on a button that acts - Approve & rename, Keep
+original, Rename all ready, a Discard, an Undo - when that button came under
+the pointer less than half a second before, as it can when the window
+changes by itself while your hand is on its way: click again.
 **Back to Intern's proposal**, above the name while it differs, drops what
 you typed for a document. **Rename all ready** leaves alone a ready
 document whose name or description you typed and did not file, and says so.

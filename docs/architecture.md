@@ -905,6 +905,78 @@ the other way out. An add that finishes while a name is being typed does
 not move the selection to the new row, and the queue's filter box stays
 while the caret is in it, however few rows are left.
 
+A press of the pointer acts only on a control it can have been aimed at
+(`takeOnlyAimedPresses` in `src/lib/aimedPress.ts`, applied to the window
+before anything is drawn). A press is aimed at what is under the pointer as
+the hand sets out, and the window changes by itself before it lands. With
+real presses a quarter of a second after the change, in alpha.18: the open
+document left the queue, and a press on its way to the panel's Close review
+landed on Rename all ready and renamed three documents; a document was read
+again, and a press on its way to its name landed on "Discard what I had",
+and what had been typed was gone; a document was given another proposal,
+and a press on its way to Keep original landed on Approve & rename and
+filed it. Each control that acts - decides, files, removes, discards,
+cancels, retries or renames - is marked where it is drawn (`data-acts`): the
+panel's decision and the items of its More menu, the yes of the question
+before a removal, the dates and parties to put in a name, "Back to Intern's
+proposal", the button under a kept text, Rename all ready, Discard waiting,
+Clear history, a result's Undo, and an update's Install. What only moves the
+view is not: a row, a view's button, Details, Close review, Next undecided,
+More, a Dismiss. A test lists every button of the queue and the panel as
+one or the other, and fails for a button that is in neither list.
+
+For each marked control the window keeps where it has been for the last
+half second (`SETTLE_MS`): its box, and none while it is not on top at its
+middle, so that a control under the drawer or behind Settings has only just
+come where it is when what covered it goes. It looks whenever the page
+changes, scrolls or is resized, when a field takes a character, and again
+as each press lands, so a change it was not told of counts from the press
+that found it. A press is taken when the control has been under the place
+pressed for all of that half second, whatever else moved: a button that
+shifts a little and stays under the pointer is the same button. Otherwise
+the press does nothing - the page hears of no button going down and of no
+click, the focus and any selection stay where they were, and nothing is
+shown - and is to be made again. The click is judged where it lands as well
+as where the press went down, since a finger's click goes to what is under
+it as it lifts; any button of the mouse is judged, since the right one takes
+the focus; and a click from the keyboard, which has no press of the pointer
+in it, is left alone - what keys may do while the window changes is the
+matter of the paragraphs above.
+
+Two things are taken sooner. A control that came where it is while a press
+or a key of the person's own was being handled - an item of a menu just
+opened, the buttons of a panel just asked for - is taken once the press
+lands 24 pixels or more (`REACH_PX`) from where the pointer was then: they
+went to it. Pressed where the pointer already was, it is not, so the second
+click of a double-click acts on nothing the first brought under it. A
+control that came by itself is never taken sooner, wherever the pointer has
+been since: a hand already on its way moves too. And Approve & rename and
+Keep original are known by name (`data-acts="approve"`, `"keep"`), not by
+the button that stands for them: while a decision is carried out they are
+disabled, and the panel shows the document just decided as filed, without
+them, before it shows the next. One that went while disabled and is back in
+the same place within the half second is where the person left it, so one
+document after another is approved with the pointer at rest; one that went
+while it could be pressed, its document read again by itself, has arrived
+when it comes back.
+
+What it costs is a press that has to be made again: on a control within half
+a second of its coming under the pointer after the wheel or a resize, and on
+a note's button pressed as soon as it appears. The demo answers a command
+while the press that sent it is still being handled, so what the answer
+changes - the next document's buttons, a result's Undo - counts as asked for
+there. The desktop backend was not run with this; where its answers come
+later, what they change counts as having come by itself and waits the half
+second. What the rule does not see is a change that moves nothing: where the
+panel's decision sticks to the bottom (a window 800 by 600), a document
+given another proposal with no kept text above its fields leaves Approve &
+rename where it was, and a press on its way to it files the new proposal.
+Nor a press made later than the half second: there, More opens its last
+item, Remove from queue, under the pointer, and a second press on More more
+than half a second after the first removes the document. Nor a window of
+another program that was over Intern's. Settings, Rename history and the
+setup screens mark nothing.
+
 A drawer is asked for at the narrow width it opens at. Asked for once, it
 used to open again by itself each time the window was next made narrower
 than 1100px, over whatever row was selected by then and with the caret in
