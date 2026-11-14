@@ -732,15 +732,29 @@ exactly as they are, that every later document Intern reads as naming the
 word (for a type: reads as that type) will be named with the spelling, and
 may be filed under that name without the person's check. Then it asks for
 the spelling to be typed (`UseOnItsOwnQuestion`): its yes stays disabled,
-and Enter in the field does nothing, until what is typed is the spelling -
-the same letters and digits in the same order, both sides decomposed
-(NFKD), stripped of combining marks, lower-cased and left with nothing but
-letters and digits (`typedOut`). Case, accents, spaces and punctuation do
-not matter; every letter and digit does. A spelling with no letter or digit
-is typed exactly, spaces at its ends aside. Only typing fills the field: a
-paste, a drop, a suggestion taken, a yank, an undo and autofill are refused,
-and the field asks the browser for no suggestions. Once the spelling is
-typed, the yes is an ordinary button, and Enter in the field answers.
+and Enter in the field does nothing but say why, until what is typed is the
+spelling - the same letters and digits in the same order (`typedOut`). Both
+sides keep only their letters, marks and digits as written (a symbol such
+as ™ is none, though NFKD would spell it "TM", nor is an apostrophe written
+as a letter, ʻ, nor a variation selector); are decomposed (NFKD); lose the
+marks on Latin, Greek, Hebrew and Arabic letters - accents, and the vowel
+points those two scripts as a rule leave unwritten - and keep every other
+mark, which makes another letter or syllable (カ and ガ, И and Й, राम and
+रमा); are lower-cased; and spell the letters no decomposition takes apart
+as a keyboard without them does (ø as o, ß as ss, ł as l, æ as ae, ı as i;
+a final ς as σ). So case, accents, spaces and punctuation do not matter:
+"contoso ltd" is "Contoso Ltd.", "Soren" is "Søren", "Acme" is "Acme™";
+every letter and digit does, and so does a mark that makes another letter.
+A spelling with no letter or digit is typed exactly, spaces at its ends
+aside. Only typing fills the field: a paste, a drop, a suggestion taken, a
+yank, an undo and autofill are refused, and the field asks the browser for
+no suggestions. A key types one character, so text put in outside a
+composition is taken one character at a time, or as many at once as keys
+were pressed in the field since its last input: an input method that shows
+no composition commits what its keys spelled, but a word put in at once
+with no keys for it - an input method's or an on-screen keyboard's
+clipboard, an emoji keyboard - is refused. Once the spelling is typed, the
+yes is an ordinary button, and Enter in the field answers.
 
 A check is for good, and the harm it can do is a wrong spelling - "John
 Smith" written as "John Smith, Jane Doe" - filed without review on every
@@ -766,15 +780,27 @@ under the pointer. Opened by a press, the question opens where the action
 was, sentence first, with the focus in its field, and nothing the press sets
 off moves what is under the pointer (`afterAPress`): neither the review
 panel nor Settings scrolls until a key is pressed. Opened from the keyboard,
-it is brought into sight, clear of the review panel's decision.
+it is brought into sight, clear of the review panel's decision, and so it
+is by the first key typed into it after a press opened it: the spelling
+went into a field out of sight, under the decision or below Settings' body.
+
+What a question cannot rule out is a person who means to fill the field
+without reading it. An input method can commit any text through a
+composition - its candidates can include its clipboard - and software that
+sends keys (dictation that types letter by letter, remote control, a
+macro) types. Each takes the person's own doing, and none is a stray
+press. Dictation that puts in a whole word at once, an assistive
+technology's "set value", and a touch keyboard's replacement are refused
+with the paste, so their users type the spelling.
 
 The command (`house_rule_check`) carries the rule's id and the spelling the
 person was shown - its kind, the document's word and the spelling - and the
 repository marks the rule checked, in one statement, only while it exists,
 is in force, and reads exactly that (`PipelineRepository::check_rule`): a
-rule forgotten is refused (`RULE_NOT_FOUND`), and one not in force, or
-respelled or learned from other words since it was shown, is refused
-(`RULE_CHANGED`) and shown again as it now reads. Checking a rule approves
+rule forgotten is refused (`RULE_NOT_FOUND`) and taken out of what the
+review window or Settings shows, and one not in force, or respelled or
+learned from other words since it was shown, is refused (`RULE_CHANGED`)
+and shown again as it now reads. Checking a rule approves
 and files nothing. The
 documents still waiting are restyled as after any change to the rules
 (`restyle_waiting`): the rule is used where their names did not show it, and
