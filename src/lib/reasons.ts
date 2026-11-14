@@ -28,24 +28,31 @@ const SENTENCES: Record<string, string> = {
   // (ReviewReason in domain.rs; raised in facts.rs and validate.rs, on the
   // relation compose.rs reads). PARTY_UNSUPPORTED: most often a name that
   // rests on sides only the model's reading gave, the document's wording
-  // saying nothing of them (Relation::on_proposed_roles; 99 of the 160 in
-  // the 9B's replays of InternBench and the real sets, 70 of the 107 in the
-  // 4B's of InternBench and real sets 1-4); then a party the model named
-  // that the document does not contain, a placeholder, or one capitalized
-  // word such as a first name, each left out of the name, which may then
-  // have no party at all; a default the model's own reading speaks
-  // against - a document "for" the party the model called its issuer or
+  // saying nothing of them (Relation::on_proposed_roles; counted before the
+  // relation rules of November 2026, 99 of the 160 in the 9B's replays of
+  // InternBench and the real sets, 70 of the 107 in the 4B's of InternBench
+  // and real sets 1-4) - since those rules also a notice or a record
+  // "from" the party it names by default, where the model called that
+  // party its issuer or sender; a party no rule could join to the
+  // document, named after a dash with no "from", "to" or "for" ("Purchase
+  // Order - Kestrel Instruments Ltd"); then a party the model named that
+  // the document does not contain, a placeholder, or one capitalized word
+  // such as a first name, each left out of the name, which may then have
+  // no party at all; a default the model's own reading speaks against - a
+  // provider's document "for" the party the model called its issuer or
   // sender, or the first of several parties the model told no further
   // apart, kept only for coming first (Relation::doubtful); a release named
   // between two of its parties, by their order alone or as a published
-  // release whose text sets out two sides; a name to or for a group of
-  // recipients such as "all staff", in its parties or in its type; a
-  // name whose party is longer than 70 characters (MAX_PARTY_NAME_CHARS in
-  // facts.rs), most often a run of text read as one name, which the
-  // filename drops when it does not fit; and a letter or a notice named to
-  // an organization read from one coined word under the addressee
-  // ("PacifiCorp"; is_coined_name in facts.rs), a shape that words the
-  // extraction ran together share.
+  // release whose text sets out two sides; a document addressed to a
+  // group of recipients such as "all staff" - named to or for the group,
+  // in its parties or in its type, or, where the cast holds the party it
+  // comes from, from that party in the group's place, so the group is
+  // then nowhere in the name; a name whose party is longer than 70
+  // characters (MAX_PARTY_NAME_CHARS in facts.rs), most often a run of
+  // text read as one name, which the filename drops when it does not
+  // fit; and a letter or a notice named to an organization read from one
+  // coined word under the addressee ("PacifiCorp"; is_coined_name in
+  // facts.rs), a shape that words the extraction ran together share.
   // PARTY_MISSING: an agreement or an amendment naming one side, an
   // invoice, a receipt or an order left naming no one, or any document left
   // naming no one because every party the model gave was set aside (copied,
@@ -55,7 +62,7 @@ const SENTENCES: Record<string, string> = {
   // each model's replays), though PARTY_UNSUPPORTED mostly comes without
   // it, and the place to look, PARTY_CHECK below, follows the last of them
   // only.
-  PARTY_UNSUPPORTED: 'Intern could not confirm from the document which party this name should give. Most often the document does not say which side a party is on, so the side rests on the model\'s reading alone. A party the model named may also be absent from the document, or be one word such as a first name, and is then left out of the name. Or the name may give a party picked only for coming first or against the model\'s own reading, a release between two of its parties, or a group of recipients such as “all staff”. A party more than 70 characters long is held as well: it is rarely one name, and the filename may have had to leave it out. So is an organization Intern read from one word under the addressee\'s name, such as “PacifiCorp”.',
+  PARTY_UNSUPPORTED: 'Intern could not confirm from the document which party this name should give. Most often the document does not say which side a party is on, so the side rests on the model\'s reading alone or is left out of the name. A party the model named may also be absent from the document, or be one word such as a first name, and is then left out of the name. Or the name may give a party picked only for coming first or against the model\'s own reading, or a release between two of its parties, or the document may be addressed to a group of recipients such as “all staff”. A party more than 70 characters long is held as well: it is rarely one name, and the filename may have had to leave it out. So is an organization Intern read from one word under the addressee\'s name, such as “PacifiCorp”.',
   PARTY_MISSING: 'The name lacks a party it needs, such as the other side of an agreement or who issued the document.',
   DESCRIPTION_UNSUPPORTED: 'The description asserts something the document does not contain.',
   DESCRIPTION_INVALID: 'The description was not a single usable sentence.',

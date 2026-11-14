@@ -1933,6 +1933,20 @@ fn validate_reading(
             cast.iter()
                 .position(|party| normalize_loosely(&party.name) == name)
         }),
+        // A notice written as a letter - a penalty notice to a manager at
+        // the company, a layoff notice to the state's workforce office -
+        // names who it was sent to in its address block, over the greeting,
+        // with no "To:" label for the rules to read a recipient from. The
+        // block says nothing of the party's role, so validation supports
+        // none by it; it does show the address of a party the reply called
+        // the recipient.
+        addressed: cast.iter().position(|party| {
+            party.role.is_none()
+                && party
+                    .proposed_role
+                    .is_some_and(|role| ADDRESSED_ROLES.contains(&role))
+                && layout.addresses(scope, &party.name)
+        }),
     };
     // A release the type names as published - an enforcement release, a
     // press release - is a record of what it announces, about its subject
@@ -1956,6 +1970,14 @@ fn validate_reading(
     // ([`Relation::doubtful`]): the document did not say, and the reply
     // said otherwise.
     if relation.on_proposed_roles || relation.doubtful || published_between {
+        push(&mut reasons, ReviewReason::PartyUnsupported);
+    }
+    // A party no rule could join to the document is named after a dash,
+    // with no joining word: "Purchase Order - Kestrel Instruments Ltd".
+    // The party is in the document; whether the document is from it, to
+    // it or for it is what nothing settled, and a name that leaves it open
+    // waits for a person to say which.
+    if relation.relation == PartyRelation::None && !relation.parties.is_empty() {
         push(&mut reasons, ReviewReason::PartyUnsupported);
     }
     // An agreement has two sides at least. One that names only one has
@@ -2009,6 +2031,19 @@ fn validate_reading(
     if to_a_class || document_type.as_deref().is_some_and(memorandum_to_a_class) {
         push(&mut reasons, ReviewReason::PartyUnsupported);
     }
+    // The office such a document comes from is what a person files it by,
+    // and where the cast holds it the name gives it in the class's place:
+    // an annual report from its company, never "for Fellow Shareholders";
+    // a circular from the department the reply named. A party the
+    // document or the reply calls the one the document is about - a
+    // certificate's insured whose name opens like a class - keeps its
+    // place. The name waits for a person all the same: the reason raised
+    // above stands, whichever party the name gives
+    // ([`source_for_a_class`]).
+    let relation = to_a_class
+        .then(|| source_for_a_class(&cast, &relation))
+        .flatten()
+        .unwrap_or(relation);
     // A party too long to be a name waits for a person. A name is a few
     // words; what runs past [`MAX_PARTY_NAME_CHARS`] is far more often a
     // run of text the reply took for one - the recipients of a "To:" list
@@ -6695,6 +6730,95 @@ fn names_a_class_of_recipients(name: &str) -> bool {
                 })
         }
         None => false,
+    }
+}
+
+/// A document named "to" or "for" a class of recipients, named instead
+/// "from" the party it comes from: the first party of the cast, besides the
+/// one `relation` names, that the document supports as its issuer or
+/// sender, else the first the document gives no role and the reply called
+/// its issuer or sender. A party the document gives another role is no
+/// source, whatever the reply called it: the document's word is against the
+/// reply's reading. A class of recipients is no source, and neither is a
+/// person named with the post they hold ([`names_a_post_holder`]), who acts
+/// for an office the cast does not hold. `None` when the cast holds no such
+/// party: the name stays as it was.
+///
+/// A class of recipients is whom a document was sent to. A party the
+/// document calls the one it is about - a certificate's "Insured:", a
+/// notice's "Tenant:" ([`SUBSTANTIVE`]) - or, the document giving it no
+/// role, that the reply called so, is no such class, though its name opens
+/// like one ("All Pro Suppliers"): a name "for" it stays as it was, `None`.
+fn source_for_a_class(cast: &[CastMember], relation: &Relation) -> Option<Relation> {
+    let sending = |role: Option<PartyRole>| {
+        role.filter(|role| matches!(role, PartyRole::Issuer | PartyRole::Sender))
+    };
+    let supported = |party: &CastMember| party.role.filter(|_| party.role_supported);
+    let about = |party: &CastMember| {
+        supported(party)
+            .or(party.proposed_role)
+            .is_some_and(|role| SUBSTANTIVE.contains(&role))
+    };
+    if cast
+        .iter()
+        .any(|party| relation.parties.contains(&party.name) && about(party))
+    {
+        return None;
+    }
+    let sources = cast
+        .iter()
+        .filter(|party| {
+            !relation.parties.contains(&party.name)
+                && !names_a_class_of_recipients(&party.name)
+                && !names_a_post_holder(&party.name)
+        })
+        .collect::<Vec<_>>();
+    let on_the_document = sources
+        .iter()
+        .find_map(|party| sending(supported(party)).map(|role| (*party, role, false)));
+    let on_the_reply = || {
+        sources.iter().find_map(|party| {
+            sending(party.proposed_role)
+                .filter(|_| supported(party).is_none())
+                .map(|role| (*party, role, true))
+        })
+    };
+    let (source, role, on_proposed_roles) = on_the_document.or_else(on_the_reply)?;
+    Some(Relation {
+        relation: PartyRelation::From,
+        parties: vec![source.name.clone()],
+        basis: format!(
+            "{}, a class of recipients, so from the {} {}",
+            relation.basis,
+            role.as_str(),
+            if on_proposed_roles {
+                "the reply named"
+            } else {
+                "the document names"
+            }
+        ),
+        on_proposed_roles,
+        defaulted: false,
+        doubtful: false,
+    })
+}
+
+/// Whether a party's name is a person's given with the post they hold:
+/// words before a comma that name no organization and a post after it
+/// ("Odalys B. Brandt, Acting General Counsel", "Odalys Brandt, Director,
+/// Office of Budget and Planning"), or a post, alone or written before the
+/// body it is held at ("Acting General Counsel", "Clerk of Court",
+/// "Director, Office of Prescription Drug Promotion"). An office named by
+/// a post is an organization ("Office of the General Counsel"), and so is
+/// a company whose name holds a post's word ("Brandt Partner Holdings
+/// Ltd").
+fn names_a_post_holder(name: &str) -> bool {
+    if !holds_a_post(name) {
+        return false;
+    }
+    match name.split_once(',') {
+        Some((before, after)) if holds_a_post(after) => !is_organization_name(before),
+        _ => !is_organization_name(name),
     }
 }
 
@@ -13159,6 +13283,577 @@ This Sponsorship Agreement is made on July 16, 2012 by Peek Investments LLC.";
         );
     }
 
+    /// InternBench's purchase order as the smaller model read it: the reply
+    /// named the vendor the order goes to and not the company that issues
+    /// it. An order is never from its vendor, so no rule joins the vendor
+    /// to the name, and "Purchase Order - Ridgewell Textiles Ltd." says
+    /// nothing of which side it is: the name is kept and waits for a
+    /// person. The same order with its buyer named is from the buyer and
+    /// files, and minutes that name no party at all are as ready as before.
+    #[test]
+    fn a_party_named_with_no_joining_word_goes_to_review() {
+        const ORDER: &str = "Thornbury Outdoor Gear Co.\n\n\
+PURCHASE ORDER\n\n\
+PO Number: TOG-PO-4471\n\
+PO Date: June 3, 2026\n\
+Buyer: Imogen Wexley\n\
+Vendor: Ridgewell Textiles Ltd.\n\
+Ship To: Thornbury Outdoor Gear Co., Receiving\n\n\
+Ripstop nylon, 70D, forest green (yards): 1200 at $6.85 = $8,220.00\n\
+Order total: $8,220.00";
+        let order = |with_buyer: bool| {
+            facts_for(ORDER, |index| ModelFacts {
+                document_type: Some("Purchase Order".into()),
+                type_evidence: vec![id_of(index, "PURCHASE ORDER")],
+                document_date: Some("2026-06-03".into()),
+                date_evidence: vec![id_of(index, "PO Date")],
+                parties: [
+                    Some(party(
+                        "Ridgewell Textiles Ltd.",
+                        Some(PartyRole::Vendor),
+                        &[id_of(index, "Vendor:")],
+                    )),
+                    with_buyer.then(|| {
+                        party(
+                            "Thornbury Outdoor Gear Co.",
+                            Some(PartyRole::Buyer),
+                            &[id_of(index, "Thornbury Outdoor")],
+                        )
+                    }),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        let outcome = order(false);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::None);
+        assert_eq!(outcome.proposal.parties, vec!["Ridgewell Textiles Ltd."]);
+        assert_eq!(
+            outcome.reasons,
+            vec![ReviewReason::PartyUnsupported],
+            "{:?}",
+            outcome.facts
+        );
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+
+        let outcome = order(true);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(outcome.proposal.parties, vec!["Thornbury Outdoor Gear Co."]);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+
+        const MINUTES: &str = "MINUTES OF THE BOARD MEETING\n\n\
+14 June 2018\n\n\
+1. The chair welcomed the members and the minutes of the last meeting were approved.\n\
+2. The board approved the budget for the coming year.";
+        let (outcome, _) = facts_for(MINUTES, |index| ModelFacts {
+            document_type: Some("Minutes of the Board Meeting".into()),
+            type_evidence: vec![id_of(index, "MINUTES OF THE")],
+            document_date: Some("2018-06-14".into()),
+            date_evidence: vec![id_of(index, "14 June")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::None);
+        assert!(outcome.proposal.parties.is_empty());
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// A purchase order is issued by the side buying and sent to its
+    /// vendor. The head of its page is no evidence of which is which: the
+    /// vendor's line stands over the "Ship To" as often as the buyer's
+    /// letterhead does. A reply that names the vendor alone is not read as
+    /// naming the order's issuer, whether the document labels the vendor,
+    /// only the reply called it so, or the order also names where it is
+    /// delivered: the vendor is kept with no joining word, and the name
+    /// waits for a person. Nor does setting the vendor aside at the head
+    /// make whoever else the order names its issuer: an order addressed to
+    /// its vendor there keeps the one other party it names with no joining
+    /// word, and waits too. The party at the head that nothing calls the
+    /// vendor is the order's issuer as before, and an invoice laid out the
+    /// same way is from its vendor.
+    #[test]
+    fn an_order_whose_vendor_heads_its_page_is_not_named_from_the_vendor() {
+        const LABELED: &str = "Thornbury Outdoor Gear Co.\n\n\
+PURCHASE ORDER\n\n\
+PO Number: TOG-PO-4471\n\
+PO Date: June 3, 2026\n\
+Vendor: Ridgewell Textiles Ltd.\n\
+Ship To: Thornbury Outdoor Gear Co., Receiving\n\n\
+Ripstop nylon, 70D, forest green (yards): 1200 at $6.85 = $8,220.00\n\
+Order total: $8,220.00";
+        const UNLABELED: &str = "PURCHASE ORDER\n\n\
+PO Number: TOG-PO-4471\n\
+PO Date: June 3, 2026\n\n\
+Ridgewell Textiles Ltd.\n\
+40 Mill Road\n\
+Dalton\n\n\
+Ship To: Thornbury Outdoor Gear Co., Receiving\n\n\
+Ripstop nylon, 70D, forest green (yards): 1200 at $6.85 = $8,220.00\n\
+Order total: $8,220.00";
+        const DELIVERED: &str = "PURCHASE ORDER\n\n\
+PO Number: TOG-PO-4471\n\
+PO Date: June 3, 2026\n\n\
+Vendor: Ridgewell Textiles Ltd.\n\
+Deliver To: Thornbury Outdoor Gear Co.\n\n\
+Ripstop nylon, 70D, forest green (yards): 1200 at $6.85 = $8,220.00\n\
+Order total: $8,220.00";
+        let read = |text: &str, kind: &str, parties: &[(&str, Option<PartyRole>, &str)]| {
+            facts_for(text, |index| ModelFacts {
+                document_type: Some(kind.into()),
+                type_evidence: vec![id_of(index, &kind.to_uppercase())],
+                document_date: Some("2026-06-03".into()),
+                date_evidence: vec![id_of(index, "Date: June 3")],
+                parties: parties
+                    .iter()
+                    .map(|(name, role, line)| party(name, *role, &[id_of(index, line)]))
+                    .collect(),
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        let vendor = |role| ("Ridgewell Textiles Ltd.", role, "Ridgewell");
+        let delivery = (
+            "Thornbury Outdoor Gear Co.",
+            Some(PartyRole::Recipient),
+            "Deliver To",
+        );
+        for (tag, text, parties) in [
+            (
+                "labelled, the reply's vendor",
+                LABELED,
+                vec![vendor(Some(PartyRole::Vendor))],
+            ),
+            (
+                "labelled, the reply's seller",
+                LABELED,
+                vec![vendor(Some(PartyRole::Seller))],
+            ),
+            ("labelled, no role", LABELED, vec![vendor(None)]),
+            (
+                "the reply's vendor alone",
+                UNLABELED,
+                vec![vendor(Some(PartyRole::Vendor))],
+            ),
+            (
+                "the reply's seller alone",
+                UNLABELED,
+                vec![vendor(Some(PartyRole::Seller))],
+            ),
+            (
+                "with where it is delivered",
+                DELIVERED,
+                vec![vendor(Some(PartyRole::Vendor)), delivery],
+            ),
+        ] {
+            let outcome = read(text, "Purchase Order", &parties);
+            assert_eq!(
+                outcome.proposal.party_relation,
+                PartyRelation::None,
+                "{tag}: {:?}",
+                outcome.facts.as_ref().map(|facts| &facts.relation_basis)
+            );
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["Ridgewell Textiles Ltd."],
+                "{tag}"
+            );
+            assert_eq!(
+                outcome.reasons,
+                vec![ReviewReason::PartyUnsupported],
+                "{tag}"
+            );
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview, "{tag}");
+        }
+
+        // An order addressed "To:" its vendor at the head of the page, with
+        // one other party named under the delivery address. The vendor set
+        // aside, nothing shows that the other party issued the order - it
+        // is the buyer on one order and the carrier on the next - so the
+        // order is not named from it: it is kept with no joining word, and
+        // the name waits for a person.
+        for other in [
+            "Thornbury Outdoor Gear Co.",
+            "Redgate Interstate Freight Inc.",
+        ] {
+            let addressed = format!(
+                "PURCHASE ORDER\n\n\
+PO Number: TOG-PO-4471\n\
+PO Date: June 3, 2026\n\n\
+To: Ridgewell Textiles Ltd.\n\
+40 Mill Road\n\
+Dalton\n\n\
+Ship To: Receiving Dock 4, 12 Canal Street, Harrow\n\n\
+Ship via {other}\n\n\
+Ripstop nylon, 70D, forest green (yards): 1200 at $6.85 = $8,220.00\n\
+Order total: $8,220.00"
+            );
+            for (role, second) in [
+                (PartyRole::Vendor, None),
+                (PartyRole::Vendor, Some(PartyRole::Buyer)),
+                (PartyRole::Seller, Some(PartyRole::Other)),
+            ] {
+                let outcome = read(
+                    &addressed,
+                    "Purchase Order",
+                    &[vendor(Some(role)), (other, second, other)],
+                );
+                let tag = format!("{other}, {role:?}, {second:?}");
+                assert_eq!(
+                    outcome.proposal.party_relation,
+                    PartyRelation::None,
+                    "{tag}: {:?}",
+                    outcome.facts.as_ref().map(|facts| &facts.relation_basis)
+                );
+                assert_eq!(outcome.proposal.parties, vec![other], "{tag}");
+                assert_eq!(
+                    outcome.reasons,
+                    vec![ReviewReason::PartyUnsupported],
+                    "{tag}"
+                );
+                assert_eq!(outcome.status, ProposalStatus::NeedsReview, "{tag}");
+            }
+        }
+        // Where no party stands alone at the head - the order's text names
+        // its buyer before any delivery address - nothing is set aside, and
+        // the order is from the party on the other side of the vendor its
+        // "To:" names, as before.
+        const ORDERED: &str = "PURCHASE ORDER\n\n\
+PO Number: TOG-PO-4471\n\
+PO Date: June 3, 2026\n\n\
+To: Ridgewell Textiles Ltd.\n\
+40 Mill Road\n\
+Dalton\n\n\
+Please supply the goods below to Thornbury Outdoor Gear Co. at its Dalton warehouse.\n\n\
+Ripstop nylon, 70D, forest green (yards): 1200 at $6.85 = $8,220.00\n\
+Order total: $8,220.00";
+        for second in [None, Some(PartyRole::Buyer)] {
+            let outcome = read(
+                ORDERED,
+                "Purchase Order",
+                &[
+                    vendor(Some(PartyRole::Vendor)),
+                    ("Thornbury Outdoor Gear Co.", second, "Thornbury Outdoor"),
+                ],
+            );
+            assert_eq!(
+                outcome.proposal.party_relation,
+                PartyRelation::From,
+                "{second:?}: {:?}",
+                outcome.facts.as_ref().map(|facts| &facts.relation_basis)
+            );
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["Thornbury Outdoor Gear Co."],
+                "{second:?}"
+            );
+            assert_eq!(
+                outcome.status,
+                ProposalStatus::Ready,
+                "{second:?}: {:?}",
+                outcome.reasons
+            );
+        }
+
+        // The letterhead's company, which nothing calls the vendor.
+        let outcome = read(
+            LABELED,
+            "Purchase Order",
+            &[("Thornbury Outdoor Gear Co.", None, "Thornbury Outdoor")],
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(outcome.proposal.parties, vec!["Thornbury Outdoor Gear Co."]);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+
+        // An invoice's vendor is its issuer, wherever it stands.
+        for text in [LABELED, UNLABELED] {
+            let invoice = text
+                .replace("PURCHASE ORDER", "INVOICE")
+                .replace("PO Number", "Invoice Number")
+                .replace("PO Date", "Invoice Date");
+            let outcome = read(&invoice, "Invoice", &[vendor(Some(PartyRole::Vendor))]);
+            assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+            assert_eq!(outcome.proposal.parties, vec!["Ridgewell Textiles Ltd."]);
+            assert_eq!(
+                outcome.status,
+                ProposalStatus::Ready,
+                "{:?}",
+                outcome.reasons
+            );
+        }
+    }
+
+    /// A notice of a penalty that names the department assessing it and
+    /// the company it penalizes only in its text: the reply called the
+    /// company the recipient, and no line of the notice addresses it. The
+    /// notice is named "for" the company, on the reply's reading, and waits
+    /// for a person. The same notice with a "To:" line is addressed to the
+    /// company on the document's own word: it is named "to" it and files.
+    #[test]
+    fn a_notice_for_a_recipient_only_its_reply_named_goes_to_review() {
+        const BODY: &str = "The Meriden Department of Environmental Quality has assessed a civil \
+penalty of $4,800 against Calder Freight LLC for operating a transfer station without a permit. \
+The penalty is due within thirty days of this notice.";
+        let notice = |heading: &str| {
+            let text = format!("NOTICE OF CIVIL PENALTY ASSESSMENT\n\n{heading}\n\n{BODY}");
+            facts_for(&text, |index| ModelFacts {
+                document_type: Some("Notice of Civil Penalty Assessment".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF CIVIL")],
+                document_date: Some("2025-09-04".into()),
+                date_evidence: vec![id_of(index, "Date: 4 September")],
+                parties: vec![
+                    party(
+                        "Meriden Department of Environmental Quality",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "has assessed")],
+                    ),
+                    party(
+                        "Calder Freight LLC",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "has assessed")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        let outcome = notice("Date: 4 September 2025");
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(outcome.proposal.parties, vec!["Calder Freight LLC"]);
+        assert_eq!(
+            outcome.reasons,
+            vec![ReviewReason::PartyUnsupported],
+            "{:?}",
+            outcome.facts
+        );
+        assert_eq!(
+            outcome
+                .facts
+                .as_ref()
+                .map(|facts| facts.relation_basis.as_str()),
+            Some("notice: the recipient, for it on the reply's roles")
+        );
+
+        let outcome = notice("Date: 4 September 2025\nTo: Calder Freight LLC");
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["Calder Freight LLC"]);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// A notice written as a letter says who it was sent to in its address
+    /// block, with no "To:" label: a notice of a mass layoff sent to the
+    /// state's workforce office, a penalty notice sent to a manager at the
+    /// company it penalizes. The reply called the party in that block the
+    /// recipient, and the document shows the address: the notice is named
+    /// "to" it, and waits for a person, the role being the reply's. The
+    /// layoff notice is not "for" the office it informs. A company that
+    /// only the "Re:" line and the text name was shown no address: the
+    /// notice is "for" it.
+    #[test]
+    fn a_notice_stays_to_the_party_its_address_block_names() {
+        const LAYOFF: &str = "September 3, 2025\n\n\
+Meriden Department of Workforce Development\n\
+Dislocated Worker Unit\n\
+10 North Senate Avenue\n\
+Meriden, IN 46204\n\n\
+Re: Notice of Mass Layoff\n\n\
+To whom it may concern:\n\n\
+This notice is given under the Worker Adjustment and Retraining Notification Act. Calder Foods LLC \
+will permanently lay off 112 employees at its Washington plant beginning November 3, 2025.\n\n\
+Sincerely,\n\
+Ashley Gatlin\n\
+Human Resources Manager";
+        for company_role in [
+            Some(PartyRole::Employer),
+            Some(PartyRole::Issuer),
+            Some(PartyRole::Sender),
+            None,
+        ] {
+            let (outcome, _) = facts_for(LAYOFF, |index| ModelFacts {
+                document_type: Some("Notice of Mass Layoff".into()),
+                type_evidence: vec![id_of(index, "Notice of Mass Layoff")],
+                document_date: Some("2025-09-03".into()),
+                date_evidence: vec![id_of(index, "September 3, 2025")],
+                parties: vec![
+                    party(
+                        "Calder Foods LLC",
+                        company_role,
+                        &[id_of(index, "Calder Foods")],
+                    ),
+                    party(
+                        "Meriden Department of Workforce Development",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "Meriden Department")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.party_relation,
+                PartyRelation::To,
+                "{company_role:?}"
+            );
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["Meriden Department of Workforce Development"],
+                "{company_role:?}"
+            );
+            assert_eq!(
+                outcome.reasons,
+                vec![ReviewReason::PartyUnsupported],
+                "{company_role:?}"
+            );
+            assert_eq!(
+                outcome
+                    .facts
+                    .as_ref()
+                    .map(|facts| facts.relation_basis.as_str()),
+                Some("notice: the recipient, on the reply's roles"),
+                "{company_role:?}"
+            );
+        }
+
+        let penalty = |address: &str| {
+            let text = format!(
+                "July 22, 2025\n\n{address}\n\n\
+Re: Notice of Civil Penalty Assessment and Order - Calder Plywood Corporation\n\n\
+Dear Ms. Brandt:\n\n\
+The Meriden Department of Environmental Quality has assessed a civil penalty of $2,600 against \
+Calder Plywood Corporation for releasing hydraulic oil.\n\n\
+Sincerely,\n\
+Imogen Wexley\n\
+Interim Manager"
+            );
+            facts_for(&text, |index| ModelFacts {
+                document_type: Some("Notice of Civil Penalty Assessment and Order".into()),
+                type_evidence: vec![id_of(index, "Notice of Civil Penalty")],
+                document_date: Some("2025-07-22".into()),
+                date_evidence: vec![id_of(index, "July 22, 2025")],
+                parties: vec![
+                    party(
+                        "Calder Plywood Corporation",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "has assessed")],
+                    ),
+                    party(
+                        "Meriden Department of Environmental Quality",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "has assessed")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        let basis = |outcome: &ValidationOutcome| {
+            outcome
+                .facts
+                .as_ref()
+                .map(|facts| facts.relation_basis.clone())
+        };
+        // The company stands in the address block, under the manager.
+        let outcome = penalty(
+            "Odalys Brandt\nPlant Manager\nCalder Plywood Corporation\n400 Mill Road\n\
+Klamath Falls, OR 97601",
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["Calder Plywood Corporation"]);
+        assert_eq!(outcome.reasons, vec![ReviewReason::PartyUnsupported]);
+        assert_eq!(
+            basis(&outcome).as_deref(),
+            Some("notice: the recipient, on the reply's roles")
+        );
+        // The block names the manager at home: the company stands in the
+        // "Re:" line and the text only.
+        let outcome = penalty("Odalys Brandt\n400 Mill Road\nKlamath Falls, OR 97601");
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(outcome.proposal.parties, vec!["Calder Plywood Corporation"]);
+        assert_eq!(outcome.reasons, vec![ReviewReason::PartyUnsupported]);
+        assert_eq!(
+            basis(&outcome).as_deref(),
+            Some("notice: the recipient, for it on the reply's roles")
+        );
+    }
+
+    /// A freight claim names the carrier it is made to in its text, and
+    /// the reply called the carrier the recipient. A claim is made to the
+    /// party it is sent to: the name stays "to" the carrier, on the reply's
+    /// reading, and waits for a person. It is not "for" the carrier, as a
+    /// notice of a penalty is for the company it penalizes.
+    #[test]
+    fn a_claim_stays_to_the_party_only_its_reply_called_the_recipient() {
+        const CLAIM: &str = "NOTICE OF FREIGHT CLAIM\n\n\
+Date: April 27, 2026\n\n\
+Hollin Brook Furniture Gallery hereby gives notice to Redgate Interstate Freight Inc. of its claim \
+for damage to a shipment of dining chairs delivered on April 20, 2026 under pro number 7741-220. \
+Six cartons arrived crushed. We claim $2,340.00.";
+        for sender_role in [Some(PartyRole::Sender), None] {
+            let (outcome, _) = facts_for(CLAIM, |index| ModelFacts {
+                document_type: Some("Notice of Freight Claim".into()),
+                type_evidence: vec![id_of(index, "NOTICE OF FREIGHT")],
+                document_date: Some("2026-04-27".into()),
+                date_evidence: vec![id_of(index, "Date: April 27")],
+                parties: vec![
+                    party(
+                        "Hollin Brook Furniture Gallery",
+                        sender_role,
+                        &[id_of(index, "Hollin Brook")],
+                    ),
+                    party(
+                        "Redgate Interstate Freight Inc.",
+                        Some(PartyRole::Recipient),
+                        &[id_of(index, "Hollin Brook")],
+                    ),
+                ],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.party_relation,
+                PartyRelation::To,
+                "{sender_role:?}"
+            );
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["Redgate Interstate Freight Inc."],
+                "{sender_role:?}"
+            );
+            assert_eq!(
+                outcome.reasons,
+                vec![ReviewReason::PartyUnsupported],
+                "{sender_role:?}"
+            );
+            assert_eq!(
+                outcome
+                    .facts
+                    .as_ref()
+                    .map(|facts| facts.relation_basis.as_str()),
+                Some("notice: the recipient, on the reply's roles"),
+                "{sender_role:?}"
+            );
+        }
+    }
+
     /// real5-memo-01's shape: a memorandum whose "TO:" line names the
     /// class of officials it is sent to. The label supports the reply's
     /// addressee, but a class of recipients is no party a document is
@@ -13228,6 +13923,212 @@ of active General Counsel Memoranda and determined that the following actions ar
             "{:?}",
             outcome.reasons
         );
+    }
+
+    /// A memorandum to a class of recipients is filed by the office it
+    /// comes from. Where the reply named that office beside the class,
+    /// though no label of the document gives it a role, the name says
+    /// "from" the office on the reply's reading; where the letterhead
+    /// names it, on the document's. Either name still waits for a person.
+    /// A sender named with the post they hold acts for an office, and
+    /// stands in for none: with no one else to name, the memorandum stays
+    /// "to" its class. A memorandum to one named organization is to it and
+    /// files as before, whatever office the reply said it comes from.
+    #[test]
+    fn a_document_to_a_class_of_recipients_is_named_from_the_office_it_comes_from() {
+        const MEMO: &str = "MEMORANDUM GC 25-05 February 14, 2025\n\n\
+TO: Regional Directors, Officers-in-Charge, and Resident Officers\n\
+FROM: Odalys B. Brandt, Acting General Counsel\n\
+SUBJECT: Rescission of Certain General Counsel Memoranda\n\n\
+Since assuming the role of Acting General Counsel of the Meriden Labor Relations Board, I have \
+conducted a comprehensive review of active General Counsel Memoranda and determined that the \
+following actions are warranted.";
+        const CLASS: &str = "Regional Directors, Officers-in-Charge, and Resident Officers";
+        let reply = |text: &str, addressee: &str, others: &[(&str, PartyRole, &str)]| {
+            facts_for(text, |index| ModelFacts {
+                document_type: Some("MEMORANDUM".into()),
+                type_evidence: vec![id_of(index, "MEMORANDUM GC")],
+                document_date: Some("2025-02-14".into()),
+                date_evidence: vec![id_of(index, "MEMORANDUM GC")],
+                parties: std::iter::once(party(
+                    addressee,
+                    Some(PartyRole::Addressee),
+                    &[id_of(index, "TO:")],
+                ))
+                .chain(
+                    others
+                        .iter()
+                        .map(|(name, role, line)| party(name, Some(*role), &[id_of(index, line)])),
+                )
+                .collect(),
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        // The board the reply called the issuer is named in a sentence
+        // only: no label supports the role.
+        let board = (
+            "Meriden Labor Relations Board",
+            PartyRole::Issuer,
+            "Since assuming",
+        );
+        let basis = |outcome: &ValidationOutcome| {
+            outcome
+                .facts
+                .as_ref()
+                .map(|facts| facts.relation_basis.clone())
+                .unwrap_or_default()
+        };
+        let outcome = reply(MEMO, CLASS, &[board]);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Meriden Labor Relations Board"]
+        );
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(
+            basis(&outcome).ends_with("so from the issuer the reply named"),
+            "{}",
+            basis(&outcome)
+        );
+
+        // The same memorandum under the office's letterhead.
+        let headed = format!("OFFICE OF THE GENERAL COUNSEL\n{MEMO}");
+        let office = (
+            "Office of the General Counsel",
+            PartyRole::Issuer,
+            "OFFICE OF THE",
+        );
+        let outcome = reply(&headed, CLASS, &[office]);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Office of the General Counsel"]
+        );
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(
+            basis(&outcome).ends_with("so from the issuer the document names"),
+            "{}",
+            basis(&outcome)
+        );
+
+        // Both are in the cast, the board the reply alone called the
+        // issuer named first: the office the document names comes before
+        // any the reply named.
+        let outcome = reply(&headed, CLASS, &[board, office]);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Office of the General Counsel"]
+        );
+        assert!(
+            basis(&outcome).ends_with("so from the issuer the document names"),
+            "{}",
+            basis(&outcome)
+        );
+
+        // The person on the "FROM:" line holds a post at an office the
+        // reply did not name.
+        let outcome = reply(
+            MEMO,
+            CLASS,
+            &[(
+                "Odalys B. Brandt, Acting General Counsel",
+                PartyRole::Sender,
+                "FROM:",
+            )],
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec![CLASS]);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        // A class of senders is no more one party than a class of
+        // recipients: a memorandum to all staff from the regional
+        // directors stays "to" its class.
+        let from_a_class = MEMO.replace(CLASS, "All Staff").replace(
+            "Odalys B. Brandt, Acting General Counsel",
+            "Regional Directors",
+        );
+        let outcome = reply(
+            &from_a_class,
+            "All Staff",
+            &[("Regional Directors", PartyRole::Sender, "FROM:")],
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["All Staff"]);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        // The reply called a party the issuer that the document labels its
+        // client: the document's own word is against the reply's reading,
+        // and the party is no source.
+        let for_a_client = MEMO.replace("SUBJECT:", "CLIENT: Calder Freight LLC\nSUBJECT:");
+        let outcome = reply(
+            &for_a_client,
+            CLASS,
+            &[("Calder Freight LLC", PartyRole::Issuer, "CLIENT:")],
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec![CLASS]);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        // One named organization is a party a memorandum is filed by.
+        let named = MEMO.replace(CLASS, "Corvane Media Group LLC");
+        let outcome = reply(&named, "Corvane Media Group LLC", &[board]);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["Corvane Media Group LLC"]);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// A person named with the post they hold is told from an office or a
+    /// company whose name holds a post's word.
+    #[test]
+    fn a_person_named_with_their_post_is_told_from_an_office() {
+        for person in [
+            "Odalys B. Brandt, Acting General Counsel",
+            "Odalys Brandt, Director, Office of Budget and Planning",
+            "Odalys Brandt, General Counsel, Corvane Media Group LLC",
+            "Acting General Counsel",
+            "Clerk of Court",
+            "Director, Office of Prescription Drug Promotion",
+        ] {
+            assert!(names_a_post_holder(person), "{person}");
+        }
+        for party in [
+            "Office of the General Counsel",
+            "Office of the Chief Counsel, Internal Revenue Service",
+            "Brandt Partner Holdings Ltd",
+            "Meriden Waste Task Force, Incorporated",
+            "Meriden Labor Relations Board",
+            "Odalys Brandt",
+            "OFAR",
+        ] {
+            assert!(!names_a_post_holder(party), "{party}");
+        }
     }
 
     /// A class of recipients opens on "All", "Each" or "Fellow" before a
@@ -13501,6 +14402,115 @@ Routine tsunami messages will be issued under a new header beginning on 22 July 
         );
     }
 
+    /// A class of recipients is whom a document is sent to. A party the
+    /// document labels as the one it is about - a certificate's "Insured:" -
+    /// is no such class, though its name opens like one ("All Pro
+    /// Suppliers", "Every Day Lenders"): the name waits for a person, as a
+    /// name that may give a class does, and stays "for" the insured. It is
+    /// not turned into a name "from" the insurer that issued the
+    /// certificate. The same holds where only the reply said the party is
+    /// the certificate's client. A party neither says anything of may be a
+    /// class, and gives way to the issuer.
+    #[test]
+    fn a_party_a_document_is_about_is_not_replaced_as_a_class_of_recipients() {
+        const LABELED: &str = "Harrowmere Mutual Insurance Company\n\
+12 Quay Street, Brackenridge\n\n\
+CERTIFICATE OF LIABILITY INSURANCE\n\n\
+Date: June 23, 2026\n\n\
+Issued by: Harrowmere Mutual Insurance Company\n\n\
+Insured: All Pro Suppliers\n\n\
+This certifies that the policies of insurance listed below have been issued to the insured named \
+above for the policy period indicated. General liability, policy BCC-GL-4471902.";
+        const UNLABELED: &str = "Harrowmere Mutual Insurance Company\n\
+12 Quay Street, Brackenridge\n\n\
+CERTIFICATE OF LIABILITY INSURANCE\n\n\
+Date: June 23, 2026\n\n\
+Issued by: Harrowmere Mutual Insurance Company\n\n\
+This certifies that general liability cover is in force for Every Day Lenders under policy \
+BCC-GL-4471902 for the policy period indicated.";
+        let certificate = |text: &str, name: &str, role: Option<PartyRole>| {
+            facts_for(text, |index| ModelFacts {
+                document_type: Some("Certificate of Liability Insurance".into()),
+                type_evidence: vec![id_of(index, "CERTIFICATE OF LIABILITY")],
+                document_date: Some("2026-06-23".into()),
+                date_evidence: vec![id_of(index, "Date: June 23")],
+                parties: vec![
+                    party(
+                        "Harrowmere Mutual Insurance Company",
+                        Some(PartyRole::Issuer),
+                        &[id_of(index, "Issued by:")],
+                    ),
+                    party(name, role, &[id_of(index, name)]),
+                ],
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        let basis = |outcome: &ValidationOutcome| {
+            outcome
+                .facts
+                .as_ref()
+                .map(|facts| facts.relation_basis.clone())
+                .unwrap_or_default()
+        };
+        let every_day = LABELED.replace("All Pro Suppliers", "Every Day Lenders");
+        for (text, name, role, row) in [
+            (
+                LABELED,
+                "All Pro Suppliers",
+                None,
+                "record: the party it is about",
+            ),
+            (
+                LABELED,
+                "All Pro Suppliers",
+                Some(PartyRole::Client),
+                "record: the party it is about",
+            ),
+            (
+                every_day.as_str(),
+                "Every Day Lenders",
+                None,
+                "record: the party it is about",
+            ),
+            (
+                UNLABELED,
+                "Every Day Lenders",
+                Some(PartyRole::Client),
+                "record: the provider's counterpart",
+            ),
+        ] {
+            let outcome = certificate(text, name, role);
+            assert_eq!(
+                outcome.proposal.party_relation,
+                PartyRelation::For,
+                "{name} {role:?}: {}",
+                basis(&outcome)
+            );
+            assert_eq!(outcome.proposal.parties, vec![name], "{name} {role:?}");
+            assert_eq!(
+                outcome.reasons,
+                vec![ReviewReason::PartyUnsupported],
+                "{name} {role:?}"
+            );
+            assert_eq!(basis(&outcome), row, "{name} {role:?}");
+        }
+        // Neither the document nor the reply says what the party is to the
+        // certificate.
+        let outcome = certificate(UNLABELED, "Every Day Lenders", None);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Harrowmere Mutual Insurance Company"]
+        );
+        assert_eq!(outcome.reasons, vec![ReviewReason::PartyUnsupported]);
+        assert_eq!(
+            basis(&outcome),
+            "record: the provider's counterpart, a class of recipients, so from the issuer the \
+document names"
+        );
+    }
+
     /// real5-notice-11's shape: a regulator's enforcement release, its
     /// office's letterhead over the release's title and date. A release an
     /// organization publishes is a record of what it announces, about its
@@ -13668,12 +14678,12 @@ Tobacco Company, who each release the other from all claims.";
     /// and called it the issuer, with no letterhead line that holds the
     /// name to support the role. A notice naming one
     /// party is "for" it by default, which a reply that read it as the
-    /// notice's issuer speaks against: the name is kept and waits for a
-    /// person. The same default for the operator an improvement notice is
-    /// served on, which the reply called the contractor, is as settled as
-    /// it was.
+    /// notice's issuer speaks against: the notice is named from the court,
+    /// on the reply's reading alone, and waits for a person. The same
+    /// default for the operator an improvement notice is served on, which
+    /// the reply called the contractor, is as settled as it was.
     #[test]
-    fn a_notice_for_the_party_its_reply_called_the_issuer_goes_to_review() {
+    fn a_notice_from_the_party_only_its_reply_called_the_issuer_goes_to_review() {
         const NOTICE: &str = "- PUBLIC NOTICE -\n\n\
 REAPPOINTMENT OF COUNTY HEARING OFFICER\n\
 HARROW COUNTY WATER COURT\n\
@@ -13703,7 +14713,7 @@ Notice Date: April 16, 2025";
             )],
             ..ModelFacts::default()
         });
-        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
         assert_eq!(
             outcome.proposal.parties,
             vec!["Harrow County Water Court Northern Division of Meriden"],
@@ -13716,12 +14726,9 @@ Notice Date: April 16, 2025";
             outcome.reasons
         );
         let facts = outcome.facts.expect("facts");
-        assert!(
-            facts
-                .relation_basis
-                .contains("though the reply called it the issuer"),
-            "{}",
-            facts.relation_basis
+        assert_eq!(
+            facts.relation_basis,
+            "notice: the one party, by default, from it as the reply called it the issuer"
         );
         // A reply that called the court the client says nothing against
         // "for" and is not held by this rule, though the name is as wrong:

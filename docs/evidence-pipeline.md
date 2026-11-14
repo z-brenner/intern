@@ -218,8 +218,9 @@ The other checks:
     customer a reader ran in from the next column) it says nothing;
   - the issuer and customer cues on the same line.
 
-  A role nothing supports never decides how the parties read in the
-  filename. When the reply gives a party no supported role, the role the
+  A role nothing supports never decides by itself how the parties read in
+  the filename: where the reply's roles are read (see the relation table),
+  the name waits for review. When the reply gives a party no supported role, the role the
   document's own wording gives it does (`ValidatedParty::document_role`):
   `Resident:` before the name makes a tenant, `Owner:` a landlord,
   `("Lender")` after it a lender.
@@ -398,8 +399,8 @@ and an addendum is an amendment.
 
 ### The relation table
 
-`relation_from_roles` uses supported roles only. Parties are taken in the
-order the document first names them.
+`relation_from_roles` reads the roles the document supports. Parties are
+taken in the order the document first names them.
 
 Before the table, a court document is filed under its case: when the
 document has a court's, a tribunal's or an arbitration's heading on its
@@ -426,7 +427,7 @@ affiliate) gives none, nor does any clause when no party is left.
 | Class | Relation |
 | --- | --- |
 | Agreement, amendment | `between` the first two parties; one party, `with` |
-| Issued | `from` the issuer; for a purchase order, the side buying (buyer, client or customer), never its vendor; otherwise the vendor, seller or sender; then the party the issuer and customer cues name, or the one party at the head of the first page before any customer cue; then the side opposite a supported customer. The customer alone is never the filename's party. A reply that proposed a type but named no one who could issue it takes the one organization at the head of the first page as the issuer, read before the kind of document its line names ("Halvorsen Fixture Works LLC INVOICE"), even when the type had to come from the title |
+| Issued | `from` the issuer; for a purchase order, the side buying (buyer, client or customer), never its vendor; otherwise the vendor, seller or sender; then the party the issuer and customer cues name, or the one party at the head of the first page before any customer cue; then the side opposite a supported customer. Neither of those last two names a purchase order from a party the document or the reply calls its vendor or seller: the vendor's line heads an order's page as often as the buyer's letterhead does. Where the party at the head is set aside as the vendor, the side opposite a supported customer is not read either: an order is addressed to its vendor, so that customer may be the vendor itself, and the party opposite the buyer on one order and a carrier on the next. The order then names no issuer: a party is kept with no joining word (the vendor, or the first party the document does not mark as receiving), or no party where the first is one the reply called the customer, and the name waits for review. The customer alone is never the filename's party. A reply that proposed a type but named no one who could issue it takes the one organization at the head of the first page as the issuer, read before the kind of document its line names ("Halvorsen Fixture Works LLC INVOICE"), even when the type had to come from the title |
 | Notice | `for` the party it is about; else `to` the recipient; else `from` the issuer; else `for` the counterpart of a provider; else `from` the provider; two parties marked other read `between` |
 | Letter | `to` the addressee; else `from` the sender; else `for` the party it is about, or the provider's counterpart; else `from` the provider |
 | Email | `from` the sender; else `to` the addressee |
@@ -439,8 +440,46 @@ borrower, licensee or buyer. In a record or a notice, a reply's bare
 "recipient" or "addressee" gives way to such a role when the document's own
 label gives it one: a report "Prepared for Cobalt Basin Water Authority" is
 `for` the authority, not `to` it, whoever else the reply named. When nothing settles the relation, the first
-party is kept with no joining word (`Invoice - Acme`). A relation is never
-guessed.
+party is kept with no joining word (`Invoice - Acme`), and the name waits
+for review with `PARTY_UNSUPPORTED`: the party is in the document, but
+whether the document is from it, to it or for it is not. A relation is never
+guessed without saying so.
+
+Where the supported roles settle nothing, or only a default, the roles the
+reply gave are read in their place (never for an agreement, and not where a
+role the document gives a party contradicts the reply's). A name that rests
+on them waits for review with `PARTY_UNSUPPORTED`. Two readings differ
+from the table there:
+
+* A notice's recipient that only the reply named is `for` it, not `to` it:
+  `to` says the notice was addressed to the party, and neither a `To:` label
+  nor an address block names it. A recipient the document labels
+  (`To: ...`) keeps `to` on the document's word. One named in the address
+  block of a notice written as a letter (the lines between its dateline and
+  its greeting, read as a letter's inside address is) keeps `to` on the
+  reply's roles, and waits for review: a notice of a mass layoff sent to a
+  state office is not `for` that office. An address block with no greeting
+  under it is not read. A claim keeps `to` as well (it is made to the party
+  it is sent to), and so does a type that names a letter, a memorandum or
+  an email beside its notice ("Notification Letter"), which is written to
+  its addressee.
+* A notice naming one party is `for` it by default, and a record whose
+  roles settle nothing is `for` the first party no role sets aside. When
+  the reply called that party the issuer or sender, it is named `from`
+  instead, on the reply's roles. A provider's counterpart stays `for`, and
+  waits for review when the reply called it the issuer or sender too.
+
+A document `to` or `for` a class of recipients ("All Staff", "Fellow
+Shareholders") waits for review with `PARTY_UNSUPPORTED`, since a class is
+no party to file by. When another party is supported as the issuer or
+sender, or, the document giving it no role, was called so by the reply, the
+name says `from` that party. A class, or a person named with the post they
+hold ("Jane Doe, Acting General Counsel"), is never taken as that party, nor
+is one the document gives another role, and the name then stays as it was.
+It also stays where the document, or failing that the reply, calls the named
+party the one the document is about (a certificate's "Insured: All Pro
+Suppliers"): such a party is no class of recipients, though its name opens
+like one. It waits for review either way.
 
 `tests/relation_gold.rs` checks the table against every InternBench gold
 document. Each party is given every role its gold allows, in both orders
