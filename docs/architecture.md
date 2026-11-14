@@ -791,13 +791,22 @@ took the focus from it, undid an unsaved setting and moved the focus into
 it, and the spelling typed next went into the setting. So while a question
 asks, every input aimed at a field without the focus is refused where the
 browser announces it (`beforeinput`, caught on the document): the undo and
-redo of the keys and of the editing menu among them. The same holds for any
-dialog over the review window (`useEditsOnlyInside`): while Settings or
-Rename history is open, an input aimed outside it is refused. Ctrl+Z in a
-field of Settings with nothing of its own to undo undid the review panel's
-Filename behind the dialog and put the caret in it, where Enter filed the
-document. A script's `execCommand('undo')` announces nothing and is not
-refused; no person sends one. The field starts empty for every question,
+redo of the keys and of the editing menu among them. The same holds while
+Settings or Rename history is open (`useEditsOnlyInside`): an input aimed
+outside it is refused. Ctrl+Z in a field of Settings with nothing of its own
+to undo undid the review panel's Filename behind the dialog and put the
+caret in it, where Enter filed the document. And in every screen, with a
+question or without, an undo or a redo changes only the field with the
+focus (`useUndoOnlyWhereFocused`): in the review panel, Ctrl+Z in the
+Description, in the queue's filter or after a press on the panel's text
+undid the Filename's last edit and put the caret in it, and the next Enter
+filed the document under the name half undone; in Settings, once a question
+had been answered or taken back, Ctrl+Z on its row undid an unsaved
+setting, which Save then stored. Chromium keeps one undo history for the
+page, so a field's own undo waits until the edits made after it elsewhere
+are undone in their own fields; nothing is lost by the wait. A script's
+`execCommand('undo')` announces nothing and is not refused; no person sends
+one. The field starts empty for every question,
 and again if the spelling it asks about changes while it asks. Cancel and
 Escape take the question back. Escape takes back the question and nothing
 else - not Settings, with what was not saved - wherever the focus is in
@@ -811,6 +820,24 @@ the pointer (`afterAPress`): Settings does not scroll until a key is
 pressed. Opened from the keyboard, it is brought into sight, and so it is by
 the first key typed into it after a press opened it: the spelling went into
 a field out of sight below Settings' body.
+
+Nothing behind Settings or Rename history takes the focus while it is open,
+so no key typed for it reaches the review window, whose keys move review on
+and file names. The window behind it - the header, the queue, the review
+panel or drawer, an update's note - is inert, out of reach of the focus, the
+keys and a screen reader, as the dialog says it is (`aria-modal`); and Tab
+and Shift+Tab go round the dialog's own controls from wherever the focus is
+(`tabWithin`), the focus on nothing included. A press on the dialog's
+heading or its backdrop left the focus on nothing, and Shift+Tab walked out
+to the review panel's Keep original, Approve & rename and Filename, or,
+narrow, to the queue's row and Rename all ready, where Enter filed documents
+with Settings still open. The queue put the focus back on Rename all ready
+behind Settings when the selected document left the queue by itself (its
+file taken from the Queue folder, or by another machine), and the space bar
+typed next renamed every ready document. A window made narrower opened the
+review drawer again under Settings, and the drawer put the caret in the
+document's name, where Enter, meant for the question, filed it. Once the
+dialog has closed, the focus goes back to what opened it.
 
 What a question cannot rule out is a person who means to fill the field
 without reading it. An input method can commit any text through a
