@@ -1825,6 +1825,14 @@ pub fn validate_facts_at(
     if relation.on_proposed_roles || relation.doubtful || published_between {
         push(&mut reasons, ReviewReason::PartyUnsupported);
     }
+    // A party no rule could join to the document is named after a dash,
+    // with no joining word: "Purchase Order - Kestrel Instruments Ltd".
+    // The party is in the document; whether the document is from it, to
+    // it or for it is what nothing settled, and a name that leaves it open
+    // waits for a person to say which.
+    if relation.relation == PartyRelation::None && !relation.parties.is_empty() {
+        push(&mut reasons, ReviewReason::PartyUnsupported);
+    }
     // An agreement has two sides at least. One that names only one has
     // lost the other, which a person must supply.
     if matches!(class, DocumentClass::Agreement | DocumentClass::Amendment)
@@ -11993,6 +12001,93 @@ This Sponsorship Agreement is made on July 16, 2012 by Peek Investments LLC.";
         assert_eq!(outcome.proposal.party_relation, PartyRelation::With);
         assert!(
             outcome.reasons.contains(&ReviewReason::PartyMissing),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// InternBench's purchase order as the smaller model read it: the reply
+    /// named the vendor the order goes to and not the company that issues
+    /// it. An order is never from its vendor, so no rule joins the vendor
+    /// to the name, and "Purchase Order - Ridgewell Textiles Ltd." says
+    /// nothing of which side it is: the name is kept and waits for a
+    /// person. The same order with its buyer named is from the buyer and
+    /// files, and minutes that name no party at all are as ready as before.
+    #[test]
+    fn a_party_named_with_no_joining_word_goes_to_review() {
+        const ORDER: &str = "Thornbury Outdoor Gear Co.\n\n\
+PURCHASE ORDER\n\n\
+PO Number: TOG-PO-4471\n\
+PO Date: June 3, 2026\n\
+Buyer: Imogen Wexley\n\
+Vendor: Ridgewell Textiles Ltd.\n\
+Ship To: Thornbury Outdoor Gear Co., Receiving\n\n\
+Ripstop nylon, 70D, forest green (yards): 1200 at $6.85 = $8,220.00\n\
+Order total: $8,220.00";
+        let order = |with_buyer: bool| {
+            facts_for(ORDER, |index| ModelFacts {
+                document_type: Some("Purchase Order".into()),
+                type_evidence: vec![id_of(index, "PURCHASE ORDER")],
+                document_date: Some("2026-06-03".into()),
+                date_evidence: vec![id_of(index, "PO Date")],
+                parties: [
+                    Some(party(
+                        "Ridgewell Textiles Ltd.",
+                        Some(PartyRole::Vendor),
+                        &[id_of(index, "Vendor:")],
+                    )),
+                    with_buyer.then(|| {
+                        party(
+                            "Thornbury Outdoor Gear Co.",
+                            Some(PartyRole::Buyer),
+                            &[id_of(index, "Thornbury Outdoor")],
+                        )
+                    }),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        let outcome = order(false);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::None);
+        assert_eq!(outcome.proposal.parties, vec!["Ridgewell Textiles Ltd."]);
+        assert_eq!(
+            outcome.reasons,
+            vec![ReviewReason::PartyUnsupported],
+            "{:?}",
+            outcome.facts
+        );
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+
+        let outcome = order(true);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(outcome.proposal.parties, vec!["Thornbury Outdoor Gear Co."]);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+
+        const MINUTES: &str = "MINUTES OF THE BOARD MEETING\n\n\
+14 June 2018\n\n\
+1. The chair welcomed the members and the minutes of the last meeting were approved.\n\
+2. The board approved the budget for the coming year.";
+        let (outcome, _) = facts_for(MINUTES, |index| ModelFacts {
+            document_type: Some("Minutes of the Board Meeting".into()),
+            type_evidence: vec![id_of(index, "MINUTES OF THE")],
+            document_date: Some("2018-06-14".into()),
+            date_evidence: vec![id_of(index, "14 June")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::None);
+        assert!(outcome.proposal.parties.is_empty());
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
             "{:?}",
             outcome.reasons
         );

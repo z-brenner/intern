@@ -292,7 +292,8 @@ pub struct RelationCues {
 ///
 /// Only a supported role counts. When nothing settles the question the
 /// first party is kept with no joining word ([`PartyRelation::None`]): the
-/// names are the document's, and the relation is not guessed at.
+/// names are the document's, and the relation is not guessed at. Validation
+/// sends such a name to a person.
 pub fn relation_from_roles(
     class: DocumentClass,
     document_type: Option<&str>,
