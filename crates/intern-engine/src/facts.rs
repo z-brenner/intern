@@ -1884,6 +1884,16 @@ pub fn validate_facts_at(
     if to_a_class || document_type.as_deref().is_some_and(memorandum_to_a_class) {
         push(&mut reasons, ReviewReason::PartyUnsupported);
     }
+    // The office such a document comes from is what a person files it by,
+    // and where the cast holds it the name gives it in the class's place:
+    // an annual report from its company, never "for Fellow Shareholders";
+    // a circular from the department the reply named. The name waits for
+    // a person all the same: the reason raised above stands, whichever
+    // party the name gives ([`source_for_a_class`]).
+    let relation = to_a_class
+        .then(|| source_for_a_class(&cast, &relation))
+        .flatten()
+        .unwrap_or(relation);
 
     // The subject, the identifier and the key facts: every number and name
     // in them must be in what the model was shown, and the subject and a
@@ -6291,6 +6301,75 @@ fn names_a_class_of_recipients(name: &str) -> bool {
                 })
         }
         None => false,
+    }
+}
+
+/// A document named "to" or "for" a class of recipients, named instead
+/// "from" the party it comes from: the first party of the cast, besides the
+/// one `relation` names, that the document supports as its issuer or
+/// sender, else the first the document gives no role and the reply called
+/// its issuer or sender. A class of recipients is no source, and neither is
+/// a person named with the post they hold ([`names_a_post_holder`]), who
+/// acts for an office the cast does not hold. `None` when the cast holds no
+/// such party: the name stays as it was.
+fn source_for_a_class(cast: &[CastMember], relation: &Relation) -> Option<Relation> {
+    let sending = |role: Option<PartyRole>| {
+        role.filter(|role| matches!(role, PartyRole::Issuer | PartyRole::Sender))
+    };
+    let supported = |party: &CastMember| party.role.filter(|_| party.role_supported);
+    let sources = cast
+        .iter()
+        .filter(|party| {
+            !relation.parties.contains(&party.name)
+                && !names_a_class_of_recipients(&party.name)
+                && !names_a_post_holder(&party.name)
+        })
+        .collect::<Vec<_>>();
+    let on_the_document = sources
+        .iter()
+        .find_map(|party| sending(supported(party)).map(|role| (*party, role, false)));
+    let on_the_reply = || {
+        sources.iter().find_map(|party| {
+            sending(party.proposed_role)
+                .filter(|_| supported(party).is_none())
+                .map(|role| (*party, role, true))
+        })
+    };
+    let (source, role, on_proposed_roles) = on_the_document.or_else(on_the_reply)?;
+    Some(Relation {
+        relation: PartyRelation::From,
+        parties: vec![source.name.clone()],
+        basis: format!(
+            "{}, a class of recipients, so from the {} {}",
+            relation.basis,
+            role.as_str(),
+            if on_proposed_roles {
+                "the reply named"
+            } else {
+                "the document names"
+            }
+        ),
+        on_proposed_roles,
+        defaulted: false,
+        doubtful: false,
+    })
+}
+
+/// Whether a party's name is a person's given with the post they hold:
+/// words before a comma that name no organization and a post after it
+/// ("Odalys B. Brandt, Acting General Counsel", "Odalys Brandt, Director,
+/// Office of Budget and Planning"), or a post with no organization's name
+/// around it ("Acting General Counsel", "Clerk of Court"). An office named
+/// by a post is an organization ("Office of the General Counsel"), and so
+/// is a company whose name holds a post's word ("Brandt Partner Holdings
+/// Ltd").
+fn names_a_post_holder(name: &str) -> bool {
+    if !holds_a_post(name) {
+        return false;
+    }
+    match name.split_once(',') {
+        Some((before, after)) if holds_a_post(after) => !is_organization_name(before),
+        _ => !is_organization_name(name),
     }
 }
 
@@ -12224,6 +12303,146 @@ of active General Counsel Memoranda and determined that the following actions ar
             "{:?}",
             outcome.reasons
         );
+    }
+
+    /// A memorandum to a class of recipients is filed by the office it
+    /// comes from. Where the reply named that office beside the class,
+    /// though no label of the document gives it a role, the name says
+    /// "from" the office on the reply's reading; where the letterhead
+    /// names it, on the document's. Either name still waits for a person.
+    /// A sender named with the post they hold acts for an office, and
+    /// stands in for none: with no one else to name, the memorandum stays
+    /// "to" its class. A memorandum to one named organization is to it and
+    /// files as before, whatever office the reply said it comes from.
+    #[test]
+    fn a_document_to_a_class_of_recipients_is_named_from_the_office_it_comes_from() {
+        const MEMO: &str = "MEMORANDUM GC 25-05 February 14, 2025\n\n\
+TO: Regional Directors, Officers-in-Charge, and Resident Officers\n\
+FROM: Odalys B. Brandt, Acting General Counsel\n\
+SUBJECT: Rescission of Certain General Counsel Memoranda\n\n\
+Since assuming the role of Acting General Counsel of the Meriden Labor Relations Board, I have \
+conducted a comprehensive review of active General Counsel Memoranda and determined that the \
+following actions are warranted.";
+        const CLASS: &str = "Regional Directors, Officers-in-Charge, and Resident Officers";
+        let reply = |text: &str, addressee: &str, other: Option<(&str, PartyRole, &str)>| {
+            facts_for(text, |index| ModelFacts {
+                document_type: Some("MEMORANDUM".into()),
+                type_evidence: vec![id_of(index, "MEMORANDUM GC")],
+                document_date: Some("2025-02-14".into()),
+                date_evidence: vec![id_of(index, "MEMORANDUM GC")],
+                parties: [
+                    Some(party(
+                        addressee,
+                        Some(PartyRole::Addressee),
+                        &[id_of(index, "TO:")],
+                    )),
+                    other.map(|(name, role, line)| party(name, Some(role), &[id_of(index, line)])),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
+                ..ModelFacts::default()
+            })
+            .0
+        };
+        // The board the reply called the issuer is named in a sentence
+        // only: no label supports the role.
+        let board = Some((
+            "Meriden Labor Relations Board",
+            PartyRole::Issuer,
+            "Since assuming",
+        ));
+        let outcome = reply(MEMO, CLASS, board);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Meriden Labor Relations Board"]
+        );
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        // The same memorandum under the office's letterhead.
+        let headed = format!("OFFICE OF THE GENERAL COUNSEL\n{MEMO}");
+        let outcome = reply(
+            &headed,
+            CLASS,
+            Some((
+                "Office of the General Counsel",
+                PartyRole::Issuer,
+                "OFFICE OF THE",
+            )),
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Office of the General Counsel"]
+        );
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        // The person on the "FROM:" line holds a post at an office the
+        // reply did not name.
+        let outcome = reply(
+            MEMO,
+            CLASS,
+            Some((
+                "Odalys B. Brandt, Acting General Counsel",
+                PartyRole::Sender,
+                "FROM:",
+            )),
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec![CLASS]);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::PartyUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+
+        // One named organization is a party a memorandum is filed by.
+        let named = MEMO.replace(CLASS, "Corvane Media Group LLC");
+        let outcome = reply(&named, "Corvane Media Group LLC", board);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::To);
+        assert_eq!(outcome.proposal.parties, vec!["Corvane Media Group LLC"]);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// A person named with the post they hold is told from an office or a
+    /// company whose name holds a post's word.
+    #[test]
+    fn a_person_named_with_their_post_is_told_from_an_office() {
+        for person in [
+            "Odalys B. Brandt, Acting General Counsel",
+            "Odalys Brandt, Director, Office of Budget and Planning",
+            "Odalys Brandt, General Counsel, Corvane Media Group LLC",
+            "Acting General Counsel",
+            "Clerk of Court",
+            "Director, Office of Prescription Drug Promotion",
+        ] {
+            assert!(names_a_post_holder(person), "{person}");
+        }
+        for party in [
+            "Office of the General Counsel",
+            "Office of the Chief Counsel, Internal Revenue Service",
+            "Brandt Partner Holdings Ltd",
+            "Meriden Waste Task Force, Incorporated",
+            "Meriden Labor Relations Board",
+            "Odalys Brandt",
+            "OFAR",
+        ] {
+            assert!(!names_a_post_holder(party), "{party}");
+        }
     }
 
     /// A class of recipients opens on "All", "Each" or "Fellow" before a
