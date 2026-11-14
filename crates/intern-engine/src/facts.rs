@@ -1225,6 +1225,11 @@ fn validate_reading(
     // "Examined by | Delphine Moncrieff, Associate Conservator", "/s/ Arlo
     // Sinclair-Ray" - unless a line names them as the one it is about or a
     // "between" clause makes them a party.
+    let organizations = parties
+        .iter()
+        .filter(|party| !party.copied && is_organization_name(&party.name))
+        .map(|party| party.name.clone())
+        .collect::<Vec<_>>();
     let standing = parties
         .iter()
         .map(|party| {
@@ -1235,10 +1240,11 @@ fn validate_reading(
                 // "Tenant:") outranks a signature or a post, and keeps the
                 // others' staff from taking them along.
                 Standing::Subject
-            } else if opens_a_caption_side(scope, &party.name) {
-                // So does a court caption that opens a side of its case
+            } else if opens_the_answering_side(scope, &party.name, &organizations) {
+                // So does a court caption that opens its answering side
                 // with their name: "v. DOUG BURGUM, SECRETARY OF THE
-                // INTERIOR" is sued in that office, not staff of it.
+                // INTERIOR" is sued in that office, not staff of it -
+                // where the reply named no organization for that side.
                 Standing::Subject
             } else {
                 standing_of(scope, &party.name, class)
@@ -7671,19 +7677,29 @@ impl CaptionLayout {
     }
 }
 
-/// Whether a person's name opens a side of the case a court document's
-/// caption sets out: the first name after "v.", or the first under the
-/// forum's heading, in a caption that closes each side with its label. An
-/// official sued, or suing, in their office is written so - "v. DOUG
-/// BURGUM, SECRETARY OF THE INTERIOR; ...", "JULIE A. SU, Acting Secretary
-/// of Labor, Plaintiff," - and is that side of the case, whatever post
-/// follows the name: cases are cited by the names that open their sides.
+/// Whether a person's name opens the answering side of the case a court
+/// document's caption sets out: the first name right after "v.", in a
+/// caption that closes each side with its label. An official sued in
+/// their office is written so - "v. DOUG BURGUM, SECRETARY OF THE
+/// INTERIOR; ..." - and is that side of the case, whatever post follows
+/// the name: cases are cited by the names that open their sides.
+///
+/// Only where the reply named no organization for that side:
+/// `organizations` are the cast's, and each must stand on the bringing
+/// side of the caption. An agency the reply named beside its officer is
+/// the party, as it always was.
 ///
 /// Anyone else a caption names keeps the standing their post gives them:
 /// the second official on a side, a judge a reader ran into the caption's
-/// column, the officer a state appears "by and through". A court form
-/// that labels no sides sets out none to open.
-fn opens_a_caption_side(scope: &ValidationScope<'_>, name: &str) -> bool {
+/// column, and everyone on the bringing side - where a side opens is plain
+/// only after "v.", not under a court's heading, whose lines a party's own
+/// can read like ("STATE OF OHIO ex rel."). A court form that labels no
+/// sides sets out none to open.
+fn opens_the_answering_side(
+    scope: &ValidationScope<'_>,
+    name: &str,
+    organizations: &[String],
+) -> bool {
     let caption = caption_units(scope);
     let text = caption_text(&caption);
     let Some(layout) = CaptionLayout::of(&text, &caption) else {
@@ -7696,44 +7712,52 @@ fn opens_a_caption_side(scope: &ValidationScope<'_>, name: &str) -> bool {
     if loose.is_empty() {
         return false;
     }
-    let opens = |stretch: &str| {
-        stretch
-            .trim_start_matches(|character: char| !character.is_alphanumeric())
-            .strip_prefix(loose.as_str())
-            .is_some_and(|rest| !rest.starts_with(char::is_alphanumeric))
+    let brings = |organization: &String| {
+        whole_positions(&text, &normalize_loosely(organization))
+            .into_iter()
+            .any(|at| layout.bringing.contains(&at))
     };
-    // The answering side opens right after the versus word.
-    let answering = text[layout.answering.start..]
+    // The side opens right after the versus word, with the name.
+    let opens = text[layout.answering.start..]
         .split_once(' ')
-        .is_some_and(|(_, rest)| opens(rest));
-    // The bringing side opens in the first line, or cell, under the
-    // forum's heading - the lines that name the court and where it sits.
-    let names_court = |words: &[&str]| {
-        words.iter().any(|word| {
-            let word = caption_word(word);
-            FORUM_WORDS.contains(&word.as_str())
-                || word
-                    .strip_suffix('s')
-                    .is_some_and(|word| FORUM_WORDS.contains(&word))
+        .and_then(|(_, rest)| {
+            rest.trim_start_matches(|character: char| !character.is_alphanumeric())
+                .strip_prefix(loose.as_str())
         })
+        .is_some_and(|rest| !rest.starts_with(char::is_alphanumeric));
+    // And with the whole name: as the caption writes it, a comma or a
+    // semicolon ends it ("v. ODALYS BRANDT, SECRETARY OF ..."). A company
+    // whose name begins like a person's ("v. BRANDT SHIPPING CO.,") opens
+    // its side itself.
+    let written = caption_cells(&caption)
+        .into_iter()
+        .flat_map(|(_, words)| words)
+        .collect::<Vec<_>>();
+    let forum_word = |word: &&str| {
+        let word = caption_word(word);
+        FORUM_WORDS.contains(&word.as_str())
+            || word
+                .strip_suffix('s')
+                .is_some_and(|word| FORUM_WORDS.contains(&word))
     };
-    let cells = caption_cells(&caption);
-    let bringing = cells
+    let name = loose.split(' ').collect::<Vec<_>>();
+    let closed = written
         .iter()
-        .position(|(_, words)| names_court(words))
+        .position(forum_word)
         .and_then(|forum| {
-            // A line of the heading ends on no comma; a party's does
-            // ("STATE OF OHIO,"), though it reads like where a court sits.
-            cells[forum + 1..]
+            written[forum..]
                 .iter()
-                .find(|(_, words)| {
-                    words.last().is_some_and(|last| last.ends_with(','))
-                        || !names_a_forum(&normalize_loosely(&words.join(" ")))
-                })
-                .map(|(_, words)| normalize_loosely(&words.join(" ")))
+                .position(|word| VERSUS_WORDS.contains(&caption_word(word).as_str()))
+                .map(|versus| forum + versus + 1)
         })
-        .is_some_and(|cell| opens(&cell));
-    answering || bringing
+        .and_then(|start| written.get(start..start + name.len()))
+        .is_some_and(|run| {
+            run.iter()
+                .zip(&name)
+                .all(|(word, part)| normalize_loosely(word) == *part)
+                && run.last().is_some_and(|last| last.ends_with([',', ';']))
+        });
+    opens && closed && organizations.iter().all(brings)
 }
 
 /// How far after "v." a caption's answering side and its label can run.
@@ -16097,14 +16121,16 @@ Rickmansworth,
 
     /// real4-notice-02's shape: a notice of appeal in a suit against
     /// officials, each written as a name and an office. The person whose
-    /// name opens a side - the first after "v.", or the first under the
-    /// court's heading - is that side of the case, though a post follows
-    /// the name: the notice is between the two sides. The second official
-    /// on a side, the officer a state appears through and a person named
-    /// in a caption that labels no sides keep the standing their post
-    /// gives them.
+    /// name opens the answering side - the first right after "v." - is
+    /// that side of the case, though a post follows the name: the notice
+    /// is between the two sides. The second official on that side, anyone
+    /// on the bringing side, a judge a reader ran into the caption and a
+    /// person named in a caption that does not close both sides with their
+    /// labels keep the standing their post gives them; and where the reply
+    /// named an organization for the answering side too, the organization
+    /// is the party, as before.
     #[test]
-    fn the_person_who_opens_a_side_of_a_caption_is_a_party() {
+    fn the_person_who_opens_the_answering_side_of_a_caption_is_a_party() {
         const NOTICE: &str = "IN THE UNITED STATES DISTRICT COURT\n\
 FOR THE EASTERN DISTRICT OF PENNSYLVANIA\n\n\
 CITY OF MILLBROOK,\n\nPlaintiff,\n\nv.\n\n\
@@ -16113,21 +16139,29 @@ CORBIN VALE, ACTING DIRECTOR\nOF THE NATIONAL PARK SERVICE; and\nNATIONAL PARK S
 Defendants.\n\nNOTICE OF APPEAL\n\n\
 Defendants hereby appeal this Court's February 16, 2026 memorandum opinion to the United \
 States Court of Appeals for the Third Circuit.\n\nDated: February 17, 2026";
-        let reply = |text: &str, first: &str, second: &str| {
+        let reply = |text: &str, names: &[&str]| {
             let (outcome, _) = facts_for(text, |index| ModelFacts {
                 document_type: Some("Notice of Appeal".into()),
                 type_evidence: vec![id_of(index, "NOTICE OF APPEAL")],
                 document_date: Some("2026-02-17".into()),
                 date_evidence: vec![id_of(index, "Dated")],
-                parties: vec![
-                    party(first, Some(PartyRole::Client), &[]),
-                    party(second, Some(PartyRole::Employer), &[]),
-                ],
+                parties: names
+                    .iter()
+                    .enumerate()
+                    .map(|(at, name)| {
+                        let role = if at == 0 {
+                            PartyRole::Client
+                        } else {
+                            PartyRole::Employer
+                        };
+                        party(name, Some(role), &[])
+                    })
+                    .collect(),
                 ..ModelFacts::default()
             });
             outcome
         };
-        let outcome = reply(NOTICE, "CITY OF MILLBROOK", "ODALYS BRANDT");
+        let outcome = reply(NOTICE, &["CITY OF MILLBROOK", "ODALYS BRANDT"]);
         assert_eq!(
             outcome.proposal.party_relation,
             PartyRelation::Between,
@@ -16140,7 +16174,7 @@ States Court of Appeals for the Third Circuit.\n\nDated: February 17, 2026";
         );
         // The second official the caption names on that side is no side of
         // the case.
-        let outcome = reply(NOTICE, "CITY OF MILLBROOK", "CORBIN VALE");
+        let outcome = reply(NOTICE, &["CITY OF MILLBROOK", "CORBIN VALE"]);
         assert!(
             !outcome
                 .proposal
@@ -16150,50 +16184,79 @@ States Court of Appeals for the Third Circuit.\n\nDated: February 17, 2026";
             "{:?}",
             outcome.proposal
         );
-        // An official who brings the case opens its first side.
-        const ENFORCEMENT: &str = "UNITED STATES DISTRICT COURT\nDISTRICT OF OREGON\n\n\
-ODALYS BRANDT, Acting Secretary of Labor,\n\nPlaintiff,\n\nv.\n\n\
-TAVISTOCK BOATWORKS, INC.,\n\nDefendant.\n\nNOTICE OF APPEAL\n\n\
-Defendant hereby appeals from the judgment entered February 16, 2026.\n\n\
-Dated: February 17, 2026";
-        let outcome = reply(ENFORCEMENT, "Tavistock Boatworks, Inc.", "Odalys Brandt");
-        assert_eq!(
-            outcome.proposal.party_relation,
-            PartyRelation::Between,
-            "{:?}",
-            outcome.proposal
-        );
-        assert_eq!(
-            outcome.proposal.parties,
-            vec!["Odalys Brandt", "Tavistock Boatworks, Inc."]
-        );
-        // Who opens a side, read on the caption alone. The officer a state
-        // appears through, the second official on a side and a judge a
-        // reader ran into the caption's column open none; nor does anyone
-        // in a caption that labels no sides.
-        let opens = |text: &str, name: &str| {
+        // The reply named the agency sued beside its officer, in either
+        // order: the notice is between the city and the agency, as it was.
+        for names in [
+            [
+                "City of Millbrook",
+                "Odalys Brandt",
+                "Harlow Basin Water Authority",
+            ],
+            [
+                "City of Millbrook",
+                "Harlow Basin Water Authority",
+                "Odalys Brandt",
+            ],
+        ] {
+            let outcome = reply(NOTICE, &names);
+            assert_eq!(
+                outcome.proposal.parties,
+                vec!["City of Millbrook", "Harlow Basin Water Authority"],
+                "{names:?}"
+            );
+        }
+
+        // Who opens the answering side, read on the caption alone.
+        let opens = |text: &str, name: &str, organizations: &[&str]| {
             let index = index_of(text);
             let context = whole(&index);
-            opens_a_caption_side(&ValidationScope::new(&index, &context, &[]), name)
+            let organizations = organizations
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>();
+            opens_the_answering_side(
+                &ValidationScope::new(&index, &context, &[]),
+                name,
+                &organizations,
+            )
         };
-        assert!(opens(NOTICE, "ODALYS BRANDT"));
-        assert!(opens(NOTICE, "Odalys Brandt"));
-        assert!(!opens(NOTICE, "CORBIN VALE"));
-        assert!(opens(ENFORCEMENT, "Odalys Brandt"));
-        let through = ENFORCEMENT.replace(
-            "ODALYS BRANDT, Acting Secretary of Labor,",
-            "STATE OF OHIO,\nby and through ODALYS BRANDT, Attorney General,",
+        assert!(opens(NOTICE, "ODALYS BRANDT", &[]));
+        assert!(opens(NOTICE, "Odalys Brandt", &["City of Millbrook"]));
+        assert!(!opens(NOTICE, "CORBIN VALE", &[]));
+        // A name the opener's only begins with is another's, and so is one
+        // a company's name begins with: the company opens its side.
+        assert!(!opens(NOTICE, "Odalys Bran", &[]));
+        assert!(!opens(NOTICE, "Odalys", &[]));
+        let shipping = NOTICE.replace(
+            "ODALYS BRANDT, SECRETARY OF THE\nINTERIOR;",
+            "ODALYS BRANDT SHIPPING CO.; ODALYS BRANDT, ITS PRESIDENT;",
         );
-        assert!(!opens(&through, "Odalys Brandt"));
-        let judged = ENFORCEMENT.replace("Plaintiff,", "Plaintiff, JUDGE ODESSA WREN");
-        assert!(opens(&judged, "Odalys Brandt"));
-        assert!(!opens(&judged, "Odessa Wren"));
-        assert!(!opens(&judged, "Judge Odessa Wren"));
+        assert_ne!(shipping, NOTICE);
+        assert!(!opens(&shipping, "Odalys Brandt", &[]));
+        // An organization the caption names on the answering side, or
+        // nowhere, is that side's party before its officer.
+        assert!(!opens(
+            NOTICE,
+            "Odalys Brandt",
+            &["City of Millbrook", "National Park Service"]
+        ));
+        assert!(!opens(
+            NOTICE,
+            "Odalys Brandt",
+            &["City of Millbrook", "Department of the Interior"]
+        ));
+        // A judge a reader ran into the caption after the bringing side's
+        // label opens nothing.
+        let judged = NOTICE.replace("Plaintiff,", "Plaintiff, JUDGE ODESSA WREN");
+        assert!(opens(&judged, "Odalys Brandt", &[]));
+        assert!(!opens(&judged, "Odessa Wren", &[]));
+        assert!(!opens(&judged, "Judge Odessa Wren", &[]));
+        // A caption that labels no sides sets out none to open.
         let unlabeled = NOTICE
             .replace("Plaintiff,\n\n", "")
             .replace("Defendants.\n\n", "");
-        assert!(!opens(&unlabeled, "ODALYS BRANDT"));
-        let outcome = reply(&unlabeled, "CITY OF MILLBROOK", "ODALYS BRANDT");
+        assert!(!opens(&unlabeled, "ODALYS BRANDT", &[]));
+        let outcome = reply(&unlabeled, &["CITY OF MILLBROOK", "ODALYS BRANDT"]);
         assert!(
             !outcome
                 .proposal
@@ -16202,6 +16265,72 @@ Dated: February 17, 2026";
                 .any(|name| name.contains("BRANDT")),
             "{:?}",
             outcome.proposal
+        );
+        // Nor does one a reader took the bringing side's label out of
+        // line in, down under "v.": that side is not closed where it ends.
+        let displaced = NOTICE.replace("Plaintiff,\n\n", "").replace(
+            "\n\nDefendants.",
+            "\n\nPlaintiff, Case No. 26-cv-0117\n\nDefendants.",
+        );
+        {
+            let index = index_of(&displaced);
+            let context = whole(&index);
+            let scope = ValidationScope::new(&index, &context, &[]);
+            let caption = caption_units(&scope);
+            let layout = CaptionLayout::of(&caption_text(&caption), &caption).expect("a caption");
+            assert!(layout.answering_closed && !layout.bringing_closed);
+        }
+        assert!(!opens(&displaced, "Odalys Brandt", &[]));
+
+        // The bringing side is not read this way. An official who brings
+        // the case, the officer a state appears through, and an officer
+        // under their organization's line - which ends on no comma and
+        // reads like where a court sits - open nothing.
+        const ENFORCEMENT: &str = "IN THE COURT OF COMMON PLEAS\nFRANKLIN COUNTY, OHIO\n\n\
+ODALYS BRANDT, Acting Secretary of Labor,\n\nPlaintiff,\n\nv.\n\n\
+TAVISTOCK BOATWORKS, INC.,\n\nDefendant.\n\nNOTICE OF APPEAL\n\n\
+Defendant hereby appeals from the judgment entered February 16, 2026.\n\n\
+Dated: February 17, 2026";
+        assert!(!opens(ENFORCEMENT, "Odalys Brandt", &[]));
+        for side in [
+            "STATE OF OHIO,\nby and through ODALYS BRANDT, Attorney General,",
+            "STATE OF OHIO ex rel.\nODALYS BRANDT, Director of Insurance,",
+            "MILLBROOK SCHOOL DISTRICT and\nODALYS BRANDT, Director of Schools,",
+            "GILCHRIST HARBOR MARINE SUPPLY, LLC, a company organized in the State of Ohio; and\n\
+ODALYS BRANDT, Director of Gilchrist Harbor Marine Supply, LLC,",
+        ] {
+            let text = ENFORCEMENT.replace("ODALYS BRANDT, Acting Secretary of Labor,", side);
+            assert!(!opens(&text, "Odalys Brandt", &[]), "{side}");
+        }
+        // The company's own director, named under its line with no comma
+        // to end it, takes no side from the company: the notice stays
+        // between the company and the defendant, and is filed.
+        let company = ENFORCEMENT
+            .replace(
+                "ODALYS BRANDT, Acting Secretary of Labor,",
+                "GILCHRIST HARBOR MARINE SUPPLY, LLC, a company organized in the State of Ohio; and\n\
+ODALYS BRANDT, Director of Gilchrist Harbor Marine Supply, LLC,",
+            )
+            .replace("Plaintiff,", "Plaintiffs,");
+        let outcome = reply(&company, &["Odalys Brandt", "Tavistock Boatworks, Inc."]);
+        assert_eq!(
+            outcome.proposal.party_relation,
+            PartyRelation::Between,
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(
+            outcome.proposal.parties,
+            vec![
+                "GILCHRIST HARBOR MARINE SUPPLY, LLC",
+                "Tavistock Boatworks, Inc."
+            ]
+        );
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
         );
     }
 
