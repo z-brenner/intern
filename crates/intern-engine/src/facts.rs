@@ -12504,12 +12504,12 @@ Tobacco Company, who each release the other from all claims.";
     /// and called it the issuer, with no letterhead line that holds the
     /// name to support the role. A notice naming one
     /// party is "for" it by default, which a reply that read it as the
-    /// notice's issuer speaks against: the name is kept and waits for a
-    /// person. The same default for the operator an improvement notice is
-    /// served on, which the reply called the contractor, is as settled as
-    /// it was.
+    /// notice's issuer speaks against: the notice is named from the court,
+    /// on the reply's reading alone, and waits for a person. The same
+    /// default for the operator an improvement notice is served on, which
+    /// the reply called the contractor, is as settled as it was.
     #[test]
-    fn a_notice_for_the_party_its_reply_called_the_issuer_goes_to_review() {
+    fn a_notice_from_the_party_only_its_reply_called_the_issuer_goes_to_review() {
         const NOTICE: &str = "- PUBLIC NOTICE -\n\n\
 REAPPOINTMENT OF COUNTY HEARING OFFICER\n\
 HARROW COUNTY WATER COURT\n\
@@ -12539,7 +12539,7 @@ Notice Date: April 16, 2025";
             )],
             ..ModelFacts::default()
         });
-        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
         assert_eq!(
             outcome.proposal.parties,
             vec!["Harrow County Water Court Northern Division of Meriden"],
@@ -12552,12 +12552,9 @@ Notice Date: April 16, 2025";
             outcome.reasons
         );
         let facts = outcome.facts.expect("facts");
-        assert!(
-            facts
-                .relation_basis
-                .contains("though the reply called it the issuer"),
-            "{}",
-            facts.relation_basis
+        assert_eq!(
+            facts.relation_basis,
+            "notice: the one party, by default, from it as the reply called it the issuer"
         );
         // A reply that called the court the client says nothing against
         // "for" and is not held by this rule, though the name is as wrong:

@@ -9,7 +9,9 @@
 //! * [`DocumentClass::of`] sorts a validated type into a class.
 //! * [`relation_from_roles`] picks the filename's parties and the word that
 //!   joins them from the class and the roles validation found support for.
-//!   A role nothing in the document supports never decides it.
+//!   A role nothing in the document supports decides it only where the
+//!   supported ones settle nothing, and the relation then says so, for the
+//!   name to wait for a person.
 //! * [`describe`] fills a template for the class, dropping optional parts
 //!   in a fixed order until the sentence fits.
 //!
@@ -195,7 +197,8 @@ pub struct Relation {
     pub basis: String,
     /// The relation rests on the roles the reply proposed, which the
     /// document's own wording neither supports nor contradicts: see
-    /// [`relation_from_roles`].
+    /// [`relation_from_roles`]. So does a default's party named "from"
+    /// because the reply called it the document's issuer or sender.
     pub on_proposed_roles: bool,
     /// No role settled the relation: a party was named by default, as the
     /// first the document names, or the one party there is, and the reply's
@@ -203,10 +206,11 @@ pub struct Relation {
     pub defaulted: bool,
     /// The rules named a party whose role nothing in the document settles,
     /// and the reply's own reading of that party speaks against the name:
-    /// a document "for" a party the reply called its issuer or sender, or
-    /// a default that kept the first of several parties the reply gave one
-    /// and the same role. Neither the document nor the reply is behind such
-    /// a name, and it waits for a person; the basis says why.
+    /// a provider's document "for" a party the reply called its issuer or
+    /// sender, or a default that kept the first of several parties the
+    /// reply gave one and the same role. Neither the document nor the reply
+    /// is behind such a name, and it waits for a person; the basis says
+    /// why.
     pub doubtful: bool,
 }
 
@@ -403,40 +407,70 @@ fn relation_from_supported_roles(
     // often the organization whose form it is as the one filling it in,
     // and the one party of a record, which may be the one it was made for.
     // A notice naming one party is for that party, and a record's first
-    // party is the one it is about, whatever the reply called them.
+    // party is the one it is about, whatever the reply called them, short
+    // of the document's issuer or sender (`for_by_default`).
     let by_default = |relation: PartyRelation, party: &CastMember, basis: &str| Relation {
         defaulted: true,
         ..one(relation, party, basis)
     };
-    // A party a document is "for" though no role of its own settles it: the
-    // party a provider's document is about, the one party a notice names,
-    // the first a record names. The reply's roles never replace such a name
-    // - a reply calls the company an improvement notice is served on its
+    // The reply's reading of a party whose role nothing in the document
+    // settles, where it called that party the document's issuer or sender:
+    // it read the document as coming from the party.
+    let called_its_source = |party: &CastMember| match party.proposed_role {
+        Some(role @ (PartyRole::Issuer | PartyRole::Sender))
+            if party.supported_role().is_none() =>
+        {
+            Some(role)
+        }
+        _ => None,
+    };
+    // The party a provider's document is about, "for" it though no role of
+    // its own settles it. The reply's roles never replace such a name - a
+    // reply calls the company an improvement notice is served on its
     // "contractor" - but a reply that called the party the document's
     // issuer or sender read the document as coming from it, which "for"
-    // denies: a court's public notice is not for the court, nor an
-    // association's newsletter for the association. Neither the document
-    // nor the reply is behind the name, and it waits for a person
-    // ([`Relation::doubtful`]). A form's filer is no such party: the one
-    // that issues a form and fills it in is the one it is for.
+    // denies. The document's own wording names another party as the one
+    // it comes from, so the reply's reading is not taken either: the name
+    // stands, neither the document nor the reply is behind it, and it
+    // waits for a person ([`Relation::doubtful`]).
     let for_unassigned = |party: &CastMember, basis: &str| {
         let relation = one(PartyRelation::For, party, basis);
-        match party.proposed_role {
-            Some(role @ (PartyRole::Issuer | PartyRole::Sender))
-                if party.supported_role().is_none() =>
-            {
-                Relation {
-                    basis: format!(
-                        "{}, though the reply called it the {}",
-                        relation.basis,
-                        role.as_str()
-                    ),
-                    doubtful: true,
-                    ..relation
-                }
-            }
-            _ => relation,
+        match called_its_source(party) {
+            Some(role) => Relation {
+                basis: format!(
+                    "{}, though the reply called it the {}",
+                    relation.basis,
+                    role.as_str()
+                ),
+                doubtful: true,
+                ..relation
+            },
+            None => relation,
         }
+    };
+    // A party a class names "for" by default alone: the one party a notice
+    // names, the first a record names. No role in the document settles it,
+    // and nothing in the document names another party the document comes
+    // from. Where the reply called that party the document's issuer or
+    // sender, the default has nothing behind it and the reply's reading is
+    // all there is: a court's public notice is not for the court, nor an
+    // association's newsletter for the association. The party is named
+    // "from", on the reply's reading, and the name waits for a person as a
+    // name that rests on the reply's roles does
+    // ([`Relation::on_proposed_roles`]): a reply can call the company a
+    // notice is served on its issuer too. A form's filer is no such party:
+    // the one that issues a form and fills it in is the one it is for.
+    let for_by_default = |party: &CastMember, basis: &str| match called_its_source(party) {
+        Some(role) => Relation {
+            basis: format!(
+                "{}: {basis}, from it as the reply called it the {}",
+                class.as_str(),
+                role.as_str()
+            ),
+            on_proposed_roles: true,
+            ..one(PartyRelation::From, party, basis)
+        },
+        None => one(PartyRelation::For, party, basis),
     };
     // A document that comes from a provider is about the party nothing
     // else is said of: a landlord's notice about its tenant, a lender's
@@ -703,11 +737,12 @@ fn relation_from_supported_roles(
                 };
             }
             // A notice naming one party, whose role nothing settles, is
-            // for that party: a loss notice for the insured.
+            // for that party: a loss notice for the insured. One the reply
+            // read as the party's own is from it (`for_by_default`).
             if let [only] = parties
                 && only.supported_role().is_none()
             {
-                return for_unassigned(only, "the one party, by default");
+                return for_by_default(only, "the one party, by default");
             }
             unresolved()
         }
@@ -789,10 +824,11 @@ fn relation_from_supported_roles(
             }
             // A record whose roles settle nothing is kept for the party it
             // first names: a maintenance record for the aircraft's owner,
-            // a certificate for the insured.
+            // a certificate for the insured. One the reply read as that
+            // party's own is from it (`for_by_default`).
             match unassigned() {
                 Some(party) => {
-                    first_of_alike(for_unassigned(party, "the first party, by default"), party)
+                    first_of_alike(for_by_default(party, "the first party, by default"), party)
                 }
                 None => unresolved(),
             }
@@ -1648,9 +1684,9 @@ mod tests {
     /// it was made for: where the rules only named them by default, the
     /// reply's roles decide, and the name says so. A form whose issuer the
     /// document names is for the party on its other side. A notice naming
-    /// one party is for that party whatever the reply called it - though a
-    /// reply that called it the issuer leaves the name doubtful - and a
-    /// default the reply's roles agree with stays a settled default.
+    /// one party is for that party by default - a reply that called it the
+    /// issuer names the notice from it instead, on the reply's roles - and
+    /// a default the reply's roles agree with stays a settled default.
     #[test]
     fn a_forms_first_party_and_a_records_one_party_give_way_to_the_replys_roles() {
         let cues = RelationCues::default();
@@ -1714,9 +1750,9 @@ mod tests {
             )],
             cues,
         );
-        assert_eq!(notice.relation, PartyRelation::For);
-        assert!(!notice.on_proposed_roles, "{}", notice.basis);
-        assert!(notice.doubtful, "{}", notice.basis);
+        assert_eq!(notice.relation, PartyRelation::From);
+        assert!(notice.on_proposed_roles, "{}", notice.basis);
+        assert!(!notice.doubtful, "{}", notice.basis);
         let agreed = relation_from_roles(
             DocumentClass::Form,
             Some("Benefits Enrollment Change Form"),
@@ -1732,17 +1768,19 @@ mod tests {
         assert!(!agreed.doubtful, "{}", agreed.basis);
     }
 
-    /// A notice is for the one party it names, a record for the first no
-    /// role assigns, and a provider's document for the party nothing else
-    /// is said of, whatever the reply called them: the name stands. Where
-    /// the reply called that party the document's issuer or sender, it read
-    /// the document as coming from the party the name says it is for, and
-    /// the name says that it is doubtful. Any other role the reply gave -
-    /// the "contractor" an improvement notice is served on - leaves it as
-    /// settled as it was; a role the document supports is no default; and
-    /// a form issued by the party filling it in is that party's filing.
+    /// A notice is for the one party it names and a record for the first no
+    /// role assigns, by default alone. Where the reply called that party the
+    /// document's issuer or sender, the default has nothing behind it: the
+    /// party is named "from", on the reply's roles, and the name says so.
+    /// Any other role the reply gave - the "contractor" an improvement
+    /// notice is served on - leaves the default "for" as settled as it was.
+    /// A provider's document stays for the party nothing else is said of,
+    /// doubtful where the reply called that party its issuer too, since the
+    /// document itself names where it comes from; a role the document
+    /// supports is no default; and a form issued by the party filling it in
+    /// is that party's filing.
     #[test]
-    fn a_name_for_the_party_the_reply_called_its_issuer_is_doubtful() {
+    fn a_party_named_by_default_is_from_it_where_the_reply_called_it_the_issuer() {
         let cues = RelationCues::default();
         let unsupported = |name: &str, proposed: Option<PartyRole>| CastMember {
             name: name.to_owned(),
@@ -1752,7 +1790,7 @@ mod tests {
         };
         // A court's public notice the reply read as the court's own, and a
         // loss notice for the insured it names, whose "for" is right.
-        for (kind, name, proposed, doubtful) in [
+        for (kind, name, proposed, from) in [
             (
                 "Public Notice",
                 "Harrow County Water Court",
@@ -1791,19 +1829,26 @@ mod tests {
                 &[unsupported(name, proposed)],
                 cues,
             );
-            assert_eq!(relation.relation, PartyRelation::For, "{proposed:?}");
+            let word = if from {
+                PartyRelation::From
+            } else {
+                PartyRelation::For
+            };
+            assert_eq!(relation.relation, word, "{proposed:?}");
             assert_eq!(relation.parties, vec![name]);
-            assert_eq!(relation.doubtful, doubtful, "{proposed:?}");
+            assert_eq!(relation.on_proposed_roles, from, "{proposed:?}");
             assert_eq!(
-                relation.basis.contains("though the reply called it"),
-                doubtful,
+                relation.basis.contains("as the reply called it"),
+                from,
                 "{}",
                 relation.basis
             );
-            assert!(!relation.on_proposed_roles, "{proposed:?}");
+            assert!(!relation.doubtful, "{proposed:?}");
         }
-        // A statement "for" the party the reply said it comes from, by the
-        // record's default.
+        // A statement from the party the reply said it comes from, the
+        // first the record names: the party the default would name, with
+        // the reply's word, and not another party the reply's roles would
+        // pick (the buyer it is "for").
         let statement = relation_from_roles(
             DocumentClass::Record,
             Some("Service Center Statement"),
@@ -1813,11 +1858,17 @@ mod tests {
             ],
             cues,
         );
-        assert_eq!(statement.relation, PartyRelation::For);
+        assert_eq!(statement.relation, PartyRelation::From);
         assert_eq!(statement.parties, vec!["Corvane Media Group"]);
-        assert!(statement.doubtful, "{}", statement.basis);
+        assert!(statement.on_proposed_roles, "{}", statement.basis);
+        assert_eq!(
+            statement.basis,
+            "record: the first party, by default, from it as the reply called it the issuer"
+        );
         // A report "for" the party nothing else is said of, beside its
-        // issuer, which the reply called the issuer too.
+        // issuer, which the reply called the issuer too: the document
+        // names where it comes from, and the counterpart stays "for",
+        // doubtful.
         let report = relation_from_roles(
             DocumentClass::Record,
             Some("Annual Report"),
@@ -1835,6 +1886,14 @@ mod tests {
         assert_eq!(report.relation, PartyRelation::For);
         assert_eq!(report.parties, vec!["Casimir Ellwood"]);
         assert!(report.doubtful, "{}", report.basis);
+        assert!(!report.on_proposed_roles, "{}", report.basis);
+        assert!(
+            report
+                .basis
+                .contains("though the reply called it the sender"),
+            "{}",
+            report.basis
+        );
         // The reply told the first party from the second, and did not say
         // the record comes from it: the default is as settled as before.
         let settled = relation_from_roles(
@@ -1849,7 +1908,9 @@ mod tests {
         assert_eq!(settled.relation, PartyRelation::For);
         assert_eq!(settled.parties, vec!["Kestrel Point Developers LLC"]);
         assert!(!settled.doubtful, "{}", settled.basis);
-        // A notice whose issuer the document supports is from it.
+        assert!(!settled.on_proposed_roles, "{}", settled.basis);
+        // A notice whose issuer the document supports is from it, and
+        // rests on nothing of the reply's.
         let from = relation_from_roles(
             DocumentClass::Notice,
             Some("Public Notice"),
@@ -1858,6 +1919,7 @@ mod tests {
         );
         assert_eq!(from.relation, PartyRelation::From);
         assert!(!from.doubtful, "{}", from.basis);
+        assert!(!from.on_proposed_roles, "{}", from.basis);
         // A form the reply said its one party issued is that party's
         // filing, by the form's own rows.
         let form = relation_from_roles(
