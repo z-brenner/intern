@@ -11,7 +11,8 @@ import { openDetails } from './grid';
   Here no press, on the action that opens the question or on the yes
   itself, checks a spelling, in the review panel or in Settings, at two
   window sizes; typing the spelling does, with a click on the yes or with
-  Enter. Nor does text put in at once with no keys for it.
+  Enter. Nor does text put in at once with no keys for it. And while the
+  question asks, no undo or redo changes a field behind it.
 */
 
 const CONTOSO = 'Use on its own: Contoso Worldwide, Inc. written as Contoso';
@@ -202,6 +203,87 @@ for (const [name, open] of surfaces) {
       await page.keyboard.press('Enter');
       await expect(ridgeline).toHaveCount(0);
       await expect.poll(() => surface.checked()).toBe(before + 2);
+      await expect(root).toBeVisible();
+    });
+  }
+}
+
+/** The field each surface has that a person may have edited, unsaved, before the question asks: the document's name, and this machine's name. */
+async function editedBehind(name: string, root: Locator) {
+  if (name === 'review panel') return root.getByRole('textbox', { name: 'Filename' });
+  await root.locator('summary', { hasText: 'Shared folders and troubleshooting' }).click();
+  return root.getByRole('textbox', { name: "This machine's name" });
+}
+
+// An undo or a redo goes to the field edited last, wherever the focus is,
+// and takes the focus there. Ctrl+Z pressed in the question's field before
+// anything was typed in it undid the edit to the document's name, and the
+// spelling typed next, with Enter as the question asks, went into the name
+// and filed the document as "... Contoso vContoso.pdf"; in Settings it
+// undid an unsaved edit to this machine's name.
+for (const [name, open] of surfaces) {
+  for (const size of sizes) {
+    test(`no undo or redo from the question changes a field edited behind it, in the ${name} at ${size.width}x${size.height}`, async ({ page }) => {
+      await page.setViewportSize(size);
+      const surface = await open(page);
+      const { root } = surface;
+      const before = await surface.checked();
+      const edited = await editedBehind(name, root);
+      await edited.click();
+      await page.keyboard.press('End');
+      await page.keyboard.type(' v2');
+      const typed = await edited.inputValue();
+      expect(typed).toMatch(/ v2$/);
+      const question = root.getByRole('group', { name: CONTOSO });
+      const field = question.getByRole('textbox');
+      const ask = async () => {
+        await (await actionInSight(surface, CONTOSO)).click();
+        await expect(field).toBeFocused();
+      };
+      const unchanged = async (what: string, value: string) => {
+        await page.waitForTimeout(100);
+        await expect(edited, what).toHaveValue(value);
+        await expect(edited, what).not.toBeFocused();
+        await expect(question, what).toBeVisible();
+      };
+
+      // Undo in the question's field, and after a press on its sentence took the focus from it.
+      await ask();
+      await page.keyboard.press('Control+Z');
+      await unchanged('Ctrl+Z in the field', typed);
+      await expect(field).toBeFocused();
+      await question.locator('p').click();
+      await expect(field).not.toBeFocused();
+      await page.keyboard.press('Control+Z');
+      await unchanged('Ctrl+Z after a press on the sentence', typed);
+      await page.keyboard.press('Escape');
+      await expect(question).toHaveCount(0);
+
+      // Undone in the field it was made in, the edit can be redone there, and not from the question.
+      await edited.focus();
+      await page.keyboard.press('Control+Z');
+      const undone = await edited.inputValue();
+      expect(undone).not.toBe(typed);
+      await ask();
+      for (const key of ['Control+Y', 'Control+Shift+Z']) {
+        await page.keyboard.press(key);
+        await unchanged(key, undone);
+        await expect(field).toBeFocused();
+      }
+      await page.keyboard.press('Escape');
+      await expect(question).toHaveCount(0);
+      await edited.focus();
+      await page.keyboard.press('Control+Y');
+      await expect(edited).toHaveValue(typed);
+
+      // Ctrl+Z, then the spelling and Enter, as the question asks: the spelling is checked, and nothing else changes.
+      await ask();
+      await page.keyboard.press('Control+Z');
+      await page.keyboard.type('Contoso');
+      await page.keyboard.press('Enter');
+      await expect(question).toHaveCount(0);
+      await expect.poll(() => surface.checked()).toBe(before + 1);
+      await expect(edited).toHaveValue(typed);
       await expect(root).toBeVisible();
     });
   }

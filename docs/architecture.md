@@ -767,10 +767,22 @@ layout that brought the yes under a still pointer, a tap through a menu, a
 window closing over the yes, a pointer that left the page - and the rules
 did not converge. Keys typed in the field stay there, but for Tab and
 Escape: the review window's Ctrl+Enter, Alt+K and Alt+N neither approve,
-keep nor move on from it, and Enter saves no settings. The field starts
-empty for every question, and again if the spelling it asks about changes
-while it asks. Cancel and Escape take the question back. Escape takes back
-the question and nothing else - not the drawer, not Settings, with what was
+keep nor move on from it, and Enter saves no settings. While a question
+asks, no field changes but the one with the focus: the browser's undo and
+redo go to the field edited last, wherever the focus is, and take the focus
+there. Ctrl+Z in the question's field, before anything was typed in it, or
+after a press on its sentence took the focus from it, undid an edit to the
+document's name or an unsaved setting and moved the focus into it; the
+spelling, typed next with Enter as the question asks, went into the name
+and approved the document under "... Contoso vContoso.pdf". So while a
+question asks, every input aimed at a field without the focus is refused
+where the browser announces it (`beforeinput`, caught on the document):
+the undo and redo of the keys and of the editing menu among them. A
+script's `execCommand('undo')` announces nothing and is not refused; no
+person sends one. The field starts empty for every question, and again if
+the spelling it asks about changes while it asks. Cancel and Escape take
+the question back. Escape takes back the question and nothing else - not
+the drawer, not Settings, with what was
 not saved - wherever the focus is in the review panel or in Settings, and
 the focus goes back to the action; closing Settings' "Learned spellings"
 section takes back a question open in it. While a question asks, the other

@@ -421,6 +421,56 @@ describe('the spellings Intern has learned', () => {
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
   });
 
+  // An undo or a redo goes to the field edited last, wherever the focus
+  // is, and takes the focus there: Ctrl+Z in the question's field undid an
+  // unsaved edit to this machine's name and moved the focus into it, where
+  // the spelling then went.
+  it('changes no setting but the one with the focus while it asks: no undo or redo reaches an unsaved edit behind it', async () => {
+    const base = createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] });
+    const houseRuleCheck = vi.fn(base.houseRuleCheck);
+    const saveSettings = vi.fn(base.saveSettings);
+    render(<App bridge={{ ...base, houseRuleCheck, saveSettings }} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    const machine = within(dialog).getByRole('textbox', { name: "This machine's name" });
+    const names = within(dialog).getByRole('textbox', { name: "Your organization's names" });
+    fireEvent.change(machine, { target: { value: 'Front desk' } });
+    /** Whether the browser may make the undo or redo it is about to in `field`: an event nobody refused. */
+    const undoes = (field: HTMLElement, inputType: string) => fireEvent(field, new InputEvent('beforeinput', { inputType, bubbles: true, cancelable: true }));
+    const action = within(list).getByRole('button', { name: /^Use on its own:/ });
+    action.focus();
+    expect(undoes(machine, 'historyUndo')).toBe(true);
+
+    fireEvent.click(action);
+    const question = within(list).getByRole('group');
+    const field = within(question).getByRole('textbox');
+    const focusOn: [string, () => void][] = [
+      ['in its field', () => field.focus()],
+      ['on its Cancel', () => within(question).getByRole('button', { name: 'Cancel' }).focus()],
+      ['on nothing, after a press on its sentence', () => (document.activeElement as HTMLElement).blur()],
+    ];
+    for (const [where, focus] of focusOn) {
+      focus();
+      for (const [other, inputType] of [[machine, 'historyUndo'], [machine, 'historyRedo'], [names, 'historyUndo']] as const) {
+        expect(undoes(other, inputType), `${inputType}, the focus ${where}`).toBe(false);
+      }
+    }
+    // In the field with the focus, the browser's undo is the person's.
+    machine.focus();
+    expect(undoes(machine, 'historyUndo')).toBe(true);
+    field.focus();
+    typeInto(field, 'Meeting Minutes');
+    fireEvent.keyDown(field, { key: 'Enter' });
+    await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledWith('2', { kind: 'document_type', from: 'Quarterly Operations Review', to: 'Meeting Minutes' }));
+    expect(question).not.toBeInTheDocument();
+    expect(machine).toHaveValue('Front desk');
+    expect(dialog).toBeInTheDocument();
+    expect(saveSettings).not.toHaveBeenCalled();
+    // Asking no more, it leaves undo to the browser again.
+    within(dialog).getByRole('button', { name: 'Save settings' }).focus();
+    expect(undoes(machine, 'historyUndo')).toBe(true);
+  });
+
   // Closing the section over an open question takes the question back: it
   // is not left asking where it cannot be seen.
   it('takes back the question when its section is closed', async () => {

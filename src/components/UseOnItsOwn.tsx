@@ -117,7 +117,10 @@ const MODIFIERS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 
  *
  * Keys typed in the field stay there, but for Tab, and Escape: Ctrl+Enter,
  * Alt+K and Alt+N neither approve, keep nor move on in review, and Enter
- * saves no settings. The field starts empty for every question, and again
+ * saves no settings. While it asks, no field changes but the one with the
+ * focus: an undo or a redo, which goes to the field edited last wherever
+ * the focus is and takes the focus there, changes no name nor setting
+ * behind the question. The field starts empty for every question, and again
  * when the spelling it asks about changes while it asks. Opened by a press,
  * the question takes the focus in its field and moves nothing under the
  * pointer (`afterAPress`); opened from the keyboard, it is brought into
@@ -157,7 +160,17 @@ function Question({ rule, describedBy, note, disabled, onConfirm, onCancel }: Qu
     // Keys a refused input was put in after are spent on it.
     const refuse = (event: InputEvent) => { if (!typing(event, keys.current)) { keys.current = 0; event.preventDefault(); } };
     input?.addEventListener('beforeinput', refuse);
-    return () => input?.removeEventListener('beforeinput', refuse);
+    // While it asks, no field changes but the one with the focus. An undo or
+    // a redo goes to the field edited last, wherever the focus is, and takes
+    // the focus there: pressed in this field, or after a press on the
+    // sentence took the focus from it, it undid the document's name, and the
+    // spelling and its Enter went into the name.
+    const elsewhere = (event: InputEvent) => { if (event.target !== document.activeElement) event.preventDefault(); };
+    document.addEventListener('beforeinput', elsewhere, true);
+    return () => {
+      input?.removeEventListener('beforeinput', refuse);
+      document.removeEventListener('beforeinput', elsewhere, true);
+    };
   }, []);
   const answer = () => {
     if (ready) onConfirm();

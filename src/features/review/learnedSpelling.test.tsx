@@ -546,6 +546,57 @@ describe('using a held document\'s spelling on its own', () => {
     });
   });
 
+  // An undo or a redo goes to the field edited last, wherever the focus
+  // is, and takes the focus there. Ctrl+Z pressed in the question's field
+  // before anything was typed in it undid the edit to the document's name,
+  // and the spelling, typed next with Enter as the question asks, went into
+  // the name and approved the document under "... Contoso vContoso.pdf".
+  it('changes no field but the one with the focus while it asks: no undo or redo reaches the name behind it', async () => {
+    const actions = handlers();
+    const bridge = spellingBridge(spellings);
+    render(<ReviewInspector item={held} drawer {...actions} spellings={bridge} />);
+    const name = screen.getByRole('textbox', { name: 'Filename' });
+    const description = screen.getByRole('textbox', { name: 'Description' });
+    fireEvent.change(name, { target: { value: `${(name as HTMLTextAreaElement).value} v2` } });
+    /** Whether the browser may make the undo or redo it is about to in `field`: an event nobody refused. */
+    const undoes = (field: HTMLElement, inputType: string) => fireEvent(field, new InputEvent('beforeinput', { inputType, bubbles: true, cancelable: true }));
+    // Before it asks, an undo is the browser's, wherever the focus is.
+    for (const field of [name, description]) expect(undoes(field, 'historyUndo')).toBe(true);
+    const action = await screen.findByRole('button', { name: CONTOSO });
+    action.focus();
+    expect(undoes(name, 'historyUndo')).toBe(true);
+
+    fireEvent.click(action);
+    const { group, field, cancel } = question(CONTOSO);
+    const focusOn: [string, () => void][] = [
+      ['in its field', () => field.focus()],
+      ['on its Cancel', () => cancel.focus()],
+      ['on nothing, after a press on its sentence', () => (document.activeElement as HTMLElement).blur()],
+    ];
+    for (const [where, focus] of focusOn) {
+      focus();
+      for (const [other, inputType] of [[name, 'historyUndo'], [name, 'historyRedo'], [description, 'historyUndo']] as const) {
+        expect(undoes(other, inputType), `${inputType} of ${other.getAttribute('aria-label') ?? 'Description'}, the focus ${where}`).toBe(false);
+      }
+    }
+    // In the field with the focus, the browser's undo is the person's.
+    name.focus();
+    expect(undoes(name, 'historyUndo')).toBe(true);
+    field.focus();
+    typeInto(field, 'Contoso');
+    fireEvent.keyDown(field, { key: 'Enter' });
+    await waitFor(() => expect(bridge.houseRuleCheck).toHaveBeenCalledWith('1', { kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' }));
+    expect(group).not.toBeInTheDocument();
+    expect(name).toHaveValue('2026-04-01 SOW between Ridgeline Cartography and Contoso v2');
+    expect(actions.onApprove).not.toHaveBeenCalled();
+    // Asking no more, it leaves undo to the browser again.
+    fireEvent.click(screen.getByRole('button', { name: RIDGELINE }));
+    fireEvent.click(question(RIDGELINE).cancel);
+    expect(screen.queryByRole('group', { name: /^Use on its own:/ })).not.toBeInTheDocument();
+    expect(undoes(name, 'historyUndo')).toBe(true);
+    expect(cancel).not.toBeInTheDocument();
+  });
+
   // Opened by a press, the question opens where its action was, sentence
   // first, and nothing moves under the pointer: the panel used to scroll it
   // clear of the decision, which brought its buttons under the pointer for
