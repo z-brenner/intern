@@ -456,6 +456,9 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .note .update-actions { margin-top: 10px; }
 .inspector section p { margin: 0; line-height: 1.5; }
 /* A name and a description as a person had them, kept where typing changes nothing (TypedKept): in the panel, or above the queue. */
+/* "Back to Intern's proposal" in the heading's own line, so the fields do not move when it comes and goes. */
+.proposal-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.proposal-heading .link-button { flex: none; font-size: 12.5px; }
 .typed-kept { margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--review-edge); border-left: 3px solid var(--review); border-radius: var(--radius-md); background: var(--review-surface); }
 .typed-kept p { margin: 0 0 8px; font-size: 13px; line-height: 1.5; color: var(--text-soft); }
 .typed-kept q { font-style: normal; }

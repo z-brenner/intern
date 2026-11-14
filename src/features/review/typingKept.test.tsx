@@ -643,6 +643,99 @@ describe('a name or a description being typed', () => {
   });
 
   /*
+    What is typed is kept through closing the panel, and nothing took it
+    back: Escape used to, and a field shown again has no undo history. Twelve
+    letters deleted from the Lease's name by mistake, Escape, Enter on the
+    row, Enter: approve(lease, 2023-09-15 Lease Agreement between ABC
+    Properties LLC and.pdf), while the row still read "... and TenantCo Inc".
+  */
+  it('can be taken back with "Back to Intern\'s proposal", which is there only while what is in the fields differs', async () => {
+    windowOf(true);
+    const { bridge } = await start();
+    const back = () => screen.queryByRole('button', { name: 'Back to Intern\'s proposal' });
+    const PROPOSED_DESCRIPTION = 'Commercial lease agreement between landlord and tenant for 123 Main St.';
+    await openDetails(LEASE);
+    expect(back()).not.toBeInTheDocument();
+
+    // Typed, and typed back by hand: nothing differs, and there is nothing to take back.
+    fireEvent.change(filename(), { target: { value: `${PROPOSED} v2` } });
+    expect(back()).toBeInTheDocument();
+    fireEvent.change(filename(), { target: { value: PROPOSED } });
+    expect(back()).not.toBeInTheDocument();
+    fireEvent.change(description(), { target: { value: DESCRIBED } });
+    expect(back()).toBeInTheDocument();
+
+    // The name spoiled, the drawer closed with Escape and opened again: it is as it was typed, as before.
+    const spoiled = PROPOSED.slice(0, -12);
+    fireEvent.change(filename(), { target: { value: spoiled } });
+    filename().focus();
+    press('Escape');
+    expect(panel()).not.toBeInTheDocument();
+    await openDetails(LEASE);
+    expect(filename()).toHaveValue(spoiled);
+    expect(description()).toHaveValue(DESCRIBED);
+
+    // The second click of a double-click takes nothing back. A press puts both back as Intern proposed them,
+    // in fields of their own - the old ones' undo steps go with them - and the caret goes to the name.
+    const fields = [filename(), description()];
+    description().focus();
+    fireEvent.click(back()!, { detail: 2 });
+    expect(filename()).toHaveValue(spoiled);
+    // The press does not take the focus (as on a Mac), and the window draws in the same commit (here, for the filter).
+    act(() => { fireEvent.focus(screen.getByRole('searchbox', { name: 'Filter queue' })); fireEvent.click(back()!); });
+    expect(filename()).toHaveValue(PROPOSED);
+    expect(description()).toHaveValue(PROPOSED_DESCRIPTION);
+    expect(back()).not.toBeInTheDocument();
+    expect(filename()).toHaveFocus();
+    for (const field of fields) expect(field).not.toBeInTheDocument();
+    // Pressed with the caret in a field, and the fields went: the person's own doing, so nothing is kept on screen for it.
+    expect(kept()).not.toBeInTheDocument();
+    nothingDecided(bridge);
+
+    // What was typed is dropped for good: closed and opened again it is Intern's proposal, and Enter in the name files that.
+    press('Escape');
+    expect(panel()).not.toBeInTheDocument();
+    await openDetails(LEASE);
+    expect(filename()).toHaveValue(PROPOSED);
+    expect(description()).toHaveValue(PROPOSED_DESCRIPTION);
+    expect(back()).not.toBeInTheDocument();
+    filename().focus();
+    press('Enter');
+    await waitFor(() => expect(bridge.approve).toHaveBeenCalledWith('lease', `${PROPOSED}.pdf`, PROPOSED_DESCRIPTION));
+  });
+
+  // Taken back - by the link, or letter by letter - a name is Intern's again
+  // and nobody's draft: Rename all ready counts the document and renames it.
+  it('is no longer typed once it is taken back: Rename all ready counts the document again and renames it as proposed', async () => {
+    windowOf(false);
+    const { bridge } = await start();
+    const all = () => screen.getByRole('button', { name: 'Rename all ready' });
+    const EMPLOYMENT_PROPOSED = '2024-04-12 Employment Agreement with John Smith';
+    await openDetails(EMPLOYMENT);
+    fireEvent.change(filename(), { target: { value: `${EMPLOYMENT_PROPOSED} (corrected)` } });
+    await waitFor(() => expect(all()).toHaveTextContent('Rename all ready 2'));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Intern\'s proposal' }));
+    await waitFor(() => expect(all()).toHaveTextContent('Rename all ready 3'));
+    expect(all()).not.toHaveAttribute('title');
+
+    fireEvent.change(description(), { target: { value: 'Signed by both.' } });
+    await waitFor(() => expect(all()).toHaveTextContent('Rename all ready 2'));
+    fireEvent.change(description(), { target: { value: '' } });
+    await waitFor(() => expect(all()).toHaveTextContent('Rename all ready 3'));
+    // Left for another row and come back to: nothing typed is waiting there.
+    selectRow(NDA);
+    await waitFor(() => expect(panel()).toHaveTextContent(NDA));
+    selectRow(EMPLOYMENT);
+    await waitFor(() => expect(panel()).toHaveTextContent(EMPLOYMENT));
+    expect(filename()).toHaveValue(EMPLOYMENT_PROPOSED);
+
+    fireEvent.click(all());
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Renamed 3 documents.'));
+    expect(bridge.approve.mock.calls.map(([id, name]) => [id, name])).toContainEqual(['employment', `${EMPLOYMENT_PROPOSED}.pdf`]);
+    expect(screen.getByRole('status', { name: 'Action status' })).not.toHaveTextContent('left for you');
+  });
+
+  /*
     Rename all ready files Intern's proposal for each ready document. For one
     whose name a person had typed and not filed it sent the proposal all the
     same - approve(employment, 2024-04-12 Employment Agreement with John

@@ -708,4 +708,65 @@ test('Analyze again starts from the new reading, with nothing kept beside it', a
   await openDetails(page, LEASE);
   await expect(name).toHaveValue(proposed);
   await expect(page.getByRole('textbox', { name: 'What you had typed' })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: "Back to Intern's proposal" })).toHaveCount(0);
+});
+
+/*
+  What is typed is kept through closing the panel, and nothing took it back:
+  Escape used to. Twelve letters deleted from the Lease's name, Escape, Enter
+  on the row, Enter: the document was filed as "... ABC Properties LLC and",
+  while its row still read "... and TenantCo Inc". Ctrl+Z in the field shown
+  again gives nothing back. "Back to Intern's proposal" does.
+*/
+test('a name spoiled and kept through Escape is taken back with "Back to Intern\'s proposal", and Enter then files the proposal', async ({ page }) => {
+  await page.setViewportSize(NARROW);
+  await page.goto('/');
+  const drawer = page.getByRole('dialog', { name: 'Review item' });
+  const name = drawer.getByRole('textbox', { name: 'Filename' });
+  const back = drawer.getByRole('button', { name: "Back to Intern's proposal" });
+  await queueCell(page, LEASE).click();
+  await page.keyboard.press('Enter');
+  await expect(name).toBeFocused();
+  const proposed = await name.inputValue();
+  await expect(back).toHaveCount(0);
+  await page.keyboard.press('Control+End');
+  for (let i = 0; i < 12; i += 1) await page.keyboard.press('Backspace');
+  const spoiled = proposed.slice(0, -12);
+  await expect(name).toHaveValue(spoiled);
+  await expect(back).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(drawer).toHaveCount(0);
+  await expect(queueCell(page, LEASE, 'proposed')).toContainText(`${proposed}.pdf`);
+  await page.keyboard.press('Enter');
+  await expect(name).toHaveValue(spoiled);
+  await page.keyboard.press('Control+z');
+  await expect(name).toHaveValue(spoiled);
+
+  // A double-click takes it back once and presses nothing else.
+  await back.dblclick();
+  await expect(name).toHaveValue(proposed);
+  await expect(back).toHaveCount(0);
+  await expect(drawer).toContainText(LEASE);
+  await page.waitForTimeout(300);
+  await expect(page.locator('.toasts')).toHaveCount(0);
+  // Spoiled again and taken back with one press: the caret is in the name.
+  await name.click();
+  await page.keyboard.press('Control+End');
+  for (let i = 0; i < 12; i += 1) await page.keyboard.press('Backspace');
+  await expect(name).toHaveValue(spoiled);
+  await back.click();
+  await expect(name).toHaveValue(proposed);
+  await expect(name).toBeFocused();
+  await expect(back).toHaveCount(0);
+  // The fields are new ones: no undo step brings the spoiled name back, or anything else.
+  await page.keyboard.press('Control+z');
+  await expect(name).toHaveValue(proposed);
+  await page.keyboard.press('Control+y');
+  await expect(name).toHaveValue(proposed);
+
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.toasts')).toContainText('Renamed 1 document.');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: /^Completed/ }).click();
+  await expect(queueCell(page, LEASE, 'proposed')).toContainText(`${proposed}.pdf`);
 });

@@ -159,10 +159,18 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     return typed?.for === draftFor ? typed : { item: item.id, for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false };
   };
   const [draft, setDraft] = useState<ReviewDraft>(typedOrProposed);
+  // Kept while it differs from the proposal it was typed over (`edited`). A
+  // name typed and then taken back - letter by letter, or with "Back to
+  // Intern's proposal" - is Intern's again and nobody's draft: it used to
+  // count as typed for good, with nothing on screen that differed.
+  const keep = (typed: ReviewDraft) => {
+    if (typed.edited) kept.set(typed.item, typed);
+    else if (kept.get(typed.item)?.for === typed.for) kept.delete(typed.item);
+  };
   // The draft last kept, so that one the window has since dropped - the
   // document was decided - is not put back as review moves on (below).
   const lastKept = useRef<ReviewDraft | undefined>(undefined);
-  useLayoutEffect(() => { if (draft.edited) { kept.set(draft.item, draft); lastKept.current = draft; } }, [draft, kept]);
+  useLayoutEffect(() => { keep(draft); lastKept.current = draft; }, [draft, kept]);
   const [error, setError] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
@@ -198,7 +206,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     // replaces its own, before any commit has shown it. Only such an edit:
     // one already kept is the window's to keep or drop, and put back here
     // it would outlive the decision that filed it.
-    if (draft.edited && lastKept.current !== draft) kept.set(draft.item, draft);
+    if (lastKept.current !== draft) keep(draft);
     setDraft(typedOrProposed());
     setError(''); setMoreOpen(false); setConfirmingRemove(false);
   }
@@ -208,8 +216,27 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // menu instead of the drawer. It closes with what it belonged to.
   if (moreOpen && !actions.keep) setMoreOpen(false);
   const { stem, description } = draft;
-  const setStem = (value: string) => setDraft((current) => ({ ...current, stem: value, edited: true }));
-  const setDescription = (value: string) => setDraft((current) => ({ ...current, description: value, edited: true }));
+  const differs = (name: string, sentence: string) => name !== proposedStem || sentence !== (item.description ?? '');
+  const setStem = (value: string) => setDraft((current) => ({ ...current, stem: value, edited: differs(value, current.description) }));
+  const setDescription = (value: string) => setDraft((current) => ({ ...current, description: value, edited: differs(current.stem, value) }));
+  // "Back to Intern's proposal": the one way to take back what was typed.
+  // What is typed is kept through closing the panel, so Escape no longer
+  // throws it away, and a field shown again has no undo history: twelve
+  // letters deleted from a name by mistake could only be typed again. The
+  // fields are new ones (`resets` is in their key), not the old ones set
+  // from code: Chromium's undo of a text set from code puts the old text
+  // back after the new. The press takes the focus first, so no field has the
+  // caret when it goes, and the caret then goes to the name, as it does
+  // after a party or a date is chosen.
+  const [resets, setResets] = useState(0);
+  const backToProposal = (event: MouseEvent<HTMLButtonElement>) => {
+    if (event.detail > 1) return;
+    event.currentTarget.focus();
+    setDraft({ item: item.id, for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false });
+    setError('');
+    setResets((count) => count + 1);
+    nameHadFocus.current = true;
+  };
   const inspectorRef = useRef<HTMLElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -262,7 +289,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     if (!field || typeof CSS === 'undefined' || CSS.supports?.('field-sizing', 'content')) return;
     field.style.height = 'auto';
     field.style.height = `${field.scrollHeight}px`;
-  }, [stem, draft.for]);
+  }, [stem, draft.for, resets]);
   useLayoutEffect(() => {
     const field = nameHadFocus.current ? filenameRef.current : descriptionHadFocus.current ? descriptionRef.current : null;
     nameHadFocus.current = false;
@@ -270,7 +297,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     if (!field) return;
     field.focus();
     field.setSelectionRange(field.value.length, field.value.length);
-  }, [draft.for]);
+  }, [draft.for, resets]);
   // The decision sticks to the bottom of the panel over whatever scrolls
   // under it, and the browser scrolls a focused control into view only when
   // none of it is in the panel, under the buttons or not. A control focused
@@ -505,10 +532,18 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       This document changed while you were working on its name and description. They are kept here as you had them, name first, and nothing here is filed.
     </TypedKept>)}
     {editable && <section className="proposal">
-      <h3>{unreadable ? 'Name it yourself' : 'Proposed rename'}</h3>
+      <div className="proposal-heading">
+        <h3>{unreadable ? 'Name it yourself' : 'Proposed rename'}</h3>
+        {/*
+          Only while what is in the fields differs from the proposal: what
+          Rename all ready leaves for the person is exactly what shows this.
+          In the heading's line, so nothing moves when it comes and goes.
+        */}
+        {draft.edited && <button type="button" className="link-button" disabled={busy} title="Puts the name and the description back as they were before you typed. What you typed for this document is dropped." onClick={backToProposal}>{unreadable ? 'Back to the name it came with' : "Back to Intern's proposal"}</button>}
+      </div>
       <label className="filename-label">Filename
         <span className="filename-field">
-          <textarea key={draft.for} ref={filenameRef} data-review-field="name" aria-label="Filename" className="filename-input" rows={1} spellCheck={false} autoComplete="off" value={stem}
+          <textarea key={`${draft.for} ${resets}`} ref={filenameRef} data-review-field="name" aria-label="Filename" className="filename-input" rows={1} spellCheck={false} autoComplete="off" value={stem}
             onChange={(event) => editStem(withoutLineBreaks(event.target.value))} onKeyDown={onFilenameKeyDown}
             aria-invalid={Boolean(error)} aria-describedby={[extension !== undefined ? `${fieldId}-extension` : '', error ? `${fieldId}-error` : ''].filter(Boolean).join(' ') || undefined} />
           {extension !== undefined && <span className="filename-extension" title="The extension stays as it is" aria-hidden="true">.{extension}</span>}
@@ -577,7 +612,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
           <button type="button" className="primary" disabled={busy} onClick={decides(acceptSuggestedDate)}>Use date &amp; rename</button>
         </div>
       </div>}
-      <label>Description<textarea key={draft.for} ref={descriptionRef} data-review-field="description" value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+      <label>Description<textarea key={`${draft.for} ${resets}`} ref={descriptionRef} data-review-field="description" value={description} onChange={(event) => setDescription(event.target.value)} /></label>
       {flagged.includes('description') && <p className="flag-line" role="note" aria-label="Part of the name to check">Check the description against the document.</p>}
     </section>}
     {/*
