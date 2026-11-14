@@ -12,9 +12,10 @@ use crate::domain::{
     ValidationOutcome,
 };
 use crate::evidence::{
-    DateSpelling, NumericOrder, Segments, date_match_positions, date_statements, digest_contains,
-    digest_contains_date, digest_contains_loosely, extract_stated_dates, is_valid_iso_date,
-    normalize, normalize_loosely, numeric_date_order,
+    DateSpelling, NumericDate, NumericOrder, Segments, date_match_positions, date_match_spans,
+    date_statements, digest_contains, digest_contains_date, digest_contains_loosely,
+    extract_stated_dates, is_valid_iso_date, normalize, normalize_loosely, numeric_date_order,
+    numeric_dates,
 };
 use crate::infer::{
     complete_type_from_title, dates_stated_on, infer_date_role, infer_document_type,
@@ -471,6 +472,77 @@ pub(crate) fn deadline_fires_as(
                 return false;
             }
             stated = true;
+        }
+    }
+    stated
+}
+
+/// Whether every statement of `date` on the lines of `segments`, wrapped
+/// lines rejoined, is one end of a period - and there is at least one. A
+/// statement is an end of a period when another date stands right before
+/// it or right after it with only "to", "through", "thru", "until" or a
+/// dash between them: "Service Period: 9/1/2017- 9/30/2017", "01/08/24 to
+/// 01/14/24", "January 8, 2024 through January 14, 2024".
+///
+/// A single statement of the date outside any period clears it ("Invoice
+/// Date: 09/01/2017"), and so does one that only a dash follows into a
+/// number that is no date - an invoice number's "2024-01-08-0457", a
+/// telephone number's "555-12-3456". Dates set side by side with no such
+/// word between them, as a table's start and end columns are, are not read
+/// as a period.
+pub(crate) fn only_bounds_a_period<'a>(
+    segments: impl IntoIterator<Item = &'a str>,
+    date: &str,
+) -> bool {
+    let joins = |between: &str| {
+        let between = between.trim();
+        matches!(between, "to" | "through" | "thru" | "until")
+            || (!between.is_empty() && between.chars().all(|character| character == '-'))
+    };
+    // A token of a numeric date's shape that some order reads as a day of
+    // a month: a year first or last, a month of 1 to 12, a day of 1 to 31.
+    let reads_as_a_date = |token: &NumericDate<'_>| {
+        let [first, second, third] = token.parts;
+        let number = |part: &str| part.parse::<u32>().unwrap_or(0);
+        let month_then_day = |month: &str, day: &str| {
+            (1..=12).contains(&number(month)) && (1..=31).contains(&number(day))
+        };
+        if first.len() == 4 {
+            third.len() == 2 && month_then_day(second, third)
+        } else {
+            first.len() <= 2
+                && matches!(third.len(), 2 | 4)
+                && (month_then_day(first, second) || month_then_day(second, first))
+        }
+    };
+    let mut stated = false;
+    for segment in segments {
+        for line in wrapped_lines(segment) {
+            let normalized = normalize(&line);
+            let statements = date_match_spans(date, &normalized);
+            if statements.is_empty() {
+                continue;
+            }
+            // Every date on the line, as a span: numeric tokens that read
+            // as a date, written ones as the evidence check finds them.
+            let mut dates = numeric_dates(&normalized)
+                .iter()
+                .filter(|token| reads_as_a_date(token))
+                .map(|token| (token.start, token.end))
+                .collect::<Vec<_>>();
+            for other in extract_stated_dates(&normalized) {
+                dates.extend(date_match_spans(&other, &normalized));
+            }
+            for (start, end) in statements {
+                let bounds = dates.iter().any(|&(other_start, other_end)| {
+                    (other_start >= end && joins(&normalized[end..other_start]))
+                        || (other_end <= start && joins(&normalized[other_end..start]))
+                });
+                if !bounds {
+                    return false;
+                }
+                stated = true;
+            }
         }
     }
     stated
@@ -2853,6 +2925,77 @@ This Intercompany Agreement is effective as of April 1, 2026 between Acme and Ac
             );
             assert_eq!(outcome.proposal.document_date, None, "{footer}");
             assert_eq!(outcome.reasons, vec![ReviewReason::DateIsDeadline]);
+        }
+    }
+
+    /// A date that every line states as one end of a period - joined to
+    /// another date by "to", "through", "thru", "until" or a dash - is the
+    /// period's, whichever end it is. One statement of it outside a period
+    /// clears it.
+    #[test]
+    fn a_date_stands_only_as_a_bound_of_a_period_when_every_line_joins_it_to_another() {
+        let only = |lines: &[&str], date: &str| only_bounds_a_period(lines.iter().copied(), date);
+        // Either end, however the two are joined, in numbers or in words.
+        for (line, date) in [
+            ("Service Period: 9/1/2017- 9/30/2017", "2017-09-01"),
+            ("Service Period: 9/1/2017- 9/30/2017", "2017-09-30"),
+            ("| 01/08/24 to 01/14/24 | 2x | -1-1--- |", "2024-01-08"),
+            ("01/08/24 - 01/21/24", "2024-01-21"),
+            (
+                "Billing period: March 1, 2026 through March 31, 2026",
+                "2026-03-01",
+            ),
+            (
+                "Statement period 1 March 2026 \u{2013} 31 March 2026",
+                "2026-03-31",
+            ),
+            ("Coverage: 2026-03-01 thru 2026-03-31", "2026-03-01"),
+            ("Open from 03/01/2026 until 03/31/2026", "2026-03-31"),
+            // A period broken where the margin fell.
+            (
+                "Billing period: March 1, 2026 to\nMarch 31, 2026",
+                "2026-03-31",
+            ),
+        ] {
+            assert!(only(&[line], date), "{line}: {date}");
+        }
+        // On every line that states it, and on at least one.
+        assert!(only(
+            &["01/08/24 - 01/21/24", "| 01/08/24 to 01/14/24 | 1x |"],
+            "2024-01-08"
+        ));
+        assert!(!only(&["01/08/24 - 01/21/24"], "2024-01-28"));
+        assert!(!only(&[], "2024-01-08"));
+        // One statement outside any period: the document gives the date a
+        // place of its own.
+        for lines in [
+            [
+                "Invoice Date: 09/01/2017",
+                "Service Period: 9/1/2017- 9/30/2017",
+            ],
+            ["Service Period: 9/1/2017- 9/30/2017", "Printed 9/1/2017"],
+        ] {
+            assert!(!only(&lines, "2017-09-01"), "{lines:?}");
+        }
+        // A dash into a number that is no date joins no period: an
+        // invoice's number, a telephone number.
+        for line in [
+            "Invoice No. 2024-01-08-0457",
+            "Reference 01/08/24-17",
+            "Fax 202-01-08-2024",
+            "Call by 01/08/24 - 555-12-3456",
+            "Lot 01/08/24-44.71.2024",
+        ] {
+            assert!(!only(&[line], "2024-01-08"), "{line}");
+        }
+        // Dates side by side, as a table's columns are, or listed with
+        // "and", are not said to be a period.
+        for line in [
+            "1 01/08/24 01/14/24 Morning News 5a-530a",
+            "| 01/08/24 | 01/14/24 |",
+            "Aired on 01/08/24 and 01/14/24",
+        ] {
+            assert!(!only(&[line], "2024-01-08"), "{line}");
         }
     }
 

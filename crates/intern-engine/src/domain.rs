@@ -735,6 +735,10 @@ pub enum ReviewReason {
     /// The date is written only as numbers whose day and month could be
     /// read either way round, and nothing in the document settles which.
     DateAmbiguous,
+    /// An invoice, a statement or another issued document states the date
+    /// only as the first or the last day of a period - a billing or
+    /// service period, a flight week - and never on its own.
+    DateIsPeriod,
     /// The quick local model read the document while its readings were
     /// always held for a person, in builds before both models were judged
     /// alike. Kept so an analysis stored by one of them still reads.
@@ -759,6 +763,7 @@ impl ReviewReason {
             Self::DateImplausible => "DATE_IMPLAUSIBLE",
             Self::DateIsDeadline => "DATE_IS_DEADLINE",
             Self::DateAmbiguous => "DATE_AMBIGUOUS",
+            Self::DateIsPeriod => "DATE_IS_PERIOD",
             Self::FastModelReading => "FAST_MODEL_READING",
         }
     }

@@ -112,6 +112,16 @@ describe('humanizeReason', () => {
     expect(humanizeReason('MODEL_DECLINED')).toContain('declined');
   });
 
+  // An invoice dated with the first day of the week it bills. The date is in
+  // the document, in numbers that read one way, and is no deadline: neither
+  // DATE_AMBIGUOUS's sentence nor DATE_IS_DEADLINE's is true of it.
+  it('says a date that only bounds a period is the period\'s, and to check for the document\'s own', () => {
+    const sentence = humanizeReason('DATE_IS_PERIOD');
+    expect(sentence).toBe('The date is written only as the start or end of a period, such as a billing or service period. Check which date the document itself carries.');
+    expect(sentence).not.toMatch(/day-first|month-first|due|expiry/);
+    expect(humanizeReason('DATE_IS_PERIOD, LOW_CONFIDENCE')).toBe(`${sentence} ${humanizeReason('LOW_CONFIDENCE')}`);
+  });
+
   it('keeps unknown codes and free text verbatim', () => {
     expect(humanizeReason('SOMETHING_NEW')).toBe('SOMETHING_NEW');
     expect(humanizeReason('Duplicate of 2026-01-05 Invoice.pdf')).toBe('Duplicate of 2026-01-05 Invoice.pdf');
@@ -125,7 +135,7 @@ describe('humanizeReason', () => {
 
   it('has a plain sentence for every failure and review code the backend can store', () => {
     const codes = [
-      'DATE_IMPLAUSIBLE', 'DATE_IS_DEADLINE', 'DATE_AMBIGUOUS', 'FAST_MODEL_READING', 'PARTY_MISSING',
+      'DATE_IMPLAUSIBLE', 'DATE_IS_DEADLINE', 'DATE_AMBIGUOUS', 'DATE_IS_PERIOD', 'FAST_MODEL_READING', 'PARTY_MISSING',
       'PASSWORD_PROTECTED', 'UNSUPPORTED_CONTENT', 'DOCUMENT_TOO_LARGE', 'OCR_UNAVAILABLE',
       'EXTRACTION_FAILED', 'ANALYSIS_FAILED', 'MODEL_FAILED', 'MODEL_OUTPUT_INVALID',
       'MODEL_INPUT_TOO_LARGE', 'MODEL_REPLY_TRUNCATED', 'HOSTED_MODEL_UNAVAILABLE',

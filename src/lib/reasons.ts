@@ -54,6 +54,12 @@ const SENTENCES: Record<string, string> = {
   DATE_IMPLAUSIBLE: 'The date\'s year looks wrong for a document, often a misread such as 2625 for 2025. Check it against the document.',
   DATE_IS_DEADLINE: 'The date the model chose is a due, renewal, or expiry date, not the date the document was issued. Check the date.',
   DATE_AMBIGUOUS: 'The date is written only as numbers that could be read day-first or month-first. Check which one the document means.',
+  // An invoice, a statement or another issued document whose chosen date
+  // stands, on every line that states it, joined to another date by "to",
+  // "through", "until" or a dash: one end of a period it bills or covers,
+  // not the day it was issued (ReviewReason::DateIsPeriod). The name keeps
+  // the date.
+  DATE_IS_PERIOD: 'The date is written only as the start or end of a period, such as a billing or service period. Check which date the document itself carries.',
   // The quick model read it. Its readings are never filed on their own; the
   // accurate model reads the document again when it can, unless a person has
   // acted on it first.
@@ -219,6 +225,7 @@ const SHORT: Record<string, string> = {
   DATE_UNSUPPORTED: 'Date not in document',
   DATE_AMBIGUOUS: 'Date could be day- or month-first',
   DATE_IS_DEADLINE: 'Date is a deadline',
+  DATE_IS_PERIOD: 'Date is a period\'s start or end',
   DATE_IMPLAUSIBLE: 'Year looks wrong',
   TYPE_MISSING: 'No document type',
   TYPE_UNSUPPORTED: 'Type not in document',

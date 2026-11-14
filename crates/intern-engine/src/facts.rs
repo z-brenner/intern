@@ -73,8 +73,8 @@ use crate::retrieve::EvidenceContext;
 use crate::validate::{
     DateField, DatePositions, GENERIC_CAPITALS, READY_CONFIDENCE, current_year, date_fields,
     date_is_tainted, date_is_tainted_as, deadline_fires, deadline_fires_as, effective_alternates,
-    first_unsupported_claim, issue_date_alternates, push, reading_is_unsettled,
-    validate_description, year_is_plausible,
+    first_unsupported_claim, issue_date_alternates, only_bounds_a_period, push,
+    reading_is_unsettled, validate_description, year_is_plausible,
 };
 
 /// Share of a subject's distinct significant words its cited units must
@@ -1011,6 +1011,23 @@ pub fn validate_facts_at(
         && (reading_is_unsettled(context, date) || reading_is_unsettled(document, date))
     {
         push(&mut reasons, ReviewReason::DateAmbiguous);
+    }
+    // An invoice, a statement or a receipt carries a date of its own, and
+    // the period it bills is another matter: "Service Period: 9/1/2017 -
+    // 9/30/2017", a broadcast invoice's flight weeks. A date the document
+    // states only as one end of a period, on every line that states it,
+    // running lines included, is as likely that period's first day as the
+    // day the paper was issued: the name keeps it, and a person checks it.
+    // A policy or a lease is dated by the start of its term, so only an
+    // issued document is asked.
+    if let Some(date) = document_date.as_deref()
+        && DocumentClass::of(document_type.as_deref()) == DocumentClass::Issued
+        && only_bounds_a_period(
+            scope.index.units().iter().map(|unit| unit.text.as_str()),
+            date,
+        )
+    {
+        push(&mut reasons, ReviewReason::DateIsPeriod);
     }
     // The wording around the date says what kind of date it is: the cited
     // units first, then the context, and the reply's role only where the
@@ -9067,6 +9084,101 @@ Payment terms: net 30. Remit to Halvorsen Fixture Works LLC.";
                 .guard_scope
                 .as_deref(),
             Some("both")
+        );
+    }
+
+    /// An invoice in the real sets dated, by the reply, with the first day
+    /// of the flight week it bills; a template's "Service Period". An
+    /// issued document's date that stands only as one end of a period
+    /// keeps its place in the name and waits for a person.
+    #[test]
+    fn an_issued_documents_date_that_only_bounds_a_period_waits_for_review() {
+        let invoice = |lines: &str| {
+            format!(
+                "Quillon Therapy Services LLC\n12 Quay Street, Brackenridge\n\nINVOICE\n\n\
+                 Bill To: Brackenridge Public Schools\n\n{lines}\n\n\
+                 Speech therapy sessions, 80 at $1.00, $80.00\n\nInvoice Total: $80.00"
+            )
+        };
+        let dated = |date: &'static str, cited: &'static str| {
+            move |index: &EvidenceIndex| ModelFacts {
+                document_type: Some("Invoice".into()),
+                type_evidence: vec![id_of(index, "INVOICE")],
+                document_date: Some(date.into()),
+                date_evidence: vec![id_of(index, cited)],
+                parties: vec![party(
+                    "Quillon Therapy Services LLC",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "Quillon Therapy")],
+                )],
+                ..ModelFacts::default()
+            }
+        };
+        // Either end of the period, and nowhere else.
+        for date in ["2017-09-01", "2017-09-30"] {
+            let (outcome, _) = facts_for(
+                &invoice("Service Period: 9/1/2017- 9/30/2017"),
+                dated(date, "Service Period"),
+            );
+            assert_eq!(outcome.proposal.document_date.as_deref(), Some(date));
+            assert!(
+                outcome.reasons.contains(&ReviewReason::DateIsPeriod),
+                "{date}: {:?}",
+                outcome.reasons
+            );
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        }
+        // The invoice gives the date a field of its own as well: it is the
+        // invoice's date, whatever period starts on it.
+        let (outcome, _) = facts_for(
+            &invoice("Invoice Date: September 1, 2017\n\nService Period: 9/1/2017- 9/30/2017"),
+            dated("2017-09-01", "Service Period"),
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2017-09-01")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::DateIsPeriod),
+            "{:?}",
+            outcome.reasons
+        );
+        // A dash into the rest of an invoice's number bounds no period.
+        let (outcome, _) = facts_for(
+            &invoice("Invoice No. 2017-09-01-0457"),
+            dated("2017-09-01", "Invoice No."),
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2017-09-01")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::DateIsPeriod),
+            "{:?}",
+            outcome.reasons
+        );
+        // A policy is dated by the start of its term: no issued document,
+        // and its period's first day is its date.
+        let (outcome, _) = facts_for(
+            "Hollowmere Mutual Insurance Company\n\nCOMMERCIAL PROPERTY POLICY\n\n\
+             | Named Insured | Fernvale Craft Brewing Cooperative |\n\
+             | Policy Period | From 07/01/2026 to 07/01/2027 at 12:01 A.M. standard time |",
+            |index| ModelFacts {
+                document_type: Some("Commercial Property Policy".into()),
+                type_evidence: vec![id_of(index, "COMMERCIAL")],
+                document_date: Some("2026-07-01".into()),
+                date_evidence: vec![id_of(index, "Policy Period")],
+                ..ModelFacts::default()
+            },
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-07-01")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::DateIsPeriod),
+            "{:?}",
+            outcome.reasons
         );
     }
 
