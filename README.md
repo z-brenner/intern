@@ -457,15 +457,51 @@ what was left on the table.
 ### Spellings Intern learns from you
 
 The document says "Contoso Worldwide, Inc."; you call it "Contoso". Respell a
-party or a document type in review and Intern remembers it. The second time
-you make the same change it becomes the spelling Intern uses, in the name, the
-layout folder, and the description record, for every later document that
-names the same thing. One edit is a decision about one document; two are a
-preference. Settings lists everything learned, with "Use now" for a spelling
-you want at once and "Forget" for one you do not, and the review panel says
-"Uses your spelling" whenever a name differs from the evidence under it. The
-evidence itself always keeps the document's own words: a learned spelling
-changes what Intern calls a thing, never what it found.
+party or a document type in review and Intern remembers it. The second time you
+make the same change it becomes the spelling Intern uses. One edit is a
+decision about one document; two are a preference.
+
+A spelling in use still fills in names, but every name it changes waits for
+you in review, even with automatic renaming on, until you choose "Use on its
+own" for that spelling. Approving a name the spelling changed does not count:
+the name may be right for that document - an agreement that names Jane Doe
+itself is rightly "John Smith, Jane Doe" - and still be wrong for the next,
+and Intern cannot tell that reliably from a document's text. So a name it
+changes keeps waiting, document after document, until you say the spelling is
+right for every one of them. If a name is right, approve it; if it is not,
+put the document's own word back, changing nothing else, and Intern forgets
+the spelling. Until you choose "Use on its own", a spelling is used only where
+the name shows it: a document whose name leaves out the party it respells (a
+long party left out for length, the third party of a "between") is filed and
+reported under the document's own words, and does not wait for it.
+
+"Use on its own" is in Settings, under Learned spellings, for every spelling in
+use that you have not chosen it for. A name waiting for such a spelling says so
+in the review window, under "Uses your spelling", and points you to Settings;
+the review window itself does not ask, so nothing typed while you review can
+reach it. "Use on its own" first says, in plain words, what it does - every
+later document Intern reads as naming the word will be named with the spelling,
+and may be filed under that name without your check. You then type the spelling
+to confirm it; "Use on its own" stays off until you have, so no stray click can
+choose it, and a paste does not count. While it asks, what you type in Settings
+goes into it unless you are typing in another field. Case, accents, spaces and
+punctuation do not matter: "contoso ltd" confirms "Contoso Ltd.", and "Soren"
+confirms "Søren". A mark that makes another letter does: "カトウ" does not confirm
+"ガトウ". Cancel or Escape takes the question back. It checks the spelling exactly
+as it was shown to you; one that changed in the meantime is refused, and shown
+again as it now reads. It approves and files no document: the names waiting for
+the spelling still wait for your decision. Once chosen, the spelling is used in
+the name, the layout folder, and the description record, for every later
+document that names the same thing, and those names are filed like any other. A
+different spelling for the same word, learned later, waits for its own choice.
+Spellings learned before alpha.18 wait for one too.
+
+Settings lists everything learned, with "Use now" for a spelling seen once
+that you want at once (the names it changes still wait until you choose "Use
+on its own"), "Use on its own", and "Forget" for one you do not want. The
+review panel says "Uses your spelling" whenever a name differs from the
+evidence under it. The evidence itself always keeps the document's own words:
+a learned spelling changes what Intern calls a thing, never what it found.
 
 ## Development
 

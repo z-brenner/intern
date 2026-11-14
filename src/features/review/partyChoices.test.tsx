@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
+import { ReviewInspector } from '../../components/ReviewInspector';
 import { openRow } from '../queue/gridTesting';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { QueueItem } from '../../types';
@@ -78,13 +79,21 @@ describe('other parties the document names', () => {
     });
     afterEach(() => { Reflect.deleteProperty(document, 'execCommand'); });
 
-    it('replaces the whole name with the editing command, keeping what was typed after the party', async () => {
+    /*
+      Only the words that differ - here the party's - not the whole name.
+      Chromium's undo of a replacement of the field's whole text puts the
+      old text back after whatever the field holds by then: after a date
+      chip had set the name from code, Ctrl+Z gave the name with its old
+      self after it.
+    */
+    it('replaces only the words that differ with the editing command, keeping what was typed after the party', async () => {
       const baseBridge = createInMemoryBridge({ items: [letter] });
       const approve = vi.fn(baseBridge.approve);
       render(<App bridge={{ ...baseBridge, approve }} />);
       await selectRow(await screen.findByRole('row', { name: /Scan 0201.pdf/i }));
       const filename = screen.getByLabelText<HTMLTextAreaElement>('Filename');
-      fireEvent.change(filename, { target: { value: '2012-06-19 Request Letter to U.S. Department of Justice re Merger' } });
+      const typed = '2012-06-19 Request Letter to U.S. Department of Justice re Merger';
+      fireEvent.change(filename, { target: { value: typed } });
 
       let selected: [number | null, number | null, boolean] | undefined;
       insertText.mockImplementationOnce((command, ui, text) => {
@@ -94,11 +103,13 @@ describe('other parties the document names', () => {
       fireEvent.click(within(choicesGroup()).getByRole('button', { name: 'Morgan, Lewis & Bockius LLP' }));
 
       expect(insertText).toHaveBeenCalledTimes(1);
-      expect(insertText).toHaveBeenCalledWith('insertText', false, '2012-06-19 Request Letter to Morgan, Lewis & Bockius LLP re Merger');
-      // The whole name was selected in the field, so the one command replaced all of it.
-      expect(selected).toEqual([0, '2012-06-19 Request Letter to U.S. Department of Justice re Merger'.length, true]);
+      expect(insertText).toHaveBeenCalledWith('insertText', false, 'Morgan, Lewis & Bockius LLP');
+      // The party's words were selected in the field, and nothing either side of them.
+      expect(selected).toEqual([typed.indexOf('U.S.'), typed.indexOf(' re Merger'), true]);
       expect(filename).toHaveValue('2012-06-19 Request Letter to Morgan, Lewis & Bockius LLP re Merger');
       expect(filename).toHaveFocus();
+      // The caret is at the end, where it was when the whole name went in.
+      expect([filename.selectionStart, filename.selectionEnd]).toEqual([filename.value.length, filename.value.length]);
       expect(within(choicesGroup()).getByRole('button', { name: 'Morgan, Lewis & Bockius LLP' })).toHaveAttribute('aria-pressed', 'true');
 
       fireEvent.keyDown(filename, { key: 'Enter' });
@@ -122,6 +133,224 @@ describe('other parties the document names', () => {
       expect(insertText).toHaveBeenCalledTimes(1);
       expect(filename).toHaveValue('2012-06-19 Request Letter to STARS Alliance LLC');
       expect(filename).toHaveFocus();
+    });
+
+    /*
+      A paste holding a line break - a spreadsheet cell's "\r\n" - left the
+      break in the field until the change set the name from code; Chromium's
+      undo of the paste then put the old name after the new one, one Enter
+      from filing. It goes in as typed, a space for each break.
+    */
+    it('puts a pasted line break in as a space, through the editing command', async () => {
+      render(<App bridge={createInMemoryBridge({ items: [letter] })} />);
+      await selectRow(await screen.findByRole('row', { name: /Scan 0201.pdf/i }));
+      const filename = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      filename.focus();
+      filename.setSelectionRange(0, filename.value.length);
+      const paste = new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertFromPaste', data: '2012-06-19 Request Letter to Foo Bar\r\n' });
+      filename.dispatchEvent(paste);
+      expect(paste.defaultPrevented).toBe(true);
+      expect(insertText).toHaveBeenCalledTimes(1);
+      expect(insertText).toHaveBeenCalledWith('insertText', false, '2012-06-19 Request Letter to Foo Bar ');
+      expect(filename).toHaveValue('2012-06-19 Request Letter to Foo Bar ');
+
+      // Text without a break is left to the browser.
+      const plain = new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertFromPaste', data: 'x' });
+      filename.dispatchEvent(plain);
+      expect(plain.defaultPrevented).toBe(false);
+      expect(insertText).toHaveBeenCalledTimes(1);
+    });
+
+    it('replaces whole words, so a letter is never split from its accent', async () => {
+      // The name writes the accent as a letter and a combining mark; the party chosen has none.
+      const accented: QueueItem = { ...letter, proposedFilename: '2012-06-19 Request Letter to Rene\u0301 Dupont.pdf', partyChoices: ['Rene Dupont'], nameParties: ['Rene\u0301 Dupont'] };
+      render(<App bridge={createInMemoryBridge({ items: [accented] })} />);
+      await selectRow(await screen.findByRole('row', { name: /Scan 0201.pdf/i }));
+      const filename = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      const before = filename.value;
+
+      let selected: [number | null, number | null] | undefined;
+      insertText.mockImplementationOnce((command, ui, text) => {
+        selected = [filename.selectionStart, filename.selectionEnd];
+        return browserInsertText(command, ui, text);
+      });
+      fireEvent.click(within(choicesGroup()).getByRole('button', { name: 'Rene Dupont' }));
+      expect(insertText).toHaveBeenCalledWith('insertText', false, 'Rene');
+      expect(selected).toEqual([before.indexOf('Rene\u0301'), before.indexOf(' Dupont')]);
+      expect(filename).toHaveValue('2012-06-19 Request Letter to Rene Dupont');
+    });
+
+    /*
+      A date put in with a click - a date chip, or "Use this date" - set the
+      name from code. Chromium's undo of the reviewer's own whole-text
+      replacement before it then put the old text back after the dated
+      name: Ctrl+A, paste a name, a date chip, Ctrl+Z gave "2012-06-19
+      Request Letter to Foo BarRequest Letter to U.S. Department of
+      Justice", one Enter from filing. The date goes in as typed, in front
+      of the name, and nothing else in the field is touched.
+    */
+    it('puts a date in front of the name with the editing command, from a date chip or the suggestion', async () => {
+      const undated: QueueItem = {
+        ...letter,
+        id: 'undated',
+        originalFilename: 'Scan 0206.pdf',
+        proposedFilename: 'Request Letter to U.S. Department of Justice.pdf',
+        errorCode: 'DATE_MISSING',
+        datesInDocument: ['2012-06-19', '2012-07-01'],
+      };
+      const suggested: QueueItem = { ...undated, id: 'suggested', originalFilename: 'Scan 0207.pdf', datesInDocument: undefined, suggestedDate: '2012-07-01' };
+      render(<App bridge={createInMemoryBridge({ items: [undated, suggested] })} />);
+      await selectRow(await screen.findByRole('row', { name: /Scan 0206.pdf/i }));
+      const filename = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      const typed = 'Request Letter to Foo Bar';
+      fireEvent.change(filename, { target: { value: typed } });
+
+      let selected: [number | null, number | null, boolean] | undefined;
+      insertText.mockImplementationOnce((command, ui, text) => {
+        selected = [filename.selectionStart, filename.selectionEnd, document.activeElement === filename];
+        return browserInsertText(command, ui, text);
+      });
+      fireEvent.click(within(screen.getByRole('group', { name: 'Dates to choose from' })).getByRole('button', { name: '2012-06-19' }));
+      expect(insertText).toHaveBeenCalledTimes(1);
+      expect(insertText).toHaveBeenCalledWith('insertText', false, '2012-06-19 ');
+      // Nothing selected: the date goes in at the start, and the name typed stays as it was.
+      expect(selected).toEqual([0, 0, true]);
+      expect(filename).toHaveValue('2012-06-19 Request Letter to Foo Bar');
+      expect(filename).toHaveFocus();
+      expect([filename.selectionStart, filename.selectionEnd]).toEqual([filename.value.length, filename.value.length]);
+
+      await selectRow(await screen.findByRole('row', { name: /Scan 0207.pdf/i }));
+      const next = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      fireEvent.click(screen.getByRole('button', { name: 'Use this date' }));
+      expect(insertText).toHaveBeenCalledTimes(2);
+      expect(insertText).toHaveBeenLastCalledWith('insertText', false, '2012-07-01 ');
+      expect(next).toHaveValue('2012-07-01 Request Letter to U.S. Department of Justice');
+      expect(next).toHaveFocus();
+    });
+
+    it('sets the name from code when the command leaves anything else in the field', async () => {
+      render(<App bridge={createInMemoryBridge({ items: [letter] })} />);
+      await selectRow(await screen.findByRole('row', { name: /Scan 0201.pdf/i }));
+      const filename = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+
+      // As a browser that moved the selection's start to the start of the name would.
+      insertText.mockImplementationOnce((command, ui, text) => {
+        filename.setSelectionRange(0, filename.selectionEnd);
+        return browserInsertText(command, ui, text);
+      });
+      fireEvent.click(within(choicesGroup()).getByRole('button', { name: 'Morgan, Lewis & Bockius LLP' }));
+      expect(insertText).toHaveBeenCalledTimes(1);
+      expect(filename).toHaveValue('2012-06-19 Request Letter to Morgan, Lewis & Bockius LLP');
+      expect(within(choicesGroup()).getByRole('button', { name: 'Morgan, Lewis & Bockius LLP' })).toHaveAttribute('aria-pressed', 'true');
+    });
+  });
+
+  /*
+    One field served every item, and the browser's undo steps outlived the
+    item they were made in: after a party chip, Ctrl+Z in the next
+    document's name (Alt+N, or another row) put the last document's old name
+    after its own, one Enter from filing. Each item, and each revision of
+    its proposal, has a field of its own, and a caret in the old one moves
+    to the new one.
+  */
+  describe('a name field of its own for each item and revision', () => {
+    const second: QueueItem = {
+      ...letter,
+      id: 'invoice',
+      originalFilename: 'Scan 0202.pdf',
+      proposedFilename: '2013-01-05 Invoice from Acme Corp.pdf',
+      description: 'An invoice.',
+      partyChoices: ['Beta LLC'],
+      nameParties: ['Acme Corp'],
+    };
+
+    it('gives the next item a new field, with the caret moved to it, and the chip kept for the item left', async () => {
+      render(<App bridge={createInMemoryBridge({ items: [letter, second] })} />);
+      await selectRow(await screen.findByRole('row', { name: /Scan 0201.pdf/i }));
+      const first = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      fireEvent.click(within(choicesGroup()).getByRole('button', { name: 'Morgan, Lewis & Bockius LLP' }));
+      expect(first).toHaveFocus();
+
+      // Alt+N, from inside the name.
+      fireEvent.keyDown(first, { key: 'n', code: 'KeyN', altKey: true });
+      const next = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      expect(next).toHaveValue('2013-01-05 Invoice from Acme Corp');
+      expect(next).not.toBe(first);
+      expect(first).not.toBeInTheDocument();
+      expect(next).toHaveFocus();
+      expect([next.selectionStart, next.selectionEnd]).toEqual([next.value.length, next.value.length]);
+
+      // Back to the first, the chip's name is there, in a field of its own again.
+      fireEvent.keyDown(next, { key: 'n', code: 'KeyN', altKey: true });
+      const again = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      expect(again).toHaveValue('2012-06-19 Request Letter to Morgan, Lewis & Bockius LLP');
+      expect(again).not.toBe(first);
+      expect(again).toHaveFocus();
+    });
+
+    it('gives a new revision a new field, moving the caret only if it was in the old one', () => {
+      const calls = { onClose: vi.fn(), onApprove: vi.fn(), onKeep: vi.fn(), onCancel: vi.fn(), onRetry: vi.fn(), onReanalyze: vi.fn(), onRemove: vi.fn(), onUndo: vi.fn(), onOpen: vi.fn(), onReveal: vi.fn() };
+      const read = { ...letter, proposalRevision: '1' };
+      const view = render(<ReviewInspector item={read} drawer={false} {...calls} />);
+      const first = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      first.focus();
+
+      view.rerender(<ReviewInspector item={{ ...read, proposedFilename: '2012-06-19 Request Letter to STARS Alliance LLC.pdf', proposalRevision: '2' }} drawer={false} {...calls} />);
+      const reread = screen.getByLabelText<HTMLTextAreaElement>('Filename');
+      expect(reread).toHaveValue('2012-06-19 Request Letter to STARS Alliance LLC');
+      expect(reread).not.toBe(first);
+      expect(reread).toHaveFocus();
+      expect([reread.selectionStart, reread.selectionEnd]).toEqual([reread.value.length, reread.value.length]);
+
+      // A caret in the description moves to the new revision's description, not to the name.
+      const description = screen.getByLabelText<HTMLTextAreaElement>('Description');
+      description.focus();
+      view.rerender(<ReviewInspector item={{ ...read, proposedFilename: '2012-06-19 Request Letter to Morgan, Lewis & Bockius LLP.pdf', proposalRevision: '3' }} drawer={false} {...calls} />);
+      expect(screen.getByLabelText('Filename')).not.toBe(reread);
+      expect(screen.getByLabelText('Filename')).not.toHaveFocus();
+      const redescribed = screen.getByLabelText<HTMLTextAreaElement>('Description');
+      expect(redescribed).not.toBe(description);
+      expect(redescribed).toHaveFocus();
+      expect([redescribed.selectionStart, redescribed.selectionEnd]).toEqual([redescribed.value.length, redescribed.value.length]);
+
+      // A caret anywhere else stays where it is.
+      const heading = screen.getByRole('heading', { name: 'Review item' });
+      heading.focus();
+      view.rerender(<ReviewInspector item={{ ...read, proposedFilename: '2012-06-19 Request Letter to STARS Alliance LLC.pdf', proposalRevision: '4' }} drawer={false} {...calls} />);
+      expect(heading).toHaveFocus();
+    });
+
+    /*
+      The description's field served every item too. After Ctrl+A and
+      typing in one document's description, Alt+N, then Ctrl+Z in the next
+      document's description put the last one's old text after its own
+      (Chromium), and approving filed that into the description ledger and
+      the shared filed index. Each item has a description field of its own.
+    */
+    it('gives the next item a description field of its own, and keeps what was typed for the item left', async () => {
+      const bridge = createInMemoryBridge({ items: [letter, second] });
+      const approve = vi.fn(bridge.approve);
+      render(<App bridge={{ ...bridge, approve }} />);
+      await selectRow(await screen.findByRole('row', { name: /Scan 0201.pdf/i }));
+      const first = screen.getByLabelText<HTMLTextAreaElement>('Description');
+      first.focus();
+      fireEvent.change(first, { target: { value: 'Desc A.' } });
+
+      // Alt+N, from inside the description: the next item's name, as from anywhere.
+      fireEvent.keyDown(first, { key: 'n', code: 'KeyN', altKey: true });
+      await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2013-01-05 Invoice from Acme Corp'));
+      await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveFocus());
+      const next = screen.getByLabelText<HTMLTextAreaElement>('Description');
+      expect(next).toHaveValue('An invoice.');
+      expect(next).not.toBe(first);
+      expect(first).not.toBeInTheDocument();
+      next.focus();
+      fireEvent.keyDown(next, { key: 'Enter', ctrlKey: true });
+      await waitFor(() => expect(approve).toHaveBeenCalledWith('invoice', '2013-01-05 Invoice from Acme Corp.pdf', 'An invoice.'));
+
+      // Back to the first, its description is as typed, in a field of its own again.
+      await waitFor(() => expect(screen.getByLabelText('Description')).toHaveValue('Desc A.'));
+      expect(screen.getByLabelText('Description')).not.toBe(first);
     });
   });
 

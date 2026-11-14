@@ -1,6 +1,8 @@
 import { ExternalLink, FolderOpen, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { describeActionError } from '../lib/actionErrors';
+import { useEditsOnlyInside } from '../lib/dialogEdits';
+import { tabWithin } from '../lib/dialogTab';
 import type { DesktopBridge, SelectionBoundary } from '../lib/bridge';
 import type { HistoryEntry } from '../types';
 import { Icon } from './Icon';
@@ -41,7 +43,7 @@ function formatWhen(at: number): string {
 /**
  * Modal history of finished renames and undos, with CSV export. Same
  * backdrop/focus-trap conventions as SettingsDialog: Escape closes, Tab
- * cycles within the dialog.
+ * cycles within the dialog, and no field behind it changes while it is open.
  */
 export function HistoryDialog({ bridge, selection, filedItems, onClose }: Props) {
   const [entries, setEntries] = useState<HistoryEntry[]>();
@@ -56,6 +58,8 @@ export function HistoryDialog({ bridge, selection, filedItems, onClose }: Props)
   // does not have to depend on its identity.
   const close = useRef(onClose);
   useEffect(() => { close.current = onClose; }, [onClose]);
+  // No field behind the dialog changes while it is open: an undo here went to the review panel's name.
+  useEditsOnlyInside(dialog);
 
   useEffect(() => {
     let active = true;
@@ -72,12 +76,7 @@ export function HistoryDialog({ bridge, selection, filedItems, onClose }: Props)
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.preventDefault(); close.current(); return; }
       if (event.key !== 'Tab') return;
-      const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled])') ?? []);
-      if (!focusable.length) return;
-      const current = document.activeElement;
-      const index = focusable.indexOf(current as HTMLElement);
-      const nextIndex = event.shiftKey ? (index <= 0 ? focusable.length - 1 : index - 1) : (index === focusable.length - 1 ? 0 : index + 1);
-      if (index !== -1) { event.preventDefault(); focusable[nextIndex].focus(); }
+      tabWithin(event, Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled])') ?? []));
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);

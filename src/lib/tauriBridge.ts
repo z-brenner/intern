@@ -266,6 +266,7 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
   houseRulesList(): Promise<LearnedRule[]> { return this.transport.invoke('house_rules_list'); }
   houseRuleForget(id: string): Promise<void> { return this.transport.invoke('house_rule_forget', { id }); }
   houseRuleUse(id: string): Promise<void> { return this.transport.invoke('house_rule_use', { id }); }
+  houseRuleCheck(id: string, shown: HouseRule): Promise<void> { return this.transport.invoke('house_rule_check', { id, kind: shown.kind, from: shown.from, to: shown.to }); }
 
   // Same shape as subscribeIntake: synchronous unsubscribe over an async
   // listen, dropping events until the listener is registered.

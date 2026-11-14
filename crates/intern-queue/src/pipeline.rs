@@ -1,5 +1,7 @@
 use std::{
+    collections::BTreeSet,
     fs,
+    ops::Range,
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
@@ -18,7 +20,8 @@ use intern_engine::{
     counterparty_view,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
-    is_own_name, lesson_from_edit, named_parties, party_as_named, sanitize_folder_name,
+    is_a_spelling, is_own_name, lesson_from_edit, named_parties, party_and_more, party_as_named,
+    proposed_party, respelled_party, same_stem, sanitize_folder_name,
     setup::{semantic_probes, validate_semantic_probe},
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -705,6 +708,15 @@ pub struct ProposalRecord {
     /// [`CopyOf`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copy_of: Option<CopyOf>,
+    /// The learned spellings among [`Self::house_rules`] that no person had
+    /// checked (see [`LearnedRule::confirmed`]) and that the name a person
+    /// approved took out (see [`keeps_spelling`]): their no to each on this
+    /// document. Where the approved name gives the document's own words
+    /// instead, the document is filed and reported under those, never
+    /// under the spelling taken out (see [`Self::as_filed`]). Set by each
+    /// approval, as the spellings stood when it was made.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected_rules: Vec<HouseRule>,
 }
 
 /// What an exact duplicate is a copy of, and where its copy goes.
@@ -728,6 +740,15 @@ pub struct CopyOf {
 /// The review reason for a document whose text is nearly the text of one
 /// already filed. The record's `near_duplicate_of` names that filing.
 pub const NEAR_DUPLICATE: &str = "NEAR_DUPLICATE";
+
+/// The review reason for a name a learned spelling changed before any person
+/// has checked that spelling (see [`LearnedRule::confirmed`]): the document
+/// waits for a person, whatever its reading says, and is never filed on its
+/// own. Approving the name, with the spelling in it or not, checks nothing;
+/// only "Use on its own" for that spelling does (see
+/// [`Pipeline::check_rule`]). Putting the document's own word back, as the
+/// approval's only change, retracts the spelling.
+pub const LEARNED_SPELLING_UNCONFIRMED: &str = "LEARNED_SPELLING_UNCONFIRMED";
 
 /// The note on an exact duplicate filed as a copy of the document it
 /// repeats: why it is named `COPY - ...` and was never read.
@@ -771,6 +792,7 @@ impl ProposalRecord {
             reviewed: false,
             manual: false,
             copy_of: None,
+            rejected_rules: Vec::new(),
         }
     }
 
@@ -797,6 +819,49 @@ impl ProposalRecord {
             .apply(&self.analysis.proposal)
             .0;
         counterparty_view(&styled, &self.own_names)
+    }
+
+    /// Whether a learned spelling no person has checked yet changed this
+    /// record's name, or where it is filed and reported: the name composed
+    /// from the reading with every rule in [`Self::house_rules`], or the
+    /// type and parties it is composed from, are not those composed with
+    /// only the rules that `checked` says a person has checked (see
+    /// [`LearnedRule::confirmed`]). A record composed now holds an
+    /// unchecked rule only where its name shows it (see [`shown_rules`]),
+    /// so for one the name is what differs; the type and the parties count
+    /// as well for a record an earlier build composed with such a rule where
+    /// the name leaves its party out - the first, shed for length, whose
+    /// folder the document still goes in, or the third of a "between" -
+    /// which was filed without review into the folder, and under the
+    /// report, the rule wrote. A rule that fired but changes none of it - a
+    /// respelling of a party the name leaves out as the person's own
+    /// organization - holds nothing. `extension` is the source file's.
+    ///
+    /// The wording of an edit cannot tell every spelling from a decision
+    /// about one document, so this is what keeps a wrong rule from filing a
+    /// name: a name it changed waits for a person until one has said, of
+    /// that spelling and no document, to use it on its own.
+    pub fn holds_unchecked_spelling(
+        &self,
+        extension: &str,
+        checked: impl Fn(&HouseRule) -> bool,
+    ) -> bool {
+        if self.is_synthetic() || self.house_rules.iter().all(&checked) {
+            return false;
+        }
+        let named = |rules: Vec<HouseRule>| {
+            let (styled, applied) = HouseStyle::new(rules).apply(&self.analysis.proposal);
+            let (named, _) = counterparty_view(&styled, &self.own_names);
+            let name = compose_styled_filename(&named, &applied, extension, &[]).value;
+            (name, named.document_type, named.parties)
+        };
+        let kept = self
+            .house_rules
+            .iter()
+            .filter(|rule| checked(rule))
+            .cloned()
+            .collect();
+        named(self.house_rules.clone()) != named(kept)
     }
 
     /// The other parties the document names, offered to a reviewer to put
@@ -899,23 +964,81 @@ impl ProposalRecord {
 
     /// The validated facts as the name `filename` the document is filed
     /// under gives them: its date (see [`proposal_as_applied`]), and the
-    /// party a reviewer put in place of one the proposed name gave - another
-    /// party the document names, chosen in review, or their own spelling.
-    /// The layout folder and the filing report are read from this, so a
-    /// document filed by party goes in the folder of the party its name
-    /// gives, not the one the reviewer took out of it.
+    /// parties as the reviewer left them - another party the document
+    /// names, chosen in review and put in place of one the proposed name
+    /// gave or beside it, or their own spelling of one. The layout folder,
+    /// which is the first party's, and the filing report are read from
+    /// this. `extension` is the source file's.
     ///
-    /// The name is read with the grammar that composed the proposed one: a
-    /// respelled side of a "between" as a lesson is read (see
-    /// [`lesson_from_edit`]), and otherwise the one party after the type it
-    /// kept, whatever the connecting word (see [`approved_party`]). An edit
-    /// to the type of a name that gave a party, keeping its party clause -
-    /// the connecting word and the party - leaves the parties as proposed,
-    /// however the type changed. One that changes the clause as well and
-    /// lengthens the type with words that begin with a connecting word
-    /// reads those words as part of the party: "Notice to Tenants from City
-    /// of Boston" for "Notice from Acme Property" gives "Tenants from City
-    /// of Boston". `extension` is the source file's.
+    /// A name approved as Intern proposed it - unchanged, or filed without
+    /// review, whatever its date or collision suffix (see [`same_stem`]) -
+    /// is no edit, and nothing below reads it: it is filed under the party
+    /// it gives (see [`proposed_party`]), exactly as alpha.17 filed it,
+    /// "Swiss Re Ltd" and "Citizens Concerning the Environment" whole. What
+    /// follows is how an edited name is read.
+    ///
+    /// A choice is a party offered in review (see [`Self::party_choices`])
+    /// that the name names and the proposed name did not, written whole
+    /// (see `newly_named`) and not only inside another's words (see
+    /// `named_choices`): the reviewer chose it, with one click or typed.
+    /// Where the name still gives a party the proposed name gave - in any
+    /// spelling, the document's own word for one a rule respelled too -
+    /// outside the choice's words (see `added_beside`), the choice was
+    /// added beside that party, not put in its place - in front of it, in
+    /// the type or as the first side of a new "between", or after it - and
+    /// the document is filed with both, in the order the name gives them,
+    /// under the first: "Employment Agreement between Acme Corporation and
+    /// John Smith" for "Employment Agreement with Acme Corporation" under
+    /// Acme, as the name Intern composes for those two parties is, and
+    /// "Employment Agreement for Beacon Staffing LLC with Acme Corporation"
+    /// under Beacon Staffing LLC, each reporting both. So are two choices
+    /// or more, beside the parties still given or none. A party the
+    /// proposed name never gave (the third of a "between") is reported
+    /// after them; one it gave and the name dropped is not. A choice typed
+    /// as part of a longer party is filed as that party, as typed
+    /// ("between Estate of John Smith and Acme Corporation").
+    ///
+    /// Otherwise the party put in is read with the grammar that composed
+    /// the proposed name: a respelled party, or side of a "between", as a
+    /// lesson reads it whether or not it teaches (see [`respelled_party`]),
+    /// or else the one party after the type the name kept, whatever the
+    /// connecting word (see [`approved_party`]). It takes the place of the
+    /// party so respelled, or else of the first, the one a name with a
+    /// single party gives. The one choice, where there is one, is put in,
+    /// as offered, where that grammar reads no party or reads the choice
+    /// itself, in any spelling, alone or with a note or another party after
+    /// it (see [`party_and_more`]): "Beacon Staffing LLC" for "BEACON
+    /// STAFFING LLC" typed, and for "Beacon Staffing LLC re Merger"; "FDIC
+    /// as Receiver for Acme Corporation" chosen for "Acme Corporation",
+    /// behind "with" or "for", which that grammar reads as a type
+    /// lengthened in front of the party it kept.
+    /// Where it reads a longer party typed around the choice's words, that
+    /// party is put in, as typed: "Estate of John Smith", typed where "John
+    /// Smith" is offered, is another party, and "Acme Corporation Holdings
+    /// LLC" another than "Acme Corporation". A note typed after the party
+    /// read (" re Probate", " RE: the lease", " regarding", " concerning")
+    /// is no part of it, nor of its folder; and a party is filed once.
+    ///
+    /// Where neither gives a party, the parties are as proposed: a type
+    /// lengthened in front of the party it kept, behind the same connecting
+    /// word or another, with no party offered among its words ("Notice to
+    /// Tenants from Acme Property", or "... from ACME PROPERTY", for
+    /// "Notice from Acme Property" or for "Notice to Acme Property"); that
+    /// party kept with another not offered, or a note, after it ("Notice to
+    /// Acme Property from Jane Doe"), the document's own word for it among
+    /// them where a rule respelled it ("with Acme Corporation from Jane
+    /// Doe" for a name's "ACME CORP"); and another type with another party
+    /// that is not offered. A name that changes the party to one not
+    /// offered and lengthens the type with words that begin with a
+    /// connecting word reads those words as part of the party: "Notice to
+    /// Tenants from City of Boston" for "Notice from Acme Property" gives
+    /// "Tenants from City of Boston", and is filed in a folder of that
+    /// name. Such words teach nothing (see [`lesson_from_edit`]), so this
+    /// is the one document's folder, not a later one's name; and the words
+    /// are read as typed because a party typed with a connecting word of
+    /// its own is as often the party - "Trustee for Acme Corp", typed short
+    /// where "Trustee for Acme Corporation" is offered - and nothing here
+    /// tells the two apart.
     pub fn as_filed(&self, extension: &str, filename: &str) -> ValidatedProposal {
         let styled = self.styled_proposal();
         let mut filed = proposal_as_applied(&styled, filename);
@@ -923,31 +1046,193 @@ impl ProposalRecord {
             return filed;
         }
         let proposed = compose_styled_filename(&styled, &self.house_rules, extension, &[]).value;
-        if let Some(edit) = lesson_from_edit(&styled, extension, &proposed, filename)
-            .filter(|edit| edit.kind == RuleKind::Party)
-        {
+        // A name approved as proposed - unchanged, or filed without review,
+        // its date or a collision suffix aside - edits nothing, and none of
+        // what reads an edit below comes into it: it is filed exactly as
+        // alpha.17 filed it, under the party the name gives (see
+        // `proposed_party`).
+        if same_stem(extension, &proposed, filename) {
+            if let Some(party) = proposed_party(&styled, extension, &proposed) {
+                put_first(&mut filed.parties, party);
+            }
+            return filed;
+        }
+        let choices = self.party_choices();
+        let chosen = named_choices(
+            newly_named(
+                choices.iter().map(String::as_str),
+                &self.house_rules,
+                extension,
+                &proposed,
+                filename,
+            )
+            .into_iter()
+            .map(|party| (party.to_owned(), spellings(party, &self.house_rules)))
+            .collect(),
+            extension,
+            filename,
+        );
+        if let Some(parties) = added_beside(
+            &filed.parties,
+            &self.house_rules,
+            &chosen,
+            extension,
+            &proposed,
+            filename,
+        ) {
+            filed.parties = parties;
+            self.put_back_rejected(&mut filed, extension, filename);
+            return filed;
+        }
+        let (chosen, chosen_spellings) = match chosen.as_slice() {
+            [(party, spellings, _)] => (Some(party.clone()), spellings.clone()),
+            _ => (None, Vec::new()),
+        };
+        let mut lesson = respelled_party(&styled, extension, &proposed, filename);
+        let mut read = match &lesson {
+            Some(edit) => Some(edit.to.clone()),
+            None => approved_party(&styled, extension, &proposed, filename),
+        };
+        // The document's own word for a party a rule respelled, kept with
+        // another party or a note after it ("Acme Corporation from Jane
+        // Doe", "Acme Corporation re Merger" for a name's "ACME CORP"), is
+        // that party kept, as the grammar reads the rule's spelling so
+        // kept: no party is read.
+        if read.as_deref().is_some_and(|read| {
+            self.house_rules.iter().any(|rule| {
+                rule.kind == RuleKind::Party
+                    && filed
+                        .parties
+                        .iter()
+                        .any(|party| HouseRule::key(party) == HouseRule::key(&rule.to))
+                    && party_and_more(read, &rule.from)
+            })
+        }) {
+            (lesson, read) = (None, None);
+        }
+        // The spellings of every party the reading knows of, which a note
+        // is never cut out of (see `without_note`).
+        let known = self
+            .analysis
+            .proposal
+            .parties
+            .iter()
+            .chain(
+                self.analysis
+                    .facts
+                    .iter()
+                    .flat_map(|facts| facts.parties.iter().map(|party| &party.name)),
+            )
+            .chain(&choices)
+            .chain(
+                self.house_rules
+                    .iter()
+                    .filter(|rule| rule.kind == RuleKind::Party)
+                    .map(|rule| &rule.to),
+            )
+            .flat_map(|party| party_keys(party))
+            .collect::<Vec<_>>();
+        let read = read.map(|read| without_note(&read, &known));
+        // The choice, where the grammar reads no party or reads it; not
+        // where it reads a longer party typed around the choice's words.
+        let chosen = chosen.filter(|_| {
+            read.as_deref().is_none_or(|read| {
+                chosen_spellings
+                    .iter()
+                    .any(|key| HouseRule::key(read) == *key || party_and_more(read, key))
+            })
+        });
+        if let Some(edit) = lesson {
+            let to = chosen.or(read).unwrap_or(edit.to.clone());
             for party in &mut filed.parties {
                 if edit.matches(party) {
-                    party.clone_from(&edit.to);
+                    party.clone_from(&to);
                 }
             }
-        } else if let Some(party) = approved_party(&styled, extension, &proposed, filename)
-            && filed
-                .parties
-                .first()
-                .is_none_or(|first| HouseRule::key(first) != HouseRule::key(&party))
-        {
-            // In place of the party the proposed name gave, which is the
-            // first: a name with one party gives the first of them.
-            filed
-                .parties
-                .retain(|other| HouseRule::key(other) != HouseRule::key(&party));
-            match filed.parties.first_mut() {
-                Some(first) => *first = party,
-                None => filed.parties.push(party),
+            // The words put in a party's place can be another party the
+            // name already gave: it is filed once.
+            let mut seen = Vec::new();
+            filed.parties.retain(|party| {
+                let key = HouseRule::key(party);
+                let first = !seen.contains(&key);
+                seen.push(key);
+                first
+            });
+        } else if let Some(party) = chosen.or(read) {
+            put_first(&mut filed.parties, party);
+        }
+        self.put_back_rejected(&mut filed, extension, filename);
+        filed
+    }
+
+    /// The document's own words, in `filed`, for each spelling the person
+    /// who approved the name `filename` took out while nobody had checked it
+    /// ([`Self::rejected_rules`]), where the name gives those words: a
+    /// party's anywhere in it, a type's where it starts. Such a spelling can
+    /// be a wrong one - "John Smith, Jane Doe" learned for "John Smith" -
+    /// and a reviewer who put the document's word back with a note or
+    /// another party after it ("between John Smith and Acme Corporation re
+    /// Probate") had the document filed in "John Smith, Jane Doe/" and
+    /// reported under it all the same, the grammar reading the document's
+    /// word kept as the spelling's party (see the rule's spelling in
+    /// [`Self::as_filed`]). A spelling a person has checked is the house's
+    /// own, and its folder stays the party's whatever words a reviewer
+    /// types for it. A party given twice is filed once. `extension` is the
+    /// source file's.
+    fn put_back_rejected(&self, filed: &mut ValidatedProposal, extension: &str, filename: &str) {
+        if self.rejected_rules.is_empty() {
+            return;
+        }
+        let words = name_words(filename, extension);
+        let words = words.split(' ').collect::<Vec<_>>();
+        for rule in &self.rejected_rules {
+            match rule.kind {
+                RuleKind::Party => {
+                    let Some(own) = self
+                        .analysis
+                        .proposal
+                        .parties
+                        .iter()
+                        .find(|party| rule.matches(party))
+                    else {
+                        continue;
+                    };
+                    if party_keys(own)
+                        .iter()
+                        .all(|key| runs_of(&words, key).is_empty())
+                    {
+                        continue;
+                    }
+                    for party in &mut filed.parties {
+                        if HouseRule::key(party) == HouseRule::key(&rule.to) {
+                            party.clone_from(own);
+                        }
+                    }
+                }
+                RuleKind::DocumentType => {
+                    let Some(own) = self.analysis.proposal.document_type.as_ref() else {
+                        continue;
+                    };
+                    let undone =
+                        HouseRule::new(RuleKind::DocumentType, rule.to.clone(), own.clone());
+                    if filed
+                        .document_type
+                        .as_deref()
+                        .is_some_and(|spelled| HouseRule::key(spelled) == HouseRule::key(&rule.to))
+                        && keeps_spelling(&undone, extension, filename)
+                    {
+                        filed.document_type = Some(own.clone());
+                    }
+                }
             }
         }
-        filed
+        let mut seen = Vec::new();
+        filed.parties.retain(|party| {
+            let key = HouseRule::key(party);
+            let first = !seen.contains(&key);
+            seen.push(key);
+            first
+        });
     }
 
     /// Whether the edit `lesson` was read from puts in the name a party the
@@ -963,12 +1248,45 @@ impl ProposalRecord {
     /// Invoice - Sam Brownell" names Sam Brownell as surely as a party clause
     /// does, or the new spelling inside the party, so "Beacon Staffing"
     /// typed for "Beacon Staffing LLC" names it as surely as the choice
-    /// offered does. A party that holds the replaced words, or is held by
-    /// them, is the one being respelled, and never counts. So a respelling
-    /// into words another party's name shares - "Acme" for "Acme
-    /// Corporation" in a document that also names Acme Holdings LLC - is not
-    /// learned either, while another party typed with a suffix the document
-    /// does not give - "Beacon Staffing Inc" - still is.
+    /// offered does. So a respelling into words another party's name
+    /// shares - "Acme" for "Acme Corporation" in a document that also names
+    /// Acme Holdings LLC - is not learned either, while another party typed
+    /// with a suffix the document does not give, or abbreviated, so that
+    /// neither it nor the new spelling holds the other - "Beacon Staffing
+    /// Inc", or "Acme Corp Holdings" for "Acme Corporation Holdings LLC" -
+    /// still is.
+    ///
+    /// The party being respelled never counts: the one the replaced words
+    /// are, and one whose name holds them or that they hold, as the
+    /// reading's other spelling of that party - "Acme Corporation Inc"
+    /// beside a name's "Acme Corporation" - would. Such a one counts after
+    /// all when the new spelling crosses over to it: to a party whose name
+    /// holds the replaced words, by holding them too, or by being a run of
+    /// the party's words that is no run of theirs; to a party the replaced
+    /// words hold, by being a run of them. A parent and its subsidiary, an
+    /// estate and the person, a city's department and the city are each two
+    /// parties, one name holding the other's, so choosing the other of such
+    /// a pair, as offered or typed short, teaches nothing in either
+    /// direction: "Acme Corporation Holdings LLC", "Acme Corporation
+    /// Holdings" or "Corporation Holdings LLC" for "Acme Corporation" beside
+    /// that parent, "Law Department" or "Boston Law Department" for "City of
+    /// Boston" beside its "City of Boston Law Department", "Acme
+    /// Corporation" or "Acme" for the parent beside "Acme Corporation". A
+    /// short form of the longer party that is a run of the named, shorter
+    /// one's words as well does not cross over: "Acme" for "Acme
+    /// Corporation" beside the parent, or "Boston" for "City of Boston"
+    /// beside its department, is learned, as is "Acme Corp", which is no run
+    /// of the parent's words.
+    ///
+    /// The price is two kinds of respelling not learned, each costing the
+    /// reviewer only that edit made again. One crosses over to the
+    /// reading's other spelling of the named party, a suffix longer or
+    /// shorter in its facts, and names it: "Beacon Staffing" for a name's
+    /// "Beacon Staffing LLC" when the facts give "Beacon Staffing", or the
+    /// reverse. The other shortens the longer party of a pair, named, into
+    /// a run of its own words that still holds the shorter one's name and
+    /// more: "Acme Corporation Holdings" for a name's "Acme Corporation
+    /// Holdings LLC" in a document that also names Acme Corporation.
     fn names_another_party(&self, lesson: &HouseRule) -> bool {
         let to = HouseRule::key(&lesson.to);
         let from = lesson.from_key();
@@ -979,15 +1297,604 @@ impl ProposalRecord {
             .flat_map(|facts| facts.parties.iter().map(|party| party.name.as_str()))
             .chain(self.analysis.proposal.parties.iter().map(String::as_str));
         found.map(party_keys).any(|keys| {
-            let respelled = keys
-                .iter()
-                .any(|key| holds_words(&from, key) || holds_words(key, &from));
-            !respelled
-                && keys
-                    .iter()
-                    .any(|key| holds_words(&to, key) || holds_words(key, &to))
+            let respelled = keys.iter().any(|key| {
+                *key == from
+                    || (holds_words(&from, key) && !holds_words(&from, &to))
+                    || (holds_words(key, &from)
+                        && !holds_words(&to, &from)
+                        && (!holds_words(key, &to) || holds_words(&from, &to)))
+            });
+            keys.iter().any(|key| typed_short(key, &from, &to))
+                || (!respelled
+                    && keys
+                        .iter()
+                        .any(|key| holds_words(&to, key) || holds_words(key, &to)))
         })
     }
+
+    /// Whether the name `approved` names a party the reading names that
+    /// the name Intern proposed did not: one validation found in the
+    /// document, or one the proposal gives, written whole in any spelling
+    /// a name can give it (see [`newly_named`]) - house style's among them,
+    /// by a rule in `style` or one this name applied. `extension` is the
+    /// source file's.
+    ///
+    /// Putting another party in the name decides who the document is with,
+    /// whatever the name's grammar reads the edit as (see
+    /// [`lesson_from_edit`]): a respelled party, a type lengthened in front
+    /// of the party it kept, or a type a party is added to after " - ". So
+    /// such an edit teaches nothing, the party chosen with one click or
+    /// typed whole. "Employment Agreement for Trustee for Acme Corporation"
+    /// for "Employment Agreement for Acme Corporation" reads as the type
+    /// "Employment Agreement for Trustee", the trustee's name ending with
+    /// the connecting word and the party the name kept, and where the
+    /// document names "Trustee for Acme Corporation" it teaches no type;
+    /// nor does "for the Trustee for Acme Corporation" typed, "FDIC as
+    /// Receiver for Acme Corporation" behind "for" or "with", or "Estate of
+    /// John Smith" for "John Smith". Two kinds of choice are found by
+    /// [`Self::names_another_party`] instead: a party typed short, as a run
+    /// of its words but not all of them, and a party whose words the
+    /// proposed name already held inside a longer one's - "Acme
+    /// Corporation" for its parent "Acme Corporation Holdings LLC".
+    ///
+    /// It finds parties, not spellings. The party the name gave, kept
+    /// beside a connecting word and words the document does not give as a
+    /// party - behind a type lengthened in front of it, or with another
+    /// party or a note after it: "Notice to Tenants from ACME PROPERTY" or
+    /// "Letter to Carl Malamud from Jane Doe" - names no party anew, and
+    /// [`lesson_from_edit`] reads no spelling from it, in any case or
+    /// punctuation and whatever the connecting word.
+    fn names_a_party_anew(&self, style: &HouseStyle, extension: &str, approved: &str) -> bool {
+        let rules = self
+            .house_rules
+            .iter()
+            .chain(style.rules())
+            .cloned()
+            .collect::<Vec<_>>();
+        let found = self
+            .analysis
+            .facts
+            .iter()
+            .flat_map(|facts| facts.parties.iter().map(|party| party.name.as_str()))
+            .chain(self.analysis.proposal.parties.iter().map(String::as_str));
+        !newly_named(found, &rules, extension, &self.filename, approved).is_empty()
+    }
+}
+
+/// `party` put in place of the first of `parties`, the one a name with a
+/// single party gives, unless it is that party already in some spelling
+/// (see [`HouseRule::key`]); one of the others it is is taken out, so it is
+/// given once. A name that gave none gives `party`.
+fn put_first(parties: &mut Vec<String>, party: String) {
+    if parties
+        .first()
+        .is_some_and(|first| HouseRule::key(first) == HouseRule::key(&party))
+    {
+        return;
+    }
+    parties.retain(|other| HouseRule::key(other) != HouseRule::key(&party));
+    match parties.first_mut() {
+        Some(first) => *first = party,
+        None => parties.push(party),
+    }
+}
+
+/// Those of `parties` the name `approved` names and the name `proposed`
+/// does not, each written whole: held as a run of whole words, as house
+/// style compares spellings ([`HouseRule::key`]), in any spelling a name
+/// gives it - the reading's, the one a composed name writes and a party
+/// choice offers (see [`party_keys`]), or one a party rule among `rules`
+/// respells it to. In the order given. `extension` is the source file's.
+fn newly_named<'a>(
+    parties: impl IntoIterator<Item = &'a str>,
+    rules: &[HouseRule],
+    extension: &str,
+    proposed: &str,
+    approved: &str,
+) -> Vec<&'a str> {
+    let before = name_words(proposed, extension);
+    let after = name_words(approved, extension);
+    parties
+        .into_iter()
+        .filter(|party| {
+            let keys = spellings(party, rules);
+            let names = |name: &str| keys.iter().any(|key| holds_words(name, key));
+            names(&after) && !names(&before)
+        })
+        .collect()
+}
+
+/// Every spelling a name gives `party`, as house style compares spellings:
+/// the reading's, the one a composed name writes and a party choice offers
+/// (see [`party_keys`]), and one a party rule among `rules` respells it to.
+fn spellings(party: &str, rules: &[HouseRule]) -> Vec<String> {
+    let mut keys = Vec::new();
+    for key in rules
+        .iter()
+        .filter(|rule| rule.kind == RuleKind::Party && rule.matches(party))
+        .map(|rule| rule.to.as_str())
+        .chain([party])
+        .flat_map(party_keys)
+    {
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+/// Those of the parties `chosen`, each with its spellings (see
+/// [`spellings`]), that the name `approved` names on their own, each with
+/// the first run of the name's words (see [`name_words`]) it is named in,
+/// in the order the name names them: not one whose every run lies inside
+/// a longer run of another's, as "Acme Corporation" does inside a chosen
+/// "Acme Corporation Holdings LLC". `extension` is the source file's.
+fn named_choices(
+    chosen: Vec<(String, Vec<String>)>,
+    extension: &str,
+    approved: &str,
+) -> Vec<(String, Vec<String>, Range<usize>)> {
+    let after = name_words(approved, extension);
+    let after = after.split(' ').collect::<Vec<_>>();
+    let runs = chosen
+        .iter()
+        .map(|(_, spellings)| {
+            spellings
+                .iter()
+                .flat_map(|key| runs_of(&after, key))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let inside_another = |index: usize, run: &Range<usize>| {
+        runs.iter().enumerate().any(|(other, theirs)| {
+            other != index
+                && theirs.iter().any(|longer| {
+                    longer.len() > run.len() && longer.start <= run.start && run.end <= longer.end
+                })
+        })
+    };
+    let mut named = chosen
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, (party, spellings))| {
+            runs[index]
+                .iter()
+                .filter(|run| !inside_another(index, run))
+                .min_by_key(|run| run.start)
+                .map(|run| (party, spellings, run.clone()))
+        })
+        .collect::<Vec<_>>();
+    named.sort_by_key(|(_, _, run)| run.start);
+    named
+}
+
+/// The parties of `parties` that the name `approved` still gives, with the
+/// parties `chosen` it newly names (see [`named_choices`]), in the order
+/// the name gives them - where any of `parties`, the parties of the name
+/// `proposed`, is among them, so the choice was added beside that party
+/// rather than put in its place, or where two or more were chosen. `None`
+/// otherwise. `extension` is the source file's.
+///
+/// A party is still given where `approved` holds it as a run of whole
+/// words, in any spelling (see [`party_keys`]) - the document's own word
+/// too, where a party rule among `rules` respelled it ("Acme Corporation"
+/// for a name's "ACME CORP") - outside the words of every choice, so not
+/// "Acme Corporation" in a chosen "Trustee for Acme Corporation", as many
+/// times as `proposed` does, so not a party a type holds as well ("Acme
+/// Lease with Acme") that the reviewer took out of the name's end. One of
+/// `parties` the proposed name gave and `approved` no longer gives is left
+/// out; one neither name gives - the third party of a "between", a party
+/// left out for length - is kept, after the rest.
+///
+/// A choice is filed as typed where the reviewer typed a longer party
+/// around its words (see [`typed_around`]): "Estate of John Smith" where
+/// "John Smith" is offered, on either side of a "between".
+fn added_beside(
+    parties: &[String],
+    rules: &[HouseRule],
+    chosen: &[(String, Vec<String>, Range<usize>)],
+    extension: &str,
+    proposed: &str,
+    approved: &str,
+) -> Option<Vec<String>> {
+    if chosen.is_empty() {
+        return None;
+    }
+    let before = name_words(proposed, extension);
+    let before = before.split(' ').collect::<Vec<_>>();
+    let after = name_words(approved, extension);
+    let after = after.split(' ').collect::<Vec<_>>();
+    let outside_every_choice = |run: &Range<usize>| {
+        chosen
+            .iter()
+            .all(|(_, _, choice)| run.end <= choice.start || run.start >= choice.end)
+    };
+    // Every spelling a name gives `party` in: its own, and the document's
+    // word for it where a rule respelled it.
+    let keys_of = |party: &str| {
+        let mut keys = party_keys(party);
+        for rule in rules.iter().filter(|rule| {
+            rule.kind == RuleKind::Party && HouseRule::key(&rule.to) == HouseRule::key(party)
+        }) {
+            for key in party_keys(&rule.from) {
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        keys
+    };
+    // Where the name gives `party` now, if as many times as the proposed
+    // name did, and whether the proposed name gave it at all.
+    let given = |party: &str| {
+        let keys = keys_of(party);
+        let starts = |words: &[&str], outside: bool| {
+            keys.iter()
+                .flat_map(|key| runs_of(words, key))
+                .filter(|run| !outside || outside_every_choice(run))
+                .map(|run| run.start)
+                .collect::<BTreeSet<_>>()
+        };
+        let now = starts(&after, true);
+        let then = starts(&before, false);
+        let at = (now.len() >= then.len())
+            .then(|| now.first().copied())
+            .flatten();
+        (at, !then.is_empty())
+    };
+    let given = parties
+        .iter()
+        .map(|party| (party, given(party)))
+        .collect::<Vec<_>>();
+    if chosen.len() < 2 && given.iter().all(|(_, (at, _))| at.is_none()) {
+        return None;
+    }
+    // The spellings of the parties the name still gives, which a longer
+    // party typed around a choice never holds (see `typed_around`).
+    let kept = given
+        .iter()
+        .filter(|(_, (at, _))| at.is_some())
+        .flat_map(|(party, _)| keys_of(party))
+        .collect::<Vec<_>>();
+    let mut named = given
+        .iter()
+        .filter_map(|(party, (at, _))| at.map(|at| (at, (*party).clone())))
+        .chain(
+            chosen
+                .iter()
+                .enumerate()
+                .map(|(index, (party, spellings, run))| {
+                    let others = kept
+                        .iter()
+                        .chain(
+                            chosen
+                                .iter()
+                                .enumerate()
+                                .filter(|(other, _)| *other != index)
+                                .flat_map(|(_, (_, spellings, _))| spellings),
+                        )
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let typed = typed_around(approved, extension, spellings, &others);
+                    (run.start, typed.unwrap_or_else(|| party.clone()))
+                }),
+        )
+        .collect::<Vec<_>>();
+    named.sort_by_key(|(at, _)| *at);
+    let never_named = given
+        .iter()
+        .filter(|(_, (at, then))| at.is_none() && !then)
+        .map(|(party, _)| (*party).clone());
+    let mut given_parties: Vec<String> = Vec::with_capacity(parties.len() + chosen.len());
+    for party in named.into_iter().map(|(_, party)| party).chain(never_named) {
+        if !given_parties
+            .iter()
+            .any(|other| HouseRule::key(other) == HouseRule::key(&party))
+        {
+            given_parties.push(party);
+        }
+    }
+    Some(given_parties)
+}
+
+/// Where the name `approved` divides one party from another, the type or
+/// a note: its connecting words, "and", a dash however it is typed, and
+/// the starts of a note (see [`NOTE_STARTS`]). "of" and "&" are no such
+/// words, as common inside a party's name as between two.
+const PARTY_DIVIDERS: [&str; 9] = [
+    " between ",
+    " and ",
+    " with ",
+    " for ",
+    " from ",
+    " to ",
+    " - ",
+    " \u{2013} ",
+    " \u{2014} ",
+];
+
+/// The starts of a note after a party, as house style reads one (see
+/// [`party_and_more`]): words after one are about the document, not a party.
+const NOTE_STARTS: [&str; 6] = [
+    " re ",
+    " re: ",
+    " regarding ",
+    " about ",
+    " concerning ",
+    " (",
+];
+
+/// The longer party the reviewer typed around a choice's words, as typed:
+/// the words of the name `approved`, between two of its dividers (see
+/// [`PARTY_DIVIDERS`]), that hold one of the choice's spellings
+/// `chosen_spellings` as a run and more - "Estate of John Smith" where
+/// "John Smith" is offered, "Acme Corporation Holdings LLC" where its
+/// subsidiary "Acme Corporation" is, "John Smith Family Trust". `None`
+/// where the first such words are the choice in some spelling, or the
+/// type, before the first divider, or a note, after a note's start.
+///
+/// Words that also hold, outside the choice's words, one of `others` - the
+/// spellings of a party the name still gives, or of another choice - are
+/// two parties joined by words that divide nothing here ("&", a comma),
+/// not one longer one: "Acme Corporation, Beacon Staffing LLC" or "John
+/// Smith & Acme Corporation". The longer party typed is then the piece of
+/// them, between "&" and commas, that holds the choice, where that piece
+/// is more than the choice and holds none of `others`: "Estate of John
+/// Smith" in "Estate of John Smith & Beacon Staffing LLC", which was filed
+/// as the bare "John Smith". `extension` is the source file's.
+fn typed_around(
+    approved: &str,
+    extension: &str,
+    chosen_spellings: &[String],
+    others: &[String],
+) -> Option<String> {
+    let name = approved.trim();
+    let stem = name
+        .rsplit_once('.')
+        .filter(|(_, suffix)| !extension.is_empty() && suffix.eq_ignore_ascii_case(extension))
+        .map_or(name, |(stem, _)| stem);
+    let stem = leading_date(stem).map_or(stem, |date| stem[date.len()..].trim_start());
+    let lower = stem.to_ascii_lowercase();
+    let mut cuts = PARTY_DIVIDERS
+        .iter()
+        .map(|divider| (*divider, false))
+        .chain(NOTE_STARTS.iter().map(|note| (*note, true)))
+        .flat_map(|(divider, note)| {
+            lower
+                .match_indices(divider)
+                .map(move |(at, _)| (at, at + divider.len(), note))
+        })
+        .collect::<Vec<_>>();
+    cuts.sort_unstable();
+    let mut segments = Vec::new();
+    let (mut start, mut after_note) = (0, false);
+    for (at, end, note) in cuts {
+        if at < start {
+            continue;
+        }
+        segments.push((&stem[start..at], after_note));
+        (start, after_note) = (end, note);
+    }
+    segments.push((&stem[start..], after_note));
+    let (index, (segment, after_note)) =
+        segments.into_iter().enumerate().find(|(_, (segment, _))| {
+            let key = HouseRule::key(segment);
+            chosen_spellings
+                .iter()
+                .any(|choice| holds_words(&key, choice))
+        })?;
+    let key = HouseRule::key(segment);
+    let words = key.split(' ').collect::<Vec<_>>();
+    let choice = chosen_spellings
+        .iter()
+        .flat_map(|spelling| runs_of(&words, spelling))
+        .collect::<Vec<_>>();
+    let holds_another = others.iter().any(|other| {
+        runs_of(&words, other).iter().any(|run| {
+            choice
+                .iter()
+                .all(|mine| run.end <= mine.start || run.start >= mine.end)
+        })
+    });
+    if index == 0 || after_note {
+        return None;
+    }
+    if !holds_another {
+        return (!chosen_spellings.contains(&key)).then(|| segment.trim().to_owned());
+    }
+    segment
+        .split(['&', ','])
+        .map(str::trim)
+        .find(|piece| {
+            let key = HouseRule::key(piece);
+            chosen_spellings
+                .iter()
+                .any(|choice| holds_words(&key, choice))
+        })
+        .filter(|piece| {
+            let key = HouseRule::key(piece);
+            let words = key.split(' ').collect::<Vec<_>>();
+            !chosen_spellings.contains(&key)
+                && others.iter().all(|other| runs_of(&words, other).is_empty())
+        })
+        .map(str::to_owned)
+}
+
+/// `party` without a note typed after it - " re Probate", " RE: the
+/// lease", " regarding ...", " concerning ..." - as review keeps one after
+/// a party: the note is about the document, no part of the party or its
+/// folder. " about " is left, as a business's name may hold it ("All About
+/// Pets LLC").
+///
+/// Nor is a party cut at a note's start that is a word of its own name:
+/// never inside a run of words that is one of `known` - the spellings of
+/// the parties the proposal, the reading's facts and the choices offered
+/// give, and of a rule's spelling ("Citizens Concerning the Environment",
+/// "Swiss Re Ltd" where the document names it) - and never where the words
+/// after the note's start, up to the next one, end in a word that ends a
+/// company's name ([`COMPANY_FORMS`]): "Munich Re Group", "Everest Re
+/// Group Ltd" typed. "Beacon Staffing re Lease" is "Beacon Staffing" still.
+fn without_note(party: &str, known: &[String]) -> String {
+    let lower = party.to_ascii_lowercase();
+    let mut cuts = [" re ", " re: ", " regarding ", " concerning "]
+        .iter()
+        .flat_map(|note| {
+            lower
+                .match_indices(note)
+                .map(move |(at, _)| (at, at + note.len()))
+        })
+        .collect::<Vec<_>>();
+    cuts.sort_unstable();
+    let whole = HouseRule::key(party);
+    for &(at, end) in &cuts {
+        let kept = party[..at].trim();
+        if kept.is_empty() {
+            continue;
+        }
+        let rest = &party[end..];
+        let next = cuts
+            .iter()
+            .map(|(start, _)| *start)
+            .find(|start| *start >= end)
+            .unwrap_or(party.len());
+        let ends_a_company = HouseRule::key(&party[end..next])
+            .rsplit(' ')
+            .next()
+            .is_some_and(|word| COMPANY_FORMS.contains(&word));
+        let inside_a_party = known.iter().any(|key| {
+            holds_words(&whole, key)
+                && !holds_words(&HouseRule::key(kept), key)
+                && !holds_words(&HouseRule::key(rest), key)
+        });
+        if !ends_a_company && !inside_a_party {
+            return kept.to_owned();
+        }
+    }
+    party.trim().to_owned()
+}
+
+/// The words that end a company's name, as house style compares spellings
+/// ([`HouseRule::key`]): a note's start just in front of one is a word of
+/// the name ("Swiss Re Ltd", "Munich Re Group", "Munich Re Capital
+/// Limited"), not a note.
+const COMPANY_FORMS: [&str; 19] = [
+    "limited",
+    "company",
+    "incorporated",
+    "ltd",
+    "inc",
+    "llc",
+    "llp",
+    "lp",
+    "plc",
+    "group",
+    "holdings",
+    "corporation",
+    "corp",
+    "co",
+    "ag",
+    "se",
+    "sa",
+    "nv",
+    "gmbh",
+];
+
+/// Whether the name `approved` keeps what `rule` writes: a party's spelling
+/// anywhere in it, a type's where the name starts after its date, each as a
+/// run of whole words as house style compares spellings
+/// ([`HouseRule::key`]) - and not only as words of the document's own,
+/// which the rule respelled: "Acme" is not kept in "Acme Corporation" put
+/// back for a rule "Acme Corporation -> Acme", nor "Contract" in "Contract
+/// for Services" put back for "Contract for Services -> Contract".
+/// `extension` is the source file's.
+fn keeps_spelling(rule: &HouseRule, extension: &str, approved: &str) -> bool {
+    let to = HouseRule::key(&rule.to);
+    match rule.kind {
+        RuleKind::Party => {
+            let words = name_words(approved, extension);
+            let words = words.split(' ').collect::<Vec<_>>();
+            let own = party_keys(&rule.from)
+                .iter()
+                .flat_map(|from| runs_of(&words, from))
+                .collect::<Vec<_>>();
+            runs_of(&words, &to).iter().any(|run| {
+                !own.iter().any(|from| {
+                    from.len() > run.len() && from.start <= run.start && run.end <= from.end
+                })
+            })
+        }
+        RuleKind::DocumentType => {
+            let name = approved.trim();
+            let stem = name
+                .rsplit_once('.')
+                .filter(|(_, suffix)| {
+                    !extension.is_empty() && suffix.eq_ignore_ascii_case(extension)
+                })
+                .map_or(name, |(stem, _)| stem);
+            let stem = leading_date(stem).map_or(stem, |date| stem[date.len()..].trim_start());
+            let words = HouseRule::key(stem);
+            let starts = |with: &str| {
+                !with.is_empty() && (words == with || words.starts_with(&format!("{with} ")))
+            };
+            let from = rule.from_key();
+            starts(&to) && !(from.len() > to.len() && starts(&from))
+        }
+    }
+}
+
+/// Each run of `words` that is the key `party`, as word ranges: where a
+/// name written as house style compares spellings (see [`name_words`])
+/// holds the party whole.
+fn runs_of(words: &[&str], party: &str) -> Vec<Range<usize>> {
+    let party = party
+        .split(' ')
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    if party.is_empty() || party.len() > words.len() {
+        return Vec::new();
+    }
+    (0..=words.len() - party.len())
+        .filter(|&at| words[at..at + party.len()] == party[..])
+        .map(|at| at..at + party.len())
+        .collect()
+}
+
+/// The words of `filename` as house style compares spellings, without its
+/// extension: "2024-04-12 Letter to Acme Corp.pdf" is "20240412 letter to
+/// acme corp". `extension` is the source file's.
+fn name_words(filename: &str, extension: &str) -> String {
+    let name = filename.trim();
+    let stem = name
+        .rsplit_once('.')
+        .filter(|(_, suffix)| !extension.is_empty() && suffix.eq_ignore_ascii_case(extension))
+        .map_or(name, |(stem, _)| stem);
+    HouseRule::key(stem)
+}
+
+/// Whether the key `to`, put in place of the key `from`, is the party
+/// `party` typed short, where `party` holds `from` with words of its own
+/// around it: `to` keeps the words in front of `from` as a run ("trustee of
+/// acme corp" for "acme corporation" beside "trustee of acme corporation",
+/// "estate of j smith" beside "estate of john smith"), or, where two words
+/// or more follow `from`, `from` and the first of them ("city of boston law
+/// dept" beside "city of boston law department"). One word after `from` is
+/// a suffix of the same party ("acme corp inc" beside "acme corporation
+/// inc" is a spelling still); `to` leaving out every word of the party's
+/// own is a short form of the named one ("acme" beside "acme corporation
+/// holdings llc").
+fn typed_short(party: &str, from: &str, to: &str) -> bool {
+    let words = party.split(' ').collect::<Vec<_>>();
+    let Some(run) = runs_of(&words, from)
+        .into_iter()
+        .next()
+        .filter(|run| run.len() < words.len())
+    else {
+        return false;
+    };
+    let front = words[..run.start].join(" ");
+    let after = &words[run.end..];
+    (!front.is_empty() && holds_words(to, &front))
+        || (after.len() >= 2 && holds_words(to, &format!("{from} {}", after[0])))
 }
 
 /// Whether the key `spelling` holds the key `words` as a run of whole
@@ -1030,6 +1937,23 @@ pub struct LearnedRule {
     pub seen: u32,
     /// Whether Intern applies it: made often enough, or told to use it now.
     pub active: bool,
+    /// How many times a person has checked this spelling: chosen "Use on
+    /// its own" for it, in the review window or in the list of learned
+    /// spellings, after Intern said in plain words what that does, for the
+    /// spelling exactly as they were shown it (see [`Pipeline::check_rule`]).
+    /// Nothing else checks it. An approval of a name the spelling changed
+    /// does not, on any document: whether a document gives in its own
+    /// words what a spelling adds - so that the name is right there
+    /// whatever the spelling is worth - cannot be read surely from its
+    /// text. "Use now" does not either. Until it is checked, a name the
+    /// rule changes waits for a person ([`LEARNED_SPELLING_UNCONFIRMED`]),
+    /// and where it does not show in the name it is not used (see
+    /// [`shown_rules`]); one check is enough. A different spelling for the
+    /// same word starts over at none, as `seen` does, and the checks count
+    /// for the spelling checked alone, whichever release respelled it
+    /// since; every rule learned before alpha.18 counted none, so each
+    /// waits for its check after the update too.
+    pub confirmed: u32,
     /// Unix seconds of the latest edit that taught it.
     pub learned_at: i64,
 }
@@ -1037,6 +1961,120 @@ pub struct LearnedRule {
 impl LearnedRule {
     pub fn rule(&self) -> HouseRule {
         HouseRule::new(self.kind, self.from.clone(), self.to.clone())
+    }
+
+    /// Whether a person has checked this rule's work (see
+    /// [`Self::confirmed`]).
+    pub fn is_checked(&self) -> bool {
+        self.confirmed > 0
+    }
+}
+
+/// The spellings review has taught, as the queue applies them: the rules in
+/// force, and which of those a person has checked.
+struct Spellings {
+    learned: Vec<LearnedRule>,
+}
+
+impl Spellings {
+    /// The rules in force: learned often enough, or told to be used.
+    fn style(&self) -> HouseStyle {
+        HouseStyle::new(
+            self.learned
+                .iter()
+                .filter(|rule| rule.active)
+                .map(LearnedRule::rule)
+                .collect(),
+        )
+    }
+
+    /// `proposal` respelled by the rules in force that a name composed
+    /// from it applies (see [`shown_rules`]), with those rules: every
+    /// checked rule that fires, and an unchecked one only where the name
+    /// shows it. `own_names` are the person's organization's names the name
+    /// is composed by, and `extension` the source file's.
+    fn styled(
+        &self,
+        proposal: &ValidatedProposal,
+        own_names: &[String],
+        extension: &str,
+    ) -> (ValidatedProposal, Vec<HouseRule>) {
+        let (_, fired) = self.style().apply(proposal);
+        let rules = shown_rules(proposal, fired, own_names, extension, |rule| {
+            self.checked(rule)
+        });
+        HouseStyle::new(rules).apply(proposal)
+    }
+
+    /// Whether a person has checked `rule`, as a name applied it: learned
+    /// for the same word, with exactly this spelling, and checked once (see
+    /// [`LearnedRule::confirmed`]). A rule forgotten or respelled since the
+    /// name was composed is not.
+    fn checked(&self, rule: &HouseRule) -> bool {
+        self.learned.iter().any(|learned| {
+            learned.kind == rule.kind
+                && HouseRule::key(&learned.from) == rule.from_key()
+                && learned.to == rule.to
+                && learned.is_checked()
+        })
+    }
+}
+
+/// Those of `fired` - the rules in force that fire on `proposal` - that a
+/// name composed from it, by the other side of `own_names`, applies: every
+/// one a person has checked (`checked`), and one nobody has checked only
+/// where the name shows it - the name composed with it gives its spelling
+/// (see [`keeps_spelling`]) and is not the name composed without it.
+/// `extension` is the source file's.
+///
+/// An unchecked rule whose work would show only in the folder a document
+/// is filed in and what its filing reports - a first party the name sheds
+/// for length, the third party of a "between" - is not used on that record
+/// at all: its folder, its report and its parties are the checked rules'
+/// and the document's own words, and nothing holds it for a spelling it
+/// does not show. Such records used to wait for a person
+/// ([`LEARNED_SPELLING_UNCONFIRMED`]) under a name that gave no word of
+/// the spelling, and a rule that never shows in a name was left with every
+/// document it touched waiting and no name a person could see it in. So
+/// every name held for an unchecked rule shows that rule's spelling; once
+/// a person has checked it, it is used here too (see
+/// [`Pipeline::restyle_waiting`]).
+///
+/// Taking one rule out can change what another shows - a shorter party
+/// leaves room for one the name shed - so the rules are asked again until
+/// none is taken out.
+fn shown_rules(
+    proposal: &ValidatedProposal,
+    fired: Vec<HouseRule>,
+    own_names: &[String],
+    extension: &str,
+    checked: impl Fn(&HouseRule) -> bool,
+) -> Vec<HouseRule> {
+    let name = |rules: Vec<HouseRule>| {
+        let (styled, applied) = HouseStyle::new(rules).apply(proposal);
+        let (named, _) = counterparty_view(&styled, own_names);
+        compose_styled_filename(&named, &applied, extension, &[]).value
+    };
+    let mut rules = fired;
+    loop {
+        let named = name(rules.clone());
+        let hidden = rules.iter().position(|rule| {
+            !checked(rule)
+                && (!keeps_spelling(rule, extension, &named)
+                    || name(
+                        rules
+                            .iter()
+                            .filter(|other| *other != rule)
+                            .cloned()
+                            .collect(),
+                    ) == named)
+        });
+        match hidden {
+            Some(index) => {
+                rules.remove(index);
+            }
+            None => return rules,
+        }
     }
 }
 
@@ -1174,7 +2212,7 @@ impl Pipeline {
         let database = database.as_ref();
         let store = Arc::new(QueueStore::open(database)?);
         let repository = PipelineRepository::open(database)?;
-        Ok(Self::assemble(
+        let pipeline = Self::assemble(
             store,
             repository,
             worker,
@@ -1183,7 +2221,10 @@ impl Pipeline {
             events,
             settings,
             database.parent().unwrap_or(Path::new(".")).to_path_buf(),
-        ))
+        );
+        pipeline.restyle_waiting_as_opened();
+        pipeline.hold_ready_under_unchecked_spellings();
+        Ok(pipeline)
     }
 
     pub fn with_local_files(
@@ -1223,7 +2264,7 @@ impl Pipeline {
             Arc::clone(&store),
             filesystem,
         ));
-        Ok(Self::assemble(
+        let pipeline = Self::assemble(
             store,
             repository,
             worker,
@@ -1232,7 +2273,49 @@ impl Pipeline {
             events,
             settings,
             database.parent().unwrap_or(Path::new(".")).to_path_buf(),
-        ))
+        );
+        pipeline.restyle_waiting_as_opened();
+        pipeline.hold_ready_under_unchecked_spellings();
+        Ok(pipeline)
+    }
+
+    /// Composes again, as the queue opens, every waiting document an earlier
+    /// release named with a learned spelling nobody has checked whose work
+    /// its name does not show (see [`shown_rules`]): that release used such
+    /// a spelling on the folder and the filing report too, which this one
+    /// does only once the spelling is checked. Without this, the hold below
+    /// put such a document in review under a name that gave no word of the
+    /// spelling. Nothing for a document whose rules are as they would be
+    /// composed now; a record that cannot be read now is left to the hold.
+    fn restyle_waiting_as_opened(&self) {
+        let _ = self.restyle_waiting();
+    }
+
+    /// Puts in review every ready document whose name a learned spelling no
+    /// person has checked changed - or, on a record an earlier build
+    /// composed, where it is filed (see
+    /// [`Self::held_for_unchecked_spelling`]): when the queue opens, and on
+    /// every recovery pass. Such a row is one an earlier release left ready,
+    /// since after the update every rule it learned is unchecked and a name
+    /// composed now is held as it is composed. The scheduler's pass holds
+    /// them too, but only once the model is ready and the queue is not
+    /// paused: minutes after an update, or never while the model fails.
+    /// Until then they were listed ready, and "Rename all ready" filed them.
+    /// Needs no model, and
+    /// holds whether or not the queue is paused; a row that cannot be
+    /// looked at now is looked at on the next pass.
+    fn hold_ready_under_unchecked_spellings(&self) {
+        let Ok(items) = self.store.list() else {
+            return;
+        };
+        for item in items
+            .iter()
+            .filter(|item| item.status == QueueStatus::Ready)
+        {
+            if let Ok(Some(record)) = self.repository.load_proposal(item.id) {
+                let _ = self.held_for_unchecked_spelling(item, &record);
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2362,8 +3445,9 @@ impl Pipeline {
     /// the validated facts the way the reviewer has taught Intern to spell
     /// them and by the other side where the person's own organization is
     /// named, collision-free where the document is going, and held for a
-    /// person when its text nearly repeats a filing's. Nobody has acted on
-    /// it yet.
+    /// person when its text nearly repeats a filing's, or when a learned
+    /// spelling no person has checked yet changed its name. Nobody has
+    /// acted on it yet.
     fn record_for(
         &self,
         item: &QueueItem,
@@ -2374,17 +3458,19 @@ impl Pipeline {
         // The document's words, respelled the way review has taught Intern
         // to. Applied here, after validation, so the evidence stayed the
         // document's and only the name is the reviewer's.
-        let (styled, house_rules) = self.repository.active_style()?.apply(&analysis.proposal);
         // And named by the other side when it names the person's own
         // organization too. Settings that cannot be read name nobody, so the
         // name carries every party, as it did before the setting existed; an
         // automatic rename reports the unreadable file
-        // (`settle_new_record`).
+        // (`settle_new_record`). A rule nobody has checked is applied only
+        // where the name shows it (see `shown_rules`).
         let own_names = self
             .settings
             .load()
             .map(|settings| settings.own_names())
             .unwrap_or_default();
+        let spellings = self.repository.spellings()?;
+        let (styled, house_rules) = spellings.styled(&analysis.proposal, &own_names, extension);
         let (named, _) = counterparty_view(&styled, &own_names);
         let filename =
             self.compose_for_target(&item.source_path, &named, &house_rules, extension, existing);
@@ -2403,7 +3489,7 @@ impl Pipeline {
             reasons.push(NEAR_DUPLICATE.to_owned());
             status = ProposalStatus::NeedsReview;
         }
-        Ok(ProposalRecord {
+        let mut record = ProposalRecord {
             status,
             filename,
             description: analysis.description.clone(),
@@ -2417,7 +3503,10 @@ impl Pipeline {
             reviewed: false,
             manual: false,
             copy_of: None,
-        })
+            rejected_rules: Vec::new(),
+        };
+        hold_unchecked_spelling(&mut record, extension, &spellings);
+        Ok(record)
     }
 
     /// What follows storing a new reading's `record`, now that the row is
@@ -2439,7 +3528,7 @@ impl Pipeline {
         if let Ok(current) = &settings {
             let names = current.own_names();
             if names != record.own_names {
-                self.recompose(&self.repository.active_style()?, item, Some(&names))?;
+                self.recompose(&self.repository.spellings()?, item, Some(&names))?;
             }
         }
         let ready_item = self.store.get(item.id)?.ok_or_else(|| {
@@ -2449,7 +3538,9 @@ impl Pipeline {
             )
         })?;
         self.events.queue_changed();
-        if next == QueueStatus::Ready {
+        // Named again just now, a learned spelling no person has checked
+        // can have sent it to review.
+        if next == QueueStatus::Ready && ready_item.status == QueueStatus::Ready {
             let settings = match settings {
                 Ok(settings) => settings,
                 Err(error) => {
@@ -2516,6 +3607,12 @@ impl Pipeline {
                 }
                 continue;
             };
+            // Whatever automatic renaming says, a name a learned spelling no
+            // person has checked changed is not left one click from filing:
+            // one an earlier release left ready, before such names waited.
+            if self.held_for_unchecked_spelling(&item, &proposal)? {
+                continue;
+            }
             if !automatic && !proposal.approved {
                 continue;
             }
@@ -2627,7 +3724,13 @@ impl Pipeline {
     }
 
     /// Apply a learned spelling from now on without waiting for a second
-    /// edit, including to documents still waiting.
+    /// edit, including to documents still waiting. Like a spelling learned
+    /// from two edits, it is not checked: "Use now" says nothing of filing
+    /// on its own, so every name it changes waits for a person until they
+    /// choose "Use on its own" (see [`LearnedRule::confirmed`]). Counting
+    /// this as the check let one click on "John Smith written as John
+    /// Smith, Jane Doe" file every later agreement with John Smith under
+    /// both names, without review.
     pub fn use_rule(&self, id: i64) -> PipelineResult<()> {
         if !self.repository.use_rule(id)? {
             return Err(PipelineError::new(
@@ -2636,6 +3739,42 @@ impl Pipeline {
             ));
         }
         self.restyle_waiting()
+    }
+
+    /// Check the learned spelling `id` on a person's explicit word: "Use on
+    /// its own", chosen in the review window or the list of learned
+    /// spellings after Intern has said in plain words that every later
+    /// document it reads as naming the word will be named by the spelling,
+    /// and may be filed under that name without their check. The only way
+    /// a spelling is checked (see [`LearnedRule::confirmed`]): from then on
+    /// the names it changes are filed like any other reading.
+    ///
+    /// Only the spelling `shown` - its kind, the document's word and the
+    /// spelling, exactly as the person was shown them - and only while it
+    /// is in force: one forgotten is refused (`RULE_NOT_FOUND`), and one
+    /// not in use, or respelled or learned for other words since it was
+    /// shown, is not the one the person agreed to and is refused
+    /// (`RULE_CHANGED`) rather than checked. A spelling for the same word
+    /// learned later starts over unchecked.
+    ///
+    /// The documents still waiting are restyled (see
+    /// [`Self::restyle_waiting`]): the spelling is used now where a name
+    /// does not show it, and a name held for it loses
+    /// [`LEARNED_SPELLING_UNCONFIRMED`] but stays in review, whatever else
+    /// it was held for not being known there. Checking approves and files
+    /// nothing.
+    pub fn check_rule(&self, id: i64, shown: &HouseRule) -> PipelineResult<()> {
+        match self.repository.check_rule(id, shown)? {
+            None => Err(PipelineError::new(
+                "RULE_NOT_FOUND",
+                "learned spelling does not exist",
+            )),
+            Some(false) => Err(PipelineError::new(
+                "RULE_CHANGED",
+                "learned spelling is not in use as it was shown",
+            )),
+            Some(true) => self.restyle_waiting(),
+        }
     }
 
     /// Recomposes the proposed name of every document still waiting under
@@ -2667,15 +3806,21 @@ impl Pipeline {
     /// carry, the date they typed in most of all. An earlier approval waiting
     /// for the queue counts too: a rule learned while it waited once rebuilt
     /// its name, and the scheduler then filed the rebuilt name under the
-    /// approval - without the date the reviewer had typed.
+    /// approval - without the date the reviewer had typed. So does every
+    /// name a person has acted on that is back in review (see
+    /// [`untouched`]): an approval whose filing failed - the file changed,
+    /// was open elsewhere, or the folder was out of reach - and a rename
+    /// they took back. Their name and date were thrown away by the next
+    /// Settings save, "Use now" or "Forget", or approval that taught
+    /// something.
     fn recompose_waiting(&self, own_names: Option<&[String]>) -> PipelineResult<()> {
-        let style = self.repository.active_style()?;
+        let spellings = self.repository.spellings()?;
         let mut changed = false;
         for item in self.store.list()? {
             if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready) {
                 continue;
             }
-            changed |= self.recompose(&style, &item, own_names)?;
+            changed |= self.recompose(&spellings, &item, own_names)?;
         }
         if changed {
             self.events.queue_changed();
@@ -2693,32 +3838,68 @@ impl Pipeline {
     /// never mentions, a respelling of a party the name leaves out - is
     /// stored without moving it, so whatever the reviewer has typed and not
     /// yet approved survives a Settings save.
+    ///
+    /// A name a learned spelling no person has checked yet changed waits for
+    /// a person (see [`ProposalRecord::holds_unchecked_spelling`]): a ready
+    /// document so renamed - a rule learned or used while it waited - goes
+    /// to review with [`LEARNED_SPELLING_UNCONFIRMED`] in the same write
+    /// that renames it, so no scheduler pass files the new name in between,
+    /// and its revision moves as any document's sent to review does. One
+    /// renamed back - the rule forgotten - or held for a rule a person has
+    /// checked since ("Use on its own") loses the reason but stays in
+    /// review: what else held it is not known here. A rule nobody has
+    /// checked is used only where the name shows it (see [`shown_rules`]),
+    /// so one checked since can change the rules of a name it does not
+    /// change, which is stored without moving the revision.
     fn recompose(
         &self,
-        style: &HouseStyle,
+        spellings: &Spellings,
         item: &QueueItem,
         own_names: Option<&[String]>,
     ) -> PipelineResult<bool> {
-        let Some(mut record) = self.repository.load_proposal(item.id)? else {
+        let Some(read) = self.repository.load_proposal_json(item.id)? else {
             return Ok(false);
         };
+        self.recompose_read(spellings, item, own_names, &read)
+    }
+
+    /// [`Self::recompose`] of the record `read`, as stored a moment ago.
+    fn recompose_read(
+        &self,
+        spellings: &Spellings,
+        item: &QueueItem,
+        own_names: Option<&[String]>,
+        read: &str,
+    ) -> PipelineResult<bool> {
+        let mut record = serde_json::from_str::<ProposalRecord>(read)
+            .map_err(|_| PipelineError::new("INVALID_DATA", "stored proposal is invalid"))?;
         // A copy's name, or one typed for a document that could not be
-        // read, has no facts behind it to compose a name from.
-        if record.approved || record.is_synthetic() {
+        // read, has no facts behind it to compose a name from; and a name a
+        // person approved, filed, or took back is theirs.
+        if !untouched(&record) {
             return Ok(false);
         }
-        let (styled, house_rules) = style.apply(&record.analysis.proposal);
         let own_names = own_names.map_or_else(|| record.own_names.clone(), <[String]>::to_vec);
-        if house_rules == record.house_rules && own_names == record.own_names {
-            return Ok(false);
-        }
-        let (named, _) = counterparty_view(&styled, &own_names);
         let extension = item
             .source_path
             .extension()
             .and_then(|value| value.to_str())
             .unwrap_or_default()
             .to_owned();
+        let (styled, house_rules) =
+            spellings.styled(&record.analysis.proposal, &own_names, &extension);
+        // A name held for a spelling checked since - "Use on its own" -
+        // says the spelling has not been checked: the reason is taken back,
+        // though the name is as it was.
+        let checked_since = record
+            .reasons
+            .iter()
+            .any(|reason| reason == LEARNED_SPELLING_UNCONFIRMED)
+            && !record.holds_unchecked_spelling(&extension, |rule| spellings.checked(rule));
+        if house_rules == record.house_rules && own_names == record.own_names && !checked_since {
+            return Ok(false);
+        }
+        let (named, _) = counterparty_view(&styled, &own_names);
         let existing = names_beside(
             item.source_path.parent().unwrap_or_else(|| Path::new(".")),
             &item.source_path,
@@ -2730,14 +3911,18 @@ impl Pipeline {
             &extension,
             &existing,
         );
-        if filename != record.filename {
-            record.revision += 1;
-        }
+        let renamed = filename != record.filename;
         record.filename = filename;
         record.house_rules = house_rules;
         record.own_names = own_names;
-        self.repository.replace_proposal(item.id, &record)?;
-        Ok(true)
+        let held = hold_unchecked_spelling(&mut record, &extension, spellings);
+        if renamed || (held && item.status == QueueStatus::Ready) {
+            record.revision += 1;
+        }
+        // Written only over the record read: whatever was written since - an
+        // approval above all - stands (see `replace_proposal_if`).
+        self.repository
+            .replace_proposal_if(item.id, read, &record, held)
     }
 
     /// What an approved edit teaches, if anything: a respelled party or
@@ -2746,6 +3931,19 @@ impl Pipeline {
     /// changed again is a change of mind about the document's word, not
     /// about Intern's; restoring the document's own spelling retracts the
     /// rule.
+    ///
+    /// So the change is asked again, traced back to the document's word,
+    /// whether it is a spelling of that word at all (see [`is_a_spelling`]).
+    /// A rule an earlier build learned, "Acme Property -> Tenants from City
+    /// of Boston", respelled as "Tenants from City of Boston Inc", holds no
+    /// more connecting words than the spelling Intern applied, but more than
+    /// "Acme Property": it teaches nothing, and the rule the reviewer
+    /// changed, one this build would not learn, is retracted. Such words
+    /// used to take the rule's place, to be learned on the next such edit.
+    ///
+    /// An approval checks no spelling, whatever it keeps of one and on
+    /// whatever document (see [`LearnedRule::confirmed`]): only "Use on its
+    /// own" does ([`Self::check_rule`]).
     fn learn_from_edit(
         &self,
         record: &ProposalRecord,
@@ -2757,23 +3955,31 @@ impl Pipeline {
             extension,
             &record.filename,
             approved,
-        ) else {
+        )
+        .map(|lesson| {
+            match record.house_rules.iter().find(|applied| {
+                applied.kind == lesson.kind && HouseRule::key(&applied.to) == lesson.from_key()
+            }) {
+                Some(applied) => HouseRule::new(lesson.kind, applied.from.clone(), lesson.to),
+                None => lesson,
+            }
+        }) else {
             return Ok(());
         };
-        let lesson = match record.house_rules.iter().find(|applied| {
-            applied.kind == lesson.kind && HouseRule::key(&applied.to) == lesson.from_key()
-        }) {
-            Some(applied) => HouseRule::new(lesson.kind, applied.from.clone(), lesson.to),
-            None => lesson,
-        };
-        if HouseRule::key(&lesson.to) == lesson.from_key() {
+        if HouseRule::key(&lesson.to) == lesson.from_key() || !is_a_spelling(&lesson) {
             self.repository.forget_rule_for(lesson.kind, &lesson.from)?;
-        } else if record.names_another_party(&lesson) {
+        } else if record.names_a_party_anew(
+            &self.repository.spellings()?.style(),
+            extension,
+            approved,
+        ) || record.names_another_party(&lesson)
+        {
             // Another party the document names is no spelling of the words
-            // it took the place of: putting it in the name - one click on
-            // the party choices - decides who this document is with.
-            // Learned, it would put that party in every later name giving
-            // those words, documents that never mention it included.
+            // it took the place of, nor any part of a type: putting it in
+            // the name - one click on the party choices, or typed, whole or
+            // short - decides who this document is with. Learned, it would
+            // put that party in every later name giving those words, or of
+            // that type, documents that never mention it included.
             return Ok(());
         } else if lesson.is_meaningful() {
             self.repository.learn(&lesson)?;
@@ -2913,6 +4119,49 @@ impl Pipeline {
         Ok(verified)
     }
 
+    /// Puts the ready `item` in review where `record`, which no person has
+    /// approved, has a name a learned spelling no person has checked yet
+    /// changed (see [`ProposalRecord::holds_unchecked_spelling`]), and says
+    /// whether it did. Such a name is never filed without a person, however
+    /// the row came to be ready: the window shows it with
+    /// [`LEARNED_SPELLING_UNCONFIRMED`]. A row that could not be put in
+    /// review - no longer ready, or the database refused - is not filed
+    /// either.
+    ///
+    /// `record` was read a moment ago, and a person can approve the
+    /// document in between: whether it is held is decided again on the
+    /// record as stored, in the transaction that puts it in review, so such
+    /// an approval is never taken back. Putting the record read earlier in
+    /// review turned the approval back into review, and the window said the
+    /// rename was applied while the document waited.
+    fn held_for_unchecked_spelling(
+        &self,
+        item: &QueueItem,
+        record: &ProposalRecord,
+    ) -> PipelineResult<bool> {
+        if record.approved || record.house_rules.is_empty() {
+            return Ok(false);
+        }
+        let spellings = self.repository.spellings()?;
+        let extension = item
+            .source_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        let held = |record: &ProposalRecord| {
+            !record.approved
+                && record.holds_unchecked_spelling(extension, |rule| spellings.checked(rule))
+        };
+        if !held(record) {
+            return Ok(false);
+        }
+        let _ = self
+            .repository
+            .hold_ready_if(item.id, LEARNED_SPELLING_UNCONFIRMED, held);
+        self.events.queue_changed();
+        Ok(true)
+    }
+
     fn apply_if_unchanged(
         &self,
         item: &QueueItem,
@@ -2967,6 +4216,14 @@ impl Pipeline {
         let filename = proposal
             .as_ref()
             .map_or(filename, |record| record.filename.as_str());
+        // Every filing without a person's approval passes here, and none
+        // files a name a learned spelling changed before a person has
+        // checked that spelling's work once.
+        if let Some(record) = proposal.as_ref()
+            && self.held_for_unchecked_spelling(item, record)?
+        {
+            return Ok(());
+        }
         if leading_date(filename).is_none() {
             self.repository.mark_needs_review(item.id, DATE_REQUIRED)?;
             self.events.queue_changed();
@@ -3969,8 +5226,14 @@ impl Pipeline {
             self.repository.mark_revalidated(id, &self.release)?;
             Ok(Some(false))
         };
+        // A row this build cannot read - a newer build left it with a status
+        // before applying that this one has never heard of - is left as it
+        // is too. Left due, it was the next due at every drain, and the
+        // scheduler, which runs the next pass at once while more is due,
+        // drained it again for as long as Intern ran, no later document
+        // validated again.
         let Some(item) = self.store.get(id)? else {
-            return Ok(Some(false));
+            return left();
         };
         let Some(stored_json) = self.repository.load_proposal_json(id)? else {
             return left();
@@ -4089,7 +5352,8 @@ impl Pipeline {
     /// said, so a new reading may take its place: in review or ready by its
     /// record's own status, with no file error; its record [`untouched`],
     /// holding the request its reply answered, and no reason but the
-    /// reading's and a near duplicate's; and no rename of it ever begun.
+    /// reading's, a near duplicate's and an unchecked learned spelling's;
+    /// and no rename of it ever begun.
     fn waits_as_read(&self, item: &QueueItem, record: &ProposalRecord) -> PipelineResult<bool> {
         let as_read = matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready)
             && queue_status_for(record.status) == item.status
@@ -4098,6 +5362,7 @@ impl Pipeline {
             && record.analysis.telemetry.request_sha256.is_some()
             && record.reasons.iter().all(|reason| {
                 reason == NEAR_DUPLICATE
+                    || reason == LEARNED_SPELLING_UNCONFIRMED
                     || record
                         .analysis
                         .review_reasons
@@ -4230,8 +5495,31 @@ impl Pipeline {
             // other filing.
             self.repository.release_copy(id)?;
         }
+        // The spellings the name takes out that nobody had checked: the
+        // person's no to them on this document (see
+        // `ProposalRecord::rejected_rules`), as the spellings stand now -
+        // before what this approval teaches or retracts. Spellings that
+        // cannot be read count as unchecked, which files the document
+        // under its own words, and stop no rename.
+        let rejected = match proposed.as_ref().filter(|record| !record.is_synthetic()) {
+            Some(record) if !record.house_rules.is_empty() => {
+                let spellings = self.repository.spellings().ok();
+                record
+                    .house_rules
+                    .iter()
+                    .filter(|rule| {
+                        !spellings
+                            .as_ref()
+                            .is_some_and(|spellings| spellings.checked(rule))
+                            && !keeps_spelling(rule, source_extension, &filename)
+                    })
+                    .cloned()
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
         self.repository
-            .approve_user_edit(id, item.status, &filename, description)?;
+            .approve_user_edit(id, item.status, &filename, description, rejected)?;
         // A preference store, not a filing step: a lesson that cannot be
         // written must not stop the rename that was just approved. A name
         // with no reading behind it corrects nothing.
@@ -4499,6 +5787,7 @@ impl Pipeline {
     }
 
     pub fn recover(&self) -> PipelineResult<()> {
+        self.hold_ready_under_unchecked_spellings();
         {
             // Renames in place for documents that could not be read: one a
             // crash left between the rename and its record, and one that
@@ -4699,6 +5988,8 @@ impl PipelineRepository {
                    from_value TEXT NOT NULL,
                    to_value TEXT NOT NULL,
                    seen INTEGER NOT NULL DEFAULT 1,
+                   confirmed INTEGER NOT NULL DEFAULT 0,
+                   confirmed_to TEXT,
                    created_at INTEGER NOT NULL,
                    updated_at INTEGER NOT NULL,
                    UNIQUE(kind, from_key)
@@ -4718,6 +6009,46 @@ impl PipelineRepository {
                  );",
             )
             .map_err(database_error)?;
+        // How many times a person checked a rule's work (see
+        // `LearnedRule::confirmed`), which releases before alpha.18 did not
+        // keep: each rule they learned starts unchecked, and waits for one
+        // check like a rule learned today.
+        if !has_column(&connection, "house_rules", "confirmed")? {
+            connection
+                .execute(
+                    "ALTER TABLE house_rules ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )
+                .map_err(database_error)?;
+        }
+        // The spelling those checks were of. A release that does not know
+        // the checks respells a rule without starting them over, so they
+        // count only while the rule writes what was checked.
+        if !has_column(&connection, "house_rules", "confirmed_to")? {
+            connection
+                .execute("ALTER TABLE house_rules ADD COLUMN confirmed_to TEXT", [])
+                .map_err(database_error)?;
+        }
+        // A development build of alpha.18 counted a person's approval of a
+        // name a spelling changed as the spelling's check, and kept the
+        // documents spellings were learned from to tell which approvals
+        // counted. No approval checks a spelling now (see
+        // `LearnedRule::confirmed`), so a database such a build used starts
+        // every spelling over unchecked, as one from alpha.17 does, and
+        // loses those tables. No release made them.
+        if table_exists(&connection, "house_rule_teachers")?
+            || table_exists(&connection, "house_rule_teacher_content")?
+        {
+            let transaction = connection.transaction().map_err(database_error)?;
+            transaction
+                .execute_batch(
+                    "UPDATE house_rules SET confirmed = 0, confirmed_to = NULL;
+                     DROP TABLE IF EXISTS house_rule_teacher_content;
+                     DROP TABLE IF EXISTS house_rule_teachers;",
+                )
+                .map_err(database_error)?;
+            transaction.commit().map_err(database_error)?;
+        }
         let legacy_exists = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'pipeline_proposals')",
             [], |row| row.get::<_, bool>(0),
@@ -4912,6 +6243,75 @@ impl PipelineRepository {
         .transpose()
     }
 
+    /// Stores `record` as item `id`'s in place of the record it was composed
+    /// from, `read` - the stored JSON as it was read - provided the stored
+    /// record is still exactly that and the row still waits for a person,
+    /// in review or ready; a ready row goes to review in the same write
+    /// where the record is `held` for a person. Says whether it wrote.
+    ///
+    /// Decided and written in one IMMEDIATE transaction, as
+    /// [`Self::hold_ready_if`] is, so nothing written in between is written
+    /// over. A record composed again from one a person approved a moment
+    /// after it was read - by a Settings save, or a spelling learned, used
+    /// or checked - was written over the approval: the person's name and
+    /// sentence were lost for Intern's unapproved ones, and the approval's
+    /// filing then filed Intern's name, or found the row back in review.
+    /// Such a record is left as it is, and the next recomposition reads it
+    /// as it is now. One being filed - no longer waiting - is left to the
+    /// filing.
+    fn replace_proposal_if(
+        &self,
+        id: i64,
+        read: &str,
+        record: &ProposalRecord,
+        held: bool,
+    ) -> PipelineResult<bool> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
+        let stored = transaction
+            .query_row(
+                "SELECT proposal_json FROM proposals WHERE queue_item_id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(database_error)?;
+        if stored.as_deref() != Some(read) {
+            return Ok(false);
+        }
+        let status = transaction
+            .query_row(
+                "SELECT status FROM queue_items WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(database_error)?;
+        let ready = queue_status_text(QueueStatus::Ready);
+        let in_review = queue_status_text(QueueStatus::NeedsReview);
+        match status.as_deref() {
+            Some(status) if status == ready && held => {
+                store_in_review_on(&transaction, id, record, QueueStatus::Ready, None)?;
+            }
+            Some(status) if status == ready || status == in_review => {
+                let json = serde_json::to_string(record).map_err(|_| {
+                    PipelineError::new("INVALID_DATA", "proposal could not be stored")
+                })?;
+                transaction
+                    .execute(
+                        "UPDATE proposals SET proposal_json = ?1 WHERE queue_item_id = ?2",
+                        params![json, id],
+                    )
+                    .map_err(database_error)?;
+            }
+            _ => return Ok(false),
+        }
+        transaction.commit().map_err(database_error)?;
+        Ok(true)
+    }
+
     /// Stores a record over the one a queue item already has.
     fn replace_proposal(&self, id: i64, record: &ProposalRecord) -> PipelineResult<()> {
         let json = serde_json::to_string(record)
@@ -4933,7 +6333,11 @@ impl PipelineRepository {
         let connection = self.lock()?;
         let mut statement = connection
             .prepare(
-                "SELECT id, kind, from_value, to_value, seen, updated_at FROM house_rules
+                // The checks count for the spelling they were of only (see
+                // `confirmed_to`).
+                "SELECT id, kind, from_value, to_value, seen,
+                   CASE WHEN confirmed_to = to_value THEN confirmed ELSE 0 END, updated_at
+                 FROM house_rules
                  ORDER BY updated_at DESC, id DESC",
             )
             .map_err(database_error)?;
@@ -4945,13 +6349,14 @@ impl PipelineRepository {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, u32>(4)?,
-                    row.get::<_, i64>(5)?,
+                    row.get::<_, u32>(5)?,
+                    row.get::<_, i64>(6)?,
                 ))
             })
             .map_err(database_error)?;
         let mut rules = Vec::new();
         for row in rows {
-            let (id, kind, from, to, seen, learned_at) = row.map_err(database_error)?;
+            let (id, kind, from, to, seen, confirmed, learned_at) = row.map_err(database_error)?;
             let Some(kind) = RuleKind::parse(&kind) else {
                 continue;
             };
@@ -4962,25 +6367,26 @@ impl PipelineRepository {
                 to,
                 seen,
                 active: seen >= EDITS_TO_LEARN,
+                confirmed,
                 learned_at,
             });
         }
         Ok(rules)
     }
 
-    /// The rules in force: learned often enough, or told to be used.
-    fn active_style(&self) -> PipelineResult<HouseStyle> {
-        Ok(HouseStyle::new(
-            self.list_rules()?
-                .into_iter()
-                .filter(|rule| rule.active)
-                .map(|rule| rule.rule())
-                .collect(),
-        ))
+    /// The spellings learned: the rules in force - learned often enough, or
+    /// told to be used - and which of them a person has checked.
+    fn spellings(&self) -> PipelineResult<Spellings> {
+        Ok(Spellings {
+            learned: self.list_rules()?,
+        })
     }
 
-    /// Records one respelling. The same change again counts it up; a
-    /// different spelling for the same word starts the count over.
+    /// Records one respelling, taught by an approved edit. The same change
+    /// again counts it up; a different spelling for the same word starts
+    /// the count over, and the checks of the spelling it replaces with it
+    /// (see [`LearnedRule::confirmed`]): a person checked what that one
+    /// wrote.
     fn learn(&self, rule: &HouseRule) -> PipelineResult<LearnedRule> {
         let connection = self.lock()?;
         connection
@@ -4989,6 +6395,7 @@ impl PipelineRepository {
                  VALUES (?1, ?2, ?3, ?4, 1, unixepoch(), unixepoch())
                  ON CONFLICT(kind, from_key) DO UPDATE SET
                    seen = CASE WHEN to_value = excluded.to_value THEN seen + 1 ELSE 1 END,
+                   confirmed = CASE WHEN to_value = excluded.to_value THEN confirmed ELSE 0 END,
                    to_value = excluded.to_value,
                    from_value = excluded.from_value,
                    updated_at = unixepoch()",
@@ -4997,7 +6404,9 @@ impl PipelineRepository {
             .map_err(database_error)?;
         connection
             .query_row(
-                "SELECT id, from_value, to_value, seen, updated_at FROM house_rules
+                "SELECT id, from_value, to_value, seen,
+                   CASE WHEN confirmed_to = to_value THEN confirmed ELSE 0 END, updated_at
+                 FROM house_rules
                  WHERE kind = ?1 AND from_key = ?2",
                 params![rule.kind.as_str(), rule.from_key()],
                 |row| {
@@ -5008,7 +6417,8 @@ impl PipelineRepository {
                         to: row.get(2)?,
                         seen: row.get(3)?,
                         active: row.get::<_, u32>(3)? >= EDITS_TO_LEARN,
-                        learned_at: row.get(4)?,
+                        confirmed: row.get(4)?,
+                        learned_at: row.get(5)?,
                     })
                 },
             )
@@ -5105,11 +6515,51 @@ impl PipelineRepository {
         Ok(removed == 1)
     }
 
+    /// Marks rule `id` checked (see [`LearnedRule::confirmed`]) for its
+    /// spelling as it stands - `shown`, the kind, the document's word and
+    /// the spelling the person was shown, exactly - and only while it is in
+    /// force. `None` for a rule that does not exist, `Some(false)` for one
+    /// not in force or no longer what was shown. The check is of this
+    /// spelling, and counts for it alone (see `confirmed_to`).
+    fn check_rule(&self, id: i64, shown: &HouseRule) -> PipelineResult<Option<bool>> {
+        let connection = self.lock()?;
+        let changed = connection
+            .execute(
+                "UPDATE house_rules SET
+                   confirmed = CASE WHEN confirmed_to = to_value THEN confirmed + 1 ELSE 1 END,
+                   confirmed_to = to_value
+                 WHERE id = ?1 AND kind = ?2 AND from_value = ?3 AND to_value = ?4 AND seen >= ?5",
+                params![
+                    id,
+                    shown.kind.as_str(),
+                    shown.from,
+                    shown.to,
+                    EDITS_TO_LEARN
+                ],
+            )
+            .map_err(database_error)?;
+        if changed == 1 {
+            return Ok(Some(true));
+        }
+        let exists = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM house_rules WHERE id = ?1)",
+                params![id],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(database_error)?;
+        Ok(exists.then_some(false))
+    }
+
+    /// Puts a rule in force at once. Not checked: every name it changes
+    /// still waits for a person until they choose "Use on its own" for it
+    /// (see [`LearnedRule::confirmed`]).
     fn use_rule(&self, id: i64) -> PipelineResult<bool> {
         let changed = self
             .lock()?
             .execute(
-                "UPDATE house_rules SET seen = MAX(seen, ?2), updated_at = unixepoch() WHERE id = ?1",
+                "UPDATE house_rules SET seen = MAX(seen, ?2), updated_at = unixepoch()
+                 WHERE id = ?1",
                 params![id, EDITS_TO_LEARN],
             )
             .map_err(database_error)?;
@@ -5317,34 +6767,80 @@ impl PipelineRepository {
         let mut record = self
             .load_proposal(id)?
             .ok_or_else(|| PipelineError::new("INVALID_DATA", "proposal is missing"))?;
-        record.status = ProposalStatus::NeedsReview;
         if let Some(reason) = reason
             && !record.reasons.iter().any(|entry| entry == reason)
         {
             record.reasons.push(reason.to_owned());
         }
-        // A document waiting for a person is no longer a document waiting to
-        // be filed, whatever was approved before.
-        record.approved = false;
         record.revision += 1;
+        self.store_in_review(id, &record, row_status, error_code)
+    }
+
+    /// Stores `record` as item `id`'s, waiting for a person, and moves the
+    /// row to review from `row_status`, its code set to `error_code` when
+    /// one is given and left as it is otherwise: one transaction, so the
+    /// row is never ready under a record that is not. `STATE_CONFLICT` when
+    /// the row is no longer `row_status`. The caller has said why, among the
+    /// record's reasons, and moved its revision.
+    fn store_in_review(
+        &self,
+        id: i64,
+        record: &ProposalRecord,
+        row_status: QueueStatus,
+        error_code: Option<&str>,
+    ) -> PipelineResult<()> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction().map_err(database_error)?;
-        let changed = transaction.execute(
-            "UPDATE queue_items SET status = 'needs_review', error_code = COALESCE(?3, error_code),
-                 updated_at = unixepoch()
-             WHERE id = ?1 AND status = ?2",
-            params![id, queue_status_text(row_status), error_code],
-        ).map_err(database_error)?;
-        if changed != 1 {
-            return Err(PipelineError::new(
-                "STATE_CONFLICT",
-                "item changed before review",
-            ));
-        }
-        let json = serde_json::to_string(&record)
-            .map_err(|_| PipelineError::new("INVALID_DATA", "proposal could not be stored"))?;
-        transaction.execute("UPDATE proposals SET proposal_json = ?1, created_at = unixepoch() WHERE queue_item_id = ?2", params![json, id]).map_err(database_error)?;
+        store_in_review_on(&transaction, id, record, row_status, error_code)?;
         transaction.commit().map_err(database_error)
+    }
+
+    /// Puts item `id` in review from ready with `reason` among its record's
+    /// reasons - where its record, read in the same transaction, is one
+    /// `held` says waits for a person - and says whether it did. A record
+    /// that changed since the caller looked, approved by a person most of
+    /// all, is decided on as it is now.
+    fn hold_ready_if(
+        &self,
+        id: i64,
+        reason: &str,
+        held: impl Fn(&ProposalRecord) -> bool,
+    ) -> PipelineResult<bool> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
+        let json = transaction
+            .query_row(
+                "SELECT proposal_json FROM proposals WHERE queue_item_id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(database_error)?;
+        let Some(mut record) = json
+            .map(|json| {
+                serde_json::from_str::<ProposalRecord>(&json)
+                    .map_err(|_| PipelineError::new("INVALID_DATA", "stored proposal is invalid"))
+            })
+            .transpose()?
+        else {
+            return Ok(false);
+        };
+        if !held(&record) {
+            return Ok(false);
+        }
+        if !record.reasons.iter().any(|entry| entry == reason) {
+            record.reasons.push(reason.to_owned());
+        }
+        record.revision += 1;
+        match store_in_review_on(&transaction, id, &record, QueueStatus::Ready, None) {
+            Ok(()) => {}
+            Err(error) if error.code == "STATE_CONFLICT" => return Ok(false),
+            Err(error) => return Err(error),
+        }
+        transaction.commit().map_err(database_error)?;
+        Ok(true)
     }
 
     /// Returns a document denied at admission to the queue, for the person
@@ -5433,10 +6929,12 @@ impl PipelineRepository {
         expected: QueueStatus,
         filename: &str,
         description: &str,
+        rejected_rules: Vec<HouseRule>,
     ) -> PipelineResult<()> {
         let mut record = self
             .load_proposal(id)?
             .ok_or_else(|| PipelineError::new("INVALID_DATA", "proposal is missing"))?;
+        record.rejected_rules = rejected_rules;
         record.filename = filename.to_owned();
         record.description = description.trim().to_owned();
         record.status = ProposalStatus::Ready;
@@ -5479,6 +6977,33 @@ impl PipelineRepository {
     }
 }
 
+/// Whether `table` has a column named `column`.
+fn has_column(connection: &Connection, table: &str, column: &str) -> PipelineResult<bool> {
+    let mut statement = connection
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(database_error)?;
+    let names = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(database_error)?;
+    for name in names {
+        if name.map_err(database_error)? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether `connection` has a table named `table`.
+fn table_exists(connection: &Connection, table: &str) -> PipelineResult<bool> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            params![table],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(database_error)
+}
+
 /// Records on `connection` that `release` read or considered item `id`.
 /// Nothing, for an item that is gone.
 fn mark_release(connection: &Connection, id: i64, release: &str) -> PipelineResult<()> {
@@ -5488,6 +7013,45 @@ fn mark_release(connection: &Connection, id: i64, release: &str) -> PipelineResu
              SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM queue_items WHERE id = ?1)
              ON CONFLICT(queue_item_id) DO UPDATE SET release = excluded.release",
             params![id, release],
+        )
+        .map_err(database_error)?;
+    Ok(())
+}
+
+/// [`PipelineRepository::store_in_review`], on `transaction`, which the
+/// caller commits.
+fn store_in_review_on(
+    transaction: &rusqlite::Transaction<'_>,
+    id: i64,
+    record: &ProposalRecord,
+    row_status: QueueStatus,
+    error_code: Option<&str>,
+) -> PipelineResult<()> {
+    let mut record = record.clone();
+    record.status = ProposalStatus::NeedsReview;
+    // A document waiting for a person is no longer a document waiting to be
+    // filed, whatever was approved before.
+    record.approved = false;
+    let changed = transaction
+        .execute(
+            "UPDATE queue_items SET status = 'needs_review', error_code = COALESCE(?3, error_code),
+                 updated_at = unixepoch()
+             WHERE id = ?1 AND status = ?2",
+            params![id, queue_status_text(row_status), error_code],
+        )
+        .map_err(database_error)?;
+    if changed != 1 {
+        return Err(PipelineError::new(
+            "STATE_CONFLICT",
+            "item changed before review",
+        ));
+    }
+    let json = serde_json::to_string(&record)
+        .map_err(|_| PipelineError::new("INVALID_DATA", "proposal could not be stored"))?;
+    transaction
+        .execute(
+            "UPDATE proposals SET proposal_json = ?1, created_at = unixepoch() WHERE queue_item_id = ?2",
+            params![json, id],
         )
         .map_err(database_error)?;
     Ok(())
@@ -5507,6 +7071,35 @@ fn untouched(record: &ProposalRecord) -> bool {
             .reasons
             .iter()
             .any(|reason| reason == UNDONE || reason == ALREADY_NAMED)
+}
+
+/// Marks `record` as waiting for a person where a learned spelling no person
+/// has checked yet changed its name (see
+/// [`ProposalRecord::holds_unchecked_spelling`]), and takes the reason back
+/// where none does any more - the rule forgotten, or respelled, since -
+/// leaving the record in review all the same: what else held it is not
+/// known here, and a person will see it. Says whether it is held.
+fn hold_unchecked_spelling(
+    record: &mut ProposalRecord,
+    extension: &str,
+    spellings: &Spellings,
+) -> bool {
+    let held = record.holds_unchecked_spelling(extension, |rule| spellings.checked(rule));
+    let marked = record
+        .reasons
+        .iter()
+        .any(|reason| reason == LEARNED_SPELLING_UNCONFIRMED);
+    if held {
+        if !marked {
+            record.reasons.push(LEARNED_SPELLING_UNCONFIRMED.to_owned());
+        }
+        record.status = ProposalStatus::NeedsReview;
+    } else if marked {
+        record
+            .reasons
+            .retain(|reason| reason != LEARNED_SPELLING_UNCONFIRMED);
+    }
+    held
 }
 
 /// Whether a stored reading is provisional and nobody has acted on it
@@ -6275,6 +7868,855 @@ mod party_choice_tests {
         // A party's name inside a longer word is no party.
         assert!(!type_edit("Letter re Stars Alliance LLCs"));
     }
+
+    /// A party whose name holds the named party's - a parent beside its
+    /// subsidiary, an estate beside the person, a city's department beside
+    /// the city - is a party of its own, and so is the named party's
+    /// subsidiary, person or city when the name gives the longer one:
+    /// choosing the other, as offered or typed short, is no spelling either
+    /// way, the longer one's short form included when it leaves out the
+    /// named party's words. A respelling of the named party that does not
+    /// cross over to the other is still a spelling, a short form of both
+    /// included; the longer one, named, shortened to a run of its words
+    /// that still holds the shorter's name, is the price, not learned.
+    #[test]
+    fn a_party_whose_name_holds_the_named_ones_or_is_held_by_it_is_another_party() {
+        let edit = |named: &str, other: &str, to: &str| {
+            letter(
+                named,
+                &[named, other],
+                vec![party(named, Support::Cited), party(other, Support::Cited)],
+            )
+            .names_another_party(&HouseRule::new(RuleKind::Party, named, to))
+        };
+        let parent = "Acme Corporation Holdings LLC";
+        let estate = "Estate of John Smith";
+        let department = "City of Boston Law Department";
+
+        // The longer party chosen for the shorter, as offered or typed short.
+        assert!(edit("Acme Corporation", parent, parent));
+        assert!(edit(
+            "Acme Corporation",
+            parent,
+            "Acme Corporation Holdings"
+        ));
+        assert!(edit("John Smith", estate, estate));
+        assert!(edit("City of Boston", department, department));
+        // ... typed short as a run of its own words that is none of the
+        // named party's, too.
+        assert!(edit("City of Boston", department, "Law Department"));
+        assert!(edit("City of Boston", department, "Boston Law Department"));
+        assert!(edit("Acme Corporation", parent, "Corporation Holdings LLC"));
+        assert!(edit("John Smith", estate, "Estate"));
+        // The shorter party chosen for the longer, as offered or typed
+        // short.
+        assert!(edit(parent, "Acme Corporation", "Acme Corporation"));
+        assert!(edit(parent, "Acme Corporation", "Acme"));
+        assert!(edit(estate, "John Smith", "John Smith"));
+        assert!(edit(department, "City of Boston", "City of Boston"));
+
+        // Respellings of the named party, which cross over to neither: a
+        // short form of both, the named party's words as well as the
+        // other's, among them.
+        assert!(!edit("Acme Corporation", parent, "Acme Corp"));
+        assert!(!edit("Acme Corporation", parent, "Acme"));
+        assert!(!edit("John Smith", estate, "J. Smith"));
+        assert!(!edit("City of Boston", department, "Boston"));
+        assert!(!edit(parent, "Acme Corporation", "Acme Corp Holdings"));
+        assert!(!edit(department, "City of Boston", "Boston Law Department"));
+        // The other party abbreviated holds neither name, nor is held by
+        // either: still learned, the gap the guard leaves.
+        assert!(!edit("Acme Corporation", parent, "Acme Corp Holdings"));
+
+        // The reading's other spelling of the named party, in its facts, is
+        // that party: a respelling that does not cross over to it is still
+        // a spelling, and one over to it is the price, not learned.
+        let spelled = |named: &str, facts: &str, to: &str| {
+            letter(named, &[facts], vec![party(facts, Support::Cited)])
+                .names_another_party(&HouseRule::new(RuleKind::Party, named, to))
+        };
+        assert!(!spelled("Acme Corporation", "Acme Corporation Inc", "Acme"));
+        assert!(spelled(
+            "Beacon Staffing LLC",
+            "Beacon Staffing",
+            "Beacon Staffing"
+        ));
+        assert!(spelled(
+            "Beacon Staffing",
+            "Beacon Staffing LLC",
+            "Beacon Staffing LLC"
+        ));
+
+        // The other price: the longer party of a pair, named, shortened to
+        // a run of its own words that still holds the shorter one's name
+        // crosses over to the shorter one, and is not learned.
+        assert!(edit(
+            parent,
+            "Acme Corporation",
+            "Acme Corporation Holdings"
+        ));
+    }
+
+    /// A party whose name holds the named party's after words of its own -
+    /// "Trustee of", "Estate of", "Friends of" - or before two or more -
+    /// "Law Department" - is another party typed short where the new
+    /// spelling keeps those words in front, or the named party's words and
+    /// the first after them, whatever the rest is shortened to. Each was
+    /// learned as the named party's spelling ("Acme Corporation -> Trustee
+    /// of Acme Corp"), and named every later document giving it, ready ones
+    /// filed without review. A suffix of one word is a spelling still, as
+    /// is a short form that crosses over to no other party.
+    #[test]
+    fn a_longer_party_typed_short_is_another_party() {
+        let edit = |named: &str, other: &str, to: &str| {
+            letter(
+                named,
+                &[named, other],
+                vec![party(named, Support::Cited), party(other, Support::Cited)],
+            )
+            .names_another_party(&HouseRule::new(RuleKind::Party, named, to))
+        };
+        let mut failed = Vec::new();
+        for (named, other, to, another) in [
+            (
+                "Acme Corporation",
+                "Trustee of Acme Corporation",
+                "Trustee of Acme Corp",
+                true,
+            ),
+            (
+                "John Smith",
+                "Estate of John Smith",
+                "Estate of J Smith",
+                true,
+            ),
+            (
+                "City of Victorville",
+                "Friends of City of Victorville",
+                "Friends of Victorville",
+                true,
+            ),
+            (
+                "City of Boston",
+                "City of Boston Law Department",
+                "City of Boston Law Dept",
+                true,
+            ),
+            // The price: the reading's titled spelling of the named party
+            // typed short crosses over to it too.
+            ("John Smith", "Dr John Smith", "Dr J Smith", true),
+            // Still spellings.
+            (
+                "Acme Corporation",
+                "Acme Corporation Inc",
+                "Acme Corp Inc",
+                false,
+            ),
+            (
+                "Acme Corporation",
+                "Trustee of Acme Corporation",
+                "Acme Corp",
+                false,
+            ),
+            (
+                "City of Boston",
+                "City of Boston Law Department",
+                "Boston",
+                false,
+            ),
+            (
+                "Acme Corporation",
+                "Acme Corporation Holdings LLC",
+                "Acme",
+                false,
+            ),
+        ] {
+            if edit(named, other, to) != another {
+                failed.push(format!("{named} -> {to} beside {other}"));
+            }
+        }
+        assert!(failed.is_empty(), "{failed:#?}");
+    }
+}
+
+#[cfg(test)]
+mod as_filed_tests {
+    use intern_engine::{
+        Evidence, HouseRule, ModelFacts, ModelProposal, PartyFact, PartyRelation, RuleKind,
+        Support, ValidatedFacts, ValidatedParty, ValidatedProposal, compose_styled_filename,
+    };
+
+    use super::{ProposalRecord, layout_subfolder, shown_rules};
+    use crate::settings::DestinationLayout;
+
+    /// A `document_type` whose proposal gives `parties` behind `relation`,
+    /// in a document validation found `found` in as well, named with the
+    /// party rules `rules` ("from -> to") applied, as Intern proposes it.
+    fn record(
+        document_type: &str,
+        (relation, parties): (PartyRelation, &[&str]),
+        found: &[&str],
+        rules: &[(&str, &str)],
+    ) -> ProposalRecord {
+        let all = parties
+            .iter()
+            .chain(found)
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>();
+        let mut record = ProposalRecord::synthetic(String::new(), String::new());
+        record.analysis.proposal = ValidatedProposal {
+            document_type: Some(document_type.into()),
+            document_date: Some("2024-04-12".into()),
+            date_role: None,
+            parties: parties.iter().map(|name| (*name).to_owned()).collect(),
+            party_relation: relation,
+            description: "A document.".into(),
+            confidence: 0.9,
+            evidence: Evidence::default(),
+        };
+        record.analysis.model_proposal = Some(ModelProposal {
+            parties: all.clone(),
+            facts: Some(Box::new(ModelFacts {
+                parties: all
+                    .iter()
+                    .map(|name| PartyFact {
+                        name: name.clone(),
+                        ..PartyFact::default()
+                    })
+                    .collect(),
+                ..ModelFacts::default()
+            })),
+            ..ModelProposal::default()
+        });
+        record.analysis.facts = Some(ValidatedFacts {
+            parties: all
+                .iter()
+                .map(|name| ValidatedParty {
+                    name: name.clone(),
+                    support: Support::Cited,
+                    ..ValidatedParty::default()
+                })
+                .collect(),
+            ..ValidatedFacts::default()
+        });
+        record.house_rules = rules
+            .iter()
+            .map(|(from, to)| HouseRule::new(RuleKind::Party, *from, *to))
+            .collect();
+        record.manual = false;
+        record.filename =
+            compose_styled_filename(&record.styled_proposal(), &record.house_rules, "pdf", &[])
+                .value;
+        record
+    }
+
+    /// The parties a document is filed with, the first its folder's, once
+    /// the name `approved` (without date or extension) is approved for it.
+    fn filed(record: &ProposalRecord, approved: &str) -> Vec<String> {
+        record
+            .as_filed("pdf", &format!("2024-04-12 {approved}.pdf"))
+            .parties
+    }
+
+    /// A name approved as Intern proposed it - unchanged, filed without
+    /// review, or with only its date or a collision suffix different - is
+    /// no edit: it is filed, and reported, under the parties the reading
+    /// gives, whole, in the folder of the first, exactly as 3f4d24b
+    /// (alpha.17's filing) filed it. Parties holding a note's start ("Re",
+    /// "Concerning"), "&", a comma, " v " or "and" among them. Read as an
+    /// edit, "Swiss Re Ltd", "Munich Re Group", "Everest Re Group Ltd",
+    /// "Hannover Re Holdings" and "Citizens Concerning the Environment" were
+    /// cut at the note's start, and filed in "Swiss/", "Munich/",
+    /// "Everest/", "Hannover/" and "Citizens/".
+    #[test]
+    fn a_name_approved_as_proposed_is_filed_under_the_parties_it_gives_whole() {
+        use PartyRelation::{Between, For, None, To, With};
+        let mut failed = Vec::new();
+        for (relation, parties, folder) in [
+            (With, &["Swiss Re Ltd"][..], "Swiss Re Ltd"),
+            (
+                With,
+                &["Munich Re Group", "Acme Corporation"],
+                "Munich Re Group",
+            ),
+            (For, &["Everest Re Group Ltd"], "Everest Re Group Ltd"),
+            (None, &["Hannover Re Holdings"], "Hannover Re Holdings"),
+            (
+                To,
+                &["Citizens Concerning the Environment"],
+                "Citizens Concerning the Environment",
+            ),
+            (
+                Between,
+                &["Citizens Concerning the Environment", "John Smith"],
+                "Citizens Concerning the Environment",
+            ),
+            (Between, &["John Smith", "Swiss Re Ltd"], "John Smith"),
+            (With, &["Johnson & Johnson"], "Johnson & Johnson"),
+            (With, &["Acme Corp, Inc."], "Acme Corp, Inc"),
+            (With, &["Roe v Wade Legal Fund"], "Roe v Wade Legal Fund"),
+            (To, &["Barnes and Noble"], "Barnes and Noble"),
+        ] {
+            let record = record(
+                "Employment Agreement",
+                (relation, parties),
+                &["Beacon Staffing LLC"],
+                &[],
+            );
+            let stem = record.filename.strip_suffix(".pdf").unwrap();
+            for approved in [
+                record.filename.clone(),
+                format!("{stem} (2).pdf"),
+                format!("{}.pdf", stem.replacen("2024-04-12", "2023-01-31", 1)),
+            ] {
+                let filed = record.as_filed("pdf", &approved);
+                let in_folder = layout_subfolder(DestinationLayout::Party, &filed)
+                    .map(|path| path.to_string_lossy().into_owned());
+                if filed.parties != parties || in_folder.as_deref() != Some(folder) {
+                    failed.push(format!("{approved}: {:?} in {in_folder:?}", filed.parties));
+                }
+            }
+        }
+        assert!(failed.is_empty(), "{failed:#?}");
+    }
+
+    /// The parties a reviewer typed are filed as typed, beside those the
+    /// name still gives: a longer party typed around one offered, on
+    /// either side of a "between" or with "and"; a party offered added
+    /// beside the second of two the name gave, the first dropped; the
+    /// document's own word for a party a rule respelled, kept beside a
+    /// choice; a party the name never gave, kept; and two parties offered,
+    /// chosen at once. A note typed after a party is no part of it, and a
+    /// party is filed once.
+    #[test]
+    fn the_parties_a_reviewer_typed_are_filed_as_typed_beside_those_kept() {
+        let agreement = "Employment Agreement";
+        let acme = "Acme Corporation";
+        let beacon = "Beacon Staffing LLC";
+        let smith = "John Smith";
+        let with_acme = (PartyRelation::With, &[acme][..]);
+        let mut failed = Vec::new();
+        for (record, approved, parties) in [
+            // A longer party typed around the choice's words.
+            (
+                record(agreement, with_acme, &[smith], &[]),
+                "Employment Agreement between Estate of John Smith and Acme Corporation",
+                &["Estate of John Smith", acme][..],
+            ),
+            (
+                record(agreement, with_acme, &[smith], &[]),
+                "Employment Agreement between Acme Corporation and Estate of John Smith",
+                &[acme, "Estate of John Smith"],
+            ),
+            (
+                record(agreement, with_acme, &[smith], &[]),
+                "Employment Agreement with Estate of John Smith and Acme Corporation",
+                &["Estate of John Smith", acme],
+            ),
+            (
+                record(agreement, with_acme, &[smith], &[]),
+                "Employment Agreement between John Smith Family Trust and Acme Corporation",
+                &["John Smith Family Trust", acme],
+            ),
+            (
+                record(agreement, (PartyRelation::With, &[beacon]), &[acme], &[]),
+                "Employment Agreement between Acme Corporation Holdings LLC and Beacon Staffing LLC",
+                &["Acme Corporation Holdings LLC", beacon],
+            ),
+            // ... but not around words of a note.
+            (
+                record(agreement, (PartyRelation::With, &[beacon]), &[acme], &[]),
+                "Employment Agreement with Beacon Staffing LLC re Acme Corporation Lease",
+                &[beacon, acme],
+            ),
+            // The choice beside the second party the name gave.
+            (
+                record(
+                    agreement,
+                    (PartyRelation::Between, &[acme, beacon]),
+                    &[smith],
+                    &[],
+                ),
+                "Employment Agreement between Beacon Staffing LLC and John Smith",
+                &[beacon, smith],
+            ),
+            // The document's own word for a party a rule respelled.
+            (
+                record(agreement, with_acme, &[smith], &[(acme, "ACME CORP")]),
+                "Employment Agreement between Acme Corporation and John Smith",
+                &["ACME CORP", smith],
+            ),
+            (
+                record(agreement, with_acme, &[beacon], &[(acme, "ACME CORP")]),
+                "Employment Agreement with Acme Corporation from Beacon Staffing LLC",
+                &["ACME CORP", beacon],
+            ),
+            // A party the name never gave.
+            (
+                record(
+                    agreement,
+                    (PartyRelation::Between, &[acme, beacon, "Northwind Traders"]),
+                    &[smith],
+                    &[],
+                ),
+                "Employment Agreement between Acme Corporation and John Smith",
+                &[acme, smith, "Northwind Traders"],
+            ),
+            (
+                record(
+                    agreement,
+                    (PartyRelation::With, &[acme, beacon]),
+                    &[smith],
+                    &[],
+                ),
+                "Employment Agreement between Acme Corporation and John Smith",
+                &[acme, smith, beacon],
+            ),
+            // Two parties offered, chosen at once, the party proposed
+            // dropped or none proposed; a subsidiary's words inside its
+            // parent's, chosen, are the parent alone.
+            (
+                record(agreement, with_acme, &[smith, beacon], &[]),
+                "Employment Agreement between John Smith and Beacon Staffing LLC",
+                &[smith, beacon],
+            ),
+            (
+                record(agreement, (PartyRelation::None, &[]), &[smith, beacon], &[]),
+                "Employment Agreement between John Smith and Beacon Staffing LLC",
+                &[smith, beacon],
+            ),
+            (
+                record(
+                    agreement,
+                    (PartyRelation::With, &[beacon]),
+                    &[acme, "Acme Corporation Holdings LLC"],
+                    &[],
+                ),
+                "Employment Agreement between Acme Corporation Holdings LLC and Beacon Staffing LLC",
+                &["Acme Corporation Holdings LLC", beacon],
+            ),
+            // A note typed after a party.
+            (
+                record("Letter", (PartyRelation::To, &[acme]), &[], &[]),
+                "Letter to Beacon Staffing re Lease",
+                &["Beacon Staffing"],
+            ),
+            (
+                record("Letter", (PartyRelation::To, &[acme]), &[], &[]),
+                "Letter to Beacon Staffing RE: Lease",
+                &["Beacon Staffing"],
+            ),
+            (
+                record(agreement, with_acme, &[smith], &[]),
+                "Employment Agreement with Estate of John Smith re Probate",
+                &["Estate of John Smith"],
+            ),
+            (
+                record("Letter", (PartyRelation::To, &[acme]), &[], &[]),
+                "Letter to All About Pets LLC",
+                &["All About Pets LLC"],
+            ),
+            // A parenthesis with more of the name after it.
+            (
+                record("Letter", (PartyRelation::To, &["Smith"]), &[], &[]),
+                "Letter to Smith (UK) Ltd",
+                &["Smith (UK) Ltd"],
+            ),
+            // A party filed once.
+            (
+                record(agreement, (PartyRelation::With, &[acme, beacon]), &[], &[]),
+                "Employment Agreement with Beacon Staffing LLC",
+                &[beacon],
+            ),
+            // The document's own word for a party a rule respelled, kept
+            // with another party after it, is that party kept.
+            (
+                record(agreement, with_acme, &[], &[(acme, "ACME CORP")]),
+                "Employment Agreement with Acme Corporation from Jane Doe",
+                &["ACME CORP"],
+            ),
+            (
+                record(agreement, with_acme, &[], &[(acme, "ACME CORP")]),
+                "Employment Agreement with Acme Corporation re Merger",
+                &["ACME CORP"],
+            ),
+            // A choice joined to a party the name still gives, or to
+            // another choice, by "&" or a comma is two parties, each filed
+            // as offered, not one longer party typed around the choice: it
+            // was filed in "Acme Corporation, Beacon Staffing LLC/", and
+            // reported beside Beacon Staffing LLC again.
+            (
+                record(agreement, (PartyRelation::With, &[beacon]), &[acme], &[]),
+                "Employment Agreement with Acme Corporation, Beacon Staffing LLC",
+                &[acme, beacon],
+            ),
+            (
+                record(agreement, (PartyRelation::With, &[beacon]), &[acme], &[]),
+                "Employment Agreement with Beacon Staffing LLC & Acme Corporation",
+                &[beacon, acme],
+            ),
+            (
+                record(agreement, with_acme, &[smith], &[]),
+                "Employment Agreement between John Smith & Acme Corporation",
+                &[smith, acme],
+            ),
+            (
+                record(
+                    agreement,
+                    (PartyRelation::With, &[beacon]),
+                    &[acme, smith],
+                    &[],
+                ),
+                "Employment Agreement between Acme Corporation & John Smith and Beacon Staffing LLC",
+                &[acme, smith, beacon],
+            ),
+            // A longer party typed around a choice, joined so to a party
+            // the name still gives, is that piece of the words, as typed:
+            // these were filed as the bare choice, in "John Smith/" and
+            // "Acme Corporation/".
+            (
+                record(agreement, (PartyRelation::With, &[beacon]), &[smith], &[]),
+                "Employment Agreement with Estate of John Smith & Beacon Staffing LLC",
+                &["Estate of John Smith", beacon],
+            ),
+            (
+                record(agreement, (PartyRelation::With, &[beacon]), &[acme], &[]),
+                "Employment Agreement with Acme Corporation Holdings & Beacon Staffing LLC",
+                &["Acme Corporation Holdings", beacon],
+            ),
+            (
+                record(agreement, (PartyRelation::With, &[beacon]), &[smith], &[]),
+                "Employment Agreement with Beacon Staffing LLC, Estate of John Smith",
+                &[beacon, "Estate of John Smith"],
+            ),
+            // A note's start that is a word of the party's own name - the
+            // reading knows the party, or a word that ends a company's name
+            // follows - is no note: these were filed in "Swiss/",
+            // "Munich/", "Everest/" and "Citizens/".
+            (
+                record(
+                    "Letter",
+                    (PartyRelation::To, &[acme]),
+                    &["Swiss Re Ltd"],
+                    &[],
+                ),
+                "Letter to Swiss Re Ltd",
+                &["Swiss Re Ltd"],
+            ),
+            (
+                record(
+                    "Letter",
+                    (PartyRelation::To, &[acme]),
+                    &["Swiss Re Ltd"],
+                    &[],
+                ),
+                "Letter to Swiss Re Ltd re Merger",
+                &["Swiss Re Ltd"],
+            ),
+            (
+                record("Letter", (PartyRelation::To, &[acme]), &[], &[]),
+                "Letter to Munich Re Group",
+                &["Munich Re Group"],
+            ),
+            (
+                record("Letter", (PartyRelation::To, &[acme]), &[], &[]),
+                "Letter to Munich Re Capital Limited",
+                &["Munich Re Capital Limited"],
+            ),
+            (
+                record("Letter", (PartyRelation::To, &[acme]), &[], &[]),
+                "Letter to Hannover Re Company re the Treaty",
+                &["Hannover Re Company"],
+            ),
+            (
+                record("Letter", (PartyRelation::To, &[acme]), &[], &[]),
+                "Letter to Everest Re Group Ltd re the Lease",
+                &["Everest Re Group Ltd"],
+            ),
+            (
+                record(
+                    "Letter",
+                    (PartyRelation::To, &[acme]),
+                    &["Citizens Concerning the Environment"],
+                    &[],
+                ),
+                "Letter to Citizens Concerning the Environment",
+                &["Citizens Concerning the Environment"],
+            ),
+            (
+                record(
+                    agreement,
+                    (PartyRelation::With, &["Swiss Reinsurance Company Ltd"]),
+                    &[],
+                    &[("Swiss Reinsurance Company Ltd", "Swiss Re")],
+                ),
+                "Employment Agreement with Swiss Re Ltd",
+                &["Swiss Re Ltd"],
+            ),
+            // As before: the choice beside the party kept, or in its place.
+            (
+                record(agreement, with_acme, &[smith], &[]),
+                "Employment Agreement between Acme Corporation and John Smith",
+                &[acme, smith],
+            ),
+            (
+                record(agreement, with_acme, &[smith], &[]),
+                "Employment Agreement with Estate of John Smith",
+                &["Estate of John Smith"],
+            ),
+            (
+                record(agreement, with_acme, &[smith], &[]),
+                "Employment Agreement with John Smith",
+                &[smith],
+            ),
+        ] {
+            let filed = filed(&record, approved);
+            if filed != parties {
+                failed.push(format!("{approved}: filed {filed:?}, not {parties:?}"));
+            }
+        }
+        assert!(failed.is_empty(), "{failed:#?}");
+    }
+
+    /// A spelling nobody had checked, taken out of the name by the person
+    /// who approved it ([`ProposalRecord::rejected_rules`]), is no party or
+    /// type the document is filed or reported under where the name gives
+    /// the document's own words instead, whatever follows them: a note,
+    /// another party, a parenthesis. A wrong "John Smith, Jane Doe" learned
+    /// for "John Smith" put every such correction in "John Smith, Jane
+    /// Doe/"; a type "Employment Agreement - Jane Doe" in a type folder of
+    /// that name. The same spellings checked stay the house's folder (see
+    /// the rows for "ACME CORP" above).
+    #[test]
+    fn a_spelling_taken_out_before_anyone_checked_it_is_not_what_is_filed() {
+        let agreement = "Employment Agreement";
+        let acme = "Acme Corporation";
+        let beacon = "Beacon Staffing LLC";
+        let smith = "John Smith";
+        let wrong = (smith, "John Smith, Jane Doe");
+        let between = (PartyRelation::Between, &[smith, acme][..]);
+        let with_smith = (PartyRelation::With, &[smith][..]);
+        let mut failed = Vec::new();
+        for (relation, rule, approved, parties) in [
+            (
+                between,
+                wrong,
+                "Employment Agreement between John Smith and Acme Corporation re Probate",
+                &[smith, acme][..],
+            ),
+            (
+                with_smith,
+                wrong,
+                "Employment Agreement with John Smith re Probate",
+                &[smith],
+            ),
+            (
+                with_smith,
+                wrong,
+                "Employment Agreement with John Smith from Jane Doe",
+                &[smith],
+            ),
+            (
+                with_smith,
+                wrong,
+                "Employment Agreement with John Smith (Executor)",
+                &[smith],
+            ),
+            (
+                with_smith,
+                wrong,
+                "Employment Agreement with John Smith and Beacon Staffing LLC",
+                &[smith, beacon],
+            ),
+            (
+                (PartyRelation::With, &[acme]),
+                (acme, "Acme Corporation aka Acme Holdings"),
+                "Employment Agreement with Acme Corporation re Merger",
+                &[acme],
+            ),
+        ] {
+            let mut record = record(agreement, relation, &[beacon], &[rule]);
+            record.rejected_rules = record.house_rules.clone();
+            let filed = filed(&record, approved);
+            if filed != parties {
+                failed.push(format!("{approved}: filed {filed:?}, not {parties:?}"));
+            }
+        }
+        // A type.
+        let mut record = record(agreement, with_smith, &[], &[]);
+        record.house_rules = vec![HouseRule::new(
+            RuleKind::DocumentType,
+            agreement,
+            "Employment Agreement - Jane Doe",
+        )];
+        record.filename =
+            compose_styled_filename(&record.styled_proposal(), &record.house_rules, "pdf", &[])
+                .value;
+        record.rejected_rules = record.house_rules.clone();
+        let filed = record.as_filed(
+            "pdf",
+            "2024-04-12 Employment Agreement with John Smith re Probate.pdf",
+        );
+        if filed.document_type.as_deref() != Some(agreement) {
+            failed.push(format!("type filed as {:?}", filed.document_type));
+        }
+        assert!(failed.is_empty(), "{failed:#?}");
+    }
+
+    /// A learned spelling nobody has checked is used on a record only where
+    /// its name shows it (see [`shown_rules`]): not for the third party of a
+    /// "between", which the name leaves out though the filing report gives
+    /// it, nor for a party left out as the person's own; but for a party the
+    /// name gives, beside it. Checked, it is used wherever it fires. A
+    /// record an earlier build composed with such a spelling is still held
+    /// for it (see [`ProposalRecord::holds_unchecked_spelling`]) until it is
+    /// composed again.
+    #[test]
+    fn a_spelling_nobody_checked_is_used_only_where_the_name_shows_it() {
+        let third = record(
+            "Employment Agreement",
+            (
+                PartyRelation::Between,
+                &["John Smith", "Acme Corporation", "Beacon Staffing LLC"],
+            ),
+            &[],
+            &[],
+        );
+        let joined = HouseRule::new(
+            RuleKind::Party,
+            "Beacon Staffing LLC",
+            "Beacon Staffing LLC and Jane Doe",
+        );
+        let short = HouseRule::new(RuleKind::Party, "Acme Corporation", "Acme");
+        let proposal = &third.analysis.proposal;
+        let used = |fired: &[&HouseRule], checked: bool| {
+            shown_rules(
+                proposal,
+                fired.iter().map(|rule| (*rule).clone()).collect(),
+                &[],
+                "pdf",
+                |_| checked,
+            )
+        };
+        assert_eq!(used(&[&joined], false), Vec::<HouseRule>::new());
+        assert_eq!(used(&[&joined], true), vec![joined.clone()]);
+        assert_eq!(used(&[&short, &joined], false), vec![short.clone()]);
+        assert_eq!(
+            shown_rules(
+                proposal,
+                vec![short.clone(), joined.clone()],
+                &[],
+                "pdf",
+                |rule| *rule == joined
+            ),
+            vec![short.clone(), joined.clone()],
+            "a checked one beside an unchecked one the name shows"
+        );
+
+        let own = HouseRule::new(RuleKind::Party, "Acme Corporation", "ACME CORPORATION");
+        assert_eq!(
+            shown_rules(
+                proposal,
+                vec![own.clone()],
+                &["Acme Corporation".into()],
+                "pdf",
+                |_| false
+            ),
+            Vec::<HouseRule>::new(),
+            "the person's own, left out"
+        );
+
+        let earlier = record(
+            "Employment Agreement",
+            (
+                PartyRelation::Between,
+                &["John Smith", "Acme Corporation", "Beacon Staffing LLC"],
+            ),
+            &[],
+            &[("Beacon Staffing LLC", "Beacon Staffing LLC and Jane Doe")],
+        );
+        assert!(
+            !earlier.filename.contains("Jane Doe"),
+            "the name leaves it out: {}",
+            earlier.filename
+        );
+        assert!(earlier.holds_unchecked_spelling("pdf", |_| false));
+        assert!(!earlier.holds_unchecked_spelling("pdf", |_| true));
+    }
+}
+
+#[cfg(test)]
+mod added_beside_tests {
+    use super::{added_beside, named_choices, spellings};
+
+    fn beside(chosen: &str, proposed: &str, approved: &str) -> Option<Vec<String>> {
+        let approved = format!("2024-04-12 {approved}.pdf");
+        added_beside(
+            &["Acme".to_owned()],
+            &[],
+            &named_choices(
+                vec![(chosen.to_owned(), spellings(chosen, &[]))],
+                "pdf",
+                &approved,
+            ),
+            "pdf",
+            &format!("2024-04-12 {proposed}.pdf"),
+            &approved,
+        )
+    }
+
+    /// A choice written beside the party the name gave first, which the
+    /// name still gives whole outside the choice's words, is filed with it,
+    /// in the order the name gives them; a choice that holds that party's
+    /// words, or a name that took the party out of its end while its type
+    /// still holds the same words, is no such choice.
+    #[test]
+    fn a_choice_beside_the_party_the_name_still_gives_is_filed_with_it() {
+        assert_eq!(
+            beside(
+                "John Smith",
+                "Lease with Acme",
+                "Lease between ACME and John Smith"
+            ),
+            Some(vec!["Acme".to_owned(), "John Smith".to_owned()])
+        );
+        assert_eq!(
+            beside(
+                "John Smith",
+                "Lease with Acme",
+                "John Smith Lease with Acme"
+            ),
+            Some(vec!["John Smith".to_owned(), "Acme".to_owned()])
+        );
+        assert_eq!(
+            beside(
+                "Trustee for Acme",
+                "Lease with Acme",
+                "Lease with Trustee for Acme"
+            ),
+            None
+        );
+        assert_eq!(
+            beside(
+                "John Smith",
+                "Acme Lease with Acme",
+                "Acme Lease with John Smith"
+            ),
+            None
+        );
+        assert_eq!(
+            beside(
+                "John Smith",
+                "Acme Lease with Acme",
+                "Acme Lease between Acme and John Smith"
+            ),
+            Some(vec!["Acme".to_owned(), "John Smith".to_owned()])
+        );
+        assert_eq!(
+            beside("John Smith", "Lease with Acme", "Lease with John Smith"),
+            None
+        );
+    }
 }
 
 #[cfg(test)]
@@ -6688,5 +9130,237 @@ mod failure_policy_tests {
             pause_reason_code("MODEL_REPLY_TRUNCATED", ErrorCode::ModelOutputInvalid),
             "MODEL_OUTPUT_INVALID"
         );
+    }
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use std::{path::Path, sync::Arc};
+
+    use intern_core::QueueStatus;
+    use intern_engine::{
+        DocumentAnalysis, DocumentSource, Evidence, ExtractProgress, HouseRule, PartyRelation,
+        RuleKind, ValidatedProposal, compose_styled_filename,
+    };
+    use rusqlite::{Connection, params};
+
+    use super::{
+        AnalyzerBoundary, ModelFailure, Pipeline, PipelineEventSink, PipelineProgress,
+        ProposalRecord, WorkerBoundary, WorkerFailure,
+    };
+    use crate::settings::SettingsStore;
+
+    /// Nothing is read here: the rows are written as a reading leaves them.
+    struct Unread;
+
+    impl WorkerBoundary for Unread {
+        fn extract(
+            &self,
+            _request_id: &str,
+            _path: &Path,
+            _progress: &mut dyn FnMut(ExtractProgress),
+        ) -> Result<DocumentSource, WorkerFailure> {
+            unreachable!("nothing is read")
+        }
+        fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+        fn restart(&self) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+    }
+
+    impl AnalyzerBoundary for Unread {
+        fn analyze(
+            &self,
+            _source: &DocumentSource,
+            _extension: &str,
+            _existing_names: &[&str],
+        ) -> Result<DocumentAnalysis, ModelFailure> {
+            unreachable!("nothing is read")
+        }
+    }
+
+    impl PipelineEventSink for Unread {
+        fn queue_changed(&self) {}
+        fn progress(&self, _progress: PipelineProgress) {}
+    }
+
+    /// A person approves a ready agreement in the moment between the
+    /// scheduler reading its record - unapproved, its name written by a
+    /// learned spelling nobody had checked - and putting it in review. The
+    /// approval stands: the row stays ready and approved, for the approval
+    /// to file. The scheduler put the record it had read in review, which
+    /// turned the approval back, and the window said the rename was applied
+    /// while the document waited in review.
+    #[test]
+    fn an_approval_made_while_the_scheduler_holds_the_row_stands() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join("queue.sqlite3");
+        let pipeline = Pipeline::with_local_files(
+            &database,
+            Arc::new(Unread),
+            Arc::new(Unread),
+            Arc::new(Unread),
+            SettingsStore::new(temp.path().join("settings.json")),
+        )
+        .unwrap();
+        let source = temp.path().join("a.pdf");
+        std::fs::write(&source, b"a.pdf").unwrap();
+        let id = pipeline.store.enqueue(&source, "hash").unwrap().id;
+
+        let mut record = ProposalRecord::synthetic(String::new(), String::new());
+        record.manual = false;
+        record.analysis.proposal = ValidatedProposal {
+            document_type: Some("Employment Agreement".into()),
+            document_date: Some("2024-04-12".into()),
+            date_role: None,
+            parties: vec!["John Smith".into(), "Acme Corporation".into()],
+            party_relation: PartyRelation::Between,
+            description: "An agreement.".into(),
+            confidence: 0.9,
+            evidence: Evidence::default(),
+        };
+        record.house_rules = vec![HouseRule::new(RuleKind::Party, "Acme Corporation", "Acme")];
+        record.filename =
+            compose_styled_filename(&record.styled_proposal(), &record.house_rules, "pdf", &[])
+                .value;
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, created_at, updated_at)
+                 VALUES ('party', 'acme corporation', 'Acme Corporation', 'Acme', 2, 1, 1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE queue_items SET status = 'ready' WHERE id = ?1",
+                params![id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO proposals(queue_item_id, proposal_json, created_at) VALUES (?1, ?2, 1)",
+                params![id, serde_json::to_string(&record).unwrap()],
+            )
+            .unwrap();
+
+        let item = pipeline.store.get(id).unwrap().unwrap();
+        let read = pipeline.repository.load_proposal(id).unwrap().unwrap();
+        pipeline
+            .repository
+            .approve_user_edit(
+                id,
+                QueueStatus::Ready,
+                &read.filename,
+                "Approved.",
+                Vec::new(),
+            )
+            .unwrap();
+        // Not filed by the scheduler's pass, which read it unapproved...
+        assert!(pipeline.held_for_unchecked_spelling(&item, &read).unwrap());
+        // ... but left to the approval that is filing it.
+        let stored = pipeline.repository.load_proposal(id).unwrap().unwrap();
+        assert!(stored.approved);
+        assert_eq!(stored.description, "Approved.");
+        assert_eq!(
+            pipeline.store.get(id).unwrap().unwrap().status,
+            QueueStatus::Ready
+        );
+    }
+
+    /// A person approves a waiting agreement in the moment between a
+    /// Settings save, or a spelling learned, used or checked, reading its
+    /// record to compose it again and writing it back - in review, or ready
+    /// and held by a spelling nobody has checked. The approval stands: the
+    /// name and sentence the person gave, the row ready for the approval to
+    /// file. The record composed from what the approval replaced was
+    /// written over it, unapproved, and the approval's filing then filed
+    /// Intern's name, or the row went back to review.
+    #[test]
+    fn an_approval_made_while_a_spelling_recomposes_the_row_stands() {
+        for (row, checked) in [("needs_review", 1), ("ready", 0)] {
+            let temp = tempfile::tempdir().unwrap();
+            let database = temp.path().join("queue.sqlite3");
+            let pipeline = Pipeline::with_local_files(
+                &database,
+                Arc::new(Unread),
+                Arc::new(Unread),
+                Arc::new(Unread),
+                SettingsStore::new(temp.path().join("settings.json")),
+            )
+            .unwrap();
+            let source = temp.path().join("a.pdf");
+            std::fs::write(&source, b"a.pdf").unwrap();
+            let id = pipeline.store.enqueue(&source, "hash").unwrap().id;
+
+            let mut record = ProposalRecord::synthetic(String::new(), String::new());
+            record.manual = false;
+            record.analysis.proposal = ValidatedProposal {
+                document_type: Some("Employment Agreement".into()),
+                document_date: Some("2024-04-12".into()),
+                date_role: None,
+                parties: vec!["John Smith".into(), "Acme Corporation".into()],
+                party_relation: PartyRelation::Between,
+                description: "An agreement.".into(),
+                confidence: 0.9,
+                evidence: Evidence::default(),
+            };
+            record.filename =
+                compose_styled_filename(&record.styled_proposal(), &[], "pdf", &[]).value;
+            let connection = Connection::open(&database).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, confirmed, confirmed_to, created_at, updated_at)
+                     VALUES ('party', 'acme corporation', 'Acme Corporation', 'Acme', 2, ?1, 'Acme', 1, 1)",
+                    params![checked],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE queue_items SET status = ?2 WHERE id = ?1",
+                    params![id, row],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO proposals(queue_item_id, proposal_json, created_at) VALUES (?1, ?2, 1)",
+                    params![id, serde_json::to_string(&record).unwrap()],
+                )
+                .unwrap();
+
+            let item = pipeline.store.get(id).unwrap().unwrap();
+            let read = pipeline.repository.load_proposal_json(id).unwrap().unwrap();
+            let approved = "2024-04-12 Employment Agreement with Acme Corporation.pdf";
+            pipeline
+                .repository
+                .approve_user_edit(id, item.status, approved, "Approved.", Vec::new())
+                .unwrap();
+            let spellings = pipeline.repository.spellings().unwrap();
+            assert!(
+                !pipeline
+                    .recompose_read(&spellings, &item, None, &read)
+                    .unwrap(),
+                "{row}"
+            );
+            let stored = pipeline.repository.load_proposal(id).unwrap().unwrap();
+            assert!(stored.approved, "{row}");
+            assert_eq!(stored.filename, approved, "{row}");
+            assert_eq!(stored.description, "Approved.", "{row}");
+            assert_eq!(stored.house_rules, Vec::new(), "{row}");
+            assert_eq!(
+                pipeline.store.get(id).unwrap().unwrap().status,
+                QueueStatus::Ready,
+                "{row}"
+            );
+
+            // Read after the approval, it is the person's and is left alone.
+            let item = pipeline.store.get(id).unwrap().unwrap();
+            assert!(
+                !pipeline.recompose(&spellings, &item, None).unwrap(),
+                "{row}"
+            );
+        }
     }
 }

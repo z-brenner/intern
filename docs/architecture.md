@@ -705,14 +705,221 @@ into the connector, and a diff would credit it all to one party.
 A rule takes effect on the second identical edit (`EDITS_TO_LEARN`), or at
 once when a person says "Use now" in Settings, and every document still
 waiting is recomposed under it so the queue shows the change immediately -
-every document but one whose name a person approved, the one just approved
-and one approved earlier that is waiting only for a busy queue alike. That
-name is the reviewer's own text and would lose whatever the validated facts
-do not carry, the date they typed with it most of all.
+every document but one whose name a person gave: the one just approved, one
+approved earlier that is waiting only for a busy queue, one whose filing
+failed and one whose rename they took back alike. That name is the
+reviewer's own text and would lose whatever the validated facts do not
+carry, the date they typed with it most of all. A recomposed record is
+written only over the record it was composed from, in the one transaction
+that checks the stored record is unchanged (`replace_proposal_if`), so an
+approval that lands between the read and the write stands and the
+recomposition leaves that document alone.
 Respelling a spelling Intern applied maps back to the document's word - the
 person changed their mind about the word, not about Intern - and restoring
 the document's own spelling retracts the rule. The whole memory is the list
 in Settings; nothing is learned that cannot be seen and forgotten there.
+
+A rule in force is still on probation until a person has checked it. The
+edits it is learned from are read for their wording, and four rounds of
+review kept finding wordings that read as a respelling but were a decision
+about one document - another party joined to the named one ("John Smith,
+Jane Doe"), a short form of another party, a note - each of which, learned,
+renamed every later document giving the word, ready ones filed without
+review. So every name a rule changes waits in review with
+`LEARNED_SPELLING_UNCONFIRMED`, never ready, until a person has checked the
+rule (`LearnedRule::confirmed`, counted in `house_rules.confirmed` for the
+spelling in `house_rules.confirmed_to`).
+
+A rule is checked only by a person's explicit word for it: "Use on its own"
+(`Pipeline::check_rule`). No approval checks a rule, on any document. An
+approval of a name the rule changed shows that the name is right for that
+document; it would show the rule right for every later one only where the
+document did not itself give the words the rule adds, and that cannot be
+read soundly from a document's text: attempts to read it kept missing words
+a document gave - a name OCR split ("J ane"), initials ("L. Smith"),
+look-alike letters from another script, an abbreviation, an OCR misreading,
+a header Intern does not read, a logo, a script written without spaces. So
+however many names a rule changed were approved, the next one waits again.
+
+"Use on its own" is offered in Settings, under Learned spellings, for every
+rule in force nobody has checked, and nowhere else. A held document's review
+panel says, under "Uses your spelling", that its name waits because Intern
+has not been told to use the spelling on its own, and that "Use on its own"
+is in Settings; it asks nothing and checks nothing. The review window does
+not ask because a word typed into a question there kept reaching review's
+own keys - J and K move review, the drawer puts the caret in a document's
+name, Enter files it - and a decision about every later document belongs in
+Settings, beside Use now and Forget. The question first says, in plain
+words, with the document's word and the spelling exactly as they are, that
+every later document Intern reads as naming the word (for a type: reads as
+that type) will be named with the spelling, and may be filed under that
+name without the person's check. Then it asks for the spelling to be typed
+(`UseOnItsOwnQuestion`): its yes stays disabled,
+and Enter in the field does nothing but say why, until what is typed is the
+spelling - the same letters and digits in the same order (`typedOut`). Both
+sides keep only their letters, marks and digits as written (a symbol such
+as ™ is none, though NFKD would spell it "TM", nor is an apostrophe written
+as a letter, ʻ, nor a variation selector); are decomposed (NFKD); lose the
+marks on Latin, Greek, Hebrew and Arabic letters - accents, and the vowel
+points those two scripts as a rule leave unwritten - and keep every other
+mark, which makes another letter or syllable (カ and ガ, И and Й, राम and
+रमा); are lower-cased; and spell the letters no decomposition takes apart
+as a keyboard without them does (ø as o, ß as ss, ł as l, æ as ae, ı as i;
+a final ς as σ). So case, accents, spaces and punctuation do not matter:
+"contoso ltd" is "Contoso Ltd.", "Soren" is "Søren", "Acme" is "Acme™";
+every letter and digit does, and so does a mark that makes another letter.
+A spelling with no letter or digit is typed exactly, spaces at its ends
+aside. Only typing fills the field: a paste, a drop, a suggestion taken, a
+yank, an undo and autofill are refused, and the field asks the browser for
+no suggestions. A key types one character, so text put in outside a
+composition is taken one character at a time, or as many at once as keys
+that type were pressed in the field since its last input: an input method
+that shows no composition commits what its keys spelled, but a word put in
+at once with no keys for it - an input method's or an on-screen keyboard's
+clipboard, an emoji keyboard - is refused. A key that types is a
+character's, an input method's (`Process`, `Unidentified`) or a dead key;
+an arrow, Enter, Home, Backspace, a function key, a modifier and a key held
+with Ctrl or Cmd type nothing and earn nothing - seven arrows, then a word
+put in at once, filled the field. Ctrl with Alt is AltGr on Windows, and
+types. Once the spelling is typed, the yes is an ordinary button, and Enter
+in the field answers.
+
+A check is for good, and the harm it can do is a wrong spelling - "John
+Smith" written as "John Smith, Jane Doe" - filed without review on every
+later document. Typing the spelling makes the person read it, letter by
+letter, and no press types. Earlier rounds let the yes take some presses
+and not others: not part of a double-click, not within half a second of the
+question, only from a pointer that had moved onto it. Each round found
+presses that got through - a slow double-click, a scroll or a change of
+layout that brought the yes under a still pointer, a tap through a menu, a
+window closing over the yes, a pointer that left the page - and the rules
+did not converge. Keys typed in the field stay there, but for Tab and
+Escape: Enter saves no settings. A press on the question's sentence or its
+waiting yes takes the focus off its field, so while a question asks, a
+character typed elsewhere in Settings, or with the focus on nothing, but not
+in another field, moves the focus into the question's field before anything
+else on the page sees the key, and the browser types it there. The space bar
+is left to press the button with the focus, and an input method's keys to
+the input method. While a question asks, no field changes but the one with
+the focus: the browser's undo and redo go to the field edited last,
+wherever the focus is, and take the focus there. Ctrl+Z in the question's
+field, before anything was typed in it, or after a press on its sentence
+took the focus from it, undid an unsaved setting and moved the focus into
+it, and the spelling typed next went into the setting. So while a question
+asks, every input aimed at a field without the focus is refused where the
+browser announces it (`beforeinput`, caught on the document): the undo and
+redo of the keys and of the editing menu among them. The same holds while
+Settings or Rename history is open (`useEditsOnlyInside`): an input aimed
+outside it is refused. Ctrl+Z in a field of Settings with nothing of its own
+to undo undid the review panel's Filename behind the dialog and put the
+caret in it, where Enter filed the document. And in every screen, with a
+question or without, an undo or a redo changes only the field with the
+focus (`useUndoOnlyWhereFocused`): in the review panel, Ctrl+Z in the
+Description, in the queue's filter or after a press on the panel's text
+undid the Filename's last edit and put the caret in it, and the next Enter
+filed the document under the name half undone; in Settings, once a question
+had been answered or taken back, Ctrl+Z on its row undid an unsaved
+setting, which Save then stored. Chromium keeps one undo history for the
+page, so a field's own undo waits until the edits made after it elsewhere
+are undone in their own fields; nothing is lost by the wait. A script's
+`execCommand('undo')` announces nothing and is not refused; no person sends
+one. The field starts empty for every question,
+and again if the spelling it asks about changes while it asks. Cancel and
+Escape take the question back. Escape takes back the question and nothing
+else - not Settings, with what was not saved - wherever the focus is in
+Settings, and the focus goes back to the action; closing the "Learned
+spellings" section takes back a question open in it. While a question asks,
+the other spellings' actions wait: a press on another "Use on its own"
+closed the question above it and opened the next under the pointer. Opened
+by a press, the question opens where the action was, sentence first, with
+the focus in its field, and nothing the press sets off moves what is under
+the pointer (`afterAPress`): Settings does not scroll until a key is
+pressed. Opened from the keyboard, it is brought into sight, and so it is by
+the first key typed into it after a press opened it: the spelling went into
+a field out of sight below Settings' body.
+
+Nothing behind Settings or Rename history takes the focus while it is open,
+so no key typed for it reaches the review window, whose keys move review on
+and file names. The window behind it - the header, the queue, the review
+panel or drawer, an update's note - is inert, out of reach of the focus, the
+keys and a screen reader, as the dialog says it is (`aria-modal`); and Tab
+and Shift+Tab go round the dialog's own controls from wherever the focus is
+(`tabWithin`), the focus on nothing included. A press on the dialog's
+heading or its backdrop left the focus on nothing, and Shift+Tab walked out
+to the review panel's Keep original, Approve & rename and Filename, or,
+narrow, to the queue's row and Rename all ready, where Enter filed documents
+with Settings still open. The queue put the focus back on Rename all ready
+behind Settings when the selected document left the queue by itself (its
+file taken from the Queue folder, or by another machine), and the space bar
+typed next renamed every ready document. A window made narrower opened the
+review drawer again under Settings, and the drawer put the caret in the
+document's name, where Enter, meant for the question, filed it. Once the
+dialog has closed, the focus goes back to what opened it.
+
+What a question cannot rule out is a person who means to fill the field
+without reading it. An input method can commit any text through a
+composition - its candidates can include its clipboard - and software that
+sends keys (dictation that types letter by letter, remote control, a
+macro) types. Each takes the person's own doing, and none is a stray
+press. Dictation that puts in a whole word at once, an assistive
+technology's "set value", and a touch keyboard's replacement are refused
+with the paste, so their users type the spelling.
+
+The command (`house_rule_check`) carries the rule's id and the spelling the
+person was shown - its kind, the document's word and the spelling - and the
+repository marks the rule checked, in one statement, only while it exists,
+is in force, and reads exactly that (`PipelineRepository::check_rule`): a
+rule forgotten is refused (`RULE_NOT_FOUND`) and taken out of the list
+Settings shows, and one not in force, or respelled or
+learned from other words since it was shown, is refused (`RULE_CHANGED`)
+and shown again as it now reads. Checking a rule approves
+and files nothing. The
+documents still waiting are restyled as after any change to the rules
+(`restyle_waiting`): the rule is used where their names did not show it, and
+a name held for it loses `LEARNED_SPELLING_UNCONFIRMED` but stays in review,
+since what else held it is not known there; it is filed when a person
+approves it. One check is enough: from then on the names the rule changes
+are filed like any other reading. "Use now" is no check: it puts a rule seen
+once in force, unchecked.
+
+A rule nobody has checked touches only what a person sees: it is used on a
+record only where the name shows it - the name composed with it gives its
+spelling and differs from the name composed without it (`shown_rules`). The
+folder and the filing report are read from the type and the parties, and a
+name can leave out a party a rule respells (a first party shed for length,
+the third of a "between"); such a rule is not used on that record at all,
+which is filed and reported under the checked rules' and the document's own
+words and is not held. So every name held with
+`LEARNED_SPELLING_UNCONFIRMED` shows the spelling it waits on, and no rule is
+left that no name could show a person. Once the rule is checked, it is used everywhere it fires, folder and report
+included: the documents still waiting are composed again then, and a name
+held for it loses the reason.
+
+Putting the document's own word back instead, with nothing else in the name
+changed, retracts the rule (one that changes another part too teaches
+nothing, and the rule stays unchecked), and a third spelling for the same
+word starts the count and the checks over; a release that does not know the
+checks respells without starting them over, so they count only while the
+rule writes the spelling checked. A document whose approved name takes out a
+spelling nobody had checked is filed and reported under the document's own
+words where the name gives them, whatever note or party follows them
+(`ProposalRecord::rejected_rules`); a checked spelling's folder stays the
+party's. The hold is decided wherever a name is composed under the rules in
+force: a new reading, Re-analyze, a validation again after an update, and
+the waiting documents a rule learned or used renames (a ready one goes to
+review in the same write that renames it); and no unapproved name a rule no
+person has checked changed is left ready, however the row came to be ready:
+the queue holds such rows when it opens and on every recovery pass, model or
+no model, paused or not, as well as before the scheduler files anything.
+Whether a row is held is decided again on its record as stored, in the
+transaction that puts it in review, so an approval made in that moment
+stands. Rules learned before alpha.18 were never checked, so after the update
+each of them waits for its check too; a ready row such a rule touched where
+its name does not show it is composed again when the queue opens, rather
+than held. A database a development build of alpha.18 used, when an approval
+could count as the check, starts every rule over unchecked as it opens. The
+wording rules still keep Intern from learning what they recognise; they are
+no longer what keeps a wrong name from being filed.
 
 ### Your organization
 

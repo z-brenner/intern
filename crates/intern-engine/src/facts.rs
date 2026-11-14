@@ -11890,11 +11890,12 @@ Glasswing Ceramics LLC is in default under the Loan Agreement dated March 3, 202
     }
 
     /// A title line that runs on into a case's number - "Re: Notice of
-    /// Civil Penalty Assessment and Order Case No. ..." - gives the title
-    /// without the word that labels the number, whether the reply stated
-    /// the title, the title with its number, or the bare kind the title
-    /// completes. A title's own word before its number stays: "Notice of
-    /// Contract Award No. 2025-15" is no "Notice of Contract".
+    /// Civil Penalty Assessment and Order Case No. ...", "... Case # ...",
+    /// "... Case #: ..." - gives the title without the word that labels the
+    /// number, whether the reply stated the title, the title with its
+    /// number, or the bare kind the title completes. A title's own word
+    /// before its number stays: "Notice of Contract Award No. 2025-15" is
+    /// no "Notice of Contract".
     #[test]
     fn a_title_cited_with_a_case_number_is_the_title_without_its_label() {
         const PENALTY: &str = "HARLOW BASIN WATER AUTHORITY\n700 Ridge Street, Suite 600\nMillbrook, OR 97232\n\n\
@@ -11908,6 +11909,9 @@ for failing to submit the required quarterly monitoring reports.";
 October 14, 2025\n\n\
 NOTICE OF CONTRACT AWARD NO. 2025-15\n\n\
 The County awards the contract for road resurfacing services to Basalt Paving Co.";
+        // The same number labelled with a "#" apart from its figure.
+        let hashed = PENALTY.replace("Case No. ", "Case # ");
+        let hashed_colon = PENALTY.replace("Case No. ", "Case #: ");
         for (text, cited, date, cited_date, stated, kind) in [
             (
                 PENALTY,
@@ -11917,6 +11921,30 @@ The County awards the contract for road resurfacing services to Basalt Paving Co
                 &[
                     "Notice of Civil Penalty Assessment and Order",
                     "Notice of Civil Penalty Assessment and Order Case No. WQ-SW-WR-2023-626",
+                    "Notice",
+                ][..],
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            (
+                hashed.as_str(),
+                "Re: Notice",
+                "2025-10-28",
+                "October 28, 2025",
+                &[
+                    "Notice of Civil Penalty Assessment and Order",
+                    "Notice of Civil Penalty Assessment and Order Case # WQ-SW-WR-2023-626",
+                    "Notice",
+                ][..],
+                "Notice of Civil Penalty Assessment and Order",
+            ),
+            (
+                hashed_colon.as_str(),
+                "Re: Notice",
+                "2025-10-28",
+                "October 28, 2025",
+                &[
+                    "Notice of Civil Penalty Assessment and Order",
+                    "Notice of Civil Penalty Assessment and Order Case #: WQ-SW-WR-2023-626",
                     "Notice",
                 ][..],
                 "Notice of Civil Penalty Assessment and Order",

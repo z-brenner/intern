@@ -1,5 +1,6 @@
 import { CircleCheck, ClipboardCopy, Ellipsis, PanelRight, Trash2 } from 'lucide-react';
 import { useDeferredValue, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { AppHeader } from './components/AppHeader';
 import { DropZone } from './components/DropZone';
 import { FolderSetupFlow } from './components/FolderSetupFlow';
@@ -19,6 +20,7 @@ import { describeActionError } from './lib/actionErrors';
 import type { RefusedAction } from './lib/actionErrors';
 import { describeAddReport } from './lib/addReport';
 import { installingLabel } from './lib/format';
+import { useUndoOnlyWhereFocused } from './lib/undoWhereFocused';
 import { describeQueueStop } from './lib/reasons';
 import type { DesktopBridge, LaunchReportSource, SelectionBoundary, SelectionResult, UpdateProgressListener, UpdateStatus } from './lib/bridge';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
@@ -85,6 +87,8 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
     });
     return () => { active = false; };
   }, [bridge, suppliedBridge, attempt]);
+  // In every screen, an undo or a redo changes only the field with the focus.
+  useUndoOnlyWhereFocused();
 
   // Its own landmark name: the screen that follows may be setup or the app, and
   // this placeholder must not be mistaken for either.
@@ -677,9 +681,22 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     catch (error) { setUpdateError(describeActionError(error)); setUpdateInstalling(false); }
   };
   const openSettings = (trigger: HTMLButtonElement) => { focusRestoreVersion.current += 1; settingsTrigger.current = trigger; setSettingsOpen(true); };
-  const closeSettings = () => { setSettingsOpen(false); settingsTrigger.current?.focus(); };
+  // The window behind a dialog is inert while it is open (`behindADialog`),
+  // so the focus goes back to what opened it once the dialog has closed.
+  const closeSettings = () => { flushSync(() => setSettingsOpen(false)); settingsTrigger.current?.focus(); };
   const openHistory = (trigger: HTMLButtonElement) => { focusRestoreVersion.current += 1; historyTrigger.current = trigger; setHistoryOpen(true); };
-  const closeHistory = () => { setHistoryOpen(false); historyTrigger.current?.focus(); };
+  const closeHistory = () => { flushSync(() => setHistoryOpen(false)); historyTrigger.current?.focus(); };
+  // While Settings or Rename history is open, nothing behind it can take the
+  // focus: not Tab or Shift+Tab after a press on the dialog's heading or its
+  // backdrop, not the queue putting the focus back on Rename all ready when
+  // the selected document leaves it by itself, not the review drawer opening
+  // again under the dialog when the window narrows and putting the caret in
+  // a document's name. Each took the keys typed in the dialog to the review
+  // window behind it, where the space bar, Enter or a typed spelling filed
+  // documents with the dialog still open. Inert, the window behind is out of
+  // reach of the focus, the keys and a screen reader, as the dialog says it
+  // is (aria-modal).
+  const behindADialog = settingsOpen || historyOpen;
   // Keep picker, drop resolution, import, and refresh in the same error and
   // busy boundary. A state-only lock misses two events before React rerenders.
   // Every add - the pickers, a drop, the drop zone - copies into the input
@@ -821,7 +838,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     {/* Settings has its own Updates section with the same information and its
        own Install button; showing both at once would be the same choice
        offered twice. */}
-    {!settingsOpen && updateStatus?.state === 'available' && updateStatus.version !== updateDismissed && <div className="note note--update" role="status" aria-label="Update available">
+    {!settingsOpen && updateStatus?.state === 'available' && updateStatus.version !== updateDismissed && <div className="note note--update" role="status" aria-label="Update available" inert={behindADialog || undefined}>
       <p>Intern {updateStatus.version} is available. You have {updateStatus.currentVersion}.</p>
       {updateError && <p role="alert">{updateError}</p>}
       <div className="update-actions">
@@ -830,10 +847,10 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       </div>
       {renameApplying && (!updateInstalling || updateProgress?.fraction === 1) && <p className="check-hint">Waiting for a rename to finish</p>}
     </div>}
-    <AppHeader inert={drawerOpen} busy={actionPending} paused={paused} inputFolder={inputName}
+    <AppHeader inert={drawerOpen || behindADialog} busy={actionPending} paused={paused} inputFolder={inputName}
       privacy={{ modelDownloaded: modelReady(model.setup), automaticUpdateChecks, lastUpdateCheck }}
       onSettings={openSettings} onHelp={() => void openGuide()} onAddFiles={addFiles} onAddFolder={addFolder} onTogglePause={() => void (async () => { if (await runQueueAction(() => paused ? bridge.resumeQueue() : bridge.pauseQueue(), `Queue ${paused ? 'resumed' : 'paused'}.`)) setPaused(!paused); })()} />
-    <div className="workspace"><section className="queue-panel" aria-label="Queue items" inert={drawerOpen || undefined}>
+    <div className="workspace" inert={behindADialog || undefined}><section className="queue-panel" aria-label="Queue items" inert={drawerOpen || undefined}>
       {queueError && <div className="note note--failed" role="alert" aria-label="Queue connection error">
         <p>{queueError.kind === 'subscription' ? 'Live queue updates are unavailable.' : 'The queue could not be refreshed.'} {describeActionError(queueError.cause)} {items.length > 0 ? 'Showing the last loaded items.' : 'Queue contents may not be available yet.'}</p>
         <button type="button" disabled={actionPending} onClick={reconnect}>Retry queue connection</button>

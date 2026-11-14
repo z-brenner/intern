@@ -983,7 +983,15 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     },
     houseRuleUse: async (id) => {
       if (!learnedRules.some((rule) => rule.id === id)) throw { code: 'RULE_NOT_FOUND', message: 'learned spelling does not exist' };
+      // In use, not checked: the first name it changes still waits for a person.
       learnedRules = learnedRules.map((rule) => rule.id === id ? { ...rule, seen: Math.max(rule.seen, 2), active: true } : rule);
+    },
+    houseRuleCheck: async (id, shown) => {
+      const rule = learnedRules.find((candidate) => candidate.id === id);
+      if (!rule) throw { code: 'RULE_NOT_FOUND', message: 'learned spelling does not exist' };
+      // Only the spelling the person was shown, exactly, in use.
+      if (!rule.active || rule.kind !== shown.kind || rule.from !== shown.from || rule.to !== shown.to) throw { code: 'RULE_CHANGED', message: 'learned spelling is not in use as it was shown' };
+      learnedRules = learnedRules.map((candidate) => candidate.id === id ? { ...candidate, confirmed: candidate.confirmed + 1 } : candidate);
     },
     ...(options.liveEvents ? {
       subscribeQueue: async (listener: (event: QueueBridgeEvent) => void) => {
@@ -1005,6 +1013,35 @@ export function createFixtureBatchBridge(): DesktopBridge {
 /** Seven scans, six of them undecided, for clearing a review queue from the keyboard. */
 export function createReviewBatchBridge(options: InMemoryBridgeOptions = {}): DesktopBridge {
   return createBridge({ items: reviewBatchItems, ...options }, false);
+}
+
+/**
+ * A statement of work held because two of the learned spellings its name
+ * used have not been checked, ahead of the demo's queue, for walking "Use on
+ * its own" in Settings and what the review panel says of such a name: the
+ * browser build's `?learnedSpellings=held`.
+ */
+const heldForSpelling: QueueItem = {
+  id: 'sow', originalFilename: 'SOW final v3.pdf', status: 'review', confidence: 0.93,
+  proposedFilename: '2026-04-01 SOW between Ridgeline Cartography and Contoso.pdf',
+  description: 'Statement of work between Ridgeline Cartography LLC and Contoso Worldwide, Inc. for the 2026 member-map engagement.',
+  evidence: { date: 'effective as of April 1, 2026', type: 'STATEMENT OF WORK', parties: 'Ridgeline Cartography LLC; Contoso Worldwide, Inc.' },
+  errorCode: 'LEARNED_SPELLING_UNCONFIRMED', reasonCodes: ['LEARNED_SPELLING_UNCONFIRMED'], reason: humanizeReason('LEARNED_SPELLING_UNCONFIRMED'),
+  houseRules: [
+    { kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso' },
+    { kind: 'party', from: 'Ridgeline Cartography LLC', to: 'Ridgeline Cartography' },
+    { kind: 'document_type', from: 'Statement of Work', to: 'SOW' },
+  ],
+};
+
+const heldForSpellingRules: LearnedRule[] = [
+  { id: '1', kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso', seen: 2, active: true, confirmed: 0, learnedAt: 1775001600 },
+  { id: '2', kind: 'party', from: 'Ridgeline Cartography LLC', to: 'Ridgeline Cartography', seen: 2, active: true, confirmed: 0, learnedAt: 1775001700 },
+  { id: '3', kind: 'document_type', from: 'Statement of Work', to: 'SOW', seen: 2, active: true, confirmed: 1, learnedAt: 1775001800 },
+];
+
+export function createLearnedSpellingBridge(): DesktopBridge {
+  return createBridge({ items: [heldForSpelling, ...seedItems], learnedRules: heldForSpellingRules }, false);
 }
 
 type BrowserFile = File & { webkitRelativePath?: string };

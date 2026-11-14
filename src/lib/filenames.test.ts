@@ -23,6 +23,8 @@ describe('withLeadingDate', () => {
     expect(withLeadingDate('2025-01-01 Invoice from Acme.pdf', '2026-03-02')).toBe('2026-03-02 Invoice from Acme.pdf');
     expect(withLeadingDate('2025-01-01 - Invoice.pdf', '2026-03-02')).toBe('2026-03-02 Invoice.pdf');
     expect(withLeadingDate('   ', '2026-03-02')).toBe('2026-03-02');
+    expect(withLeadingDate('2012-6-1 Request Letter.pdf', '2012-06-19')).toBe('2012-06-19 Request Letter.pdf');
+    expect(withLeadingDate('2012-06-1234 Notice.pdf', '2012-06-19')).toBe('2012-06-19 2012-06-1234 Notice.pdf');
   });
 });
 

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import type { QueueItem } from '../../types';
 import { itemActions } from './actions';
+import { isTextField } from '../../lib/textField';
 
 /**
  * What the review panel does when a shortcut asks. The panel owns the name
@@ -35,15 +36,6 @@ export interface ReviewShortcutOptions {
   selectionSpansRows?(): boolean;
   /** Delete was pressed with cells of several rows selected, and did nothing: say why. */
   onDeleteRefused?(): void;
-}
-
-const NOT_TEXT = new Set(['button', 'checkbox', 'radio', 'submit', 'reset', 'range', 'color', 'file', 'image']);
-
-/** Somewhere typing goes into a field, where a letter is a letter and not a command. */
-function isTextField(target: Element | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
-  return target instanceof HTMLInputElement && !NOT_TEXT.has(target.type);
 }
 
 /**

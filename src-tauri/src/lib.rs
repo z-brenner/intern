@@ -192,6 +192,7 @@ pub fn run() {
             commands::house_rules_list,
             commands::house_rule_forget,
             commands::house_rule_use,
+            commands::house_rule_check,
         ]))
         .build(tauri::generate_context!())
         .expect("error while running Intern")

@@ -1,6 +1,6 @@
 import { Ban, CalendarPlus, CircleAlert, ChevronRight, ClipboardCopy, Ellipsis, ExternalLink, FileCheck2, FileText, FolderOpen, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
 import { useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
-import type { KeyboardEvent, MouseEvent, Ref } from 'react';
+import type { FocusEvent, KeyboardEvent, MouseEvent, Ref } from 'react';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
@@ -11,6 +11,7 @@ import type { ReasonField } from '../lib/reasons';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
 import type { ModelReading, QueueItem } from '../types';
+import { afterAPress } from '../lib/lastInput';
 
 /**
  * Below this the model's own figure already says it was unsure, and is by
@@ -147,7 +148,24 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     setAnalysisOpen(open);
     try { window.localStorage.setItem(ANALYSIS_DETAILS_KEY, open ? 'open' : 'closed'); } catch { /* Not remembered; it still opens now. */ }
   };
+  const filenameRef = useRef<HTMLTextAreaElement>(null);
+  const descriptionRef = useRef<HTMLTextAreaElement>(null);
+  // The name's field and the description's are one item's, and one
+  // revision's: each is keyed by the draft (below), so the browser's undo
+  // steps go with the field they were made in. One field served every item,
+  // and an undo step could outlive its item: once the field's whole text
+  // had been replaced - by a party chip, or by Ctrl+A and typing or Delete -
+  // Ctrl+Z in the next document's field put the last one's old text after
+  // its own (Chromium; WebView2 is Chromium). In the name that was one
+  // Enter from filing; in the description, another matter's sentence went
+  // into this document's record, the description ledger and the shared
+  // filed index. A caret in the old field moves to the new one, at the end,
+  // where the reused field had it.
+  const nameHadFocus = useRef(false);
+  const descriptionHadFocus = useRef(false);
   if (draft.for !== draftFor) {
+    nameHadFocus.current = filenameRef.current !== null && document.activeElement === filenameRef.current;
+    descriptionHadFocus.current = descriptionRef.current !== null && document.activeElement === descriptionRef.current;
     const kept = draft.edited ? new Map(setAside).set(draft.for, draft) : setAside;
     if (kept !== setAside) setSetAside(kept);
     setDraft(kept.get(draftFor) ?? { for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false });
@@ -162,13 +180,35 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   const setStem = (value: string) => setDraft((current) => ({ ...current, stem: value, edited: true }));
   const setDescription = (value: string) => setDraft((current) => ({ ...current, description: value, edited: true }));
   const inspectorRef = useRef<HTMLElement>(null);
-  const filenameRef = useRef<HTMLTextAreaElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
   const fieldId = useId();
   useEffect(() => { if (confirmingRemove) confirmRef.current?.focus(); }, [confirmingRemove]);
+  // Text with a line break - a cell copied from a spreadsheet, a line from a
+  // document - goes into the name with a space for each break, as typed,
+  // through the browser's editing command. Pasted as it was, the field held
+  // the break until the change set the name from code, and Chromium's undo
+  // of that paste then put the old name after the new one: Ctrl+A, paste
+  // "2024-02-01 Engagement Letter with Contoso\r\n", Ctrl+Z gave "2024-02-01
+  // Engagement Letter with Contoso 2024-02-01 Engagement Letter with
+  // Northwind Traders", one Enter from filing. Registered on each render,
+  // so the field of the draft on screen has it.
+  useLayoutEffect(() => {
+    const field = filenameRef.current;
+    if (!field) return;
+    const asTyped = (event: InputEvent) => {
+      const text = event.data ?? event.dataTransfer?.getData('text/plain') ?? null;
+      if (text === null || !/[\r\n]/.test(text) || typeof document.execCommand !== 'function') return;
+      event.preventDefault();
+      if (document.execCommand('insertText', false, withoutLineBreaks(text))) return;
+      editStem(withoutLineBreaks(`${field.value.slice(0, field.selectionStart)}${text}${field.value.slice(field.selectionEnd)}`));
+    };
+    field.addEventListener('beforeinput', asTyped);
+    return () => field.removeEventListener('beforeinput', asTyped);
+  });
   // The More menu closes on a press anywhere outside it, as the toolbar's
   // does. It used to stay open over the panel until its own button was
   // pressed again or one of its actions taken.
@@ -191,7 +231,35 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     if (!field || typeof CSS === 'undefined' || CSS.supports?.('field-sizing', 'content')) return;
     field.style.height = 'auto';
     field.style.height = `${field.scrollHeight}px`;
-  }, [stem]);
+  }, [stem, draft.for]);
+  useLayoutEffect(() => {
+    const field = nameHadFocus.current ? filenameRef.current : descriptionHadFocus.current ? descriptionRef.current : null;
+    nameHadFocus.current = false;
+    descriptionHadFocus.current = false;
+    if (!field) return;
+    field.focus();
+    field.setSelectionRange(field.value.length, field.value.length);
+  }, [draft.for]);
+  // The decision sticks to the bottom of the panel over whatever scrolls
+  // under it, and the browser scrolls a focused control into view only when
+  // none of it is in the panel, under the buttons or not. A control focused
+  // under them, or half under them, stayed there: "Analysis details" reached
+  // by Tab. A control focused from the keyboard is scrolled clear of the
+  // buttons, however tall they are now, never so far that its top leaves
+  // the panel. After a press nothing is scrolled until a key is pressed
+  // (`afterAPress`): not the control the press focused, so that the press
+  // lands on what was pressed, and nothing else a press sets off moves what
+  // is under the pointer for the press that comes next.
+  const keepFocusInSight = (event: FocusEvent<HTMLElement>) => {
+    const panel = inspectorRef.current;
+    const decision = actionsRef.current;
+    const focused = event.target;
+    if (afterAPress() || !panel || !decision || decision.offsetHeight === 0 || decision.contains(focused)) return;
+    const box = focused.getBoundingClientRect();
+    const under = box.bottom + 12 - decision.getBoundingClientRect().top;
+    const room = box.top - 12 - panel.getBoundingClientRect().top;
+    if (under > 0 && room > 0) panel.scrollTop += Math.min(under, room);
+  };
   useEffect(() => {
     if (!drawer) return;
     const filenameInput = filenameRef.current;
@@ -211,6 +279,28 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   };
   const approve = () => submit(stem);
   const editStem = (value: string) => { setStem(value); setError(stemProblem(value, extension, sourceExtension) ?? ''); };
+  // A name a click puts in - a party chip, a date - goes in as typing would,
+  // through the browser's own editing command, so one Ctrl+Z in the name
+  // gives back what the click replaced. A value set from code empties the
+  // field's undo history, and a party the reviewer had corrected by hand
+  // could only be typed again. Only the words that differ are replaced, not
+  // the whole text: Chromium's undo of a whole-text replacement puts the
+  // old text back after whatever the field holds by then, so after a click
+  // that set the name from code - a date chip did, until it came here too -
+  // Ctrl+Z gave the name with its old self after it, one Enter from filing.
+  // Where the command is missing or refused (jsdom has none), or leaves
+  // anything but the new name, the value is set from code. The caret stays
+  // in the name, at the end, where Enter files it.
+  const typeName = (next: string) => {
+    const field = filenameRef.current;
+    field?.focus();
+    if (next === stem) return;
+    const { start, end, text } = changedWords(stem, next);
+    field?.setSelectionRange(start, end);
+    const typed = field !== null && document.activeElement === field && typeof document.execCommand === 'function' && document.execCommand('insertText', false, text);
+    if (!typed || field.value !== next) editStem(next);
+    else field.setSelectionRange(next.length, next.length);
+  };
   // The model's date, when Intern could not find it written in the document
   // and so left it out of the name. Offered until the name carries a date.
   const suggestedDate = item.suggestedDate && !dated ? item.suggestedDate : undefined;
@@ -218,7 +308,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // was pressed with it: focus fell to nothing, and a keyboard user had to
   // find the panel again to file the name they had just completed. It goes
   // to the name, which now starts with that date; Enter there files it.
-  const putDate = (date: string) => { editStem(withLeadingDate(stem, date)); filenameRef.current?.focus(); };
+  const putDate = (date: string) => typeName(withLeadingDate(stem, date));
   const useSuggestedDate = () => putDate(suggestedDate!);
   const acceptSuggestedDate = () => submit(withLeadingDate(stem, suggestedDate!));
   // When the name has no date and the model offered none worth showing, the
@@ -228,25 +318,12 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   const chooseDate = putDate;
   // The other parties the document names, when the name gives the wrong
   // one: a click puts one in place of the party the name gives - which
-  // used to mean retyping fifteen to forty characters - and the caret stays
-  // in the name, where Enter files it. The one the name now gives is
-  // pressed. The new name goes in as typing would, through the browser's
-  // own editing command, so one Ctrl+Z in the name gives back what the
-  // click replaced. A value set from code empties the field's undo
-  // history, and a party the reviewer had corrected by hand, once a chip
-  // replaced it, could only be typed again. Where the command is missing
-  // or refused (jsdom has none), the value is set from code.
+  // used to mean retyping fifteen to forty characters - as typed (see
+  // typeName), and the caret stays in the name, where Enter files it. The
+  // one the name now gives is pressed.
   const partyChoices = item.partyChoices ?? [];
   const partyOffer = { proposed: proposedStem, nameParties: item.nameParties ?? [], choices: partyChoices };
-  const chooseParty = (party: string) => {
-    const next = withParty(stem, party, partyOffer);
-    const field = filenameRef.current;
-    field?.focus();
-    if (next === stem) return;
-    field?.select();
-    const typed = field !== null && document.activeElement === field && typeof document.execCommand === 'function' && document.execCommand('insertText', false, next);
-    if (!typed) editStem(next);
-  };
+  const chooseParty = (party: string) => typeName(withParty(stem, party, partyOffer));
   const partyInName = partyChoices.length > 0 ? partyGiven(stem, partyOffer) : undefined;
   // Enter files the name, as it does in any one-line field; the IME's Enter
   // that ends a composition is left to the IME. A held Enter repeats, and
@@ -288,6 +365,8 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // item's can be, since approving it checks its files first.
   const editable = actions.approve;
   const omitted = item.omittedParties ?? [];
+  // Held because a learned spelling nobody has checked changed the name.
+  const heldForSpelling = item.status === 'review' && itemReasonCodes(item).includes('LEARNED_SPELLING_UNCONFIRMED');
   const completed = item.status === 'completed';
   const filedAs = item.filedName ?? item.proposedFilename;
   const remove = actions.remove;
@@ -342,7 +421,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // The parts of the name being edited that the review is about, as they now read.
   const nameFlags = editable ? flaggedNameParts(joinFilename(stem, extension), flagged) : [];
   const reviewNote = item.reason && (item.status === 'review' || item.status === 'failed');
-  return <aside ref={inspectorRef} id={id} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown}>
+  return <aside ref={inspectorRef} id={id} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown} onFocus={keepFocusInSight}>
     {/* A filed document's name is no longer its "current" one; it said so anyway (FRONTEND_UX-8). */}
     {/* Focusable so selecting a row can bring a keyboard user here, past the rest of the queue. */}
     <div className="inspector-title"><h2 ref={headingRef} tabIndex={-1}>{completed ? 'Filed document' : 'Review item'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close review"><Icon icon={X} /></button></div>
@@ -388,7 +467,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       <h3>{unreadable ? 'Name it yourself' : 'Proposed rename'}</h3>
       <label className="filename-label">Filename
         <span className="filename-field">
-          <textarea ref={filenameRef} aria-label="Filename" className="filename-input" rows={1} spellCheck={false} autoComplete="off" value={stem}
+          <textarea key={draft.for} ref={filenameRef} aria-label="Filename" className="filename-input" rows={1} spellCheck={false} autoComplete="off" value={stem}
             onChange={(event) => editStem(withoutLineBreaks(event.target.value))} onKeyDown={onFilenameKeyDown}
             aria-invalid={Boolean(error)} aria-describedby={[extension !== undefined ? `${fieldId}-extension` : '', error ? `${fieldId}-error` : ''].filter(Boolean).join(' ') || undefined} />
           {extension !== undefined && <span className="filename-extension" title="The extension stays as it is" aria-hidden="true">.{extension}</span>}
@@ -404,10 +483,22 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         A name that differs from the evidence under it looks like a mistake
         unless the reason is on screen: the reviewer's own spelling, learned
         from their edits, was applied. Said here, beside the name, with the
-        document's words kept in the evidence below.
+        document's words kept in the evidence below. A spelling ending in
+        its own period ("Inc.") ends the list without a second one. Settings
+        forgets a spelling; it has no way to change one, so the note does
+        not say it has.
       */}
       {item.houseRules && item.houseRules.length > 0 && <p className="check-hint house-style-hint" role="note" aria-label="Learned spellings applied">
-        Uses your spelling: {item.houseRules.map((rule, index) => <span key={`${rule.kind}-${rule.from}`}>{index > 0 ? '; ' : ''}<q>{rule.from}</q> written as <strong>{rule.to}</strong></span>)}. Change or forget it under Settings.
+        Uses your spelling: {item.houseRules.map((rule, index) => <span key={`${rule.kind}-${rule.from}`}>{index > 0 ? '; ' : ''}<q>{rule.from}</q> written as <strong>{rule.to}</strong></span>)}{item.houseRules[item.houseRules.length - 1].to.trimEnd().endsWith('.') ? '' : '.'} {item.houseRules.length === 1 ? 'Forget it' : 'Forget any of them'} in Settings, under Learned spellings.
+      </p>}
+      {/*
+        A name held for a spelling nobody has checked says why it waits, and
+        where "Use on its own" is: in Settings only. The review window asks
+        no question and checks no spelling - a word typed into a question
+        here reached review's own keys, which move on and file names.
+      */}
+      {heldForSpelling && item.houseRules && item.houseRules.length > 0 && <p className="check-hint held-spelling-hint" role="note" aria-label="Why the name waits">
+        This name waits for you because Intern has not been told to use {item.houseRules.length === 1 ? 'this spelling' : 'every one of these spellings'} on its own: <q>Use on its own</q> is in Settings, under Learned spellings.
       </p>}
       {/*
         The same for a party the evidence names and the name does not: the
@@ -445,7 +536,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
           <button type="button" className="primary" disabled={busy} onClick={decides(acceptSuggestedDate)}>Use date &amp; rename</button>
         </div>
       </div>}
-      <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+      <label>Description<textarea key={draft.for} ref={descriptionRef} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
       {flagged.includes('description') && <p className="flag-line" role="note" aria-label="Part of the name to check">Check the description against the document.</p>}
     </section>}
     {/*
@@ -513,7 +604,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       */}
       {item.nearDuplicateOf && <p className="near-duplicate" aria-label="Filed already as">Filed already as <q>{item.nearDuplicateOf}</q>.</p>}
     </section>}
-    <div className="inspector-actions">
+    <div ref={actionsRef} className="inspector-actions">
       {confirmingRemove && remove ? <div className="remove-confirm" role="group" aria-label="Confirm removal" onKeyDown={(event) => {
         // Escape takes back the question, not the whole drawer.
         if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelRemove(); }
@@ -578,4 +669,24 @@ function listOf(words: string[]): string {
 /** The flagged parts of a name, one per field, in the order the name reads. */
 function flaggedNameParts(name: string, flagged: readonly ReasonField[]): Array<{ field: ReasonField; text: string }> {
   return nameParts(name, flagged).flatMap((part) => part.flagged && part.field && part.text.trim() ? [{ field: part.field, text: part.text }] : []);
+}
+
+/**
+ * Where two names differ: the span of `from`, `start` to `end`, that `text`
+ * takes the place of to make `to`. The words both share at the start and at
+ * the end are left out, whole: the span begins and ends at a space or at an
+ * end of `from`, so it splits no character - a letter and its accent, or a
+ * character of two code units. Chromium's editing never splits one, and
+ * given a span that does, edits another span than the one meant.
+ */
+function changedWords(from: string, to: string): { start: number; end: number; text: string } {
+  let start = 0;
+  while (start < from.length && start < to.length && from[start] === to[start]) start += 1;
+  // `end` is where the shared ending begins in `from`; `to.length - (from.length - end)` is where it begins in `to`.
+  let end = from.length;
+  while (end > start && to.length - (from.length - end) > start && from[end - 1] === to[to.length - (from.length - end) - 1]) end -= 1;
+  const boundary = (at: number) => at === 0 || at === from.length || from[at - 1] === ' ' || from[at] === ' ';
+  while (!boundary(start)) start -= 1;
+  while (!boundary(end)) end += 1;
+  return { start, end, text: to.slice(start, to.length - (from.length - end)) };
 }

@@ -662,15 +662,31 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
   .inspector { width: min(370px, 100vw); }
 }
 
-/* Spellings Intern has learned: one row per rule, the change in the middle, its state and actions at the end. */
+/* Spellings Intern has learned: one row per rule, the kind and the change on the first line, its state and actions under the change. The list sits in a dialog about 410px wide at every window size, where state and actions beside the change ran past the dialog's edge and cut off "Forget". */
 .learned-rules { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 8px; }
-.learned-rules li { display: grid; grid-template-columns: auto 1fr auto auto; gap: 12px; align-items: center; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-subtle); font-size: 13px; }
-.learned-rules q, .house-style-hint q, .own-names-hint q { font-style: normal; }
+.learned-rules li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; align-items: center; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-subtle); font-size: 13px; }
+.learned-rules .rule-change { overflow-wrap: anywhere; }
+.learned-rules .rule-state, .learned-rules .rule-actions { grid-column: 2; }
+.learned-rules q, .house-style-hint q, .held-spelling-hint q, .own-names-hint q { font-style: normal; }
 .rule-kind { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-soft); }
 .rule-state { font-size: 12px; color: var(--text-soft); white-space: nowrap; }
-.rule-actions { display: flex; gap: 6px; }
+.rule-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .rule-actions button { min-height: 30px; padding: 0 10px; }
-@media (max-width: 640px) { .learned-rules li { grid-template-columns: auto 1fr; } .rule-state, .rule-actions { grid-column: 2; } }
+.rule-actions button:disabled { opacity: .5; cursor: default; }
+/* The question "Use on its own" asks: what it does, the field the spelling is typed into, then its yes and Cancel. */
+.learned-rules .rule-confirm { grid-column: 1 / -1; }
+.rule-confirm { display: grid; gap: 6px; }
+.rule-confirm p { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+.rule-confirm q { font-weight: 600; }
+.rule-confirm .rule-confirm-field { display: block; margin: 0; font-size: 12.5px; font-weight: 400; color: var(--text); overflow-wrap: anywhere; }
+.rule-confirm .rule-confirm-field input { margin-top: 4px; padding: 5px 8px; font-size: 13px; }
+.rule-confirm .rule-confirm-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Said after an Enter the field did not answer; empty, it takes no room, and a screen reader still hears what comes into it. */
+.rule-confirm .rule-confirm-not-yet { display: block; font-size: 12px; line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
+.rule-confirm .rule-confirm-not-yet:empty { margin-top: -6px; }
+.rule-confirm button { min-height: 30px; padding: 0 10px; }
+.rule-confirm button:disabled { opacity: .5; cursor: default; }
+.learned-rules li:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* The filing a near-duplicate repeats, under the reason for review. */
 .near-duplicate { margin: 8px 0 0; font-size: 13px; }

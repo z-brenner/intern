@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { App } from './App';
-import { createBrowserSelectionBoundary, createFixtureBatchBridge, createInMemoryBridge, createReviewBatchBridge } from './lib/inMemoryBridge';
+import { createBrowserSelectionBoundary, createFixtureBatchBridge, createInMemoryBridge, createLearnedSpellingBridge, createReviewBatchBridge } from './lib/inMemoryBridge';
 import { TauriBridge, createTauriSelectionBoundary, isTauriRuntime } from './lib/tauriBridge';
 import { WhatsNew } from './features/updates/WhatsNew';
 import packageInfo from '../package.json';
@@ -27,6 +27,8 @@ function browserBridge() {
   if (import.meta.env.DEV && params.get('update') === 'available') return createInMemoryBridge({ update: { state: 'available', currentVersion: '0.1.0', version: '0.2.0' } });
   // A morning's scans to clear from the keyboard, six of them undecided.
   if (import.meta.env.DEV && params.get('reviewBatch') === '1') return createReviewBatchBridge();
+  // A document held for learned spellings nobody has checked.
+  if (import.meta.env.DEV && params.get('learnedSpellings') === 'held') return createLearnedSpellingBridge();
   return undefined;
 }
 

@@ -151,6 +151,38 @@ describe('another party put in a name', () => {
       .toBe('2012-06-19 Request Letter to STARS Alliance LLC');
   });
 
+  /*
+    A known party at the start of the party's words says where the party
+    starts, not where it ends. "Smith" completed by hand to "Smith and Sons,
+    Inc." is a party, and the words after "Smith" are the rest of it: kept,
+    they gave "Letter to Jones LLP and Sons, Inc.", one Enter from filing,
+    and a pressed chip for "Smith" that changed nothing when clicked.
+  */
+  it('replaces a party lengthened by hand whole, and keeps only a note typed after a known one', () => {
+    const smith = offer('2020-01-02 Letter to Smith', ['Smith'], ['Jones LLP']);
+    expect(withParty('2020-01-02 Letter to Smith and Sons, Inc.', 'Jones LLP', smith)).toBe('2020-01-02 Letter to Jones LLP');
+    expect(withParty('2020-01-02 Letter to Smith & Sons re: Merger', 'Jones LLP', smith)).toBe('2020-01-02 Letter to Jones LLP');
+    const court = offer('2020-01-02 Notice to Court', ['Court'], ['State of Ohio']);
+    expect(withParty('2020-01-02 Notice to Court of Appeals', 'State of Ohio', court)).toBe('2020-01-02 Notice to State of Ohio');
+    const notice = offer('2020-01-02 Notice between A Corp and B Inc', ['A Corp', 'B Inc'], ['C LLC']);
+    expect(withParty('2020-01-02 Notice between A Corp and B Inc Holdings', 'C LLC', notice)).toBe('2020-01-02 Notice between A Corp and C LLC');
+    // A party an earlier click put in, lengthened by hand.
+    const invoice = offer('2023-10-05 Invoice', [], ['Acme', 'Beta LLC']);
+    expect(withParty('2023-10-05 Invoice - Acme Corp', 'Beta LLC', invoice)).toBe('2023-10-05 Invoice - Beta LLC');
+    // Only the longest known party is read: not "Smith" and a note " (UK) Ltd".
+    const uk = offer('2020-01-02 Letter to Smith', ['Smith'], ['Smith (UK)', 'Jones LLP']);
+    expect(withParty('2020-01-02 Letter to Smith (UK) Ltd', 'Jones LLP', uk)).toBe('2020-01-02 Letter to Jones LLP');
+    expect(partyGiven('2020-01-02 Letter to Smith (UK) Ltd', uk)).toBeUndefined();
+    // No chip is pressed for the known words the party starts with.
+    expect(partyGiven('2020-01-02 Letter to Smith and Sons, Inc.', smith)).toBeUndefined();
+    expect(partyGiven('2023-10-05 Invoice - Acme Corp', invoice)).toBeUndefined();
+    // A note about the document after a known party still stays, and its chip is pressed.
+    for (const note of [' re Merger', ' Re: Merger', ' regarding the Merger', ' about Merger', ' concerning Merger', ' - signed', ' (signed)']) {
+      expect(withParty(`2020-01-02 Letter to Smith${note}`, 'Jones LLP', smith), note).toBe(`2020-01-02 Letter to Jones LLP${note}`);
+      expect(partyGiven(`2020-01-02 Letter to Smith${note}`, smith), note).toBe('Smith');
+    }
+  });
+
   it('reads the party a name gives as withParty does, words typed after it or not', () => {
     const letter = offer('2012-06-19 Request Letter to U.S. Department of Justice', ['U.S. Department of Justice'], ['Morgan, Lewis & Bockius LLP']);
     expect(partyGiven('2012-06-19 Request Letter to Morgan, Lewis & Bockius LLP (2)', letter)).toBe('Morgan, Lewis & Bockius LLP');

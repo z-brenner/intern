@@ -121,6 +121,24 @@ describe('humanizeReason', () => {
     expect(humanizeReason('LOW_CONFIDENCE, NEAR_DUPLICATE')).toContain('filed already');
   });
 
+  // A name a learned spelling changed waits for a person until they choose
+  // "Use on its own" for the spelling: the sentence says why, and what to do
+  // either way - approve a right name, and choose Use on its own in
+  // Settings to stop being asked, or put the document's word back. It does not say an
+  // approval checks the spelling: none does. Nor does it promise a put-back
+  // forgets the spelling whatever else changed: one made with another part
+  // of the name changed teaches nothing (tests/pipeline.rs
+  // the_documents_own_word_put_back_is_no_check_of_the_rule).
+  it('says a name a learned spelling changed waits until the spelling is used on its own, and what to do if the name is right or not', () => {
+    const sentence = humanizeReason('LEARNED_SPELLING_UNCONFIRMED');
+    expect(sentence).toBe('Intern used a spelling it learned from your edits. Until you tell it to use that spelling on its own, a name it changes waits for you. If the name is right, approve it; to stop being asked, choose Use on its own for the spelling in Settings, under Learned spellings. If not, put the document\'s own words back - when that is the only change, Intern stops using that spelling.');
+    // It is chosen in Settings, not beside this sentence in the review window.
+    expect(sentence).toMatch(/Use on its own for the spelling in Settings, under Learned spellings/);
+    expect(sentence).not.toMatch(/first time/);
+    expect(sentence).not.toMatch(/approv\w* (it )?checks|checked by approv/i);
+    expect(shortReason(['LEARNED_SPELLING_UNCONFIRMED'])).toEqual({ text: 'Learned spelling', more: 0 });
+  });
+
   it('explains a bare duplicate flag once the filed name it referred to is gone', () => {
     // Named as the review menu names it: a review item has no Retry.
     expect(humanizeReason('DUPLICATE')).toBe('This document\'s content was filed once already, so Intern did not file it again. Choose Process anyway to process it all the same, keep it where it is, or remove it.');
@@ -160,7 +178,7 @@ describe('humanizeReason', () => {
       'EXTRACTION_FAILED', 'ANALYSIS_FAILED', 'MODEL_FAILED', 'MODEL_OUTPUT_INVALID',
       'MODEL_INPUT_TOO_LARGE', 'MODEL_REPLY_TRUNCATED', 'HOSTED_MODEL_UNAVAILABLE',
       'HOSTED_MODEL_BILLING', 'STATE_CONFLICT', 'INVALID_TRANSITION', 'ALREADY_NAMED',
-      'INTAKE_WITHDRAWN', 'SECRET_SERVICE_UNAVAILABLE', 'EXACT_COPY',
+      'INTAKE_WITHDRAWN', 'SECRET_SERVICE_UNAVAILABLE', 'EXACT_COPY', 'LEARNED_SPELLING_UNCONFIRMED',
     ];
     for (const code of codes) {
       const sentence = humanizeReason(code);

@@ -24,8 +24,9 @@ use intern_engine::{
 use intern_queue::{
     AdmissionEvidence, AdmissionGuard, AdmissionStage,
     pipeline::{
-        AnalyzerBoundary, ModelFailure, Pipeline, PipelineError, PipelineEventSink, PipelineItem,
-        PipelineProgress, Revalidation, RevalidationOutlook, WorkerBoundary, WorkerFailure,
+        AnalyzerBoundary, LEARNED_SPELLING_UNCONFIRMED, ModelFailure, Pipeline, PipelineError,
+        PipelineEventSink, PipelineItem, PipelineProgress, Revalidation, RevalidationOutlook,
+        WorkerBoundary, WorkerFailure,
     },
     settings::{AppSettings, SettingsStore},
 };
@@ -561,6 +562,55 @@ fn a_drain_validates_one_waiting_document_again_and_says_more_may_be_due() {
     }
 }
 
+/// A waiting row this build cannot read - a newer build left it with a
+/// status before applying that this one has never heard of - is left as it
+/// is and considered for the release, as any document left as it was. It
+/// used to be left due: every drain came back to it and said more was due,
+/// the app's scheduler ran the next pass at once for that, and so drained
+/// the same row for as long as Intern ran, no later document ever validated
+/// again.
+#[test]
+fn a_waiting_row_this_build_cannot_read_is_considered_once() {
+    let rig = Rig::new(None, false);
+    let first = rig.release("0.1.0-alpha.18");
+    let [unreadable, readable] = ["one.pdf", "two.pdf"].map(|name| rig.add(&first, name));
+    assert!(!first.run_until_idle().unwrap());
+    drop(first);
+    let database = Connection::open(rig.database()).unwrap();
+    database
+        .execute(
+            "UPDATE queue_items SET previous_status = 'held_by_newer_build' WHERE id = ?1",
+            [unreadable],
+        )
+        .unwrap();
+
+    *rig.runtime.gate.lock().unwrap() = Some(STRICTER);
+    let next = rig.release("0.1.0-alpha.19");
+    assert!(next.run_until_idle().unwrap(), "the unreadable row");
+    assert!(next.run_until_idle().unwrap(), "the next one");
+    assert!(!next.run_until_idle().unwrap(), "none left");
+
+    assert!(!rig.revalidated(unreadable), "nothing read for it");
+    let considered: String = database
+        .query_row(
+            "SELECT release FROM revalidations WHERE queue_item_id = ?1",
+            [unreadable],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(considered, "0.1.0-alpha.19");
+    let status: String = database
+        .query_row(
+            "SELECT status FROM queue_items WHERE id = ?1",
+            [unreadable],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(status, "ready", "left as it is");
+    assert!(rig.revalidated(readable));
+    assert_eq!(item(&next, readable).status, QueueStatus::NeedsReview);
+}
+
 /// A stored reply stands in for a fresh reading only for the same request
 /// to the same model file. A document the reader now reads differently, one
 /// read before readings recorded their request, and - after another update
@@ -799,4 +849,39 @@ fn a_reading_that_becomes_ready_follows_the_automatic_rename_setting() {
         }
         assert_eq!(rig.runtime.readings.load(Ordering::SeqCst), 1);
     }
+}
+
+/// A spelling in force that no person has checked - as every rule an
+/// earlier release learned is after the update - renames a document waiting
+/// one click from filing when the update validates it again, and the
+/// document waits for a person: it is never left ready under a name the
+/// rule wrote.
+#[test]
+fn a_waiting_reading_an_unchecked_spelling_renames_when_validated_again_waits_for_a_person() {
+    let rig = Rig::new(None, false);
+    let first = rig.release("0.1.0-alpha.18");
+    let waiting = rig.add(&first, "waiting.pdf");
+    first.run_until_idle().unwrap();
+    let read = item(&first, waiting);
+    assert_eq!(read.status, QueueStatus::Ready, "{:?}", read.proposal);
+    assert!(read.proposal.unwrap().house_rules.is_empty());
+    drop(first);
+
+    Connection::open(rig.database())
+        .unwrap()
+        .execute(
+            "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, created_at, updated_at)
+             VALUES ('party', 'acme corporation', 'Acme Corporation', 'Acme', 2, 1, 1)",
+            [],
+        )
+        .unwrap();
+    let next = rig.release("0.1.0-alpha.19");
+    next.run_until_idle().unwrap();
+
+    assert!(rig.revalidated(waiting));
+    let again = item(&next, waiting);
+    assert_eq!(again.status, QueueStatus::NeedsReview);
+    let again = again.proposal.unwrap();
+    assert!(again.filename.ends_with(" Acme.pdf"), "{}", again.filename);
+    assert_eq!(again.reasons, vec![LEARNED_SPELLING_UNCONFIRMED]);
 }
