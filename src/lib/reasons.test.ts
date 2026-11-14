@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { describeActionError } from './actionErrors';
-import { describeQueueStop, humanizeReason } from './reasons';
+import { describeQueueStop, humanizeReason, shortReason } from './reasons';
 
 describe('humanizeReason', () => {
   it('translates a single code into its sentence', () => {
@@ -46,10 +46,30 @@ describe('humanizeReason', () => {
   it('translates the pipeline comma-joined list into sentences', () => {
     const result = humanizeReason('TYPE_UNSUPPORTED, LOW_CONFIDENCE, MODEL_REQUESTED_REVIEW');
     expect(result).toBe(
-      'The proposed document type does not appear verbatim in the document. '
+      'The document does not confirm the proposed type as its own. The type does not appear verbatim in the document, or appears only where the document says what it is about, such as a subject line or the text of a letter. Check the type. '
       + 'The model was unsure of its reading. Check the name against the document, starting with the date and the parties. '
       + 'The model asked for a person to look at this one.',
     );
+  });
+
+  // TYPE_UNSUPPORTED is raised for a type the document does not state, and
+  // also for one it states only where it says what it is about: a subject
+  // line a record heads, a letter's text below its greeting. TYPE_INFERRED
+  // is raised when a title stands in for the model's type and when the
+  // layout's kind does ("Letter", "Email", "Notice"), whether or not the
+  // model gave a type. Each sentence must be true of every case, so the
+  // first does not say the type is absent and the second does not say the
+  // model gave none or that a title was used.
+  it('says the type reasons without claiming the type is absent or that the model gave none', () => {
+    const unsupported = humanizeReason('TYPE_UNSUPPORTED');
+    expect(unsupported).toMatch(/^The document does not confirm the proposed type as its own\./);
+    expect(unsupported).toMatch(/does not appear verbatim in the document, or appears only where/);
+    expect(unsupported.endsWith(' Check the type.'), unsupported).toBe(true);
+    const inferred = humanizeReason('TYPE_INFERRED');
+    expect(inferred).toMatch(/own title, or the kind its layout shows/);
+    expect(inferred).not.toMatch(/gave no|title was used/);
+    expect(shortReason(['TYPE_UNSUPPORTED'])).toEqual({ text: 'Type uncertain', more: 0 });
+    expect(shortReason(['TYPE_INFERRED'])).toEqual({ text: 'Type supplied by Intern', more: 0 });
   });
 
   // LOW_CONFIDENCE is raised when the model rates itself low, and also when

@@ -702,10 +702,15 @@ pub enum ReviewReason {
     DateUnsupported,
     /// No specific document type was identified.
     TypeMissing,
-    /// The document type was not literally present in the document.
+    /// The document does not confirm the proposed type as its own: the
+    /// type is not literally present in it, or stands only where the
+    /// document says what it is about - a "Re:" or "Subject:" line a record
+    /// heads, a letter's text below its greeting.
     TypeUnsupported,
-    /// The model gave no usable type, so the document's own title was used;
-    /// a person should confirm it names the document.
+    /// The type is not the reply's: the document's own title stands in for
+    /// a type the reply did not give or the document did not support, or
+    /// the kind the layout shows does ("Letter", "Email", "Notice"). A
+    /// person should confirm it names the document.
     TypeInferred,
     /// The document does not settle the filename's party: a named party
     /// could not be found in it, or the name rests on roles only the reply
