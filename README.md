@@ -480,15 +480,18 @@ reported under the document's own words, and does not wait for it.
 you have not chosen it for, and in Settings, under Learned spellings, for
 every spelling in use. Each first says, in plain words, what it does - every
 later document Intern reads as naming the word will be named with the
-spelling, and may be filed under that name without your check - and Cancel
-takes the question back. It checks the spelling exactly as it was shown to
-you; one that changed in the meantime is refused, and shown again as it now
-reads. It does not approve or file the document in front of you: that one
-still waits for your decision. Once chosen, the spelling is used in the name,
-the layout folder, and the description record, for every later document that
-names the same thing, and those names are filed like any other. A different
-spelling for the same word, learned later, waits for its own choice. Spellings
-learned before alpha.18 wait for one too.
+spelling, and may be filed under that name without your check. You then
+type the spelling to confirm it; "Use on its own" stays off until you have,
+so no stray click can choose it, and a paste does not count. Case, accents,
+spaces and punctuation do not matter: "contoso ltd" confirms "Contoso Ltd.".
+Cancel or Escape takes the question back. It checks the spelling exactly as
+it was shown to you; one that changed in the meantime is refused, and shown
+again as it now reads. It does not approve or file the document in front of
+you: that one still waits for your decision. Once chosen, the spelling is
+used in the name, the layout folder, and the description record, for every
+later document that names the same thing, and those names are filed like any
+other. A different spelling for the same word, learned later, waits for its
+own choice. Spellings learned before alpha.18 wait for one too.
 
 Settings lists everything learned, with "Use now" for a spelling seen once
 that you want at once (the names it changes still wait until you choose "Use

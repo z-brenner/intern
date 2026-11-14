@@ -730,101 +730,52 @@ name used, and in Settings for every rule in force nobody has checked. Each
 first says, in plain words, with the document's word and the spelling
 exactly as they are, that every later document Intern reads as naming the
 word (for a type: reads as that type) will be named with the spelling, and
-may be filed under that name without the person's check; Cancel and Escape
-take the question back. Escape takes back the question and nothing else -
-not the drawer, not Settings - wherever the focus is in the review panel or
-in Settings, and the focus goes back to the action; closing Settings'
-"Learned spellings" section takes back a question open in it. While a
-question asks, the other spellings' actions wait, in the review window and
-in Settings. Its yes takes a press of the pointer - a click that counts
-presses, or one that began with the pointer down on it and no key pressed
-since - only when the press began on the yes, by a pointer that came onto
-the yes since the question appeared and is on it still
-(`UseOnItsOwnQuestion`, with where each kind of pointer was last seen kept
-by `lastInput`). A pointer came onto the yes when the browser finds the yes
-itself under it - not something drawn over the yes's box, as the More menu
-and the decision it grows, or Settings and its backdrop, are; when the same
-kind of pointer was last seen off the yes as the yes is now - a mouse, a pen
-and a finger are each their own, and a finger's tap says nothing of where
-the mouse is; and, for a mouse or a pen, which hover, when it moved there
-with the yes standing where it was when that pointer was last seen. A
-pointer that moved onto a yes that had moved since came there by the yes
-moving: a scroll that left the yes's edge a pixel from a still mouse, and a
-twitch of the hand across it. A finger, which has no hover, and a pen that
-does not report hovering come onto the yes by touching down on it; a pen
-that hovers does so only with the yes standing where it was when it last
-hovered. And a pointer comes onto the yes only from away from it, at least
-the yes's own height off it: a mouse, or a pen that hovers, seen away from
-the yes standing where it is, and not lost since; a finger, or a pen that
-does not hover, from a touch away from the yes as it is now. A hand resting
-on the mouse drifts a pixel or two as it presses: a question opened from
-the keyboard with its yes's edge a pixel from a resting mouse, or a yes the
-wheel brought to rest beside a still one, took that drift across its edge
-as a pointer moved onto it. A pointer moved to a button comes from at least
-that button's size away. A report of a pointer where it already was is no
-move; it says what is under the pointer now, and a pointer it finds off the
-yes is no longer on it. A pointer the page loses sight of is forgotten
-(`lastInput`): the page sees a mouse, or a pen that hovers, only while it
-is over the page with nothing of the system's over it, and over another
-window lying over the panel - the document the spelling is checked against
-- a notification, or the system's menu, or with Intern behind another
-window, it moves where the page cannot see. When that goes away it rests
-where the page did not see it go, on the yes, and a nudge was taken as a
-move onto it. So a pointer that leaves the page, the window losing the
-focus, a `contextmenu` the page does not take for itself, a
-`pointercancel`, a press seen to begin and not to end, and the window
-moving on the screen - snapped by a key, the page moving under a mouse
-that stays put - lose the pointer: where it is next seen is where it was
-found, and a pointer that had come onto the yes is no longer on it. A finger is seen only where it touches
-down, and nothing of it is lost between touches. A pointer is off the yes
-once it is seen anywhere else, once it is lost, or once the yes moves at
-all, away and back included: the yes is watched every frame while a
-pointer is on it, and measured again at the press. So a yes that came under
-a pointer that did not move to it - the question opening under the pointer
-that pressed its action, the row below a closed question moving up, a
-scroll, a question opened from the keyboard scrolled under a resting mouse,
-a menu, a dialog or another window over it going away - takes no press
-until the pointer has been seen away from it where it is now and comes
-back onto it. The press on the yes is the last press anywhere, and only one
-that began on the yes: a press with the middle button on the yes clicks
-nothing, and a finger's tap that began on Keep original over the yes, whose
-click landed on the yes, was taken as the end of it. A press never gives
-the yes the focus: a press with another button, or one let go off the yes,
-clicks nothing, and the focus Chromium gives a pressed button left on the
-yes made the next Enter or Space a yes from the keyboard. A press refused
-because its pointer had not come onto the yes says what to do, beside the
-buttons, where the person is looking: "Move well off Use on its own, then
-back." - for a finger, "Tap well away, then Use on its own." It takes no
-room until then and moves
-nothing under the pointer; a refusal that said nothing left a person who
-meant it pressing a yes that did nothing, after a scroll of their own wheel
-had brought it to rest under the pointer. Earlier rounds kept the yes from
-coming under the pointer in each way found, and each time another way was
-found; this does not depend on how the yes got there. Two older rules stay
-behind it. Opened by a press, the question opens where the action was,
-sentence first, and nothing the press sets off moves what is under the
-pointer (`afterAPress`): Cancel takes the focus where it is, and neither the
-review panel nor Settings scrolls until a key is pressed. The review panel
-used to scroll the question clear of the decision stuck to its bottom, which
-brought the yes under the pointer that had pressed the action: a
-double-click a little slower than the system's, or a press again, used the
-spelling on its own with the sentence never read. The next press lands on
-the sentence and leaves the focus on Cancel. And a press on the yes that is
-part of a double-click or more, or that began within half a second of the
-question appearing or of a press the yes did not take, is no answer; opened
-by a press, the half second runs from when that press began, as a
-double-click is timed from its first press to its second, so a person quick
-to move onto the yes and press it is answered. A press the yes refuses
-checks nothing and puts the focus back on Cancel; a yes from the keyboard or
-from assistive technology is taken at once. Opened from the keyboard, the
-question is scrolled into sight, Cancel and all. The command
-(`house_rule_check`) carries the rule's id and the spelling the person was
-shown - its kind, the document's word and the spelling - and the repository
-marks the rule checked, in one statement, only while it exists, is in force,
-and reads exactly that (`PipelineRepository::check_rule`): a rule forgotten
-is refused (`RULE_NOT_FOUND`), and one not in force, or respelled or learned
-from other words since it was shown, is refused (`RULE_CHANGED`) and shown
-again as it now reads. Checking a rule approves and files nothing. The
+may be filed under that name without the person's check. Then it asks for
+the spelling to be typed (`UseOnItsOwnQuestion`): its yes stays disabled,
+and Enter in the field does nothing, until what is typed is the spelling -
+the same letters and digits in the same order, both sides decomposed
+(NFKD), stripped of combining marks, lower-cased and left with nothing but
+letters and digits (`typedOut`). Case, accents, spaces and punctuation do
+not matter; every letter and digit does. A spelling with no letter or digit
+is typed exactly, spaces at its ends aside. Only typing fills the field: a
+paste, a drop, a suggestion taken, a yank, an undo and autofill are refused,
+and the field asks the browser for no suggestions. Once the spelling is
+typed, the yes is an ordinary button, and Enter in the field answers.
+
+A check is for good, and the harm it can do is a wrong spelling - "John
+Smith" written as "John Smith, Jane Doe" - filed without review on every
+later document. Typing the spelling makes the person read it, letter by
+letter, and no press types. Earlier rounds let the yes take some presses
+and not others: not part of a double-click, not within half a second of the
+question, only from a pointer that had moved onto it. Each round found
+presses that got through - a slow double-click, a scroll or a change of
+layout that brought the yes under a still pointer, a tap through a menu, a
+window closing over the yes, a pointer that left the page - and the rules
+did not converge. Keys typed in the field stay there, but for Tab and
+Escape: the review window's Ctrl+Enter, Alt+K and Alt+N neither approve,
+keep nor move on from it, and Enter saves no settings. The field starts
+empty for every question, and again if the spelling it asks about changes
+while it asks. Cancel and Escape take the question back. Escape takes back
+the question and nothing else - not the drawer, not Settings, with what was
+not saved - wherever the focus is in the review panel or in Settings, and
+the focus goes back to the action; closing Settings' "Learned spellings"
+section takes back a question open in it. While a question asks, the other
+spellings' actions wait, in the review window and in Settings: a press on
+another "Use on its own" closed the question above it and opened the next
+under the pointer. Opened by a press, the question opens where the action
+was, sentence first, with the focus in its field, and nothing the press sets
+off moves what is under the pointer (`afterAPress`): neither the review
+panel nor Settings scrolls until a key is pressed. Opened from the keyboard,
+it is brought into sight, clear of the review panel's decision.
+
+The command (`house_rule_check`) carries the rule's id and the spelling the
+person was shown - its kind, the document's word and the spelling - and the
+repository marks the rule checked, in one statement, only while it exists,
+is in force, and reads exactly that (`PipelineRepository::check_rule`): a
+rule forgotten is refused (`RULE_NOT_FOUND`), and one not in force, or
+respelled or learned from other words since it was shown, is refused
+(`RULE_CHANGED`) and shown again as it now reads. Checking a rule approves
+and files nothing. The
 documents still waiting are restyled as after any change to the rules
 (`restyle_waiting`): the rule is used where their names did not show it, and
 a name held for it loses `LEARNED_SPELLING_UNCONFIRMED` but stays in review,
