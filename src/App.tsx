@@ -11,6 +11,7 @@ import { QueueTable, findCell } from './components/QueueTable';
 import { ReviewInspector } from './components/ReviewInspector';
 import { SettingsDialog } from './components/SettingsDialog';
 import { SetupScreen } from './components/SetupScreen';
+import { TypedKept, typingInReview } from './components/TypedKept';
 import { QueueProgress } from './components/QueueProgress';
 import { ViewSwitch } from './components/ViewSwitch';
 import { Toast } from './components/Toast';
@@ -20,6 +21,7 @@ import { describeActionError } from './lib/actionErrors';
 import type { RefusedAction } from './lib/actionErrors';
 import { describeAddReport } from './lib/addReport';
 import { installingLabel } from './lib/format';
+import { isTextField } from './lib/textField';
 import { useUndoOnlyWhereFocused } from './lib/undoWhereFocused';
 import { describeQueueStop } from './lib/reasons';
 import type { DesktopBridge, LaunchReportSource, SelectionBoundary, SelectionResult, UpdateProgressListener, UpdateStatus } from './lib/bridge';
@@ -36,7 +38,9 @@ import { createGridStore, selectionOf } from './features/queue/gridStore';
 import { useQueue } from './features/queue/useQueue';
 import { useBatchProgress } from './features/queue/batch';
 import { requestAttentionIfUnfocused, setTaskbarProgress } from './lib/windowSignals';
-import { isParked, itemActions, keptOriginal, nextUndecided, undecidedOrder } from './features/review/actions';
+import { isParked, isUnreadable, itemActions, keptOriginal, nextUndecided, undecidedOrder } from './features/review/actions';
+import { keptText, setAsideOutdatedDrafts, typedAndNotFiled, watchedDrafts } from './features/review/drafts';
+import type { EarlierDrafts, KeptText, ReviewDrafts } from './features/review/drafts';
 import { useReviewShortcuts } from './features/review/useReviewShortcuts';
 import type { ReviewInspectorHandle } from './features/review/useReviewShortcuts';
 import { modelReady, useModelSetup } from './features/setup/useModelSetup';
@@ -149,6 +153,45 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // it opens only when asked in this session.
   const [detailsAskedFor, setDetailsAskedFor] = useState(false);
   const detailsButton = useRef<HTMLButtonElement>(null);
+  // What was typed in the panel for a name and a description and not filed.
+  // It is the window's, not the panel's: the panel leaves the screen when
+  // the window changes width, when it is closed and when the selection is
+  // cleared, and what had been typed went with it. It is kept for the
+  // proposal it was typed over. Once its document is seen with another, or
+  // none, it is set aside - out of the fields, which show the document as it
+  // now is, and into what the panel shows beside them (EarlierDrafts) - and
+  // only the person drops it: by filing it, by deciding the document some
+  // other way, by having it read again, or by discarding it.
+  const [, redrawForTyped] = useState(0);
+  const [reviewDrafts] = useState<ReviewDrafts>(() => watchedDrafts(() => redrawForTyped((count) => count + 1)));
+  const [earlierDrafts] = useState<EarlierDrafts>(() => new Map());
+  const forgetTyped = (id: string) => { const typed = reviewDrafts.delete(id); if (earlierDrafts.delete(id) || typed) redrawForTyped((count) => count + 1); };
+  const typedOver = (id: string) => typedAndNotFiled(reviewDrafts, earlierDrafts, id);
+  // What a person had in a name and a description when the panel they were
+  // typing in went by itself, kept above the queue with the caret in it
+  // (see the rule below): `left`, the document is no longer in the queue.
+  const [keptNotices, setKeptNotices] = useState<Array<KeptText & { name: string; left: boolean }>>([]);
+  // The kept text the caret goes into, once it is on screen.
+  const [caretTo, setCaretTo] = useState<number>();
+  // What the person is doing, for telling it from what happens by itself:
+  // `seq` moves with each thing they do that changes what the panel shows
+  // (another row, the next undecided, closing the panel, discarding a kept
+  // text), and `deciding` is the document a decision of theirs is being
+  // carried out for (approve, keep, remove, read again, retry, cancel, undo)
+  // until the queue has shown what it did.
+  const [own, setOwn] = useState<{ seq: number; deciding?: string }>({ seq: 0 });
+  const byThePerson = () => setOwn((now) => ({ ...now, seq: now.seq + 1 }));
+  const deciding = (id: string) => setOwn((now) => ({ ...now, deciding: id }));
+  const decided = (id: string) => setOwn((now) => now.deciding === id ? { seq: now.seq + 1 } : now);
+  // A decision the backend refused is not what takes a field. The document
+  // can be read again by itself just as Enter files its name: the approval
+  // is refused, the queue read for the refusal shows the fields gone, and
+  // that is the document changing by itself. So `deciding` ends with the
+  // refusal, before that read, and `decided` then has nothing to mark.
+  const unlessRefused = (id: string, run: () => Promise<void>) => async () => {
+    try { await run(); }
+    catch (error) { setOwn((now) => now.deciding === id ? { ...now, deciding: undefined } : now); throw error; }
+  };
   // The queue table's active cell and selected cells, in a store beside the
   // table so a drag does not re-render the whole window (see gridStore).
   const [gridStore] = useState(createGridStore);
@@ -250,16 +293,90 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const shown = (list: QueueItem[]) => list.filter((item) => inCurrentView(item) && (!query || matchesQuery(item, query)) && (!readyFilter || renamesWithAllReady(item)));
   const visible = shown(items);
   // The box itself goes by what is in it now, not by what the rows have caught up with.
-  const filterShown = filtered.length > FILTER_THRESHOLD || filter.trim().length > 0;
+  // And it stays while the caret is in it: a view that shrinks by itself to
+  // few enough rows - a document filed elsewhere, or taken from the Queue
+  // folder - took the empty box from under the caret, and the word typed for
+  // it was review's keys.
+  const [filterHasCaret, setFilterHasCaret] = useState(false);
+  const filterShown = filtered.length > FILTER_THRESHOLD || filter.trim().length > 0 || filterHasCaret;
   const selected = items.find((item) => item.id === selectedId);
   const panelOpen = Boolean(selected) && (narrowInspector ? detailsAskedFor : detailsOpen);
   const drawerOpen = panelOpen && narrowInspector;
+  // A name or a description with the caret in it leaves the screen only by
+  // something the person did. Its field can go by itself - the document is
+  // read again (every untouched provisional reading is, at once, when the
+  // accurate model becomes usable, and typing is not touching), is given
+  // another proposal, is filed from another machine or leaves the queue, or
+  // the panel closes as the window changes width - and the caret went with
+  // it, to nothing. What the person typed next was then review's keys: the
+  // rest of a sentence moved the selection (j, k), opened a document at its
+  // name and filed it (Enter, Enter), approved one (Ctrl+Enter), kept one
+  // (Alt+K) or removed one (Delete, Enter), none of them looked at.
+  //
+  // So when a field with the caret has gone, and nothing the person did took
+  // it, what it held stays on screen, read-only, and the caret goes into it:
+  // in the panel while the panel still shows that document, above the queue
+  // otherwise (TypedKept). It is told by what happened to the field, not by
+  // a list of causes, so a cause nobody has thought of is held as well.
+  // `typing` is read while rendering, before this commit changes the page.
+  const typing = typingInReview();
+  const shownInPanel = useRef<QueueItem | undefined>(undefined);
+  const ownSeen = useRef(own.seq);
+  useLayoutEffect(() => {
+    const before = shownInPanel.current;
+    shownInPanel.current = panelOpen ? selected : undefined;
+    const acted = own.seq !== ownSeen.current;
+    ownSeen.current = own.seq;
+    // After the commit that shows the queue as it now is, so the panel,
+    // which keeps an edit as it is shown, has kept its last by then.
+    const moved = setAsideOutdatedDrafts(reviewDrafts, earlierDrafts, items, own.deciding);
+    let redraw = moved.length > 0;
+    if (typing && !typing.field.isConnected && !acted && !(before && before.id === own.deciding)) {
+      // Nothing that was about to move the focus or the selection for an
+      // action that has finished does so now: the person is typing.
+      focusRestoreVersion.current += 1;
+      reviewTrigger.current = null;
+      if (before && !typing.kept && panelOpen && selected?.id === before.id) {
+        // A draft set aside just now is what the field held. Nothing typed
+        // (or a field gone while its proposal stands) has none: it is kept
+        // all the same, for the caret.
+        if (!moved.includes(before.id)) { earlierDrafts.set(before.id, [...(earlierDrafts.get(before.id) ?? []), keptText(typing.text, false)]); redraw = true; }
+        setCaretTo(earlierDrafts.get(before.id)!.at(-1)!.key);
+      } else {
+        const kept = { ...keptText(typing.text, false), name: before?.originalFilename ?? 'A document', left: !before || !items.some((item) => item.id === before.id) };
+        setKeptNotices((notices) => [...notices, kept]);
+        setCaretTo(kept.key);
+      }
+    }
+    if (redraw) redrawForTyped((count) => count + 1);
+  });
+  useLayoutEffect(() => {
+    if (caretTo !== undefined) document.querySelector<HTMLTextAreaElement>(`textarea[data-typed-kept="${caretTo}"]`)?.focus();
+  }, [caretTo]);
+  const dismissKeptNotice = (key: number) => {
+    byThePerson();
+    setKeptNotices((notices) => notices.filter((kept) => kept.key !== key));
+    // To the button of the view shown, as when the queue takes the focus back from a row that has gone.
+    setQueueFocus({ version: ++focusRestoreVersion.current });
+  };
+  const discardEarlier = (id: string, key: number) => {
+    byThePerson();
+    const rest = (earlierDrafts.get(id) ?? []).filter((kept) => kept.key !== key);
+    if (rest.length) earlierDrafts.set(id, rest); else earlierDrafts.delete(id);
+    redrawForTyped((count) => count + 1);
+    setFocusRequest({ id, target: 'heading' });
+  };
   // What still waits on a person among the rows shown. The Needs Review page
   // used to collect these; the queue's toolbar counts them now, so the number
   // the page's badge carried is not lost with it. Counted from the rows the
   // filter leaves, the same rows the count's button steps through.
   const needReview = visible.filter((item) => item.status === 'review');
   const readyItems = items.filter(renamesWithAllReady);
+  // Rename all ready files Intern's proposal, so it leaves alone a ready
+  // document whose name or description a person typed and has not filed:
+  // filed as proposed, what they typed was gone without a word. Its count
+  // is of what it will rename.
+  const readyUntyped = readyItems.filter((item) => !typedOver(item.id));
   // Installing an update hands Intern to the installer, which closes it. A
   // rename in its applying stage is the one piece of work that cannot be
   // canceled, and closing underneath it leaves the journal to finish the move
@@ -295,6 +412,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // in the table, where the person is working, and the Details panel - open
   // or not - stays as it was; open, it follows the selection.
   const selectRow = (item: QueueItem, cell: HTMLElement) => {
+    byThePerson();
     seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = { element: cell, itemId: item.id }; setSelectedId(item.id);
   };
   // J/K, and the arrow keys where nothing else has focus: the selected row
@@ -303,6 +421,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // `focus` is false (the "need review" count, which keeps focus itself so
   // each press goes on to the next).
   const moveSelection = (item: QueueItem, focus = true) => {
+    byThePerson();
     seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = rowTrigger(item.id);
     const cell = { id: item.id, column: activeColumn() };
     gridStore.set({ anchor: cell, focus: cell });
@@ -312,6 +431,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // Wide, whether the panel is open is remembered for the next launch. The
   // narrow drawer is opened for the moment only, and leaves that alone.
   const rememberDetails = (open: boolean) => {
+    byThePerson();
     if (narrowInspector) { setDetailsAskedFor(open); return; }
     setDetailsOpen(open);
     try { window.localStorage.setItem(DETAILS_PREFERENCE_KEY, open ? 'open' : 'closed'); } catch { /* Not remembered; it still opens now. */ }
@@ -331,6 +451,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // Enter on a cell, a double-click on one, F2, and Next undecided: select
   // the item, open the Details panel, and go straight to its name.
   const openItem = (item: QueueItem, trigger?: HTMLElement) => {
+    byThePerson();
     seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = trigger ? { element: trigger, itemId: item.id } : rowTrigger(item.id); setSelectedId(item.id);
     rememberDetails(true);
     setFocusRequest({ id: item.id, target: itemActions(item).approve ? 'filename' : 'heading' });
@@ -373,40 +494,67 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // row being filed was still on screen a moment before it left the view, and
   // every toolbar button was still disabled for the action in flight - so
   // focus went to <body> whenever there was no next item to go to.
-  const [queueFocus, setQueueFocus] = useState<{ version: number; element?: HTMLElement; itemId?: string }>();
+  const [queueFocus, setQueueFocus] = useState<{ version: number; element?: HTMLElement; itemId?: string; decided?: boolean }>();
   // `itemId`: a row to go to instead, once it is on screen - the document an
-  // undo has just put back in the queue.
-  const restoreQueueFocus = (itemId?: string) => {
+  // undo has just put back in the queue. `decided`: the row has gone by the
+  // person's own decision - approved, kept, removed - not by itself.
+  const restoreQueueFocus = (itemId?: string, decided = false) => {
     const invocation = reviewTrigger.current;
     reviewTrigger.current = null;
-    setQueueFocus({ version: ++focusRestoreVersion.current, ...(itemId ? { itemId } : { element: invocation?.element, itemId: invocation?.itemId }) });
+    setQueueFocus({ version: ++focusRestoreVersion.current, decided, ...(itemId ? { itemId } : { element: invocation?.element, itemId: invocation?.itemId }) });
   };
   useEffect(() => {
     if (!queueFocus) return;
     setQueueFocus(undefined);
-    const { version, element, itemId } = queueFocus;
+    const { version, element, itemId, decided } = queueFocus;
     if (focusRestoreVersion.current !== version) return;
+    // Never out of a field. The queue takes the focus back when what had it
+    // has gone; a field with the caret in it - the filter, a name, what is
+    // kept of one (TypedKept) - is someone typing, and the words they typed
+    // next would land on whatever the focus was moved to.
+    if (isTextField(document.activeElement)) return;
     const refreshedTrigger = itemId ? rowCell(itemId) : undefined;
-    // Prefer the primary action by name rather than "the first button in the
-    // panel". That positional fallback silently moved the moment the toolbar
-    // gained a second control, sending focus to a destructive Discard button
-    // instead of Apply all ready.
+    // Never a button that acts, and never another row's cell. With its row
+    // gone the focus went to the toolbar's primary action, Rename all ready -
+    // and before that to "the first button in the panel", which became a
+    // destructive Discard the moment the toolbar gained a second control.
+    // But the selected document can leave the queue by itself - its file
+    // taken from the Queue folder, or filed by another machine - while a
+    // person is typing its name or its description, and the next space bar
+    // typed renamed every ready document. On another row's cell, Enter would
+    // open that document's details at its name, where a second Enter files
+    // it. The focus goes to the button of the view already shown, where the
+    // space bar and Enter file nothing; with nothing in the queue at all
+    // there is no such button, and it goes nowhere.
+    //
+    // That is for a row that went by itself. One the person has just decided
+    // - Delete and Enter on the question, or the last approval - leaves them
+    // in the queue, not in the middle of a sentence: the focus goes to the
+    // cell the table keeps for Tab (with nothing selected, the first row's),
+    // as it did before that rule, and the arrow keys go on from there. From
+    // the view's button they moved nothing.
     const target = element?.isConnected
       ? element
       : refreshedTrigger
-        ?? document.querySelector<HTMLElement>('.queue-panel .queue-actions button.primary:not(:disabled)')
-        ?? document.querySelector<HTMLElement>('.queue-panel .queue-grid [tabindex="0"]')
-        ?? document.querySelector<HTMLElement>('.queue-panel button:not(:disabled)');
+        ?? (decided ? document.querySelector<HTMLElement>('.queue-panel .queue-grid [tabindex="0"]') : null)
+        ?? document.querySelector<HTMLElement>('.queue-panel .view-switch [aria-current="page"]');
     target?.focus();
   }, [queueFocus]);
   useEffect(() => {
     if (!selectedId || selected) return;
     setSelectedId(undefined);
-    restoreQueueFocus();
+    // Gone from the queue: by the person's own decision if one is being carried out for it.
+    restoreQueueFocus(undefined, own.deciding === selectedId);
   }, [selected, selectedId]);
   // A drawer emptied by its item leaving (filed, removed) is closed, not left
   // to spring open again over the next row a person clicks.
   useEffect(() => { if (!selected) setDetailsAskedFor(false); }, [selected]);
+  // A drawer is asked for at the narrow width it opens at. Asked for once, it
+  // opened again by itself each time the window was next made narrow - a snap
+  // to half the screen - over whatever row was selected by then, even after
+  // Close review at the wide width, with the caret in that row's name: the
+  // Enter meant for the row's cell, which opens details there, filed it.
+  useEffect(() => { if (!narrowInspector) setDetailsAskedFor(false); }, [narrowInspector]);
   // With no rows on screen there is no table to clear its own selection; a
   // selection left behind would come back with the next row that arrives.
   const nothingShown = visible.length === 0;
@@ -456,6 +604,12 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // than sending focus back to the toolbar to find it again (FRONTEND_UX-10).
   // When none is left, focus goes back to the queue as before.
   const decide = async (item: QueueItem, decision: 'approve' | 'keep' | 'remove', run: () => Promise<void>) => {
+    if (actionInFlight.current) return;
+    deciding(item.id);
+    try { await carryOut(item, decision, unlessRefused(item.id, run)); }
+    finally { decided(item.id); }
+  };
+  const carryOut = async (item: QueueItem, decision: 'approve' | 'keep' | 'remove', run: () => Promise<void>) => {
     const before = undecidedOrder(visible);
     const selectionVersion = focusRestoreVersion.current;
     // Approving a parked item checks its files first, and that check can be
@@ -467,6 +621,10 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     const fresh = outcome.read;
     const now = decision === 'approve' ? fresh?.find((entry) => entry.id === item.id) : undefined;
     const after = now?.status;
+    // The decision is what becomes of what was typed for the document: filed
+    // as typed, or given up with it. Sent back to review, it is still the
+    // person's to file, and stays.
+    if (after !== 'review') forgetTyped(item.id);
     // An approval the backend accepted can still leave the document unrenamed:
     // it files the name between documents while the queue is busy, and sends
     // the item back to review when the file changed since it was read. Each is
@@ -491,7 +649,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     const next = nextUndecided(before, item.id, shown(fresh ?? items));
     if (!next) {
       setSelectedId(undefined);
-      restoreQueueFocus();
+      restoreQueueFocus(undefined, true);
       return;
     }
     // A selection change of its own, so the focus restore that a disappearing
@@ -502,26 +660,44 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     setFocusRequest({ id: next.id, target: 'filename' });
     setActionMessage(`${done} Next: ${next.originalFilename}.`);
   };
-  const refreshAndClear = async (run: () => Promise<void>, success: string | ((read?: QueueItem[]) => string), refused?: RefusedAction) => {
+  // `readAgain`: the person asked for a new reading of the document, and what
+  // they typed over the one before goes with it, as it always has.
+  const refreshAndClear = async (id: string, run: () => Promise<void>, success: string | ((read?: QueueItem[]) => string), refused?: RefusedAction, readAgain = false) => {
+    if (actionInFlight.current) return;
     const selectionVersion = focusRestoreVersion.current;
-    if (!await runQueueAction(run, success, refused)) return;
-    if (focusRestoreVersion.current !== selectionVersion) return;
-    setSelectedId(undefined);
-    restoreQueueFocus();
+    deciding(id);
+    try {
+      if (!await runQueueAction(unlessRefused(id, run), success, refused)) return;
+      if (readAgain) forgetTyped(id);
+      if (focusRestoreVersion.current !== selectionVersion) return;
+      setSelectedId(undefined);
+      restoreQueueFocus();
+    } finally { decided(id); }
   };
   // Retry queues a failed item, a duplicate or an unverified upload to be
   // read again. A parked item's is Check again, which queues nothing: it
   // finishes the stopped rename or rolls it back, and only the queue after
   // it says which; it can also fail for the reason the item was parked.
   const retryItem = (item: QueueItem) => isParked(item)
-    ? refreshAndClear(() => bridge.retry(item.id), (read) => checkedOutcome(item, read), { checkedFiles: true })
-    : refreshAndClear(() => bridge.retry(item.id), 'Item queued for retry.');
+    ? refreshAndClear(item.id, () => bridge.retry(item.id), (read) => checkedOutcome(item, read), { checkedFiles: true })
+    : refreshAndClear(item.id, () => bridge.retry(item.id), 'Item queued for retry.', undefined, isUnreadable(item));
   const applyAllReady = async () => {
     if (actionInFlight.current) return;
+    // Nothing it would rename: every ready document has something typed for
+    // it. Said where it can be seen, since the press did nothing else.
+    if (readyUntyped.length === 0) {
+      const { text } = batchOutcome([], [], readyItems.length);
+      setActionError('');
+      setActionMessage(text);
+      showToast('done', text);
+      return;
+    }
     actionInFlight.current = true;
     const selectionVersion = focusRestoreVersion.current;
     const selectedAtStart = selected;
-    const batch = readyItems;
+    const batch = readyUntyped;
+    // Left for the person: ready, with a name or a description they typed.
+    let leftTyped = readyItems.length - batch.length;
     setActionPending(true);
     setActionError('');
     // Said once, not at every step: the toast shows how far along it is.
@@ -532,14 +708,16 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       for (const [index, item] of batch.entries()) {
         // Forty renames take a while, and the button alone said nothing.
         showToast('progress', `Applying ${index + 1} of ${batch.length}…`);
+        // Typed over since the press: left as well.
+        if (typedOver(item.id)) { leftTyped += 1; continue; }
         try { await bridge.approve(item.id, item.proposedFilename!, item.description ?? ''); applied.push(item.id); }
         catch (error) { failed.set(item.id, error); }
       }
       // Said from the batch's own read. The one on screen can be older: a
       // queue event the renames raised starts a newer read, and the read
       // made for the batch is then never shown.
-      const outcome = batchOutcome(applied, await refresh() ?? await bridge.listItems());
-      if (applied.length) showToast('done', outcome.text, outcome.undoable.length ? outcome.undoable : undefined);
+      const outcome = batchOutcome(applied, await refresh() ?? await bridge.listItems(), leftTyped);
+      if (applied.length || leftTyped) showToast('done', outcome.text, outcome.undoable.length ? outcome.undoable : undefined);
       else setToast(undefined);
       if (failed.size) {
         const firstError = failed.values().next().value;
@@ -548,7 +726,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       } else {
         setActionMessage(outcome.text);
       }
-      if (focusRestoreVersion.current === selectionVersion && selectedAtStart?.status === 'ready' && !failed.has(selectedAtStart.id)) {
+      if (focusRestoreVersion.current === selectionVersion && selectedAtStart && applied.includes(selectedAtStart.id)) {
         setSelectedId(undefined);
         restoreQueueFocus();
       }
@@ -735,7 +913,8 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     }
     // Select only after the queue contains the imported row, and never over
     // a different document the reviewer chose while the import was running.
-    if (!imported || !targetId || focusRestoreVersion.current !== selectionVersion) return;
+    // Nor while they are typing a name or a description: the fields would go from under the caret.
+    if (!imported || !targetId || focusRestoreVersion.current !== selectionVersion || typingInReview()) return;
     seededSelection.current = true;
     focusRestoreVersion.current += 1;
     reviewTrigger.current = null;
@@ -869,6 +1048,16 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       */}
       {settings.modelSource !== 'hosted' && accuracyStatus(model.setup) && <p className="model-status" role="status" aria-label="Local model status">{accuracyStatus(model.setup)}</p>}
       {/* A note, not a second live region: the status above already reads it out. */}
+      {/*
+        What a person had in a name and a description when the panel they
+        were typing in went by itself. Above the queue, which is never inert
+        then: the panel is gone. It has the caret, and stays until dismissed.
+      */}
+      {keptNotices.map((kept) => <TypedKept key={kept.key} kept={kept} className="note note--review" label={`Kept from ${kept.name}`} dismiss="Done" onDismiss={() => dismissKeptNotice(kept.key)}>
+        {kept.left
+          ? <><q>{kept.name}</q> left the queue while you were in its name or description. They are kept here as you had them, name first.</>
+          : <>The details of <q>{kept.name}</q> closed while you were in its name or description. What you typed is kept with the document, and is in its details when you open them again.</>}
+      </TypedKept>)}
       {skippedNotice && <div className="note note--review" role="note" aria-label="Files not added">
         <p>{skippedNotice}</p>
         <button type="button" onClick={() => setSkippedNotice('')}>Dismiss</button>
@@ -888,7 +1077,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
         onChooseFiles={selection ? addFiles : undefined} onChooseFolder={selection ? addFolder : undefined} />}
       {items.length > 0 && <DropZone variant="panel" inputFolder={inputName} onDrop={(payload) => { if (selection) void importSelection(() => selection.resolveDrop(payload)); }}>
       <div className="queue-toolbar">
-        <ViewSwitch active={view} items={items} onChange={(next) => { focusRestoreVersion.current += 1; reviewTrigger.current = null; setView(next); setSelectedId(undefined); clearCellSelection(); setMoreOpen(false); }} />
+        <ViewSwitch active={view} items={items} onChange={(next) => { byThePerson(); focusRestoreVersion.current += 1; reviewTrigger.current = null; setView(next); setSelectedId(undefined); clearCellSelection(); setMoreOpen(false); }} />
         <div className="toolbar-filters">
           {/*
             What the Needs Review page used to collect, counted where the work
@@ -898,8 +1087,12 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
           {view === 'queue' && needReview.length > 0 && <button type="button" className="need-review" title="Go to the next document that needs review" onClick={goToNextReview}>
             {needReview.length} {needReview.length === 1 ? 'needs' : 'need'} review
           </button>}
-          {/* Exactly the rows Rename all ready will rename, to look over first. */}
-          {view === 'queue' && readyItems.length > 0 && <button type="button" className="ready-filter" aria-pressed={readyFilter} title="Show only the documents Rename all ready will rename" onClick={() => { setReadyOnly(!readyOnly); clearCellSelection(); }}>
+          {/*
+            The ready documents, to look over first: the rows Rename all
+            ready renames - all but one whose name or description a person
+            typed and has not filed, which it leaves for them.
+          */}
+          {view === 'queue' && readyItems.length > 0 && <button type="button" className="ready-filter" aria-pressed={readyFilter} title="Show only the ready documents: what Rename all ready renames, apart from any you typed a name or a description for" onClick={() => { setReadyOnly(!readyOnly); clearCellSelection(); }}>
             <Icon icon={CircleCheck} />{readyItems.length} ready
           </button>}
         </div>
@@ -928,7 +1121,9 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
               <button type="button" role="menuitem" aria-label="Discard waiting items" disabled={actionPending} onClick={() => void (async () => { setMoreOpen(false); const dropped = waitingItems.length; await runQueueAction(() => bridge.discardWaiting(), `Discarded ${dropped} waiting ${dropped === 1 ? 'item' : 'items'}.`); })()}><Icon icon={Trash2} />Discard waiting <span>{waitingItems.length}</span></button>
             </div>}
           </div>}
-          {view === 'queue' && readyItems.length > 0 && <button type="button" className="primary" aria-label="Rename all ready" disabled={actionPending} onClick={() => void applyAllReady()}>Rename all ready <span>{readyItems.length}</span></button>}
+          {view === 'queue' && readyItems.length > 0 && <button type="button" className="primary" aria-label="Rename all ready" disabled={actionPending}
+            title={readyUntyped.length < readyItems.length ? `Renames the ${readyUntyped.length} ready ${readyUntyped.length === 1 ? 'document' : 'documents'} as Intern proposed. ${readyItems.length - readyUntyped.length} with a name or a description you typed ${readyItems.length - readyUntyped.length === 1 ? 'is' : 'are'} left for you to file.` : undefined}
+            onClick={() => void applyAllReady()}>Rename all ready <span>{readyUntyped.length}</span></button>}
           {view === 'completed' && filtered.length > 0 && <>
             <button type="button" disabled={actionPending} onClick={(event) => openHistory(event.currentTarget)}>History</button>
             <button type="button" disabled={actionPending} onClick={() => void (async () => { if (await runQueueAction(() => bridge.clearHistory(), 'History cleared.')) queueMicrotask(() => document.querySelector<HTMLButtonElement>('.view-switch button[data-view="completed"]')?.focus()); })()}>Clear history</button>
@@ -938,7 +1133,8 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       {/* A stopped queue says why in its own note above; "Reading…" would contradict it. */}
       {view === 'queue' && !pipelineError && <QueueProgress progress={batch} paused={paused} />}
       {filterShown && <div className="queue-filter" role="search">
-        <input type="search" aria-label="Filter queue" placeholder="Filter by filename or description" value={filter} onChange={(event) => { setFilter(event.target.value); clearCellSelection(); }} onKeyDown={(event) => {
+        <input type="search" aria-label="Filter queue" placeholder="Filter by filename or description" value={filter} onChange={(event) => { setFilter(event.target.value); clearCellSelection(); }}
+          onFocus={() => setFilterHasCaret(true)} onBlur={() => setFilterHasCaret(false)} onKeyDown={(event) => {
           // Escape clears the filter first; only an already-empty box lets the
           // key through to whatever else listens for it.
           if (event.key === 'Escape' && filter) { event.stopPropagation(); setFilter(''); }
@@ -963,10 +1159,11 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
           onDismiss={toast.kind === 'progress' ? undefined : () => setToast(undefined)}>{toast.text}</Toast>}
         {actionError && <Toast tone="error" label="Action error" onDismiss={() => setActionError('')}>{actionError}</Toast>}
       </div>}
-      {panelOpen && selected && <ReviewInspector id={REVIEW_PANEL_ID} ref={inspectorHandle} busy={actionPending} drawer={drawerOpen} item={selected}
+      {panelOpen && selected && <ReviewInspector id={REVIEW_PANEL_ID} ref={inspectorHandle} busy={actionPending} drawer={drawerOpen} item={selected} drafts={reviewDrafts}
+        earlier={earlierDrafts.get(selected.id)} onDiscardEarlier={(kept) => discardEarlier(selected.id, kept.key)}
         position={undecided.length ? { index: undecided.findIndex((item) => item.id === selected.id) + 1 || undefined, total: undecided.length } : undefined}
         onNext={goToNextUndecided}
-        onClose={() => closeDetails()} onApprove={(filename, description) => void decide(selected, 'approve', () => bridge.approve(selected.id, filename, description))} onKeep={() => void decide(selected, 'keep', () => bridge.keepOriginal(selected.id))} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void retryItem(selected)} onReanalyze={() => void refreshAndClear(() => bridge.reanalyze(selected.id), 'Sent back to be analyzed again.')} onRemove={(confirmed) => void decide(selected, 'remove', () => confirmed ? bridge.remove(selected.id, { confirmed: true }) : bridge.remove(selected.id))} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} onOpen={() => void openDocument(selected.id, false)} onReveal={() => void openDocument(selected.id, true)} />}
+        onClose={() => closeDetails()} onApprove={(filename, description) => void decide(selected, 'approve', () => bridge.approve(selected.id, filename, description))} onKeep={() => void decide(selected, 'keep', () => bridge.keepOriginal(selected.id))} onCancel={() => void refreshAndClear(selected.id, () => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void retryItem(selected)} onReanalyze={() => void refreshAndClear(selected.id, () => bridge.reanalyze(selected.id), 'Sent back to be analyzed again.', undefined, true)} onRemove={(confirmed) => void decide(selected, 'remove', () => confirmed ? bridge.remove(selected.id, { confirmed: true }) : bridge.remove(selected.id))} onUndo={() => void refreshAndClear(selected.id, () => bridge.undo(selected.id), 'Operation undone.')} onOpen={() => void openDocument(selected.id, false)} onReveal={() => void openDocument(selected.id, true)} />}
     </div>
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))} onClose={closeHistory} />}
     {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next, after) => { await saveSettings(next); closeSettings(); void (after?.processExisting ? queueWhatIsThere() : refreshAfterSettings()); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
@@ -1051,9 +1248,11 @@ function renamedCount(count: number) {
  * backend files an approved name between documents, it sends an item back
  * to review when the file changed since it was read, and it completes one
  * whose name was already its own without renaming it (ALREADY_NAMED). Each
- * is said as it is, and only what was filed is offered to Undo.
+ * is said as it is, and only what was filed is offered to Undo. `leftTyped`
+ * is how many ready documents the batch left alone because a person had
+ * typed a name or a description for them.
  */
-function batchOutcome(ids: string[], queue: QueueItem[]) {
+function batchOutcome(ids: string[], queue: QueueItem[], leftTyped = 0) {
   const now = (id: string) => queue.find((item) => item.id === id);
   const completed = ids.flatMap((id) => { const item = now(id); return item?.status === 'completed' ? [item] : []; });
   const filed = completed.filter((item) => !keptOriginal(item));
@@ -1061,10 +1260,11 @@ function batchOutcome(ids: string[], queue: QueueItem[]) {
   const later = ids.filter((id) => now(id)?.status === 'ready').length;
   const back = ids.filter((id) => now(id)?.status === 'review').length;
   const text = [
-    filed.length > 0 || (!named && !later && !back) ? renamedCount(filed.length) : '',
+    ids.length === 0 && leftTyped ? 'Nothing was renamed.' : filed.length > 0 || (!named && !later && !back) ? renamedCount(filed.length) : '',
     named ? `${named} already had ${named === 1 ? 'its name' : 'their names'}.` : '',
     later ? `${later} will be renamed when the queue is free.` : '',
     back ? `${back} ${back === 1 ? 'needs' : 'need'} review again.` : '',
+    leftTyped ? `${leftTyped} ${leftTyped === 1 ? 'was' : 'were'} left for you: ${leftTyped === 1 ? 'it has' : 'they have'} a name or a description you typed and did not file.` : '',
   ].filter(Boolean).join(' ');
   return { text, undoable: filed.filter((item) => item.undoable === true).map((item) => item.id) };
 }

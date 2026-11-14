@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { Locator, Page } from '@playwright/test';
-import { openDetails, queueCell } from './grid';
+import { detailsToggle, openDetails, queueCell } from './grid';
 
 /*
   The review panel scrolls under its decision - Approve & rename, Keep
@@ -300,15 +300,18 @@ for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) 
 }
 
 /*
-  Narrow, the review drawer opens again for a document it was open for, and
-  puts the caret in its name. Opened again under Settings - the window made
-  narrower while the question asked - it took the focus from the question,
-  and Enter, meant for the question, filed the held document.
+  Narrow, the review drawer opened again for a document it had been open
+  for, and put the caret in its name. Opened again under Settings - the
+  window made narrower while the question asked - it took the focus from the
+  question, and Enter, meant for the question, filed the held document.
+  Nothing behind Settings takes the focus now, and the drawer does not open
+  again by itself at all: it is asked for at the narrow width it opens at.
 */
-test('the review drawer opened again under Settings takes no focus from it', async ({ page }) => {
+test('no review drawer opens again under Settings, and nothing takes the focus from it', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 600 });
   await page.goto('/?learnedSpellings=held');
   const name = (await openDetails(page, HELD)).getByRole('textbox', { name: 'Filename' });
+  const shown = await name.inputValue();
   await page.setViewportSize({ width: 1400, height: 900 });
   const status = () => queueCell(page, HELD, 'status').textContent();
   const before = await status();
@@ -320,18 +323,476 @@ test('the review drawer opened again under Settings takes no focus from it', asy
   await page.keyboard.type('Cont');
   await expect(field).toBeFocused();
   await page.setViewportSize({ width: 800, height: 600 });
-  await expect(page.getByRole('dialog', { name: 'Review item' })).toBeVisible();
   await page.waitForTimeout(300);
+  await expect(page.getByRole('dialog', { name: 'Review item' })).toHaveCount(0);
   await expect(field).toBeFocused();
-  const shown = await name.inputValue();
   await page.keyboard.type('oso');
   await expect(field).toHaveValue('Contoso');
-  await expect(name).toHaveValue(shown);
   await page.keyboard.press('Enter');
   await expect(dialog.getByRole('group', { name: CONTOSO })).toHaveCount(0);
   await expect(dialog).toBeVisible();
   await page.waitForTimeout(300);
   await expect(page.locator('.toasts')).toHaveCount(0);
   expect(await status()).toBe(before);
+  // Asked for again once Settings is closed, the held document's name is as it was.
+  await dialog.getByRole('button', { name: 'Close settings' }).click();
+  await expect(page.getByRole('dialog', { name: 'Review item' })).toHaveCount(0);
+  await openDetails(page, HELD);
   await expect(name).toHaveValue(shown);
+  await expect(page.locator('.toasts')).toHaveCount(0);
 });
+
+/*
+  What was typed for a name and a description and not filed is the window's,
+  not the review panel's, so it is still there when the panel comes back.
+  The panel kept it, and the panel leaves the screen without anything being
+  decided: a wide panel when the window is made narrower than 1100px - half
+  of a 1920px screen is 960px - a drawer when it is made wider, and either
+  by Close review. Each time both fields came back as Intern's proposal.
+*/
+const LEASE = 'Lease Agreement - 123 Main St.pdf';
+const WIDE = { width: 1400, height: 900 };
+const NARROW = { width: 800, height: 600 };
+
+for (const [label, first, second] of [['a wide panel, the window made narrower and wider again', WIDE, NARROW], ['a drawer, the window made wider and narrower again', NARROW, WIDE]] as const) {
+  test(`what was typed for a name and a description is still there: ${label}`, async ({ page }) => {
+    await page.setViewportSize(first);
+    await page.goto('/');
+    const panel = page.locator('#review-panel');
+    const name = panel.getByRole('textbox', { name: 'Filename' });
+    const description = panel.getByRole('textbox', { name: 'Description' });
+    await openDetails(page, LEASE);
+    await name.click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' v2 signed');
+    await description.click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' Countersigned copy received 3 May; clause 7 amended by hand.');
+    const typed = { name: await name.inputValue(), description: await description.inputValue() };
+    expect(typed.name).toMatch(/TenantCo Inc v2 signed$/);
+    expect(typed.description).toMatch(/amended by hand\.$/);
+    const stillThere = async () => {
+      await expect(name).toHaveValue(typed.name);
+      await expect(description).toHaveValue(typed.description);
+    };
+    const status = () => queueCell(page, LEASE, 'status').textContent();
+    const before = await status();
+
+    // A drawer opens only when asked for at the narrow width: back there, it
+    // is closed until it is. A wide panel left open is there again.
+    const backAtFirst = async () => {
+      await page.setViewportSize(first);
+      if (first !== NARROW) return;
+      await page.waitForTimeout(200);
+      await expect(panel).toHaveCount(0);
+      await detailsToggle(page).click();
+    };
+
+    // At the other width the panel is off screen: narrow, a drawer opens
+    // only when asked; wide, the panel was never left open.
+    await page.setViewportSize(second);
+    await expect(panel).toHaveCount(0);
+    await backAtFirst();
+    await stillThere();
+
+    // Asked for at the other width, it has what was typed there too.
+    await page.setViewportSize(second);
+    await expect(panel).toHaveCount(0);
+    await detailsToggle(page).click();
+    await stillThere();
+    await backAtFirst();
+    await stillThere();
+
+    // Closed by its own button and opened again.
+    await panel.getByRole('button', { name: 'Close review' }).click();
+    await expect(panel).toHaveCount(0);
+    await detailsToggle(page).click();
+    await stillThere();
+
+    // Nothing was filed by any of it, and Enter in the name files what was typed.
+    await expect(page.locator('.toasts')).toHaveCount(0);
+    expect(await status()).toBe(before);
+    await name.click();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.toasts')).toContainText('Renamed 1 document.');
+    // Narrow, review has moved on in the drawer, over the queue.
+    if (await page.getByRole('dialog', { name: 'Review item' }).isVisible()) await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: /^Completed/ }).click();
+    await expect(queueCell(page, LEASE, 'proposed')).toContainText(`${typed.name}.pdf`);
+    await expect(queueCell(page, LEASE, 'description')).toContainText(typed.description);
+  });
+}
+
+/*
+  A name or a description with the caret in it leaves the screen only by
+  something the person did. The panel closes by itself when the window
+  changes width - a snap to half the screen, with the caret still in the
+  description - and the caret went to nothing: the rest of the sentence was
+  review's keys (j and k move the selection, Enter opens a document at its
+  name and files it). What the fields held stays on screen instead, above
+  the queue, read-only, with the caret in it.
+*/
+for (const [label, first, second] of [['a wide panel closed by a narrower window', WIDE, NARROW], ['a drawer closed by a wider window', NARROW, WIDE]] as const) {
+  test(`what is being typed keeps the caret, and what is typed next decides nothing: ${label}`, async ({ page }) => {
+    await page.setViewportSize(first);
+    await page.goto('/');
+    const panel = page.locator('#review-panel');
+    const name = panel.getByRole('textbox', { name: 'Filename' });
+    const description = panel.getByRole('textbox', { name: 'Description' });
+    await openDetails(page, LEASE);
+    await name.click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' v2 signed');
+    await description.click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' Countersigned copy received 3 May');
+    const typed = { name: await name.inputValue(), description: await description.inputValue() };
+    const statuses = () => page.locator('.queue-grid [data-column="status"]').allTextContents();
+    const before = await statuses();
+    const selected = page.locator('.queue-grid tr[aria-current="true"]');
+    await expect(selected).toContainText(LEASE);
+
+    await page.setViewportSize(second);
+    await expect(panel).toHaveCount(0);
+    const kept = page.getByRole('textbox', { name: 'What you had typed' });
+    await expect(kept).toBeFocused();
+    await expect(kept).toHaveValue(`${typed.name}\n\n${typed.description}`);
+    await expect(page.getByRole('group', { name: `Kept from ${LEASE}` })).toContainText('What you typed is kept with the document');
+
+    // Tab, to go on to the next field; the rest of the sentence; and each route that decided a document nobody had looked at.
+    await page.keyboard.press('Tab');
+    await page.keyboard.type(' subject to both.');
+    await page.keyboard.press('Control+Enter');
+    await page.keyboard.press('ArrowUp');
+    await page.keyboard.press('Control+Enter');
+    await page.keyboard.type(' as taken by Deutsche Bank');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Alt+k');
+    await page.keyboard.press('Delete');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(300);
+    await expect(kept).toBeFocused();
+    await expect(kept).toHaveValue(`${typed.name}\n\n${typed.description}`);
+    await expect(panel).toHaveCount(0);
+    await expect(page.getByRole('group', { name: 'Confirm removal' })).toHaveCount(0);
+    await expect(page.locator('.toasts')).toHaveCount(0);
+    await expect(selected).toContainText(LEASE);
+    expect(await statuses()).toEqual(before);
+
+    // Done takes it away; the focus goes to the view's own button, where Enter files nothing.
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    await expect(kept).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^Queue, \d+$/ })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(panel).toHaveCount(0);
+    await expect(page.locator('.toasts')).toHaveCount(0);
+    // Asked for again, the panel has what was typed.
+    await openDetails(page, LEASE);
+    await expect(name).toHaveValue(typed.name);
+    await expect(description).toHaveValue(typed.description);
+    expect(await statuses()).toEqual(before);
+  });
+}
+
+/*
+  A drawer is asked for at the narrow width it opens at. Asked for once, it
+  opened again by itself each time the window was next made narrow, over
+  whatever row was selected by then and with the caret in its name - even
+  after Close review at the wide width. The Enter meant for the row's cell,
+  which opens details there, filed the document.
+*/
+for (const closedWide of [false, true]) {
+  test(`a drawer asked for once does not open again by itself when the window is next made narrow${closedWide ? ', after Close review at the wide width' : ''}`, async ({ page }) => {
+    const EMPLOYMENT = 'Employment Agreement - John Smith.pdf';
+    await page.setViewportSize(NARROW);
+    await page.goto('/');
+    const drawer = page.getByRole('dialog', { name: 'Review item' });
+    await queueCell(page, LEASE).click();
+    await page.keyboard.press('Enter');
+    await expect(drawer).toContainText(LEASE);
+
+    await page.setViewportSize(WIDE);
+    await expect(page.locator('#review-panel')).toHaveCount(0);
+    if (closedWide) {
+      await detailsToggle(page).click();
+      await page.locator('#review-panel').getByRole('button', { name: 'Close review' }).click();
+      await expect(page.locator('#review-panel')).toHaveCount(0);
+    }
+    const cell = queueCell(page, EMPLOYMENT);
+    await cell.click();
+    const status = () => queueCell(page, EMPLOYMENT, 'status').textContent();
+    const before = await status();
+
+    await page.setViewportSize(NARROW);
+    await page.waitForTimeout(400);
+    await expect(drawer).toHaveCount(0);
+    await expect(cell).toBeFocused();
+    // The Enter aimed at the cell opens the document's details, and files nothing.
+    await page.keyboard.press('Enter');
+    await expect(drawer).toContainText(EMPLOYMENT);
+    await expect(drawer.getByRole('textbox', { name: 'Filename' })).toBeFocused();
+    await page.waitForTimeout(300);
+    await expect(page.locator('.toasts')).toHaveCount(0);
+    expect(await status()).toBe(before);
+  });
+}
+
+/*
+  Rename all ready files Intern's proposal for each ready document. For one
+  whose name a person had typed and not filed it sent the proposal all the
+  same, said "Renamed 3 documents", and the typed name was gone. It leaves
+  such a document for the person, counts what it will rename, and says what
+  it left.
+*/
+test('Rename all ready leaves a ready document whose name was typed and not filed, and says so', async ({ page }) => {
+  const EMPLOYMENT = 'Employment Agreement - John Smith.pdf';
+  const NDA = 'NDA - Acme Corp.docx';
+  await page.setViewportSize(WIDE);
+  await page.goto('/');
+  const panel = page.locator('#review-panel');
+  const name = panel.getByRole('textbox', { name: 'Filename' });
+  await openDetails(page, EMPLOYMENT);
+  await name.click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type(' (corrected)');
+  const typed = await name.inputValue();
+  // Left for the next row, as review does.
+  await queueCell(page, NDA).click();
+  await expect(panel).toContainText(NDA);
+  const all = page.getByRole('button', { name: 'Rename all ready' });
+  await expect(all).toHaveText('Rename all ready 2');
+  await expect(page.getByRole('button', { name: '3 ready' })).toBeVisible();
+
+  await all.click();
+  await expect(page.locator('.toasts')).toContainText('Renamed 2 documents. 1 was left for you: it has a name or a description you typed and did not file.');
+  await expect(queueCell(page, EMPLOYMENT, 'status')).toContainText('Ready');
+  await expect(queueCell(page, EMPLOYMENT, 'proposed')).toContainText('2024-04-12 Employment Agreement with John Smith.pdf');
+  await expect(queueCell(page, NDA)).toHaveCount(0);
+
+  // What was typed is still its name in review, and Enter there files it.
+  await openDetails(page, EMPLOYMENT);
+  await expect(name).toHaveValue(typed);
+  await name.click();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.toasts')).toContainText('Renamed 1 document.');
+  await page.getByRole('button', { name: /^Completed/ }).click();
+  await expect(queueCell(page, EMPLOYMENT, 'proposed')).toContainText(`${typed}.pdf`);
+  await expect(queueCell(page, NDA, 'proposed')).toContainText('2024-03-01 Non-Disclosure Agreement with Acme Corp.docx');
+});
+
+/*
+  The fields go by themselves in other ways too, and the panel stays: Intern
+  reads the document again with nobody asking (every untouched provisional
+  reading at once, when the accurate model becomes usable - and typing is not
+  touching), another machine files it, or its file is taken from the Queue
+  folder. Typed after the Lease left the queue, " subject to both." and
+  Ctrl+Enter filed the first document in the queue: the j selects it, the
+  panel shows it, Ctrl+Enter approves it. After a re-reading, ArrowUp and
+  Ctrl+Enter approved the document above; " Bank" and Alt+K kept another's
+  original name; " taken", Delete and Enter removed one. `?queue=changes` is
+  the demo's queue with `window.internQueue` to change it as the backend does.
+*/
+type QueueByItself = { change(id: string, change: Record<string, unknown>): void; leave(id: string): void };
+const queueByItself = (page: Page, act: 'read again' | 'new reading' | 'left the queue' | 'filed elsewhere') => page.evaluate((how) => {
+  const queue = (window as unknown as { internQueue: QueueByItself }).internQueue;
+  if (how === 'read again') queue.change('lease', { status: 'processing', stage: 'reading', proposedFilename: undefined, description: undefined, reason: undefined });
+  else if (how === 'new reading') queue.change('lease', { status: 'review', stage: undefined, proposedFilename: '2023-09-15 Lease between ABC Properties and TenantCo.pdf', description: 'A lease of 123 Main St.', proposalRevision: '1' });
+  else if (how === 'filed elsewhere') queue.change('lease', { status: 'completed', filedName: '2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf' });
+  else queue.leave('lease');
+}, act);
+/** Tab, to go on to the next field; the rest of a sentence; and each route that decided a document nobody had looked at. */
+const typeOn = async (page: Page) => {
+  await page.keyboard.press('Tab');
+  await page.keyboard.type(' subject to both.');
+  await page.keyboard.press('Control+Enter');
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('Control+Enter');
+  await page.keyboard.type(' as taken by Deutsche Bank');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Alt+k');
+  await page.keyboard.type(' taken');
+  await page.keyboard.press('Delete');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(300);
+};
+/** Every other document's row, as it reads: its status and the name proposed for it. */
+const otherRows = (page: Page) => page.locator('.queue-grid tbody tr').evaluateAll((rows) => rows.map((row) => `${row.querySelector('[data-column="original"]')?.textContent} | ${row.querySelector('[data-column="status"]')?.textContent} | ${row.querySelector('[data-column="proposed"]')?.textContent}`).filter((row) => !row.startsWith('Lease Agreement')));
+
+for (const size of [WIDE, NARROW]) for (const how of ['read again', 'filed elsewhere', 'left the queue'] as const) {
+  test(`a document that is ${how === 'left the queue' ? 'taken from the queue' : how} while its description is typed keeps what was typed and the caret, and what is typed next decides nothing, at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await page.goto('/?queue=changes');
+    const panel = await openDetails(page, LEASE);
+    const name = panel.getByRole('textbox', { name: 'Filename' });
+    const description = panel.getByRole('textbox', { name: 'Description' });
+    await name.click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' v2 signed');
+    await description.click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' Countersigned copy received 3 May');
+    const typed = `${await name.inputValue()}\n\n${await description.inputValue()}`;
+    const before = await otherRows(page);
+    const kept = page.getByRole('textbox', { name: 'What you had typed' });
+    const nothingDecided = async () => {
+      await expect(kept).toBeFocused();
+      await expect(kept).toHaveValue(typed);
+      await expect(page.getByRole('group', { name: 'Confirm removal' })).toHaveCount(0);
+      await expect(page.locator('.toasts')).toHaveCount(0);
+      expect(await otherRows(page)).toEqual(before);
+    };
+
+    await queueByItself(page, how);
+    await expect(description).toHaveCount(0);
+    await expect(kept).toHaveAttribute('readonly', '');
+    await nothingDecided();
+    await typeOn(page);
+    await nothingDecided();
+
+    if (how === 'left the queue') {
+      // Above the queue: the document and its panel have gone, and nothing is selected.
+      await expect(page.locator('#review-panel')).toHaveCount(0);
+      await expect(page.getByRole('group', { name: `Kept from ${LEASE}` })).toContainText('left the queue while you were in its name or description');
+      await expect(page.locator('.queue-grid tr[aria-current="true"]')).toHaveCount(0);
+      await page.getByRole('button', { name: 'Done', exact: true }).click();
+      await expect(kept).toHaveCount(0);
+      await expect(page.getByRole('button', { name: /^Queue, \d+$/ })).toBeFocused();
+      expect(await otherRows(page)).toEqual(before);
+      return;
+    }
+    // In the panel, which still shows the document.
+    await expect(panel).toContainText(LEASE);
+    await expect(panel.getByRole('group', { name: 'Kept from before this document changed' })).toBeVisible();
+    if (how === 'filed elsewhere') return;
+
+    // The new reading is shown as it is, beside what was typed: the caret is not in it, and nothing typed goes into it.
+    await queueByItself(page, 'new reading');
+    await expect(name).toHaveValue('2023-09-15 Lease between ABC Properties and TenantCo');
+    await expect(description).toHaveValue('A lease of 123 Main St.');
+    await nothingDecided();
+    await typeOn(page);
+    await nothingDecided();
+    await expect(name).toHaveValue('2023-09-15 Lease between ABC Properties and TenantCo');
+    await expect(description).toHaveValue('A lease of 123 Main St.');
+    // Escape is the way out from the keyboard: to its own button, which takes it away. Only the person does.
+    await page.keyboard.press('Escape');
+    await expect(panel.getByRole('button', { name: 'Discard what I had' })).toBeFocused();
+    await expect(panel).toBeVisible();
+    await page.keyboard.press('Enter');
+    await expect(kept).toHaveCount(0);
+    await expect(panel.getByRole('heading', { name: 'Review item' })).toBeFocused();
+    await expect(page.locator('.toasts')).toHaveCount(0);
+    expect(await otherRows(page)).toEqual(before);
+  });
+}
+
+/*
+  A reading the person asks for is another matter: Analyze again starts from
+  Intern's proposal, as it always has, and nothing of what was typed over the
+  reading before is kept beside it.
+*/
+test('Analyze again starts from the new reading, with nothing kept beside it', async ({ page }) => {
+  await page.setViewportSize(WIDE);
+  await page.goto('/?queue=changes');
+  const panel = await openDetails(page, LEASE);
+  const name = panel.getByRole('textbox', { name: 'Filename' });
+  const proposed = await name.inputValue();
+  await name.click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type(' v2 signed');
+  await panel.getByRole('button', { name: 'More review actions' }).click();
+  await panel.getByRole('button', { name: 'Analyze again' }).click();
+  await expect(queueCell(page, LEASE, 'status')).toContainText(/review/i, { timeout: 15_000 });
+  await openDetails(page, LEASE);
+  await expect(name).toHaveValue(proposed);
+  await expect(page.getByRole('textbox', { name: 'What you had typed' })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: "Back to Intern's proposal" })).toHaveCount(0);
+});
+
+/*
+  What is typed is kept through closing the panel, and nothing took it back:
+  Escape used to. Twelve letters deleted from the Lease's name, Escape, Enter
+  on the row, Enter: the document was filed as "... ABC Properties LLC and",
+  while its row still read "... and TenantCo Inc". Ctrl+Z in the field shown
+  again gives nothing back. "Back to Intern's proposal" does.
+*/
+test('a name spoiled and kept through Escape is taken back with "Back to Intern\'s proposal", and Enter then files the proposal', async ({ page }) => {
+  await page.setViewportSize(NARROW);
+  await page.goto('/');
+  const drawer = page.getByRole('dialog', { name: 'Review item' });
+  const name = drawer.getByRole('textbox', { name: 'Filename' });
+  const back = drawer.getByRole('button', { name: "Back to Intern's proposal" });
+  await queueCell(page, LEASE).click();
+  await page.keyboard.press('Enter');
+  await expect(name).toBeFocused();
+  const proposed = await name.inputValue();
+  await expect(back).toHaveCount(0);
+  await page.keyboard.press('Control+End');
+  for (let i = 0; i < 12; i += 1) await page.keyboard.press('Backspace');
+  const spoiled = proposed.slice(0, -12);
+  await expect(name).toHaveValue(spoiled);
+  await expect(back).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(drawer).toHaveCount(0);
+  await expect(queueCell(page, LEASE, 'proposed')).toContainText(`${proposed}.pdf`);
+  await page.keyboard.press('Enter');
+  await expect(name).toHaveValue(spoiled);
+  await page.keyboard.press('Control+z');
+  await expect(name).toHaveValue(spoiled);
+
+  // A double-click takes it back once and presses nothing else.
+  await back.dblclick();
+  await expect(name).toHaveValue(proposed);
+  await expect(back).toHaveCount(0);
+  await expect(drawer).toContainText(LEASE);
+  await page.waitForTimeout(300);
+  await expect(page.locator('.toasts')).toHaveCount(0);
+  // Spoiled again and taken back with one press: the caret is in the name.
+  await name.click();
+  await page.keyboard.press('Control+End');
+  for (let i = 0; i < 12; i += 1) await page.keyboard.press('Backspace');
+  await expect(name).toHaveValue(spoiled);
+  await back.click();
+  await expect(name).toHaveValue(proposed);
+  await expect(name).toBeFocused();
+  await expect(back).toHaveCount(0);
+  // The fields are new ones: no undo step brings the spoiled name back, or anything else.
+  await page.keyboard.press('Control+z');
+  await expect(name).toHaveValue(proposed);
+  await page.keyboard.press('Control+y');
+  await expect(name).toHaveValue(proposed);
+
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.toasts')).toContainText('Renamed 1 document.');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: /^Completed/ }).click();
+  await expect(queueCell(page, LEASE, 'proposed')).toContainText(`${proposed}.pdf`);
+});
+
+/*
+  A document removed from the keyboard - Delete, and Enter on the question -
+  leaves the focus in the table, where the arrow keys go on. It had come to
+  land on the view's button, where they move nothing: that is where the focus
+  goes when a document leaves by itself, and nowhere else.
+*/
+for (const size of [WIDE, NARROW]) {
+  test(`a document removed from the keyboard leaves the focus on a cell of the table, at ${size.width}x${size.height}`, async ({ page }) => {
+    const EMPLOYMENT = 'Employment Agreement - John Smith.pdf';
+    const NDA = 'NDA - Acme Corp.docx';
+    await page.setViewportSize(size);
+    await page.goto('/?queue=changes');
+    const panel = await openDetails(page, LEASE);
+    await panel.locator('h2').focus();
+    await page.keyboard.press('Delete');
+    await expect(panel.getByRole('group', { name: 'Confirm removal' })).toBeVisible();
+    await page.keyboard.press('Enter');
+    await expect(queueCell(page, LEASE)).toHaveCount(0);
+    await expect(page.locator('#review-panel')).toHaveCount(0);
+    await expect(queueCell(page, EMPLOYMENT)).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(queueCell(page, NDA)).toBeFocused();
+    await expect(page.locator('.queue-grid tr[aria-current="true"]')).toContainText(NDA);
+  });
+}
