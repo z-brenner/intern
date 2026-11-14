@@ -1955,6 +1955,13 @@
        "Girafa.com, Inc."
       ],
       "relation": "from"
+     },
+     {
+      "parties": [
+       "Girafa.com, Inc.",
+       "Amazon Web Services, LLC"
+      ],
+      "relation": "between"
      }
     ],
     "party_roles": [
