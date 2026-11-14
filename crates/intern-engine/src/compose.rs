@@ -2531,9 +2531,43 @@ mod tests {
         assert_eq!(delivered.relation, PartyRelation::None);
         assert_eq!(delivered.parties, vec!["Ridgewell Textiles Ltd."]);
         assert_eq!(delivered.basis, "issued: unresolved");
+        // Nor where the order names the delivery party first. One the reply
+        // called the recipient too heads the cast as its customer, and no
+        // party is named; one only the document's label marks leaves the
+        // vendor with no joining word.
+        for (proposed, parties, basis) in [
+            (
+                Some(PartyRole::Recipient),
+                vec![],
+                "issued: the first party is the reply's customer",
+            ),
+            (None, vec!["Ridgewell Textiles Ltd."], "issued: unresolved"),
+        ] {
+            let delivered = relation_from_roles(
+                DocumentClass::Issued,
+                Some("Purchase Order"),
+                &[
+                    member(
+                        "Thornbury Outdoor Gear Co.",
+                        Some(PartyRole::Recipient),
+                        proposed,
+                    ),
+                    member(
+                        "Ridgewell Textiles Ltd.",
+                        Some(PartyRole::Vendor),
+                        Some(PartyRole::Vendor),
+                    ),
+                ],
+                RelationCues::default(),
+            );
+            assert_eq!(delivered.relation, PartyRelation::None, "{proposed:?}");
+            assert_eq!(delivered.parties, parties, "{proposed:?}");
+            assert_eq!(delivered.basis, basis, "{proposed:?}");
+        }
         // A party at the head that nothing calls the vendor is the order's
         // issuer on the cue, and an invoice's vendor is its issuer on the
-        // cue and as the other side of its customer.
+        // cue and as the other side of its customer, whichever of the two
+        // the invoice names first.
         let headed = relation_from_roles(
             DocumentClass::Issued,
             Some("Purchase Order"),
@@ -2554,22 +2588,26 @@ mod tests {
         );
         assert_eq!(billed.relation, PartyRelation::From);
         assert_eq!(billed.basis, "issued: the issuer's cues");
-        let billed = relation_from_roles(
-            DocumentClass::Issued,
-            Some("Invoice"),
-            &[
-                member("Ridgewell Textiles Ltd.", None, Some(PartyRole::Seller)),
-                member(
-                    "Thornbury Outdoor Gear Co.",
-                    Some(PartyRole::Recipient),
-                    Some(PartyRole::Recipient),
-                ),
-            ],
-            RelationCues::default(),
+        let seller = member("Ridgewell Textiles Ltd.", None, Some(PartyRole::Seller));
+        let customer = member(
+            "Thornbury Outdoor Gear Co.",
+            Some(PartyRole::Recipient),
+            Some(PartyRole::Recipient),
         );
-        assert_eq!(billed.relation, PartyRelation::From);
-        assert_eq!(billed.parties, vec!["Ridgewell Textiles Ltd."]);
-        assert_eq!(billed.basis, "issued: the other side of the customer");
+        for cast in [[seller.clone(), customer.clone()], [customer, seller]] {
+            let billed = relation_from_roles(
+                DocumentClass::Issued,
+                Some("Invoice"),
+                &cast,
+                RelationCues::default(),
+            );
+            assert_eq!(billed.relation, PartyRelation::From, "{cast:?}");
+            assert_eq!(billed.parties, vec!["Ridgewell Textiles Ltd."], "{cast:?}");
+            assert_eq!(
+                billed.basis, "issued: the other side of the customer",
+                "{cast:?}"
+            );
+        }
         // An invoice is still from its vendor.
         let invoice = relation_from_roles(
             DocumentClass::Issued,
