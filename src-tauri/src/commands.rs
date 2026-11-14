@@ -5535,9 +5535,10 @@ pub async fn house_rule_use(id: String, state: State<'_, AppState>) -> Result<()
 
 /// Use a learned spelling on its own: the person, told in plain words that
 /// every later document Intern reads as naming its word will be named by it
-/// and may be filed without their check, checks it - in the review window
-/// or Settings - for the spelling exactly as they were shown it (`kind`,
-/// `from`, `to`). The only way a spelling is checked; an approval never is.
+/// and may be filed without their check, checks it - in Settings, under
+/// Learned spellings, the only place that offers it - for the spelling
+/// exactly as they were shown it (`kind`, `from`, `to`). The only way a
+/// spelling is checked; an approval never is.
 /// Refused as `RULE_NOT_FOUND` for a spelling forgotten, and as
 /// `RULE_CHANGED` for one not in use or that reads otherwise now; a
 /// spelling for the same word learned later starts over unchecked.

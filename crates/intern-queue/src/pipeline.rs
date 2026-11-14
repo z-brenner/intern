@@ -1938,9 +1938,10 @@ pub struct LearnedRule {
     /// Whether Intern applies it: made often enough, or told to use it now.
     pub active: bool,
     /// How many times a person has checked this spelling: chosen "Use on
-    /// its own" for it, in the review window or in the list of learned
-    /// spellings, after Intern said in plain words what that does, for the
-    /// spelling exactly as they were shown it (see [`Pipeline::check_rule`]).
+    /// its own" for it in Settings, under Learned spellings (the only
+    /// place that offers it), after Intern said in plain words what that
+    /// does, for the spelling exactly as they were shown it (see
+    /// [`Pipeline::check_rule`]).
     /// Nothing else checks it. An approval of a name the spelling changed
     /// does not, on any document: whether a document gives in its own
     /// words what a spelling adds - so that the name is right there
@@ -3742,12 +3743,12 @@ impl Pipeline {
     }
 
     /// Check the learned spelling `id` on a person's explicit word: "Use on
-    /// its own", chosen in the review window or the list of learned
-    /// spellings after Intern has said in plain words that every later
-    /// document it reads as naming the word will be named by the spelling,
-    /// and may be filed under that name without their check. The only way
-    /// a spelling is checked (see [`LearnedRule::confirmed`]): from then on
-    /// the names it changes are filed like any other reading.
+    /// its own", chosen in Settings, under Learned spellings (the only
+    /// place that offers it), after Intern has said in plain words that
+    /// every later document it reads as naming the word will be named by
+    /// the spelling, and may be filed under that name without their check.
+    /// The only way a spelling is checked (see [`LearnedRule::confirmed`]):
+    /// from then on the names it changes are filed like any other reading.
     ///
     /// Only the spelling `shown` - its kind, the document's word and the
     /// spelling, exactly as the person was shown them - and only while it

@@ -8063,13 +8063,13 @@ fn no_approval_checks_a_spelling_however_a_document_gives_its_words() {
 
 /// "Smith" written as "John Smith", learned from agreements that each give
 /// John Smith's full name before calling him Smith. A person chooses "Use
-/// on its own" for it - in the review window or the list of learned
-/// spellings - and the choice counts only for the spelling exactly as they
-/// were shown it, in force: one with another spelling, another word or
-/// another kind, or a spelling that does not exist, is refused and checks
-/// nothing. Checked, the name held for it loses the reason but stays in
-/// review, unapproved, and the next agreement it changes is filed on its
-/// own. A spelling for the same word learned later starts over unchecked:
+/// on its own" for it - in Settings, under Learned spellings, the only
+/// place that offers it - and the choice counts only for the spelling
+/// exactly as they were shown it, in force: one with another spelling,
+/// another word or another kind, or a spelling that does not exist, is
+/// refused and checks nothing. Checked, the name held for it loses the
+/// reason but stays in review, unapproved, and the next agreement it
+/// changes is filed on its own. A spelling for the same word learned later starts over unchecked:
 /// refused while it is not in use, and once put in use ("Use now") the
 /// next name it changes waits again; the choice made for the old spelling
 /// does not check the new one, and asked for again as it was, is refused.
