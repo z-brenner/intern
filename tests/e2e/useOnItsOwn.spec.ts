@@ -11,8 +11,10 @@ import { openDetails } from './grid';
   Here no press, on the action that opens the question or on the yes
   itself, checks a spelling, in the review panel or in Settings, at two
   window sizes; typing the spelling does, with a click on the yes or with
-  Enter. Nor does text put in at once with no keys for it. And while the
-  question asks, no undo or redo changes a field behind it.
+  Enter. Nor does text put in at once with no keys for it. While the
+  question asks, what is typed after a press took the focus off its field
+  goes into it, and to nothing else, and no undo or redo changes a field
+  behind it.
 */
 
 const CONTOSO = 'Use on its own: Contoso Worldwide, Inc. written as Contoso';
@@ -203,6 +205,74 @@ for (const [name, open] of surfaces) {
       await page.keyboard.press('Enter');
       await expect(ridgeline).toHaveCount(0);
       await expect.poll(() => surface.checked()).toBe(before + 2);
+      await expect(root).toBeVisible();
+    });
+  }
+}
+
+/** The presses that take the focus off the question's field, each from the question open or, for a double-click, from its action. */
+const offTheField: [string, (page: Page, surface: Surface, question: Locator) => Promise<void>][] = [
+  ['a press on its waiting yes', async (page, surface, question) => {
+    await (await actionInSight(surface, CONTOSO)).click();
+    const at = await centre(question.getByRole('button', { name: 'Use on its own' }));
+    expect(await under(page, at)).toBe('the yes');
+    await page.mouse.click(at.x, at.y);
+  }],
+  ['a press on its sentence', async (_, surface, question) => {
+    await (await actionInSight(surface, CONTOSO)).click();
+    await question.locator('p').click();
+  }],
+  ['a double-click on its action', async (page, surface) => {
+    const at = await centre(await actionInSight(surface, CONTOSO));
+    await page.mouse.dblclick(at.x, at.y);
+  }],
+];
+
+// Only the question's field kept its keys. A press on its sentence or its
+// waiting yes, or the second press of a double-click on its action, took
+// the focus off it, and what was typed next went to the review shortcuts:
+// J moved review on, the drawer put the caret in the next document's name,
+// and the Enter meant for the question filed that document, unseen. A
+// character typed anywhere but in another field is the question's, and no
+// key is a shortcut while it asks.
+for (const [name, open] of surfaces) {
+  for (const size of sizes) {
+    test(`what is typed after a press took the focus off the field goes into it, in the ${name} at ${size.width}x${size.height}`, async ({ page }) => {
+      await page.setViewportSize(size);
+      const surface = await open(page);
+      const { root } = surface;
+      const before = await surface.checked();
+      const statuses = () => page.locator('.queue-grid [data-column="status"]').allTextContents();
+      const filed = await statuses();
+      const question = root.getByRole('group', { name: CONTOSO });
+      const field = question.getByRole('textbox');
+      const notYet = question.getByRole('status');
+      for (const [what, offIt] of offTheField) {
+        await offIt(page, surface, question);
+        await expect(question, what).toBeVisible();
+        if (what !== 'a double-click on its action') await expect(field, what).not.toBeFocused();
+        await page.keyboard.type('j');
+        await expect(field, what).toBeFocused();
+        await page.keyboard.press('Enter');
+        await page.keyboard.type('k');
+        await page.keyboard.press('Enter');
+        await expect(field, what).toHaveValue('jk');
+        await expect(notYet, what).toHaveText('That is not Contoso: type it as it is shown.');
+        expect(await statuses(), what).toEqual(filed);
+        if (name === 'review panel') await expect(root, what).toContainText('SOW final v3.pdf');
+        await page.keyboard.press('Escape');
+        await expect(question, what).toHaveCount(0);
+      }
+      // The spelling typed after a press on the sentence, and Enter: the spelling is checked, and nothing else.
+      await (await actionInSight(surface, CONTOSO)).click();
+      await question.locator('p').click();
+      await expect(field).not.toBeFocused();
+      await page.keyboard.type('Contoso');
+      await expect(field).toHaveValue('Contoso');
+      await page.keyboard.press('Enter');
+      await expect(question).toHaveCount(0);
+      await expect.poll(() => surface.checked()).toBe(before + 1);
+      expect(await statuses()).toEqual(filed);
       await expect(root).toBeVisible();
     });
   }

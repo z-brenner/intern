@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { afterAPress } from '../lib/lastInput';
+import { isTextField } from '../lib/textField';
 import type { HouseRule, LearnedRule } from '../types';
 
 /**
@@ -105,6 +106,79 @@ const TYPING_KEYS = new Set(['Process', 'Unidentified', 'Dead']);
 const typesText = (event: { key: string; ctrlKey: boolean; altKey: boolean; metaKey: boolean }) =>
   (!NAMED_KEY.test(event.key) || TYPING_KEYS.has(event.key)) && (!event.ctrlKey || event.altKey) && !event.metaKey;
 
+/** A key that types a character itself: not an input method's or a dead key, nor the space bar, which presses what has the focus. */
+const typesACharacter = (event: KeyboardEvent) => typesText(event) && !NAMED_KEY.test(event.key) && event.key !== ' ';
+
+/** A question asking: where it is, its field, and how it takes a character typed outside its field. */
+interface Asking { group: HTMLElement; field: HTMLInputElement; take(): void }
+
+/** The questions asking, the last opened last. */
+const asking: Asking[] = [];
+
+/**
+ * Whether "Use on its own" asks, in the review window or in Settings. While
+ * it does, no key is a shortcut (useReviewShortcuts), wherever the focus is.
+ */
+export const askingNow = (): boolean => asking.length > 0;
+
+/** Whether a dialog that keeps the keys to itself is open over `group`. */
+const underADialog = (group: Element) => [...group.ownerDocument.querySelectorAll('[aria-modal="true"]')].some((dialog) => !dialog.contains(group));
+
+/**
+ * Whether a key pressed at `target` is `question`'s: anywhere but in a text
+ * field - on nothing, on its sentence, on a button - unless a dialog is open
+ * over it. In a field the person put the focus in, a key is that field's.
+ */
+const isOwn = (question: Asking, target: Element | null) => !underADialog(question.group) && !isTextField(target);
+
+/** What a person puts the focus on to use: a button, a link, a field, a table's cell. */
+const CONTROLS = 'a[href], button, input, select, textarea, summary, [contenteditable="true"], [role="gridcell"]';
+
+/**
+ * Where a question went away by itself - not answered, not taken back -
+ * while the keys typed were its own: the app it was in. Until the person
+ * presses, or presses Tab or Escape, the keys after it go nowhere.
+ */
+let goneFrom: Element | undefined;
+/** Whether the last key pressed was Tab or Escape, which leave a question. */
+let leftByKey = false;
+
+/** The element `element` is in that is the page's own: the app's root. */
+function appOf(element: Element): Element {
+  let app = element;
+  while (app.parentElement && app.parentElement !== element.ownerDocument.body) app = app.parentElement;
+  return app;
+}
+
+/**
+ * Every key, before anything else on the page sees it. While a question
+ * asks, a character typed anywhere its own (`isOwn`) goes into its field,
+ * with the focus, and to nothing else: the browser types it where the focus
+ * is once the key is down. Once a question went away by itself
+ * (`goneFrom`), every key but Tab and Escape goes nowhere.
+ */
+function routeKey(event: KeyboardEvent) {
+  leftByKey = event.key === 'Tab' || event.key === 'Escape';
+  if (asking.length === 0) {
+    if (!goneFrom) return;
+    if (leftByKey || !goneFrom.isConnected) { goneFrom = undefined; return; }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
+  if (event.isComposing || event.keyCode === 229 || !typesACharacter(event)) return;
+  const target = event.target instanceof Element ? event.target : null;
+  const question = [...asking].reverse().find((candidate) => isOwn(candidate, target));
+  if (!question) return;
+  event.stopImmediatePropagation();
+  question.take();
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', routeKey, { capture: true });
+  window.addEventListener('pointerdown', () => { goneFrom = undefined; leftByKey = false; }, { capture: true, passive: true });
+}
+
 /**
  * The question "Use on its own" asks before it checks a spelling, where the
  * action was: the consequence, a field to type the spelling into, then Use
@@ -129,10 +203,21 @@ const typesText = (event: { key: string; ctrlKey: boolean; altKey: boolean; meta
  *
  * Keys typed in the field stay there, but for Tab, and Escape: Ctrl+Enter,
  * Alt+K and Alt+N neither approve, keep nor move on in review, and Enter
- * saves no settings. While it asks, no field changes but the one with the
- * focus: an undo or a redo, which goes to the field edited last wherever
- * the focus is and takes the focus there, changes no name nor setting
- * behind the question. The field starts empty for every question, and again
+ * saves no settings. Nor are keys typed elsewhere anyone else's while it
+ * asks (`routeKey`): a press on its sentence or its waiting yes, or the
+ * second press of a double-click on its action, takes the focus off its
+ * field, and the spelling typed next went to the review shortcuts - the K
+ * of "Deutsche Bank" moved review to the document before, the drawer put
+ * the caret in that one's name, and the Enter meant for the question filed
+ * it. A character typed anywhere but in another field, and not from a
+ * dialog over the question, goes into its field, with the focus; no other
+ * key is a shortcut (`askingNow`). Gone by itself - the document read
+ * again, the spelling changed - while what was typed was its own, it
+ * leaves the keys after it going nowhere until a press, Tab or Escape:
+ * the person typing has not seen it go. While it asks, no field changes
+ * but the one with the focus: an undo or a redo, which goes to the field
+ * edited last wherever the focus is and takes the focus there, changes no
+ * name nor setting behind the question. The field starts empty for every question, and again
  * when the spelling it asks about changes while it asks. Opened by a press,
  * the question takes the focus in its field and moves nothing under the
  * pointer (`afterAPress`); opened from the keyboard, it is brought into
@@ -165,6 +250,26 @@ function Question({ rule, describedBy, note, disabled, onConfirm, onCancel }: Qu
   const [notYet, setNotYet] = useState(false);
   const matches = typedOut(typed, rule.to);
   const ready = !disabled && matches;
+  // Answered, or taken back by its Cancel or Escape: not gone by itself.
+  const ended = useRef(false);
+  useLayoutEffect(() => {
+    const own: Asking = {
+      group: group.current!,
+      field: field.current!,
+      take: () => {
+        own.field.focus({ preventScroll: true });
+        own.group.scrollIntoView?.({ block: 'nearest' });
+      },
+    };
+    asking.push(own);
+    goneFrom = undefined;
+    return () => {
+      asking.splice(asking.indexOf(own), 1);
+      // Still on the page as it goes: where the focus is, keys were its own.
+      const at = own.group.ownerDocument.activeElement;
+      if (!ended.current && !leftByKey && (at === own.field || (isOwn(own, at) && !at?.matches(CONTROLS)))) goneFrom = appOf(own.group);
+    };
+  }, []);
   useEffect(() => {
     const input = field.current;
     if (!afterAPress()) group.current?.scrollIntoView?.({ block: 'nearest' });
@@ -185,11 +290,12 @@ function Question({ rule, describedBy, note, disabled, onConfirm, onCancel }: Qu
     };
   }, []);
   const answer = () => {
-    if (ready) onConfirm();
+    if (ready) { ended.current = true; onConfirm(); }
     else if (!matches && typed.trim() !== '') setNotYet(true);
   };
+  const cancel = () => { ended.current = true; onCancel(); };
   return <div ref={group} className="rule-confirm" role="group" aria-label={`Use on its own: ${spellingLabel(rule)}`} aria-describedby={describedBy} onKeyDown={(event) => {
-    if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); onCancel(); }
+    if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); cancel(); }
   }}>
     <p id={describedBy}>{onItsOwnConsequence(rule)} Do this only if that is right for every one of them.{note ? <> {note}</> : null}</p>
     <label className="rule-confirm-field">Type <q>{rule.to}</q> to use it on its own
@@ -218,7 +324,7 @@ function Question({ rule, describedBy, note, disabled, onConfirm, onCancel }: Qu
         }} />
     </label>
     <span className="rule-confirm-buttons"><button type="button" className="primary" disabled={!ready} onClick={answer}>Use on its own</button>
-      <button type="button" onClick={onCancel}>Cancel</button></span>
+      <button type="button" onClick={cancel}>Cancel</button></span>
     <span className="rule-confirm-not-yet" role="status">{notYet && !matches ? <>That is not <q>{rule.to}</q>: type it as it is shown.</> : null}</span>
   </div>;
 }

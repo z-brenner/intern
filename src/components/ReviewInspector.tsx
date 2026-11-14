@@ -12,7 +12,7 @@ import type { ReviewInspectorHandle } from '../features/review/useReviewShortcut
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
 import type { DesktopBridge } from '../lib/bridge';
 import type { HouseRule, LearnedRule, ModelReading, QueueItem } from '../types';
-import { UseOnItsOwnQuestion, failureCode, spellingLabel } from './UseOnItsOwn';
+import { UseOnItsOwnQuestion, askingNow, failureCode, spellingLabel } from './UseOnItsOwn';
 import { afterAPress } from '../lib/lastInput';
 
 /**
@@ -292,8 +292,12 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     const room = box.top - 12 - panel.getBoundingClientRect().top;
     if (under > 0 && room > 0) panel.scrollTop += Math.min(under, room);
   };
+  // The drawer puts the caret in the name of the document it shows - but
+  // not while "Use on its own" asks: the window narrowing into a drawer took
+  // the focus out of its field, and the spelling typed next went into the
+  // name, where Enter files it.
   useEffect(() => {
-    if (!drawer) return;
+    if (!drawer || askingNow()) return;
     const filenameInput = filenameRef.current;
     if (filenameInput && !filenameInput.disabled) filenameInput.focus();
     else inspectorRef.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();

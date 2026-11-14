@@ -421,6 +421,43 @@ describe('the spellings Intern has learned', () => {
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
   });
 
+  // A press on the sentence, or on the waiting yes, took the focus off the
+  // question's field, and the spelling typed next went nowhere - or, in
+  // the review window, to its shortcuts. What is typed is the question's
+  // wherever the focus is in the dialog, but in another field.
+  it('takes a character typed after the focus left its field into the field', async () => {
+    const base = createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] });
+    const houseRuleCheck = vi.fn(base.houseRuleCheck);
+    const onSave = vi.fn(base.saveSettings);
+    render(<App bridge={{ ...base, houseRuleCheck, saveSettings: onSave }} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    const names = within(dialog).getByRole('textbox', { name: "Your organization's names" });
+    fireEvent.click(within(list).getByRole('button', { name: /^Use on its own:/ }));
+    const field = within(list).getByRole('textbox');
+    for (const [where, focusAway] of [
+      ['on its row', () => within(list).getByRole('listitem').focus()],
+      ['on nothing', () => (document.activeElement as HTMLElement).blur()],
+      ['on Save', () => within(dialog).getByRole('button', { name: 'Save settings' }).focus()],
+      ['on its Cancel', () => within(list).getByRole('button', { name: 'Cancel' }).focus()],
+    ] as const) {
+      focusAway();
+      expect(field, where).not.toHaveFocus();
+      expect(fireEvent.keyDown(document.activeElement ?? document.body, { key: 'M' }), where).toBe(true);
+      expect(field, where).toHaveFocus();
+    }
+    // Not from another field, whose keys are its own.
+    names.focus();
+    fireEvent.keyDown(names, { key: 'M' });
+    expect(names).toHaveFocus();
+    field.focus();
+    typeInto(field, 'Meeting Minutes');
+    fireEvent.keyDown(field, { key: 'Enter' });
+    await waitFor(() => expect(houseRuleCheck).toHaveBeenCalledWith('2', { kind: 'document_type', from: 'Quarterly Operations Review', to: 'Meeting Minutes' }));
+    expect(onSave).not.toHaveBeenCalled();
+    expect(dialog).toBeInTheDocument();
+  });
+
   // An undo or a redo goes to the field edited last, wherever the focus
   // is, and takes the focus there: Ctrl+Z in the question's field undid an
   // unsaved edit to this machine's name and moved the focus into it, where

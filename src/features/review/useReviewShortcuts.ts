@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import type { QueueItem } from '../../types';
 import { itemActions } from './actions';
+import { askingNow } from '../../components/UseOnItsOwn';
+import { isTextField } from '../../lib/textField';
 
 /**
  * What the review panel does when a shortcut asks. The panel owns the name
@@ -37,15 +39,6 @@ export interface ReviewShortcutOptions {
   onDeleteRefused?(): void;
 }
 
-const NOT_TEXT = new Set(['button', 'checkbox', 'radio', 'submit', 'reset', 'range', 'color', 'file', 'image']);
-
-/** Somewhere typing goes into a field, where a letter is a letter and not a command. */
-function isTextField(target: Element | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
-  return target instanceof HTMLInputElement && !NOT_TEXT.has(target.type);
-}
-
 /**
  * The letter a chord was pressed with: the one the key types on this
  * keyboard's layout, or where that is no Latin letter (a Cyrillic or Greek
@@ -74,12 +67,16 @@ function chordLetter(event: KeyboardEvent): string {
  *   from those fields as well. After every decision the caret is in a name,
  *   where J is a letter, so there was no key for "not this one yet": the
  *   Next undecided link was three presses of Shift+Tab away;
- * - but none of those three from the field "Use on its own" asks a spelling
- *   to be typed into, whose keys, but for Tab and Escape, never reach this
- *   listener (UseOnItsOwnQuestion);
  * - Delete removes, after asking - but not while the table has cells of
  *   several rows selected, which it would seem to remove as well;
  * - "/" goes to the filter.
+ *
+ * None of them acts while "Use on its own" asks for a spelling to be typed,
+ * wherever the focus is: a character typed anywhere but in another field
+ * goes into its field, and no other key is a shortcut (UseOnItsOwnQuestion).
+ * A press on its sentence or its waiting yes took the focus off its field,
+ * and the K of "Deutsche Bank" moved review to the document before, whose
+ * name the next Enter filed.
  *
  * Approve, keep and remove act only while the Details panel is open, and
  * only where it offers the matching button, so a shortcut can never do what
@@ -99,8 +96,9 @@ export function useReviewShortcuts(options: ReviewShortcutOptions) {
     const onKeyDown = (event: KeyboardEvent) => {
       const { enabled, rows, selected, inspector, onMove, onOpen, onNext, onFilter, selectionSpansRows, onDeleteRefused } = latest.current;
       // A key a field or dialog already handled (Enter in the name, Escape
-      // in the filter) is not a shortcut as well.
-      if (!enabled || event.defaultPrevented || event.isComposing) return;
+      // in the filter) is not a shortcut as well, and while "Use on its own"
+      // asks, no key is one, wherever the focus is.
+      if (!enabled || event.defaultPrevented || event.isComposing || askingNow()) return;
       const target = event.target instanceof Element ? event.target : null;
       const textField = isTextField(target);
       const inPanel = Boolean(target?.closest('.inspector'));
