@@ -839,6 +839,18 @@ review drawer again under Settings, and the drawer put the caret in the
 document's name, where Enter, meant for the question, filed it. Once the
 dialog has closed, the focus goes back to what opened it.
 
+With no dialog open, the focus the queue takes back for itself never goes to
+a button that acts, nor to another row's cell. When the row review was
+opened from is gone, it went to the toolbar's primary action, Rename all
+ready; and the selected document can leave the queue by itself - its file
+taken from the Queue folder, or filed by another machine - while a person is
+typing its name or its description, so the next space bar typed renamed
+every ready document. It goes to the button of the view already shown, where
+the space bar and Enter change nothing; with nothing in the queue at all, it
+goes nowhere. What is typed after that is no longer stopped: J and K select a
+row and put the focus on its cell, as from anywhere outside a field, and
+Enter there opens the row's details at its name.
+
 What a question cannot rule out is a person who means to fill the field
 without reading it. An input method can commit any text through a
 composition - its candidates can include its clipboard - and software that
@@ -931,6 +943,26 @@ a document being read while the list changed reads it again as it starts to
 wait. A proposal's revision moves only when its name does: the review panel
 replaces an unapproved draft when it moves, and a document the change leaves
 named as it was keeps whatever the reviewer had typed.
+
+What a reviewer types for a name and a description and does not file is the
+window's, one draft a document (`ReviewDrafts`), not the review panel's. The
+panel leaves the screen without anything being decided - a wide panel when
+the window is made narrower than 1100px, as half of a 1920px screen is, a
+drawer when it is made wider, either by Close review, Escape or the Details
+toggle, and when the selection is cleared - and while the panel kept what
+was typed, each of those brought both fields back as Intern's proposal. The
+panel keeps each edit as it is shown and reads it back whenever it shows the
+document. Outliving the panel, a draft is shown only over the proposal it
+was typed over: the document, and its proposal's revision, name and sentence
+(`proposalOf`). The revision alone does not say which reading a proposal is
+from - a new reading is numbered from 1 again - and under it a name typed
+over one reading would come back over the next. A draft is forgotten once
+its document is seen with another proposal or none (`forgetOutdatedDrafts`):
+sent back by Analyze again or read again by itself, even to the same words,
+a document shows its new reading. A document missing from a list that could
+not be read is not a document that changed, and keeps its draft. A field
+shown again has no undo history, so Ctrl+Z there does not go back to the
+proposal; the queue's row still shows it.
 
 ## Model and runtime
 
