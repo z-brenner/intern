@@ -2614,11 +2614,15 @@ fn read_type_words<'a>(
         return TypeReading::Unsupported;
     }
     // "This letter sets out the decision of the ...", "These minutes
-    // record ...": a reply that opens on "this" or "these" copied a
-    // sentence that talks about the document. Its words are no title -
-    // none is read back past "this" from a line either - and what the
-    // sentence goes on to name is as likely the matter as the kind. The
-    // document's own title or layout stands in, for a person to confirm.
+    // record ...": a reply that opens on "this" or "these" has copied a
+    // sentence that talks about the document. Its words are not taken for
+    // a title - none is read back past "this" from a line either - and
+    // what the sentence goes on to name is as likely the matter as the
+    // kind. The document's own title or layout stands in, for a person to
+    // confirm. The few titles that do open so ("This Week in Parliament")
+    // and a deed named only by its first words ("THIS DEED OF TRUST, made
+    // ...") wait for a person as well: that costs a look, never a wrong
+    // name.
     if value_words
         .first()
         .is_some_and(|word| matches!(word.as_str(), "this" | "these"))
@@ -14893,9 +14897,9 @@ Tidewater Buying LLC / POL\nAttention: Accounts Payable\n41 Wharf Street\nGilchr
 
     /// A reply that copies the sentence a document opens with - "This
     /// letter sets out the decision of the ..." - gives a sentence where a
-    /// type belongs. Its words are never the type: the document's layout or
-    /// its title stands in, for a person to confirm. A reply that names
-    /// the kind in a word of its own is read as before.
+    /// type belongs. Its words are not taken for the type: the document's
+    /// layout or its title stands in, for a person to confirm. A reply that
+    /// names the kind in a word of its own is read as before.
     #[test]
     fn a_reply_that_opens_on_this_or_these_is_a_sentence_and_no_type() {
         const LETTER: &str = "Harbour Markets Authority\n10 Quay Road, Brackenridge\n\n\
@@ -14981,6 +14985,27 @@ These directions take effect at once.\n\nYours faithfully\n\nHead of Retail Poli
             "{:?}",
             outcome.reasons
         );
+        // "These" opens a sentence as "this" does. Minutes with no title of
+        // their own, answered with the words their record opens on, were
+        // typed "These minutes" with nothing to check; now the type is not
+        // the document's, and the name waits for a person.
+        const MINUTES: &str = "Harbour Markets Authority\n\nBoard meeting of 28 March 2023\n\n\
+These minutes record the meeting of the board held at 10 Quay Road, Brackenridge.\n\n\
+Present: the chair, the secretary and four members.";
+        let (outcome, _) = facts_for(MINUTES, |index| ModelFacts {
+            document_type: Some("These minutes".into()),
+            type_evidence: vec![id_of(index, "These minutes record")],
+            document_date: Some("2023-03-28".into()),
+            date_evidence: vec![id_of(index, "28 March 2023")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.document_type, None);
+        assert!(
+            outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
         // An agreement's opening words given as its type were written as
         // the type before ("This Agreement between ..."). Now its title
         // stands in, for review - also where the reply cited the title
