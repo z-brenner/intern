@@ -15,7 +15,7 @@ use crate::evidence::{
     DateSpelling, NumericDate, NumericOrder, Segments, date_match_positions, date_match_spans,
     date_statements, digest_contains, digest_contains_date, digest_contains_loosely,
     extract_stated_dates, is_valid_iso_date, normalize, normalize_loosely, numeric_date_order,
-    numeric_dates,
+    numeric_dates, read_date_positions,
 };
 use crate::infer::{
     complete_type_from_title, dates_stated_on, infer_date_role, infer_document_type,
@@ -490,6 +490,13 @@ pub(crate) fn deadline_fires_as(
 /// telephone number's "555-12-3456". Dates set side by side with no such
 /// word between them, as a table's start and end columns are, are not read
 /// as a period.
+///
+/// A statement in a looser spelling, which only validation's reading of a
+/// date finds ([`read_date_positions`]: "Invoice Date: 08-Jan-24", "Jan
+/// 8,2024", a stamp's "JAN 0 8 2024"), is as much a place of the date's own
+/// and clears it too. No period is read from two such spellings: the other
+/// end of a period is read strictly, so a period written loosely is not
+/// seen, and nothing is said of it.
 pub(crate) fn only_bounds_a_period<'a>(
     segments: impl IntoIterator<Item = &'a str>,
     date: &str,
@@ -519,10 +526,11 @@ pub(crate) fn only_bounds_a_period<'a>(
     for segment in segments {
         for line in wrapped_lines(segment) {
             let normalized = normalize(&line);
-            let statements = date_match_spans(date, &normalized);
-            if statements.is_empty() {
+            let read = read_date_positions(date, &normalized);
+            if read.is_empty() {
                 continue;
             }
+            let statements = date_match_spans(date, &normalized);
             // Every date on the line, as a span: numeric tokens that read
             // as a date, written ones as the evidence check finds them.
             let mut dates = numeric_dates(&normalized)
@@ -532,6 +540,17 @@ pub(crate) fn only_bounds_a_period<'a>(
                 .collect::<Vec<_>>();
             for other in extract_stated_dates(&normalized) {
                 dates.extend(date_match_spans(&other, &normalized));
+            }
+            // A statement only the looser reading finds, inside no date
+            // read strictly: the date's own, outside any period.
+            let inside_a_date = |at: &usize| {
+                statements
+                    .iter()
+                    .chain(&dates)
+                    .any(|&(start, end)| (start..end).contains(at))
+            };
+            if !read.iter().all(inside_a_date) {
+                return false;
             }
             for (start, end) in statements {
                 let bounds = dates.iter().any(|&(other_start, other_end)| {
@@ -2976,6 +2995,18 @@ This Intercompany Agreement is effective as of April 1, 2026 between Acme and Ac
             ["Service Period: 9/1/2017- 9/30/2017", "Printed 9/1/2017"],
         ] {
             assert!(!only(&lines, "2017-09-01"), "{lines:?}");
+        }
+        // That statement may be written as only the looser reading finds
+        // it: a two-figure year after the month in words, a comma that
+        // lost its space, a stamp's figures set apart.
+        for own in [
+            "Invoice Date: 08-Jan-24",
+            "Invoice Date: Jan 8,2024",
+            "RECEIVED JAN 0 8 2024",
+        ] {
+            let lines = [own, "Service Period: 01/08/2024 - 01/31/2024"];
+            assert!(!only(&lines, "2024-01-08"), "{lines:?}");
+            assert!(only(&lines[1..], "2024-01-08"), "{lines:?}");
         }
         // A dash into a number that is no date joins no period: an
         // invoice's number, a telephone number.

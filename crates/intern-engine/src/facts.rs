@@ -9182,6 +9182,23 @@ Payment terms: net 30. Remit to Halvorsen Fixture Works LLC.";
             "{:?}",
             outcome.reasons
         );
+        // So it is when that field writes the date as only the looser
+        // reading finds it.
+        for field in ["Invoice Date: 01-Sep-17", "Invoice Date: Sep 1,2017"] {
+            let (outcome, _) = facts_for(
+                &invoice(&format!("{field}\n\nService Period: 9/1/2017- 9/30/2017")),
+                dated("2017-09-01", "Service Period"),
+            );
+            assert_eq!(
+                outcome.proposal.document_date.as_deref(),
+                Some("2017-09-01")
+            );
+            assert!(
+                !outcome.reasons.contains(&ReviewReason::DateIsPeriod),
+                "{field}: {:?}",
+                outcome.reasons
+            );
+        }
         // A dash into the rest of an invoice's number bounds no period.
         let (outcome, _) = facts_for(
             &invoice("Invoice No. 2017-09-01-0457"),
