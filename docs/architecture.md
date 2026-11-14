@@ -724,14 +724,20 @@ look-alike letters from another script, an abbreviation, an OCR misreading,
 a header Intern does not read, a logo, a script written without spaces. So
 however many names a rule changed were approved, the next one waits again.
 
-"Use on its own" is offered in the review window, beside "Uses your
-spelling", for each rule in force nobody has checked that a held document's
-name used, and in Settings for every rule in force nobody has checked. Each
-first says, in plain words, with the document's word and the spelling
-exactly as they are, that every later document Intern reads as naming the
-word (for a type: reads as that type) will be named with the spelling, and
-may be filed under that name without the person's check. Then it asks for
-the spelling to be typed (`UseOnItsOwnQuestion`): its yes stays disabled,
+"Use on its own" is offered in Settings, under Learned spellings, for every
+rule in force nobody has checked, and nowhere else. A held document's review
+panel says, under "Uses your spelling", that its name waits because Intern
+has not been told to use the spelling on its own, and that "Use on its own"
+is in Settings; it asks nothing and checks nothing. The review window does
+not ask because a word typed into a question there kept reaching review's
+own keys - J and K move review, the drawer puts the caret in a document's
+name, Enter files it - and a decision about every later document belongs in
+Settings, beside Use now and Forget. The question first says, in plain
+words, with the document's word and the spelling exactly as they are, that
+every later document Intern reads as naming the word (for a type: reads as
+that type) will be named with the spelling, and may be filed under that
+name without the person's check. Then it asks for the spelling to be typed
+(`UseOnItsOwnQuestion`): its yes stays disabled,
 and Enter in the field does nothing but say why, until what is typed is the
 spelling - the same letters and digits in the same order (`typedOut`). Both
 sides keep only their letters, marks and digits as written (a symbol such
@@ -771,58 +777,40 @@ presses that got through - a slow double-click, a scroll or a change of
 layout that brought the yes under a still pointer, a tap through a menu, a
 window closing over the yes, a pointer that left the page - and the rules
 did not converge. Keys typed in the field stay there, but for Tab and
-Escape: the review window's Ctrl+Enter, Alt+K and Alt+N neither approve,
-keep nor move on from it, and Enter saves no settings. Nor are keys typed
-anywhere else anyone else's while a question asks. Asking a person to type
-a word made the keys the next thing to go wrong: a press on the question's
-sentence or its waiting yes, or the second press of a double-click on its
-action, takes the focus off its field, and the spelling typed next went to
-the review shortcuts - the K of "Deutsche Bank" moved review to the
-document before, the drawer put the caret in that one's name, and the
-Enter meant for the question filed it, unreviewed; a second Enter filed
-the held document, its spelling unchecked. So, before anything else on
-the page sees a key (a listener on the window, in the capture phase), a
-character typed anywhere but in a text field - and not from a dialog open
-over the question - moves the focus into the question's field, where the
-browser then types it, and goes to nothing else; no other key is a review
-shortcut while a question asks, wherever the focus is; and the drawer does
-not put the caret in the name while one asks, as it did when the window
-narrowed into a drawer. A key typed into another field the person put the
-focus in is that field's. The space bar is left to press the button with
-the focus, and an input method's keys to the input method. A question can
-also go away by itself while its spelling is typed - the document read
-again, the spelling changed - and the rest of what was typed went to the
-shortcuts the same way. Gone so, not answered or taken back, while the
-focus was in its field or on nothing a person uses (not a button, link,
-field or cell), it leaves every key after it going nowhere but Tab and
-Escape, until a press, Tab or Escape: the person typing has not seen it go.
-While a question asks, no field changes but the one with the focus: the
-browser's undo and redo go to the field edited last, wherever the focus is,
-and take the focus there. Ctrl+Z in the question's field, before anything
-was typed in it, or after a press on its sentence took the focus from it,
-undid an edit to the document's name or an unsaved setting and moved the
-focus into it; the spelling, typed next with Enter as the question asks,
-went into the name and approved the document under "... Contoso
-vContoso.pdf". So while a question asks, every input aimed at a field
-without the focus is refused where the browser announces it (`beforeinput`, caught on the document):
-the undo and redo of the keys and of the editing menu among them. A
-script's `execCommand('undo')` announces nothing and is not refused; no
-person sends one. The field starts empty for every question, and again if
-the spelling it asks about changes while it asks. Cancel and Escape take
-the question back. Escape takes back the question and nothing else - not
-the drawer, not Settings, with what was
-not saved - wherever the focus is in the review panel or in Settings, and
-the focus goes back to the action; closing Settings' "Learned spellings"
-section takes back a question open in it. While a question asks, the other
-spellings' actions wait, in the review window and in Settings: a press on
-another "Use on its own" closed the question above it and opened the next
-under the pointer. Opened by a press, the question opens where the action
-was, sentence first, with the focus in its field, and nothing the press sets
-off moves what is under the pointer (`afterAPress`): neither the review
-panel nor Settings scrolls until a key is pressed. Opened from the keyboard,
-it is brought into sight, clear of the review panel's decision, and so it
-is by the first key typed into it after a press opened it: the spelling
-went into a field out of sight, under the decision or below Settings' body.
+Escape: Enter saves no settings. A press on the question's sentence or its
+waiting yes takes the focus off its field, so while a question asks, a
+character typed elsewhere in Settings, or with the focus on nothing, but not
+in another field, moves the focus into the question's field before anything
+else on the page sees the key, and the browser types it there. The space bar
+is left to press the button with the focus, and an input method's keys to
+the input method. While a question asks, no field changes but the one with
+the focus: the browser's undo and redo go to the field edited last,
+wherever the focus is, and take the focus there. Ctrl+Z in the question's
+field, before anything was typed in it, or after a press on its sentence
+took the focus from it, undid an unsaved setting and moved the focus into
+it, and the spelling typed next went into the setting. So while a question
+asks, every input aimed at a field without the focus is refused where the
+browser announces it (`beforeinput`, caught on the document): the undo and
+redo of the keys and of the editing menu among them. The same holds for any
+dialog over the review window (`useEditsOnlyInside`): while Settings or
+Rename history is open, an input aimed outside it is refused. Ctrl+Z in a
+field of Settings with nothing of its own to undo undid the review panel's
+Filename behind the dialog and put the caret in it, where Enter filed the
+document. A script's `execCommand('undo')` announces nothing and is not
+refused; no person sends one. The field starts empty for every question,
+and again if the spelling it asks about changes while it asks. Cancel and
+Escape take the question back. Escape takes back the question and nothing
+else - not Settings, with what was not saved - wherever the focus is in
+Settings, and the focus goes back to the action; closing the "Learned
+spellings" section takes back a question open in it. While a question asks,
+the other spellings' actions wait: a press on another "Use on its own"
+closed the question above it and opened the next under the pointer. Opened
+by a press, the question opens where the action was, sentence first, with
+the focus in its field, and nothing the press sets off moves what is under
+the pointer (`afterAPress`): Settings does not scroll until a key is
+pressed. Opened from the keyboard, it is brought into sight, and so it is by
+the first key typed into it after a press opened it: the spelling went into
+a field out of sight below Settings' body.
 
 What a question cannot rule out is a person who means to fill the field
 without reading it. An input method can commit any text through a
@@ -837,8 +825,8 @@ The command (`house_rule_check`) carries the rule's id and the spelling the
 person was shown - its kind, the document's word and the spelling - and the
 repository marks the rule checked, in one statement, only while it exists,
 is in force, and reads exactly that (`PipelineRepository::check_rule`): a
-rule forgotten is refused (`RULE_NOT_FOUND`) and taken out of what the
-review window or Settings shows, and one not in force, or respelled or
+rule forgotten is refused (`RULE_NOT_FOUND`) and taken out of the list
+Settings shows, and one not in force, or respelled or
 learned from other words since it was shown, is refused (`RULE_CHANGED`)
 and shown again as it now reads. Checking a rule approves
 and files nothing. The
