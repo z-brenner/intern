@@ -197,9 +197,12 @@ The other checks:
   - `Presented by` or `Prepared by`, for a sender;
   - for an issuer, a vendor or a seller the reply named, the `To:` line of
     an invoice's payment slip: a line directly under `PAYMENT ADVICE`,
-    where that heading is not the document's own title and its type is no
-    remittance or payment advice. The slip goes back with the payment, so
-    its `To:` names who is paid and labels no recipient or addressee;
+    where that heading is neither the first heading of the first page nor
+    the document's first line, and the type is no remittance or payment
+    advice. The slip goes back with the payment, so its `To:` names who is
+    paid: the party the line's value opens with, whole. For that party the
+    line labels no recipient or addressee; of anyone else on the line (a
+    customer a reader ran in from the next column) it says nothing;
   - the issuer and customer cues on the same line.
 
   A role nothing supports never decides how the parties read in the
@@ -249,14 +252,11 @@ The other checks:
   second name that the layout ran into it (`PrOperty 47 JUniper LOOP Cedar
   Finch Properties Llc`); a legal form ends an organization's name. A name
   that is the end of an organization a unit names (`MANUFACTURING LLC` of
-  `EMBer POSt MANUFACtURInG LLC`) is completed to it, unless the document
-  sets the reply's name out on a line or in a table's cell of its own (a
-  caption's `TAVISTOCK BOATWORKS, INC.,`, an address block's line): such
-  a name is whole, and the word before it elsewhere is that place's own
-  (`If Tavistock Boatworks, Inc. believes ...`). The price is a name
-  wrapped over two lines whose second line the reply gave alone. Capitals
-  OCR scattered are read as capitals. A first name on its own is
-  unsupported.
+  `EMBer POSt MANUFACtURInG LLC`) is completed to it, whether or not a
+  line of the document holds the reply's words alone: such a line is as
+  often the second line of a wrapped name or a column's heading as a name
+  set out whole, and nothing in a layout tells them apart. Capitals OCR
+  scattered are read as capitals. A first name on its own is unsupported.
   A name keeps what stands before an address that runs on to its city
   (`John Smith, 1420 Fielder Lane, Cedar Rapids, IA 52402`).
 - **Who is a party.** Someone named only on a `cc:` line is copied in, and
@@ -267,11 +267,14 @@ The other checks:
   column header naming a job (`Examined by`, `Winemaker`, `Crew lead`, an
   issued document's `Buyer:`), the `Name:` of a `By:`/`Title:` block, or
   with a post right beside the name (`Beckett Halloran (President)`). Not
-  the person whose name opens a side of a court caption that labels both
-  sides, the first name after `v.` or the first under the court's heading
-  (`v. DOUG BURGUM, SECRETARY OF THE INTERIOR; ...`): an official sued or
-  suing in their office is that side of the case, and anyone else the
-  caption names keeps the standing their post gives them. A bare
+  the person whose name opens the answering side of a court caption that
+  labels both sides: the first name right after `v.`, a comma or a
+  semicolon ending it (`v. DOUG BURGUM, SECRETARY OF THE INTERIOR; ...`),
+  where every organization the reply named stands on the bringing side.
+  An official sued in their office is that side of the case. Anyone else
+  the caption names keeps the standing their post gives them: the second
+  official, everyone on the bringing side, and the officer of an agency
+  the reply named too, which is then the party. A bare
   signature mark (`/s/`, a `Signature` column) counts only outside letters
   and emails, and never for the one the document labels as its sender:
   anyone signs their own letter. A label or column header that names the one the
@@ -290,24 +293,27 @@ The other checks:
   whose reply names no one it is addressed to takes as its addressee the
   name its first page's `To:` field opens with; an `Attn:` line names the
   person who reads it for the addressee and never does.
-- **A party that waits.** Three names keep their party and go to review
-  with `PARTY_UNSUPPORTED`:
+- **A party that waits.** Two names go to review with
+  `PARTY_UNSUPPORTED` for the party they give:
   - a party longer than 70 characters. It is far more often a run of text
     than a name (a `To:` list's recipients in a row), and the filename
-    sheds a party that does not fit. A real name of that length waits too;
-  - a letter named to an organization read from one coined word under the
-    addressee and over the street in its inside address: two or more
-    capitalized parts of at least three letters each, run together or
-    joined by dots (`PacifiCorp`, `Public.Resource.Org`), with no figure
-    and no surname's particle, whose parts set apart read as an
-    organization's line. A city or a person the extraction ran together
-    has the same shape, so the name is never filed on it;
-  - a memorandum or a circular named to a post or to the holders of posts
-    (`Chair, Board of Directors`, `Academic Deans and Directors`), when
-    the cast holds no organization the document supports as its issuer or
-    sender. When it holds one, the name says `from` that organization
-    instead and raises nothing. A class of recipients the class test
-    already holds is left to it.
+    sheds a party that does not fit. The name is unchanged. A real name of
+    that length waits too;
+  - a letter, or a notice or a document of no known kind laid out as one,
+    named to an organization read from one coined word in its inside
+    address: two or more capitalized
+    parts of at least three letters each, run together or joined by dots
+    (`PacifiCorp`, `Public.Resource.Org`), with no figure and no
+    surname's particle, whose parts set apart read as an organization's
+    line. The word is read only under the addressee with the street's
+    line right under it, and only for a name that waits already and would
+    give that person and no one else, where the document supports no one
+    else as its sender or issuer: the reply is then read a second time
+    with the word as the organization (`validate_facts_at`). A name that
+    would be filed, or that gives anyone else (the office a letter comes
+    from), is never renamed by it. A note or a person the extraction ran
+    together has the same shape (`HandDelivered`, `JaneDoe`), so the name
+    is never filed on it.
 - **Roles** a party keeps are the ones the document supports: the reply's,
   else the one the document's wording gives, else none
   (`ValidatedParty::proposed_role` keeps what the reply said).
@@ -364,10 +370,10 @@ LLC", "Tavistock Boatworks, Inc., Defendant"), the filename reads `between`
 them, the side bringing the case first. A letter or an email about a case
 keeps the table's correspondence rules, and an invoice or a statement for it
 still comes from its issuer. A role's or a field's own label, a side's in
-the plural too ("Defendants"), is never part
-of a name: the index's "Plaintiff Gilchrist Harbor Marine Supply, LLC" does
-not complete the reply's "Gilchrist Harbor Marine Supply, LLC", nor "Account
-Name Calm.com, Inc." its "Calm.com, Inc.".
+the plural ("Defendants") and a bankruptcy's "Debtor" or "Debtors" too, is
+never part of a name: the index's "Plaintiff Gilchrist Harbor Marine Supply,
+LLC" does not complete the reply's "Gilchrist Harbor Marine Supply, LLC", nor
+"Account Name Calm.com, Inc." its "Calm.com, Inc.".
 
 An agreement or an amendment that names only one party goes to review with
 `PARTY_MISSING`: an agreement has two sides at least, so the reply lost one.
