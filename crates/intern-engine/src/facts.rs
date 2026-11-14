@@ -2567,6 +2567,18 @@ fn read_type_words<'a>(
     }) {
         return TypeReading::Unsupported;
     }
+    // "This letter sets out the decision of the ...", "These minutes
+    // record ...": a reply that opens on "this" or "these" copied a
+    // sentence that talks about the document. Its words are no title -
+    // none is read back past "this" from a line either - and what the
+    // sentence goes on to name is as likely the matter as the kind. The
+    // document's own title or layout stands in, for a person to confirm.
+    if value_words
+        .first()
+        .is_some_and(|word| matches!(word.as_str(), "this" | "these"))
+    {
+        return TypeReading::Unsupported;
+    }
     let Some(head) = head_noun(&value_words).map(str::to_owned) else {
         return TypeReading::Unsupported;
     };
@@ -14467,6 +14479,117 @@ Tidewater Buying LLC / POL\nAttention: Accounts Payable\n41 Wharf Street\nGilchr
             reply,
         );
         assert_eq!(outcome.proposal.document_type, None);
+    }
+
+    /// A reply that copies the sentence a document opens with - "This
+    /// letter sets out the decision of the ..." - gives a sentence where a
+    /// type belongs. Its words are never the type: the document's layout or
+    /// its title stands in, for a person to confirm. A reply that names
+    /// the kind in a word of its own is read as before.
+    #[test]
+    fn a_reply_that_opens_on_this_or_these_is_a_sentence_and_no_type() {
+        const LETTER: &str = "Harbour Markets Authority\n10 Quay Road, Brackenridge\n\n\
+Date: 28 March 2023\n\nMarlowe Tidal Power Limited\n4 Sluice Lane\nBrackenridge\n\n\
+Dear Sir or Madam\n\nDerogation from condition 22B\n\n\
+This letter sets out the decision of the Harbour Markets Authority to grant Marlowe Tidal \
+Power Limited a limited derogation from condition 22B of its supply licence.\n\n\
+These directions take effect at once.\n\nYours faithfully\n\nHead of Retail Policy";
+        let letter = |kind: &str| {
+            let (outcome, _) = facts_for(LETTER, |index| ModelFacts {
+                document_type: Some(kind.into()),
+                type_evidence: vec![id_of(index, "This letter sets out")],
+                document_date: Some("2023-03-28".into()),
+                date_evidence: vec![id_of(index, "28 March 2023")],
+                parties: vec![party(
+                    "Marlowe Tidal Power Limited",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Marlowe Tidal Power Limited")],
+                )],
+                ..ModelFacts::default()
+            });
+            outcome
+        };
+        for sentence in [
+            "This letter sets out the decision of the Harbour Markets Authority (",
+            "This letter sets out the decision",
+            "This letter",
+            "These directions take effect at once",
+        ] {
+            let outcome = letter(sentence);
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Letter"),
+                "{sentence}"
+            );
+            for reason in [
+                ReviewReason::TypeUnsupported,
+                ReviewReason::TypeInferred,
+                ReviewReason::TypeMissing,
+            ] {
+                assert!(
+                    outcome.reasons.contains(&reason),
+                    "{sentence}: {reason:?} not in {:?}",
+                    outcome.reasons
+                );
+            }
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        }
+        // The kind in a word of its own, cited on the same sentence, is the
+        // document's: nothing about the type is unsupported.
+        let outcome = letter("Letter");
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some("Letter"));
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // Only the word itself opens a sentence: a title whose first word
+        // begins with its letters is a title.
+        let agreement = |title: &str, kind: &str, cited: &str| {
+            let text = format!(
+                "{title}\n\nThis Agreement is made on March 3, 2026 between Corvane \
+                 Analytics Inc. and Larkhaven Seed Company."
+            );
+            let (outcome, _) = facts_for(&text, |index| ModelFacts {
+                document_type: Some(kind.into()),
+                type_evidence: vec![id_of(index, cited)],
+                ..ModelFacts::default()
+            });
+            outcome
+        };
+        let outcome = agreement(
+            "THISTLE SUPPLY AGREEMENT",
+            "Thistle Supply Agreement",
+            "THISTLE",
+        );
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Thistle Supply Agreement")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // An agreement's opening words given as its type were written as
+        // the type before ("This Agreement between ..."). Now its title
+        // stands in, for review - also where the reply cited the title
+        // itself, which is this rule's cost: that reading was supported.
+        for cited in ["This Agreement is made", "SEED PRODUCTION"] {
+            let outcome = agreement("SEED PRODUCTION AGREEMENT", "This Agreement", cited);
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Seed Production Agreement"),
+                "{cited}"
+            );
+            for reason in [ReviewReason::TypeUnsupported, ReviewReason::TypeInferred] {
+                assert!(
+                    outcome.reasons.contains(&reason),
+                    "{cited}: {reason:?} not in {:?}",
+                    outcome.reasons
+                );
+            }
+        }
     }
 
     /// Real letters are laid out in more ways than a written-out dateline
