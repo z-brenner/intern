@@ -772,16 +772,39 @@ layout that brought the yes under a still pointer, a tap through a menu, a
 window closing over the yes, a pointer that left the page - and the rules
 did not converge. Keys typed in the field stay there, but for Tab and
 Escape: the review window's Ctrl+Enter, Alt+K and Alt+N neither approve,
-keep nor move on from it, and Enter saves no settings. While a question
-asks, no field changes but the one with the focus: the browser's undo and
-redo go to the field edited last, wherever the focus is, and take the focus
-there. Ctrl+Z in the question's field, before anything was typed in it, or
-after a press on its sentence took the focus from it, undid an edit to the
-document's name or an unsaved setting and moved the focus into it; the
-spelling, typed next with Enter as the question asks, went into the name
-and approved the document under "... Contoso vContoso.pdf". So while a
-question asks, every input aimed at a field without the focus is refused
-where the browser announces it (`beforeinput`, caught on the document):
+keep nor move on from it, and Enter saves no settings. Nor are keys typed
+anywhere else anyone else's while a question asks. Asking a person to type
+a word made the keys the next thing to go wrong: a press on the question's
+sentence or its waiting yes, or the second press of a double-click on its
+action, takes the focus off its field, and the spelling typed next went to
+the review shortcuts - the K of "Deutsche Bank" moved review to the
+document before, the drawer put the caret in that one's name, and the
+Enter meant for the question filed it, unreviewed; a second Enter filed
+the held document, its spelling unchecked. So, before anything else on
+the page sees a key (a listener on the window, in the capture phase), a
+character typed anywhere but in a text field - and not from a dialog open
+over the question - moves the focus into the question's field, where the
+browser then types it, and goes to nothing else; no other key is a review
+shortcut while a question asks, wherever the focus is; and the drawer does
+not put the caret in the name while one asks, as it did when the window
+narrowed into a drawer. A key typed into another field the person put the
+focus in is that field's. The space bar is left to press the button with
+the focus, and an input method's keys to the input method. A question can
+also go away by itself while its spelling is typed - the document read
+again, the spelling changed - and the rest of what was typed went to the
+shortcuts the same way. Gone so, not answered or taken back, while the
+focus was in its field or on nothing a person uses (not a button, link,
+field or cell), it leaves every key after it going nowhere but Tab and
+Escape, until a press, Tab or Escape: the person typing has not seen it go.
+While a question asks, no field changes but the one with the focus: the
+browser's undo and redo go to the field edited last, wherever the focus is,
+and take the focus there. Ctrl+Z in the question's field, before anything
+was typed in it, or after a press on its sentence took the focus from it,
+undid an edit to the document's name or an unsaved setting and moved the
+focus into it; the spelling, typed next with Enter as the question asks,
+went into the name and approved the document under "... Contoso
+vContoso.pdf". So while a question asks, every input aimed at a field
+without the focus is refused where the browser announces it (`beforeinput`, caught on the document):
 the undo and redo of the keys and of the editing menu among them. A
 script's `execCommand('undo')` announces nothing and is not refused; no
 person sends one. The field starts empty for every question, and again if
