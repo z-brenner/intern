@@ -197,8 +197,9 @@ The other checks:
   - `Presented by` or `Prepared by`, for a sender;
   - the issuer and customer cues on the same line.
 
-  A role nothing supports never decides how the parties read in the
-  filename. When the reply gives a party no supported role, the role the
+  A role nothing supports never decides by itself how the parties read in
+  the filename: where the reply's roles are read (see the relation table),
+  the name waits for review. When the reply gives a party no supported role, the role the
   document's own wording gives it does (`ValidatedParty::document_role`):
   `Resident:` before the name makes a tenant, `Owner:` a landlord,
   `("Lender")` after it a lender.
@@ -318,8 +319,8 @@ and an addendum is an amendment.
 
 ### The relation table
 
-`relation_from_roles` uses supported roles only. Parties are taken in the
-order the document first names them.
+`relation_from_roles` reads the roles the document supports. Parties are
+taken in the order the document first names them.
 
 Before the table, a court document is filed under its case: when the
 document has a court's, a tribunal's or an arbitration's heading on its
@@ -358,8 +359,33 @@ borrower, licensee or buyer. In a record or a notice, a reply's bare
 "recipient" or "addressee" gives way to such a role when the document's own
 label gives it one: a report "Prepared for Cobalt Basin Water Authority" is
 `for` the authority, not `to` it, whoever else the reply named. When nothing settles the relation, the first
-party is kept with no joining word (`Invoice - Acme`). A relation is never
-guessed.
+party is kept with no joining word (`Invoice - Acme`), and the name waits
+for review with `PARTY_UNSUPPORTED`: the party is in the document, but
+whether the document is from it, to it or for it is not. A relation is never
+guessed without saying so.
+
+Where the supported roles settle nothing, or only a default, the roles the
+reply gave are read in their place (never for an agreement, and not where a
+role the document gives a party contradicts the reply's). A name that rests
+on them waits for review with `PARTY_UNSUPPORTED`. Two readings differ
+from the table there:
+
+* A notice's recipient that only the reply named is `for` it, not `to` it:
+  `to` says the notice was addressed to the party, and the document showed
+  no address. A recipient the document labels (`To: ...`) keeps `to`.
+* A notice naming one party is `for` it by default, and a record whose
+  roles settle nothing is `for` the first party no role sets aside. When
+  the reply called that party the issuer or sender, it is named `from`
+  instead, on the reply's roles. A provider's counterpart stays `for`, and
+  waits for review when the reply called it the issuer or sender too.
+
+A document `to` or `for` a class of recipients ("All Staff", "Fellow
+Shareholders") waits for review with `PARTY_UNSUPPORTED`, since a class is
+no party to file by. When another party is supported as the issuer or
+sender, or, the document giving it no role, was called so by the reply, the
+name says `from` that party. A class, or a person named with the post they
+hold ("Jane Doe, Acting General Counsel"), is never taken as that party, and
+the name then stays as it was. It waits for review either way.
 
 `tests/relation_gold.rs` checks the table against every InternBench gold
 document. Each party is given every role its gold allows, in both orders
