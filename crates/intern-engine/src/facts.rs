@@ -525,6 +525,11 @@ pub fn validate_facts_at(
     let mut type_title = None;
     let mut type_unit = None;
     let proposed_type = content(facts.document_type.as_deref(), scope);
+    // A copy marking the reply ran on into from the title is no part of
+    // the type: the reply is read without it.
+    let unmarked =
+        proposed_type.and_then(|value| without_copy_marking(scope, &facts.type_evidence, value));
+    let proposed_type = unmarked.as_deref().or(proposed_type);
     // A title phrase runs on through "of the ..." to a party's name; a
     // party is no part of a type.
     let names = facts
@@ -2709,6 +2714,135 @@ fn read_type_words<'a>(
         }
     }
     TypeReading::Unsupported
+}
+
+/// Markings a sheet carries to say which copy of a paper it is - the stamp
+/// under an invoice's title, the word over a statement's - never what kind
+/// of paper it is.
+const COPY_MARKINGS: &[&str] = &["duplicate", "copy", "original", "reprint"];
+
+/// A reply's type without the copy marking it ran on into: "INVOICE
+/// DUPLICATE" of a sheet headed `INVOICE` with `DUPLICATE` stamped on the
+/// line below is the reply "INVOICE", and is read as that reply is. Only
+/// when all of this holds:
+///
+/// * the reply's words are not the document's as they stand - a title that
+///   states its marking keeps it ("DUPLICATE INVOICE" on one line,
+///   "Plaintiff's Original Petition", "Application for Duplicate Title");
+/// * the marking is the reply's first or last word, and what is left still
+///   names a kind of document ("Certified Copy" names none without it);
+/// * what is left is stated, or a cited title names its kind, and the
+///   document prints the marking as a line of its own right beside that
+///   line ([`stands_alone_beside`]): the stamp the reply ran into, not a
+///   word the reply brought with it.
+///
+/// What is left is written as that title line writes it. `None` otherwise,
+/// and the reply is read whole.
+fn without_copy_marking(
+    scope: &ValidationScope<'_>,
+    cited: &[String],
+    value: &str,
+) -> Option<String> {
+    let tokens = value.split_whitespace().collect::<Vec<_>>();
+    let marking_of = |token: &str| match words(token).as_slice() {
+        [word] => COPY_MARKINGS
+            .iter()
+            .copied()
+            .find(|marking| *marking == word.as_str()),
+        _ => None,
+    };
+    let (first, last) = (tokens.first()?, tokens.last()?);
+    if tokens.len() < 2 || (marking_of(first).is_none() && marking_of(last).is_none()) {
+        return None;
+    }
+    if matches!(
+        read_type_words(scope, cited, value),
+        TypeReading::Title { .. } | TypeReading::Stated { .. }
+    ) {
+        return None;
+    }
+    [(*last, &tokens[..tokens.len() - 1]), (*first, &tokens[1..])]
+        .into_iter()
+        .find_map(|(token, rest)| {
+            let marking = marking_of(token)?;
+            // A dash or a bracket that set the marking off goes with it.
+            let rest = rest
+                .iter()
+                .copied()
+                .skip_while(|token| words(token).is_empty())
+                .collect::<Vec<_>>();
+            let kept = rest
+                .iter()
+                .rposition(|token| !words(token).is_empty())
+                .map_or(0, |at| at + 1);
+            let rest = rest[..kept].join(" ");
+            let rest_words = words(&rest);
+            if !has_a_kind(&rest_words) {
+                return None;
+            }
+            let found = match read_type_words(scope, cited, &rest) {
+                TypeReading::Title { found, .. } | TypeReading::Stated { found } => found,
+                TypeReading::Retitled { .. } | TypeReading::Unsupported => return None,
+            };
+            let line = found.line.as_deref()?;
+            if !stands_alone_beside(scope, found.unit?, line, marking) {
+                return None;
+            }
+            // The line is the title the reply ran on from: where its phrase is
+            // the reply's words, they are written as a title's are, capitals
+            // and all ("INVOICE" is an "Invoice" wherever the reply cited).
+            let titled = head_noun(&rest_words)
+                .and_then(|head| title_phrase(line, head))
+                .filter(|phrase| words(phrase) == rest_words);
+            Some(titled.unwrap_or(rest))
+        })
+}
+
+/// Whether the document prints `word` as a line of its own right before or
+/// right after `line` of `unit`, on the same page: the line above or below
+/// it in the unit, else the last line of the unit before or the first line
+/// of the unit after. A line read across a wrapped heading has the whole
+/// heading's neighbours.
+fn stands_alone_beside(
+    scope: &ValidationScope<'_>,
+    unit: &EvidenceUnit,
+    line: &str,
+    word: &str,
+) -> bool {
+    let lines_of = |unit: &EvidenceUnit| {
+        unit.text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let neighbour = |ordinal: Option<usize>| {
+        ordinal
+            .and_then(|ordinal| scope.index.units().get(ordinal))
+            .filter(|neighbour| neighbour.page == unit.page)
+            .map(lines_of)
+            .unwrap_or_default()
+    };
+    let own = lines_of(unit);
+    let (first, last) = match own.iter().position(|own| own == line.trim()) {
+        Some(at) => (at, at),
+        None => (0, own.len().saturating_sub(1)),
+    };
+    let before = match first.checked_sub(1) {
+        Some(at) => own.get(at).cloned(),
+        None => neighbour((unit.ordinal as usize).checked_sub(1)).pop(),
+    };
+    let after = match own.get(last + 1) {
+        Some(line) => Some(line.clone()),
+        None => neighbour(Some(unit.ordinal as usize + 1))
+            .into_iter()
+            .next(),
+    };
+    [before, after]
+        .into_iter()
+        .flatten()
+        .any(|line| matches!(words(&line).as_slice(), [only] if only == word))
 }
 
 /// Whether a title phrase read from `line` runs on into a sentence there
@@ -10827,6 +10961,170 @@ Glasswing Ceramics LLC is in default under the Loan Agreement dated March 3, 202
             Some("Loan Agreement")
         );
         assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+    }
+
+    /// A stamp that says which copy a sheet is - "DUPLICATE" on the line
+    /// under an invoice's "INVOICE" - is no part of its type. A reply that
+    /// ran on from the title into the stamp is read as the reply that
+    /// stopped at the title, wherever it cited, and is filed as that reply
+    /// is.
+    #[test]
+    fn a_copy_marking_the_reply_ran_into_is_no_part_of_the_type() {
+        const STAMPED: &str = "Halvorsen Fixture Works LLC\n12 Quay Street, Brackenridge\n\n\
+INVOICE\n\nDUPLICATE\n\n\
+Invoice No.: INV-10438\n\nInvoice Date: May 1, 2025\n\nDue Date: May 31, 2025\n\n\
+Bill To: Quillon Ridge Bakery, Inc.\n\nDisplay shelving for the bakery counter, $1,248.00\n\n\
+Payment terms: net 30. Remit to Halvorsen Fixture Works LLC.";
+        for (reply, cited) in [
+            ("INVOICE DUPLICATE", "INVOICE"),
+            ("INVOICE - DUPLICATE", "INVOICE"),
+            ("INVOICE (DUPLICATE)", "INVOICE"),
+            // The stamp first, as a reader might say it.
+            ("DUPLICATE INVOICE", "INVOICE"),
+            // Cited on the issuer's block: the title is found all the same,
+            // and written as a title in capitals is.
+            ("INVOICE DUPLICATE", "Halvorsen Fixture Works LLC"),
+            ("Invoice Duplicate", "Halvorsen Fixture Works LLC"),
+            ("Duplicate Invoice", "Halvorsen Fixture Works LLC"),
+        ] {
+            let (outcome, _) = facts_for(STAMPED, |index| ModelFacts {
+                document_type: Some(reply.into()),
+                type_evidence: vec![id_of(index, cited)],
+                ..invoice_facts(index)
+            });
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Invoice"),
+                "{reply}"
+            );
+            assert_eq!(
+                outcome.status,
+                ProposalStatus::Ready,
+                "{reply}: {:?}",
+                outcome.reasons
+            );
+        }
+        // The same reply about the same invoice without the stamp brought
+        // the word from somewhere else: the type is not the document's, and
+        // the title stands in for a person to confirm, as before.
+        let (outcome, _) = facts_for(INVOICE, |index| ModelFacts {
+            document_type: Some("INVOICE DUPLICATE".into()),
+            ..invoice_facts(index)
+        });
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some("Invoice"));
+        for reason in [ReviewReason::TypeUnsupported, ReviewReason::TypeInferred] {
+            assert!(
+                outcome.reasons.contains(&reason),
+                "{reason:?}: {:?}",
+                outcome.reasons
+            );
+        }
+        // So did a reply whose word the sheet prints only in a sentence.
+        const MENTIONED: &str = "Halvorsen Fixture Works LLC\n12 Quay Street, Brackenridge\n\n\
+INVOICE\n\nInvoice Date: May 1, 2025\n\nBill To: Quillon Ridge Bakery, Inc.\n\n\
+This duplicate is issued at the customer's request.";
+        let (outcome, _) = facts_for(MENTIONED, |index| ModelFacts {
+            document_type: Some("INVOICE DUPLICATE".into()),
+            type_evidence: vec![id_of(index, "INVOICE")],
+            document_date: Some("2025-05-01".into()),
+            date_evidence: vec![id_of(index, "Invoice Date")],
+            ..ModelFacts::default()
+        });
+        assert!(
+            outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        // A bare kind left after the cut says as little as it does alone.
+        const NOTICE: &str = "Basalt Commercial Credit Corp.\n\nOctober 14, 2025\n\n\
+NOTICE\n\nCOPY\n\n\
+Glasswing Ceramics LLC is in default under the Loan Agreement dated March 3, 2023.";
+        let (outcome, _) = facts_for(NOTICE, |index| ModelFacts {
+            document_type: Some("NOTICE COPY".into()),
+            type_evidence: vec![id_of(index, "NOTICE")],
+            document_date: Some("2025-10-14".into()),
+            date_evidence: vec![id_of(index, "October 14")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some("Notice"));
+        assert!(
+            outcome.reasons.contains(&ReviewReason::TypeMissing),
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+    }
+
+    /// A title that states its marking keeps it, and so does a reply the
+    /// marking is not at an end of, or that names no kind without it.
+    #[test]
+    fn a_marking_the_title_states_or_the_type_needs_stays() {
+        // Stated whole, on one line or across a wrapped heading.
+        for (text, reply) in [
+            (
+                "Halvorsen Fixture Works LLC\n12 Quay Street, Brackenridge\n\n\
+DUPLICATE INVOICE\n\nInvoice Date: May 1, 2025\n\nBill To: Quillon Ridge Bakery, Inc.",
+                "Duplicate Invoice",
+            ),
+            (
+                "CAUSE NO. 2025-41872\n\nMARISOL QUENBY, Plaintiff,\nv.\n\
+HARLOW BASIN WATER AUTHORITY, Defendant.\n\n\
+PLAINTIFF'S ORIGINAL COMPLAINT\n\n\
+Plaintiff Marisol Quenby files this complaint against Harlow Basin Water Authority.",
+                "Original Complaint",
+            ),
+            (
+                "DEPARTMENT OF MOTOR VEHICLES\n\nAPPLICATION FOR DUPLICATE TITLE\n\n\
+Date: May 1, 2025\n\nOwner: Delphine Okonkwo-Reyes",
+                "Application for Duplicate Title",
+            ),
+        ] {
+            let index = index_of(text);
+            let context = whole(&index);
+            let scope = ValidationScope::new(&index, &context, &[]);
+            assert_eq!(without_copy_marking(&scope, &[], reply), None, "{reply}");
+            let (outcome, _) = facts_for(text, |_| ModelFacts {
+                document_type: Some(reply.into()),
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some(reply),
+                "{reply}"
+            );
+        }
+        // A pleading's title set one word to a line: "Original" is a line of
+        // its own there, and the reply keeps it - what is left of the reply
+        // without it is read by no kind the engine knows.
+        const PETITION: &str = "CAUSE NO. 2025-41872\n\nPLAINTIFF'S\n\nORIGINAL\n\nPETITION\n\n\
+Plaintiff Marisol Quenby files this petition against Harlow Basin Water Authority.";
+        let index = index_of(PETITION);
+        let context = whole(&index);
+        let scope = ValidationScope::new(&index, &context, &[]);
+        for reply in ["Plaintiff's Original Petition", "Original Petition"] {
+            assert_eq!(without_copy_marking(&scope, &[], reply), None, "{reply}");
+        }
+        // Printed beside the title, yet not the reply's to lose: what is
+        // left names no kind ("Certified"), the marking stands in the
+        // middle of the reply, or the reply is the marking alone.
+        const CERTIFIED: &str = "REGISTRAR OF COMPANIES\n\nCERTIFIED\n\nCOPY\n\n\
+STATEMENT\n\nCOPY\n\nDate: May 1, 2025\n\n\
+Request for copy of the statement of Larkhaven Seed Company.";
+        let index = index_of(CERTIFIED);
+        let context = whole(&index);
+        let scope = ValidationScope::new(&index, &context, &[]);
+        for reply in [
+            "Certified Copy",
+            "Request for copy of the statement",
+            "Statement Copy Request",
+            "Copy",
+        ] {
+            assert_eq!(without_copy_marking(&scope, &[], reply), None, "{reply}");
+        }
+        assert_eq!(
+            without_copy_marking(&scope, &[], "STATEMENT COPY").as_deref(),
+            Some("Statement")
+        );
     }
 
     #[test]
