@@ -25,6 +25,8 @@ describe('the spellings Intern has learned', () => {
     const dialog = await openSettings();
     expect(await within(dialog).findByText(/Nothing yet\. Change a party's name or a document type in review/)).toBeVisible();
     expect(within(dialog).queryByRole('list', { name: 'Learned spellings' })).not.toBeInTheDocument();
+    // What the section offers, and no more: Settings has no way to change a spelling.
+    expect(within(dialog).getByText(/^Intern learns repeated spelling corrections\./)).toHaveTextContent('Intern learns repeated spelling corrections. You can see them here, and forget any of them.');
   });
 
   it('lists each spelling with its state, uses one at once, and forgets one', async () => {

@@ -614,7 +614,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           whole memory, so anything it learned wrong can be seen and undone
           here rather than discovered in a folder listing.
         */}
-        <p className="section-lead">Intern learns repeated spelling corrections. You can change or forget them here.</p>
+        <p className="section-lead">Intern learns repeated spelling corrections. You can see them here, and forget any of them.</p>
         {rules !== undefined && rules.length === 0 && <p className="check-hint">Nothing yet. Change a party's name or a document type in review and it will appear here.</p>}
         {rules !== undefined && rules.length > 0 && <ul ref={rulesList} className="learned-rules" aria-label="Learned spellings">
           {rules.map((rule, index) => <li key={rule.id} data-rule={rule.id} tabIndex={-1}>

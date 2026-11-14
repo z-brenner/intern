@@ -26,7 +26,9 @@ describe('a name in the reviewer\'s own spelling', () => {
     await selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
 
     const note = screen.getByRole('note', { name: 'Learned spellings applied' });
-    expect(note).toHaveTextContent('Uses your spelling: Contoso Worldwide, Inc. written as Contoso. Change or forget it under Settings.');
+    expect(note).toHaveTextContent('Uses your spelling: Contoso Worldwide, Inc. written as Contoso. Forget it in Settings, under Learned spellings.');
+    // Settings has no way to change a spelling, so the note does not send anyone there for one.
+    expect(note.textContent).not.toMatch(/change/i);
     expect(screen.getByLabelText('Filename')).toHaveValue('2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso');
     fireEvent.click(screen.getByText('Analysis details'));
     const evidence = screen.getByRole('heading', { name: 'Evidence' }).closest('section')!;
@@ -35,14 +37,14 @@ describe('a name in the reviewer\'s own spelling', () => {
 
   // A spelling ending in its own period ("Inc.") is the end of the list:
   // the sentence takes no second one. It read "Receiver, Inc.. Change or
-  // forget it under Settings."
+  // forget it under Settings." - and Settings has no way to change one.
   it('ends the note with one period after a spelling that ends in one', async () => {
     const abbreviated: QueueItem = { ...respelled, houseRules: [{ kind: 'party', from: 'Contoso Worldwide, Inc.', to: 'Contoso, Inc.' }] };
     render(<App bridge={createInMemoryBridge({ items: [abbreviated] })} />);
     await selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
 
     const note = screen.getByRole('note', { name: 'Learned spellings applied' });
-    expect(note).toHaveTextContent('Uses your spelling: Contoso Worldwide, Inc. written as Contoso, Inc. Change or forget it under Settings.');
+    expect(note).toHaveTextContent('Uses your spelling: Contoso Worldwide, Inc. written as Contoso, Inc. Forget it in Settings, under Learned spellings.');
     expect(note.textContent).not.toContain('..');
   });
 
@@ -121,7 +123,9 @@ describe('a document held for a spelling nobody has checked', () => {
     expect(why).toHaveTextContent('This name waits for you because Intern has not been told to use every one of these spellings on its own: Use on its own is in Settings, under Learned spellings.');
     // It does not say that approving the name would do instead.
     expect(why.textContent).not.toMatch(/approv/i);
-    expect(screen.getByRole('note', { name: 'Learned spellings applied' })).toHaveTextContent('Change or forget it under Settings.');
+    const applied = screen.getByRole('note', { name: 'Learned spellings applied' });
+    expect(applied).toHaveTextContent('Forget any of them in Settings, under Learned spellings.');
+    expect(applied.textContent).not.toMatch(/change/i);
   });
 
   it('says "this spelling" under a note of one', () => {
