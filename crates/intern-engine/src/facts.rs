@@ -2846,6 +2846,15 @@ fn without_copy_marking(
             if !stands_alone_beside(scope, found.unit?, line, marking) {
                 return None;
             }
+            // The title read for what is left may itself hold the marking - a
+            // stamp set over a one-word title reads with it as one heading,
+            // "DUPLICATE INVOICE" - and then the type would be written with
+            // the very word that was cut: the reply is read whole.
+            if let TypeReading::Title { phrase, .. } = read_type(scope, cited, &rest)
+                && words(&phrase).iter().any(|word| word == marking)
+            {
+                return None;
+            }
             // The line is the title the reply ran on from: where its phrase is
             // the reply's words, they are written as a title's are, capitals
             // and all ("INVOICE" is an "Invoice" wherever the reply cited).
@@ -11253,6 +11262,47 @@ Glasswing Ceramics LLC is in default under the Loan Agreement dated March 3, 202
         assert_eq!(outcome.status, ProposalStatus::NeedsReview);
     }
 
+    /// A stamp set over a one-word title reads with it as one heading:
+    /// "DUPLICATE" over "INVOICE" is the title "DUPLICATE INVOICE". The
+    /// title read for what is left of "INVOICE DUPLICATE" then holds the
+    /// marking itself, so nothing was cut that the type does not state: the
+    /// reply is read whole and the name waits for a person, as before.
+    #[test]
+    fn a_marking_the_title_read_for_the_rest_holds_is_not_cut() {
+        const OVER: &str = "Halvorsen Fixture Works LLC\n12 Quay Street, Brackenridge\n\n\
+DUPLICATE\n\nINVOICE\n\n\
+Invoice No.: INV-10438\n\nInvoice Date: May 1, 2025\n\nDue Date: May 31, 2025\n\n\
+Bill To: Quillon Ridge Bakery, Inc.\n\nDisplay shelving for the bakery counter, $1,248.00\n\n\
+Payment terms: net 30. Remit to Halvorsen Fixture Works LLC.";
+        for (reply, cited) in [
+            ("INVOICE DUPLICATE", "INVOICE"),
+            ("INVOICE DUPLICATE", "Halvorsen Fixture Works LLC"),
+            ("Invoice Duplicate", "Halvorsen Fixture Works LLC"),
+        ] {
+            let (outcome, index) = facts_for(OVER, |index| ModelFacts {
+                document_type: Some(reply.into()),
+                type_evidence: vec![id_of(index, cited)],
+                ..invoice_facts(index)
+            });
+            let context = whole(&index);
+            let scope = ValidationScope::new(&index, &context, &[]);
+            assert_eq!(
+                without_copy_marking(&scope, &[id_of(&index, cited)], reply),
+                None,
+                "{reply} cited on {cited}"
+            );
+            for reason in [ReviewReason::TypeUnsupported, ReviewReason::TypeInferred] {
+                assert!(
+                    outcome.reasons.contains(&reason),
+                    "{reply} cited on {cited}: {reason:?} not in {:?} (type {:?})",
+                    outcome.reasons,
+                    outcome.proposal.document_type
+                );
+            }
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview, "{reply}");
+        }
+    }
+
     /// A title that states its marking keeps it, and so does a reply the
     /// marking is not at an end of, or that names no kind without it.
     #[test]
@@ -11316,9 +11366,19 @@ Request for copy of the statement of Larkhaven Seed Company.";
             "Request for copy of the statement",
             "Statement Copy Request",
             "Copy",
+            // "COPY" stands over "STATEMENT" here too, and the two headings
+            // read as the one title "COPY STATEMENT": the title read for
+            // what is left holds the marking.
+            "STATEMENT COPY",
         ] {
             assert_eq!(without_copy_marking(&scope, &[], reply), None, "{reply}");
         }
+        // The same statement with the marking under its title only.
+        const STATEMENT: &str = "Larkhaven Seed Company\n44 Mill Road, Brackenridge\n\n\
+STATEMENT\n\nCOPY\n\nDate: May 1, 2025\n\nAccount of: Quillon Ridge Bakery, Inc.";
+        let index = index_of(STATEMENT);
+        let context = whole(&index);
+        let scope = ValidationScope::new(&index, &context, &[]);
         assert_eq!(
             without_copy_marking(&scope, &[], "STATEMENT COPY").as_deref(),
             Some("Statement")
