@@ -445,8 +445,11 @@ checks read the document around it:
   lines included, joins it to another date by `to`, `through`, `thru`,
   `until` or a dash, on either side, the date is kept and the proposal goes
   to review with `DATE_IS_PERIOD`. One statement of the date outside any
-  period clears it, and so does a dash that runs into a number that is no
-  date (`Invoice No. 2024-01-08-0457`). Only an issued document is asked: a
+  period clears it, however loosely it is written (`Invoice Date:
+  08-Jan-24`), and so does a dash that runs into a number that is no date
+  (`Invoice No. 2024-01-08-0457`) or into a time written with dots
+  (`28.01.2024 - 11.30.05`: two ends in figures are written alike, with one
+  separator and a year as long). Only an issued document is asked: a
   policy or a lease is dated by the start of its term. The evidence
   pipeline alone raises it.
 
