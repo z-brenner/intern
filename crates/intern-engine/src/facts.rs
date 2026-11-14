@@ -3321,7 +3321,9 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
 /// reply is kept as written.
 /// A stated type as a title names its kind, not the whole line a bigger
 /// model copies. The field a title line runs into is cut away ("CHANGE
-/// ORDER Distribution: Briarport Library District" is a "Change Order");
+/// ORDER Distribution: Briarport Library District" is a "Change Order"),
+/// and so is a date box's label with the format it asks for
+/// ([`before_date_field`]);
 /// the line's own kind phrase stands for the line ("Fieldnote S2 Product
 /// Launch Plan" is a "Product Launch Plan", "Spring Wholesale Availability
 /// and Price List" a "Price List", as [`title_phrase`] reads a title); and
@@ -3331,6 +3333,7 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
 /// it is about ("Supply Agreement", "Amendment to Lease"), and a party's
 /// name can be part of that.
 fn stated_title(value: &str, parties: &[&str]) -> String {
+    let value = before_date_field(value);
     // "PLAINTIFF'S Notice of Voluntary Dismissal": the side filing a
     // notice is no part of its name.
     let tokens = value
@@ -3434,6 +3437,74 @@ fn stated_title(value: &str, parties: &[&str]) -> String {
         value = kept;
     }
     value
+}
+
+/// A stated title up to the date field its line runs into: the label
+/// "Date" with the format its value is asked in after it, in brackets -
+/// "CERTIFICATE OF LIABILITY INSURANCE DATE (MM/DD/YYYY)", the head of a
+/// form whose title shares its line with the date box, is a "CERTIFICATE
+/// OF LIABILITY INSURANCE". No paper is called by a format placeholder,
+/// so the title ends before the label wherever what is left still holds a
+/// kind of document; it need not end in one ("... Insurance"). Any other
+/// bracket after "Date" is the title's own ("Notice of Hearing Date
+/// (Rescheduled)"), and the whole value is returned.
+fn before_date_field(value: &str) -> &str {
+    let tokens = value.split_whitespace().collect::<Vec<_>>();
+    let core = |token: &str| -> String {
+        normalize(token)
+            .trim_matches(|character: char| !character.is_alphanumeric())
+            .to_owned()
+    };
+    let label = (1..tokens.len())
+        .find(|&at| core(tokens[at]) == "date" && opens_with_a_date_format(&tokens[at + 1..]));
+    let Some(label) = label else {
+        return value;
+    };
+    // Tokens are slices of `value`: the title is what stands before the
+    // label's.
+    let start = tokens[label].as_ptr() as usize - value.as_ptr() as usize;
+    let head = value[..start].trim_end();
+    if has_a_kind(&words(head)) {
+        head
+    } else {
+        value
+    }
+}
+
+/// Whether `tokens` open with a date's format in brackets, the way a form
+/// says how to fill its date box: "(MM/DD/YYYY)", "[DD-MM-YYYY]",
+/// "(yyyy.mm.dd)", "(DD MMM YYYY)" - a bracket closed within three tokens
+/// that holds nothing but the letters D, M and Y, at least two of them,
+/// and the marks that set them apart.
+fn opens_with_a_date_format(tokens: &[&str]) -> bool {
+    let Some(first) = tokens.first() else {
+        return false;
+    };
+    let close = match first.chars().next() {
+        Some('(') => ')',
+        Some('[') => ']',
+        _ => return false,
+    };
+    let Some(last) = tokens.iter().take(3).position(|token| {
+        token
+            .trim_end_matches([',', '.', ':', ';'])
+            .ends_with(close)
+    }) else {
+        return false;
+    };
+    let inside = tokens[..=last].join(" ").to_lowercase();
+    let inside = inside
+        .trim_end_matches([',', '.', ':', ';'])
+        .trim_start_matches(['(', '['])
+        .trim_end_matches(close);
+    let letters = ['d', 'm', 'y']
+        .into_iter()
+        .filter(|letter| inside.contains(*letter))
+        .count();
+    letters >= 2
+        && inside
+            .chars()
+            .all(|character| matches!(character, 'd' | 'm' | 'y' | '/' | '-' | '.' | ' '))
 }
 
 /// Whether the head a title keeps before a party's name
@@ -8862,6 +8933,75 @@ mod tests {
         ] {
             assert_eq!(stated_title(kept, &parties), kept);
         }
+    }
+
+    /// A form's title can share its line with the date box: "CERTIFICATE OF
+    /// LIABILITY INSURANCE DATE (MM/DD/YYYY)". The box's label and the
+    /// format it asks for are no part of the title, which ends before the
+    /// label though it does not end in a kind word there. Any other
+    /// bracket after "Date" is the title's own, and a label with nothing
+    /// before it that names a kind is no title's end.
+    #[test]
+    fn a_stated_title_ends_before_a_date_boxs_label_and_its_format() {
+        for (value, title) in [
+            (
+                "CERTIFICATE OF LIABILITY INSURANCE DATE (MM/DD/YYYY)",
+                "CERTIFICATE OF LIABILITY INSURANCE",
+            ),
+            (
+                "Certificate of Insurance Date [DD-MM-YYYY]",
+                "Certificate of Insurance",
+            ),
+            ("Delivery Receipt DATE (yyyy.mm.dd):", "Delivery Receipt"),
+            ("Loss Report Date (DD MMM YYYY)", "Loss Report"),
+        ] {
+            assert_eq!(stated_title(value, &[]), title, "{value}");
+        }
+        for kept in [
+            // No format: the bracket says something about the date.
+            "Notice of Hearing Date (Rescheduled)",
+            "Notice of Hearing Date (May)",
+            "Certificate of Insurance Date (Required)",
+            // No bracket, or a format with no label before it.
+            "Notice of Hearing Date MM/DD/YYYY",
+            "Certificate of Insurance (MM/DD/YYYY)",
+            // Nothing before the label names a kind.
+            "Effective Date (MM/DD/YYYY)",
+            "Date (MM/DD/YYYY)",
+        ] {
+            assert_eq!(stated_title(kept, &[]), kept);
+        }
+        // Read from the form: the type, and the name it is filed under.
+        const CERTIFICATE: &str = "CERTIFICATE OF LIABILITY INSURANCE DATE (MM/DD/YYYY)\n\n\
+06/23/2026\n\n\
+PRODUCER: Marlowe & Finch Insurance Brokers\n\n\
+INSURED: All Seasons Landscaping\n\n\
+This certificate is issued as a matter of information only.";
+        let (outcome, _) = facts_for(CERTIFICATE, |index| ModelFacts {
+            document_type: Some("CERTIFICATE OF LIABILITY INSURANCE DATE (MM/DD/YYYY)".into()),
+            type_evidence: vec![id_of(index, "CERTIFICATE OF")],
+            document_date: Some("2026-06-23".into()),
+            date_evidence: vec![id_of(index, "06/23/2026")],
+            parties: vec![party(
+                "All Seasons Landscaping",
+                Some(PartyRole::Client),
+                &[id_of(index, "INSURED:")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("CERTIFICATE OF LIABILITY INSURANCE")
+        );
+        assert!(
+            !outcome.reasons.contains(&ReviewReason::TypeUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(
+            crate::naming::compose_filename(&outcome.proposal, "pdf", &[]).value,
+            "2026-06-23 Certificate of Liability Insurance for All Seasons Landscaping.pdf"
+        );
     }
 
     /// A kind a connector joins to the title's head past an article or a
