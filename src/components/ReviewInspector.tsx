@@ -6,6 +6,8 @@ import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
 import { StatusCell } from './StatusCell';
 import { isUnreadable, itemActions, keptOriginal, withoutReviewPrefix } from '../features/review/actions';
+import { proposalOf } from '../features/review/drafts';
+import type { ReviewDraft, ReviewDrafts } from '../features/review/drafts';
 import { itemFlaggedFields, itemReasonCodes, nameParts, partyGiven, withParty } from '../features/queue/check';
 import type { ReasonField } from '../lib/reasons';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
@@ -99,11 +101,15 @@ interface Props {
   onUndo(): void;
   onOpen(): void;
   onReveal(): void;
+  /**
+   * Where what is typed and not filed is kept: the window's, so that it
+   * outlives the panel (see `ReviewDrafts`). Without one the panel keeps
+   * its own, which goes with it.
+   */
+  drafts?: ReviewDrafts;
 }
-/** The name and description being edited, for one item and one revision of its proposal (`for`). */
-interface Draft { for: string; stem: string; description: string; edited: boolean }
 
-export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal }: Props) {
+export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal, drafts }: Props) {
   // Exactly what the backend accepts for this item. Retry on an ordinary
   // review item, and nothing at all for a ready or waiting one, were the
   // two ways this panel used to be wrong (FRONTEND_UX-3, FRONTEND_UX-4).
@@ -119,22 +125,33 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   const startingName = item.proposedFilename ?? (unreadable ? withoutReviewPrefix(item.originalFilename) : '');
   const { stem: proposedStem, extension } = splitFilename(startingName, sourceExtension);
   // The name and description being edited belong to one item, and to one
-  // revision of its proposal. The panel stays mounted as review moves on, and
+  // proposal of it. The panel stays mounted as review moves on, and
   // they used to be put back to the new item's in a passive effect: a task
   // after the commit that showed the new item. A key pressed in between - a
   // held or quick second Ctrl+Enter, or Enter in the name - approved the item
   // on screen under the name and description of the one just decided. They
   // are put back while rendering instead, so no commit, and no handler or
   // shortcut taken from one, ever pairs an item with another's draft.
-  const draftFor = `${item.id}\n${item.proposalRevision ?? ''}`;
-  const [draft, setDraft] = useState<Draft>({ for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false });
-  // What was typed for an item left undecided - Alt+N, Next undecided, or
-  // another row - is set aside under the same item and revision, and is in
-  // the fields again when review comes back to it. It used to be thrown
-  // away, and Alt+N is pressed from inside the name, where corrections are
-  // typed. A new reading is a new revision: its own proposal is shown, not
-  // an edit of the one before.
-  const [setAside, setSetAside] = useState<ReadonlyMap<string, Draft>>(() => new Map());
+  const draftFor = proposalOf(item);
+  // What was typed for an item and not filed is kept for the item and the
+  // proposal it was typed over, and is in the fields again whenever the
+  // panel shows that item with that proposal. It used to be thrown away
+  // when review moved on - Alt+N, Next undecided, another row - and Alt+N
+  // is pressed from inside the name, where corrections are typed. Then the
+  // panel kept it, and it went with the panel, which leaves the screen
+  // without anything being decided: when the window changes width, when it
+  // is closed, when the selection is cleared. So it is kept outside the
+  // panel (`drafts`, the window's), as each edit is shown. A new reading
+  // is a new proposal: it is shown as it is, not under an edit of the one
+  // before.
+  const [ownDrafts] = useState<ReviewDrafts>(() => new Map());
+  const kept = drafts ?? ownDrafts;
+  const typedOrProposed = (): ReviewDraft => {
+    const typed = kept.get(item.id);
+    return typed?.for === draftFor ? typed : { item: item.id, for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false };
+  };
+  const [draft, setDraft] = useState<ReviewDraft>(typedOrProposed);
+  useLayoutEffect(() => { if (draft.edited) kept.set(draft.item, draft); }, [draft, kept]);
   const [error, setError] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
@@ -151,7 +168,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   const filenameRef = useRef<HTMLTextAreaElement>(null);
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
   // The name's field and the description's are one item's, and one
-  // revision's: each is keyed by the draft (below), so the browser's undo
+  // proposal's: each is keyed by the draft (below), so the browser's undo
   // steps go with the field they were made in. One field served every item,
   // and an undo step could outlive its item: once the field's whole text
   // had been replaced - by a party chip, or by Ctrl+A and typing or Delete -
@@ -166,9 +183,10 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   if (draft.for !== draftFor) {
     nameHadFocus.current = filenameRef.current !== null && document.activeElement === filenameRef.current;
     descriptionHadFocus.current = descriptionRef.current !== null && document.activeElement === descriptionRef.current;
-    const kept = draft.edited ? new Map(setAside).set(draft.for, draft) : setAside;
-    if (kept !== setAside) setSetAside(kept);
-    setDraft(kept.get(draftFor) ?? { for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false });
+    // Kept here as well: an edit can reach this render with the item that
+    // replaces its own, before any commit has shown it.
+    if (draft.edited) kept.set(draft.item, draft);
+    setDraft(typedOrProposed());
     setError(''); setMoreOpen(false); setConfirmingRemove(false);
   }
   // The More menu is drawn only beside Keep original. An item that can no

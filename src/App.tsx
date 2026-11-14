@@ -37,6 +37,8 @@ import { useQueue } from './features/queue/useQueue';
 import { useBatchProgress } from './features/queue/batch';
 import { requestAttentionIfUnfocused, setTaskbarProgress } from './lib/windowSignals';
 import { isParked, itemActions, keptOriginal, nextUndecided, undecidedOrder } from './features/review/actions';
+import { forgetOutdatedDrafts } from './features/review/drafts';
+import type { ReviewDrafts } from './features/review/drafts';
 import { useReviewShortcuts } from './features/review/useReviewShortcuts';
 import type { ReviewInspectorHandle } from './features/review/useReviewShortcuts';
 import { modelReady, useModelSetup } from './features/setup/useModelSetup';
@@ -149,6 +151,16 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // it opens only when asked in this session.
   const [detailsAskedFor, setDetailsAskedFor] = useState(false);
   const detailsButton = useRef<HTMLButtonElement>(null);
+  // What was typed in the panel for a name and a description and not filed.
+  // It is the window's, not the panel's: the panel leaves the screen when
+  // the window changes width, when it is closed and when the selection is
+  // cleared, and what had been typed went with it. It is kept for the
+  // proposal it was typed over, and forgotten once its document is seen
+  // with another, or none (see ReviewDrafts) - after the commit that shows
+  // that, so the panel, which keeps an edit as it is shown, has kept its
+  // last by then.
+  const [reviewDrafts] = useState<ReviewDrafts>(() => new Map());
+  useEffect(() => { forgetOutdatedDrafts(reviewDrafts, items); }, [reviewDrafts, items]);
   // The queue table's active cell and selected cells, in a store beside the
   // table so a drag does not re-render the whole window (see gridStore).
   const [gridStore] = useState(createGridStore);
@@ -963,7 +975,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
           onDismiss={toast.kind === 'progress' ? undefined : () => setToast(undefined)}>{toast.text}</Toast>}
         {actionError && <Toast tone="error" label="Action error" onDismiss={() => setActionError('')}>{actionError}</Toast>}
       </div>}
-      {panelOpen && selected && <ReviewInspector id={REVIEW_PANEL_ID} ref={inspectorHandle} busy={actionPending} drawer={drawerOpen} item={selected}
+      {panelOpen && selected && <ReviewInspector id={REVIEW_PANEL_ID} ref={inspectorHandle} busy={actionPending} drawer={drawerOpen} item={selected} drafts={reviewDrafts}
         position={undecided.length ? { index: undecided.findIndex((item) => item.id === selected.id) + 1 || undefined, total: undecided.length } : undefined}
         onNext={goToNextUndecided}
         onClose={() => closeDetails()} onApprove={(filename, description) => void decide(selected, 'approve', () => bridge.approve(selected.id, filename, description))} onKeep={() => void decide(selected, 'keep', () => bridge.keepOriginal(selected.id))} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void retryItem(selected)} onReanalyze={() => void refreshAndClear(() => bridge.reanalyze(selected.id), 'Sent back to be analyzed again.')} onRemove={(confirmed) => void decide(selected, 'remove', () => confirmed ? bridge.remove(selected.id, { confirmed: true }) : bridge.remove(selected.id))} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} onOpen={() => void openDocument(selected.id, false)} onReveal={() => void openDocument(selected.id, true)} />}

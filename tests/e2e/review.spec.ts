@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { Locator, Page } from '@playwright/test';
-import { openDetails, queueCell } from './grid';
+import { detailsToggle, openDetails, queueCell } from './grid';
 
 /*
   The review panel scrolls under its decision - Approve & rename, Keep
@@ -335,3 +335,74 @@ test('the review drawer opened again under Settings takes no focus from it', asy
   expect(await status()).toBe(before);
   await expect(name).toHaveValue(shown);
 });
+
+/*
+  What was typed for a name and a description and not filed is the window's,
+  not the review panel's, so it is still there when the panel comes back.
+  The panel kept it, and the panel leaves the screen without anything being
+  decided: a wide panel when the window is made narrower than 1100px - half
+  of a 1920px screen is 960px - a drawer when it is made wider, and either
+  by Close review. Each time both fields came back as Intern's proposal.
+*/
+const LEASE = 'Lease Agreement - 123 Main St.pdf';
+const WIDE = { width: 1400, height: 900 };
+const NARROW = { width: 800, height: 600 };
+
+for (const [label, first, second] of [['a wide panel, the window made narrower and wider again', WIDE, NARROW], ['a drawer, the window made wider and narrower again', NARROW, WIDE]] as const) {
+  test(`what was typed for a name and a description is still there: ${label}`, async ({ page }) => {
+    await page.setViewportSize(first);
+    await page.goto('/');
+    const panel = page.locator('#review-panel');
+    const name = panel.getByRole('textbox', { name: 'Filename' });
+    const description = panel.getByRole('textbox', { name: 'Description' });
+    await openDetails(page, LEASE);
+    await name.click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' v2 signed');
+    await description.click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' Countersigned copy received 3 May; clause 7 amended by hand.');
+    const typed = { name: await name.inputValue(), description: await description.inputValue() };
+    expect(typed.name).toMatch(/TenantCo Inc v2 signed$/);
+    expect(typed.description).toMatch(/amended by hand\.$/);
+    const stillThere = async () => {
+      await expect(name).toHaveValue(typed.name);
+      await expect(description).toHaveValue(typed.description);
+    };
+    const status = () => queueCell(page, LEASE, 'status').textContent();
+    const before = await status();
+
+    // At the other width the panel is off screen: narrow, a drawer opens
+    // only when asked; wide, the panel was never left open.
+    await page.setViewportSize(second);
+    await expect(panel).toHaveCount(0);
+    await page.setViewportSize(first);
+    await stillThere();
+
+    // Asked for at the other width, it has what was typed there too.
+    await page.setViewportSize(second);
+    await expect(panel).toHaveCount(0);
+    await detailsToggle(page).click();
+    await stillThere();
+    await page.setViewportSize(first);
+    await stillThere();
+
+    // Closed by its own button and opened again.
+    await panel.getByRole('button', { name: 'Close review' }).click();
+    await expect(panel).toHaveCount(0);
+    await detailsToggle(page).click();
+    await stillThere();
+
+    // Nothing was filed by any of it, and Enter in the name files what was typed.
+    await expect(page.locator('.toasts')).toHaveCount(0);
+    expect(await status()).toBe(before);
+    await name.click();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.toasts')).toContainText('Renamed 1 document.');
+    // Narrow, review has moved on in the drawer, over the queue.
+    if (await page.getByRole('dialog', { name: 'Review item' }).isVisible()) await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: /^Completed/ }).click();
+    await expect(queueCell(page, LEASE, 'proposed')).toContainText(`${typed.name}.pdf`);
+    await expect(queueCell(page, LEASE, 'description')).toContainText(typed.description);
+  });
+}
