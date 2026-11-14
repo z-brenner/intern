@@ -188,6 +188,68 @@ for (const size of [{ width: 1400, height: 900 }, { width: 1280, height: 720 }])
 }
 
 /*
+  The browser's undo goes to the field edited last wherever the focus is,
+  with no dialog open too. Ctrl+Z in the review panel's Description, in the
+  queue's filter or after a press on the panel's text undid the Filename's
+  last edit and put the caret in it, and the next Enter - a new line, in
+  the Description - filed the document under the name half undone. An undo
+  or a redo changes only the field with the focus.
+*/
+for (const size of [{ width: 1400, height: 900 }, { width: 800, height: 600 }]) {
+  test(`no undo or redo from elsewhere in the review panel changes its name, at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await page.goto('/');
+    const lease = 'Lease Agreement - 123 Main St.pdf';
+    const panel = await openDetails(page, lease);
+    const name = panel.getByRole('textbox', { name: 'Filename' });
+    const description = panel.getByRole('textbox', { name: 'Description' });
+    await name.click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' v2');
+    const edited = await name.inputValue();
+    expect(edited).toMatch(/ v2$/);
+    const status = () => queueCell(page, lease, 'status').textContent();
+    const before = await status();
+    const elsewhere: [string, () => Promise<void>][] = [
+      ['in the Description', () => description.click()],
+      ['on the panel heading', () => panel.getByRole('heading', { name: 'Review item' }).focus()],
+      ['after a press on the panel text', () => panel.locator('.selected-file').click()],
+    ];
+    // Narrow, the queue is inert under the drawer.
+    if (!await narrow(page)) elsewhere.push(['in the queue filter', () => page.getByRole('searchbox', { name: 'Filter queue' }).click()]);
+    for (const [where, focusOn] of elsewhere) {
+      for (const key of ['Control+Z', 'Control+Y', 'Control+Shift+Z']) {
+        await focusOn();
+        await page.keyboard.press(key);
+        await page.waitForTimeout(100);
+        await expect(name, `${key} ${where}`).toHaveValue(edited);
+        await expect(name, `${key} ${where}`).not.toBeFocused();
+      }
+    }
+    // Enter in the Description after Ctrl+Z there is a new line in it, and files nothing.
+    await description.click();
+    const described = await description.inputValue();
+    await page.keyboard.press('Control+Z');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(300);
+    await expect(description).toBeFocused();
+    await expect(description).not.toHaveValue(described);
+    await expect(name).toHaveValue(edited);
+    expect(await status()).toBe(before);
+    // In each field, its own undo is the browser's: the new line in the
+    // Description, then the edit to the name. (The undo goes to the last
+    // edit in the page, so the name's waits until the Description's is
+    // undone.)
+    await page.keyboard.press('Control+Z');
+    await expect(description).toHaveValue(described);
+    await name.click();
+    await page.keyboard.press('Control+Z');
+    await expect(name).not.toHaveValue(edited);
+    expect(await status()).toBe(before);
+  });
+}
+
+/*
   Nothing behind Settings takes the focus while it is open: the window
   behind it is inert, and Tab and Shift+Tab go round its own controls from
   wherever the focus is. A press on its heading or its backdrop left the

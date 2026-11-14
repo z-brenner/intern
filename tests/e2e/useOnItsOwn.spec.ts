@@ -339,6 +339,57 @@ for (const size of sizes) {
   });
 }
 
+// Once the question is taken back or answered, the undo it kept from
+// unsaved settings was the browser's again: Ctrl+Z on its row, pressed to
+// take back the check, undid this machine's name instead and put the caret
+// in it, and Save stored what was left. An undo or a redo changes only the
+// field with the focus, before, while and after the question asks.
+for (const size of sizes) {
+  test(`no undo or redo after the question changes an unsaved setting, in Settings at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    const surface = await settings(page);
+    const { root } = surface;
+    const before = await surface.checked();
+    const edited = await editedBehind(root);
+    await edited.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type('-laptop');
+    const typed = await edited.inputValue();
+    const question = root.getByRole('group', { name: CONTOSO });
+    const field = question.getByRole('textbox');
+    const unchanged = async (what: string) => {
+      for (const key of ['Control+Z', 'Control+Y', 'Control+Shift+Z']) {
+        await page.keyboard.press(key);
+        await page.waitForTimeout(100);
+        await expect(edited, `${key} ${what}`).toHaveValue(typed);
+        await expect(edited, `${key} ${what}`).not.toBeFocused();
+      }
+    };
+    // Taken back with Escape, with the focus where Escape leaves it, and on the row.
+    await (await actionInSight(surface, CONTOSO)).click();
+    await page.keyboard.type('Cont');
+    await page.keyboard.press('Escape');
+    await expect(question).toHaveCount(0);
+    await unchanged('after the question was taken back');
+    await root.locator('li', { has: page.getByRole('button', { name: CONTOSO }) }).focus();
+    await unchanged('on its row');
+    // Answered with the spelling and Enter.
+    await (await actionInSight(surface, CONTOSO)).click();
+    await expect(field).toBeFocused();
+    await page.keyboard.type('Contoso');
+    await page.keyboard.press('Enter');
+    await expect(question).toHaveCount(0);
+    await expect.poll(() => surface.checked()).toBe(before + 1);
+    await unchanged('after the question was answered');
+    await root.getByRole('button', { name: 'Save settings' }).focus();
+    await unchanged('on Save');
+    // In this machine's name, its own undo is the browser's.
+    await edited.click();
+    await page.keyboard.press('Control+Z');
+    await expect(edited).not.toHaveValue(typed);
+  });
+}
+
 // A paste is no typing. The same paste goes into another field of Settings.
 test('a paste puts nothing in the field', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);

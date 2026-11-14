@@ -20,6 +20,7 @@ import { describeActionError } from './lib/actionErrors';
 import type { RefusedAction } from './lib/actionErrors';
 import { describeAddReport } from './lib/addReport';
 import { installingLabel } from './lib/format';
+import { useUndoOnlyWhereFocused } from './lib/undoWhereFocused';
 import { describeQueueStop } from './lib/reasons';
 import type { DesktopBridge, LaunchReportSource, SelectionBoundary, SelectionResult, UpdateProgressListener, UpdateStatus } from './lib/bridge';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
@@ -86,6 +87,8 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
     });
     return () => { active = false; };
   }, [bridge, suppliedBridge, attempt]);
+  // In every screen, an undo or a redo changes only the field with the focus.
+  useUndoOnlyWhereFocused();
 
   // Its own landmark name: the screen that follows may be setup or the app, and
   // this placeholder must not be mistaken for either.

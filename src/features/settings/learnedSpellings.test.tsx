@@ -466,8 +466,11 @@ describe('the spellings Intern has learned', () => {
   // An undo or a redo goes to the field edited last, wherever the focus
   // is, and takes the focus there: Ctrl+Z in the question's field undid an
   // unsaved edit to this machine's name and moved the focus into it, where
-  // the spelling then went.
-  it('changes no setting but the one with the focus while it asks: no undo or redo reaches an unsaved edit behind it', async () => {
+  // the spelling then went. Once the question had been answered or taken
+  // back, Ctrl+Z on its row or on Save - to take back the check - undid the
+  // unsaved edit instead, and Save stored it. Before, while and after it
+  // asks, an undo changes only the field with the focus.
+  it('changes no setting but the one with the focus, before, while and after it asks: no undo or redo reaches an unsaved edit', async () => {
     const base = createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] });
     const houseRuleCheck = vi.fn(base.houseRuleCheck);
     const saveSettings = vi.fn(base.saveSettings);
@@ -481,6 +484,9 @@ describe('the spellings Intern has learned', () => {
     const undoes = (field: HTMLElement, inputType: string) => fireEvent(field, new InputEvent('beforeinput', { inputType, bubbles: true, cancelable: true }));
     const action = within(list).getByRole('button', { name: /^Use on its own:/ });
     action.focus();
+    expect(undoes(machine, 'historyUndo')).toBe(false);
+    // In the field with the focus, the browser's undo is the person's.
+    machine.focus();
     expect(undoes(machine, 'historyUndo')).toBe(true);
 
     fireEvent.click(action);
@@ -508,9 +514,35 @@ describe('the spellings Intern has learned', () => {
     expect(machine).toHaveValue('Front desk');
     expect(dialog).toBeInTheDocument();
     expect(saveSettings).not.toHaveBeenCalled();
-    // Asking no more, it leaves undo to the browser again.
-    within(dialog).getByRole('button', { name: 'Save settings' }).focus();
+    // Asking no more, an undo on Save or on the row changes no setting,
+    // and in this machine's name it is the browser's.
+    for (const focus of [() => within(dialog).getByRole('button', { name: 'Save settings' }).focus(), () => within(list).getByRole('listitem').focus()]) {
+      focus();
+      for (const [other, inputType] of [[machine, 'historyUndo'], [machine, 'historyRedo'], [names, 'historyUndo']] as const) expect(undoes(other, inputType), inputType).toBe(false);
+    }
+    machine.focus();
     expect(undoes(machine, 'historyUndo')).toBe(true);
+  });
+
+  it('changes no setting but the one with the focus once the question is taken back', async () => {
+    render(<App bridge={createInMemoryBridge({ learnedRules: [{ ...learned[1], confirmed: 0 }] })} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    const machine = within(dialog).getByRole('textbox', { name: "This machine's name" });
+    fireEvent.change(machine, { target: { value: 'Front desk' } });
+    const undoes = (field: HTMLElement, inputType: string) => fireEvent(field, new InputEvent('beforeinput', { inputType, bubbles: true, cancelable: true }));
+    fireEvent.click(within(list).getByRole('button', { name: /^Use on its own:/ }));
+    const field = within(list).getByRole('textbox');
+    typeInto(field, 'Meet');
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(within(list).queryByRole('group')).not.toBeInTheDocument();
+    for (const focus of [() => within(list).getByRole('listitem').focus(), () => within(list).getByRole('button', { name: /^Use on its own:/ }).focus(), () => (document.activeElement as HTMLElement).blur()]) {
+      focus();
+      for (const inputType of ['historyUndo', 'historyRedo']) expect(undoes(machine, inputType), inputType).toBe(false);
+    }
+    machine.focus();
+    expect(undoes(machine, 'historyUndo')).toBe(true);
+    expect(machine).toHaveValue('Front desk');
   });
 
   // Closing the section over an open question takes the question back: it

@@ -30,7 +30,8 @@ describe('a dialog over the review window', () => {
     const name = within(panel).getByRole('textbox', { name: 'Filename' });
     const description = within(panel).getByRole('textbox', { name: 'Description' });
     fireEvent.change(name, { target: { value: `${(name as HTMLTextAreaElement).value} v2` } });
-    // Before Settings opens, an undo is the browser's.
+    // Before Settings opens, an undo in the name is the browser's.
+    name.focus();
     expect(allowed(name, 'historyUndo')).toBe(true);
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Settings' })[0]);
@@ -51,6 +52,7 @@ describe('a dialog over the review window', () => {
 
     fireEvent.keyDown(machine, { key: 'Escape' });
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    name.focus();
     expect(allowed(name, 'historyUndo')).toBe(true);
     expect(allowed(name, 'insertText')).toBe(true);
   });
@@ -62,6 +64,7 @@ describe('a dialog over the review window', () => {
       render(<App bridge={createInMemoryBridge({ items: [filed] })} />);
       fireEvent.click(await screen.findByRole('button', { name: /^Completed/ }));
       fireEvent.change(behind, { target: { value: 'edited' } });
+      behind.focus();
       expect(allowed(behind, 'historyUndo')).toBe(true);
 
       fireEvent.click(await screen.findByRole('button', { name: 'History' }));
@@ -71,10 +74,46 @@ describe('a dialog over the review window', () => {
 
       fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
       await waitFor(() => expect(dialog).not.toBeInTheDocument());
+      behind.focus();
       expect(allowed(behind, 'historyUndo')).toBe(true);
     } finally {
       behind.remove();
     }
+  });
+});
+
+/*
+  The browser's undo goes to the field edited last wherever the focus is,
+  with no dialog open too. In the review panel, Ctrl+Z in the Description,
+  in the queue's filter or after a press on the panel's text undid the
+  Filename's last edit and put the caret in it, and the next Enter - a new
+  line, in the Description - filed the document under the name half
+  undone. An undo or a redo changes only the field with the focus.
+*/
+describe('an undo in the review window', () => {
+  it('lets no undo or redo from elsewhere in the review window reach the name', async () => {
+    render(<App bridge={createInMemoryBridge()} />);
+    const panel = await openRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    const name = within(panel).getByRole('textbox', { name: 'Filename' });
+    const description = within(panel).getByRole('textbox', { name: 'Description' });
+    fireEvent.change(name, { target: { value: `${(name as HTMLTextAreaElement).value} v2` } });
+    for (const [where, focusOn] of [
+      ['in the Description', () => description.focus()],
+      ['in the queue filter', () => screen.getByRole('searchbox', { name: 'Filter queue' }).focus()],
+      ['on the panel heading', () => within(panel).getByRole('heading', { name: 'Review item' }).focus()],
+      ['on nothing, after a press on the panel text', () => (document.activeElement as HTMLElement).blur()],
+    ] as const) {
+      focusOn();
+      for (const inputType of ['historyUndo', 'historyRedo']) {
+        expect(allowed(name, inputType), `${inputType} ${where}`).toBe(false);
+        expect(allowed(description, inputType), `${inputType} in the description, ${where}`).toBe(where === 'in the Description');
+      }
+    }
+    // In the field with the focus, undo and redo are the person's.
+    name.focus();
+    expect(allowed(name, 'historyUndo')).toBe(true);
+    expect(allowed(name, 'historyRedo')).toBe(true);
+    expect(name).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc v2');
   });
 });
 
