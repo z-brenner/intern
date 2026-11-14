@@ -467,6 +467,30 @@ describe('the spellings Intern has learned', () => {
     await waitFor(() => expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('Quarterly Operations Review written as Board Minutes'));
   });
 
+  // A spelling forgotten since the list was shown - in the review window,
+  // or by putting a document's own words back - stayed in the list as in
+  // use, its "Use on its own" refused again however often it was tried.
+  it('takes a spelling forgotten since the list was shown out of the list when using it on its own finds it gone', async () => {
+    const unchecked: LearnedRule = { id: '3', kind: 'party', from: 'Northwind Traders', to: 'Northwind', seen: 2, active: true, confirmed: 0, learnedAt: 1716369300 };
+    const base = createInMemoryBridge({ learnedRules: [learned[0], unchecked, learned[1]] });
+    const houseRuleCheck = vi.fn(base.houseRuleCheck);
+    render(<App bridge={{ ...base, houseRuleCheck }} />);
+    const dialog = await openSettings();
+    const list = await within(dialog).findByRole('list', { name: 'Learned spellings' });
+    const rows = () => within(list).getAllByRole('listitem');
+    await base.houseRuleForget('3');
+    fireEvent.click(within(rows()[1]).getByRole('button', { name: 'Use on its own: Northwind Traders written as Northwind' }));
+    typeInto(within(rows()[1]).getByRole('textbox'), 'Northwind');
+    fireEvent.click(within(rows()[1]).getByRole('button', { name: 'Use on its own' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('That spelling is no longer in the list');
+    expect(houseRuleCheck).toHaveBeenCalledWith('3', { kind: 'party', from: 'Northwind Traders', to: 'Northwind' });
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    expect(list).not.toHaveTextContent('Northwind');
+    // The focus goes to the row that took its place, as when it is forgotten here.
+    await waitFor(() => expect(rows()[1]).toHaveFocus());
+    expect(rows()[1]).toHaveTextContent('Quarterly Operations Review written as Meeting Minutes');
+  });
+
   it('reports a spelling that could not be changed and keeps the list', async () => {
     const base = createInMemoryBridge({ learnedRules: learned });
     const houseRuleForget = vi.fn(async () => { throw { code: 'DATABASE_UNAVAILABLE', message: 'the queue database is locked' }; });

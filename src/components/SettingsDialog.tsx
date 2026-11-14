@@ -335,8 +335,9 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     try { await run(); setRules(await bridge.houseRulesList()); }
     catch (error) {
       setRulesError(ruleFailure(error));
-      // A spelling that changed under the person is shown as it is now.
-      if (failureCode(error) === 'RULE_CHANGED') {
+      // A spelling that changed under the person is shown as it is now, and
+      // one forgotten is gone: left in the list, it was refused again.
+      if (failureCode(error) === 'RULE_CHANGED' || failureCode(error) === 'RULE_NOT_FOUND') {
         await bridge.houseRulesList().then(setRules, () => undefined);
       }
     }
@@ -362,8 +363,9 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     takes away the control that had the focus puts it back in the list
     rather than on the page, outside the dialog: to the spelling's row once
     it is used on its own or put in use, the button pressed gone; to the row
-    that took a forgotten spelling's place, the one before it at the end of
-    the list, or the section's heading when none is left. A focus such a
+    that took a forgotten spelling's place - forgotten here, or found
+    forgotten already when it was used on its own - the one before it at the
+    end of the list, or the section's heading when none is left. A focus such a
     change left where it was - a Forget refused - stays there.
   */
   const [checkingRule, setCheckingRule] = useState<string>();
@@ -392,10 +394,10 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
       return true;
     };
   }, [checkingRule]);
-  const checkRule = async (rule: LearnedRule) => {
+  const checkRule = async (rule: LearnedRule, index: number) => {
     setCheckingRule(undefined);
     await changeRule(() => bridge.houseRuleCheck(rule.id, { kind: rule.kind, from: rule.from, to: rule.to }));
-    setFocusRule({ id: rule.id, on: 'row' });
+    setFocusRule({ id: rule.id, on: 'row', index });
   };
   const putInUse = async (rule: LearnedRule) => {
     await changeRule(() => bridge.houseRuleUse(rule.id));
@@ -619,7 +621,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
             <span className="rule-kind">{rule.kind === 'party' ? 'Party' : 'Type'}</span>
             <span className="rule-change"><q>{rule.from}</q> written as <strong>{rule.to}</strong></span>
             <span className="rule-state">{!rule.active ? 'Seen once · in use after one more edit' : rule.confirmed > 0 ? 'In use' : 'In use · asks before filing'}</span>
-            {checkingRule === rule.id ? <UseOnItsOwnQuestion rule={rule} describedBy={`rule-check-${rule.id}`} onConfirm={() => void checkRule(rule)} onCancel={() => takeBackCheck(rule.id)} /> : <span className="rule-actions">
+            {checkingRule === rule.id ? <UseOnItsOwnQuestion rule={rule} describedBy={`rule-check-${rule.id}`} onConfirm={() => void checkRule(rule, index)} onCancel={() => takeBackCheck(rule.id)} /> : <span className="rule-actions">
               {!rule.active && <button type="button" disabled={asking} aria-label={`Use now: ${spellingLabel(rule)}`} onClick={() => void putInUse(rule)}>Use now</button>}
               {rule.active && rule.confirmed === 0 && <button type="button" disabled={asking} data-action="use-on-its-own" aria-label={`Use on its own: ${spellingLabel(rule)}`} onClick={() => { setRulesError(''); setCheckingRule(rule.id); }}>Use on its own</button>}
               <button type="button" disabled={asking} aria-label={`Forget: ${spellingLabel(rule)}`} onClick={() => void forgetRule(rule, index)}>Forget</button>
