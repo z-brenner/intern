@@ -2,6 +2,8 @@
 //! read from small committed fixtures LibreOffice wrote (see
 //! `fixtures/formats/README.md`). Each holds the same one-page engagement
 //! letter: a date and two parties, which is what naming a document needs.
+//! The `dated.*` workbooks hold a quotation dated by `=TODAY()` instead,
+//! for the cells the workbook readers mark as worked out by such a formula.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -111,6 +113,88 @@ fn workbook_dates_and_tables_survive_every_workbook_format() {
     assert!(ods.starts_with("| Engagement Letter |"), "{ods}");
     assert!(ods.contains("| Fieldwork starts | 2025-04-14 |"), "{ods}");
     assert!(ods.contains("| Fee with expenses | 50000 |"), "{ods}");
+}
+
+/// The label of each row a marked stretch of a sheet's text stands on,
+/// having checked that the stretch is the whole of the row's second cell.
+fn marked_rows(document: &ExtractedDocument) -> Vec<&str> {
+    let mut labels = Vec::new();
+    for page in &document.pages {
+        for &(start, end) in &page.volatile_spans {
+            let line_start = page.text[..start].rfind('\n').map_or(0, |at| at + 1);
+            let line_end = page.text[end..]
+                .find('\n')
+                .map_or(page.text.len(), |at| end + at);
+            let mut cells = page.text[line_start..line_end]
+                .trim_start_matches("| ")
+                .split(" | ");
+            labels.push(cells.next().unwrap());
+            assert_eq!(cells.next(), Some(&page.text[start..end]));
+        }
+    }
+    labels
+}
+
+/// A quotation dated by `=TODAY()`, as LibreOffice wrote it. Both Excel
+/// formats mark the cells a formula calling TODAY or NOW worked out - on
+/// its own, with arithmetic, inside IF, TEXT, YEAR and EOMONTH, and filled
+/// down three rows, which the binary format keeps as one shared formula -
+/// and no other: not the typed date, not `=B5+7`, not the text that only
+/// says TODAY(), not the formula whose string says it, not the shared
+/// `=C14*2`. The two readers mark the same stretches of the same text,
+/// but for the second `=NOW()` was worked out in. An OpenDocument
+/// spreadsheet's formulas are not read, so nothing of it is marked.
+#[test]
+fn a_today_or_now_formulas_cells_are_marked_in_both_excel_formats() {
+    let workbook = read("dated.xlsm").unwrap();
+    let binary = read("dated.xls").unwrap();
+    for (name, document) in [("dated.xlsm", &workbook), ("dated.xls", &binary)] {
+        assert_eq!(
+            marked_rows(document),
+            [
+                "Quote date",
+                "Printed",
+                "Valid until",
+                "Either",
+                "In words",
+                "Week 1",
+                "Week 2",
+                "Week 3",
+                "Year",
+                "Month end",
+            ],
+            "{name}"
+        );
+        let text = text_of(document);
+        for typed in [
+            "| Ordered | 2026-03-03 |  |",
+            "| Ships | 2026-03-10 |  |",
+            "| Note | Prices as of TODAY() and NOW() |  |",
+            "| Reminder | Reply by TODAY() about this Quotation |  |",
+            "| Either | 2026-03-03 |  |",
+            "| Lot 1 | 2 | 1 |",
+            "| Lot 3 | 6 | 3 |",
+        ] {
+            assert!(text.contains(typed), "{name} lacks {typed:?}:\n{text}");
+        }
+        assert!(document.warnings.is_empty(), "{name}");
+    }
+    assert_eq!(
+        workbook.pages[0].volatile_spans,
+        binary.pages[0].volatile_spans
+    );
+    let but_for_now = |document: &ExtractedDocument| {
+        text_of(document)
+            .lines()
+            .filter(|line| !line.starts_with("| Printed |"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(but_for_now(&workbook), but_for_now(&binary));
+
+    let open_document = read("dated.ods").unwrap();
+    assert!(text_of(&open_document).contains("| Ordered | 2026-03-03 |"));
+    assert!(marked_rows(&open_document).is_empty());
 }
 
 /// Word has saved RTF under `.doc` for as long as both have existed.

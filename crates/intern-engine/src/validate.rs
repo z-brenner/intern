@@ -615,8 +615,9 @@ pub(crate) fn only_bounds_a_period<'a>(
 /// read on either reading, and is not held.
 ///
 /// A document none of whose pages carries a marked cell - every document
-/// but an Excel 2007 workbook with such a formula, and every extraction
-/// stored or recorded before the worker marked them - is never held here.
+/// but an Excel workbook with such a formula (`.xlsx`, `.xlsm`, `.xls`),
+/// and every extraction stored or recorded before the worker marked them -
+/// is never held here.
 /// A range that is no stretch of its page's text is not read.
 pub(crate) fn stated_only_by_volatile_formulas(source: &DocumentSource, date: &str) -> bool {
     if source

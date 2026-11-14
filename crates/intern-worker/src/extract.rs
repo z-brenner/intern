@@ -568,8 +568,8 @@ pub struct ExtractedPage {
     /// spreadsheet formula calling TODAY or NOW last worked out: a value
     /// that follows the day the workbook is opened, not one a person
     /// typed. They say something about the text and change none of it.
-    /// Only an Excel 2007 sheet's page has any (see
-    /// [`crate::sheet::extract_xlsx`]); a page with none is written
+    /// Only a sheet of an Excel workbook has any, in either of Excel's
+    /// formats (see [`crate::sheet`]); a page with none is written
     /// without the field, exactly as it was before the field existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub volatile_spans: Vec<(usize, usize)>,

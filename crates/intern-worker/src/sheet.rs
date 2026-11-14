@@ -11,13 +11,15 @@
 //!
 //! One kind of cached value is not the document's own: what a formula that
 //! calls TODAY or NOW last worked out, which is another day's whenever the
-//! workbook is opened on another day. An Excel 2007 sheet is read a second
-//! time for those formulas, and where their cells stand in the page's text
-//! is given beside it ([`ExtractedPage::volatile_spans`]); the text itself
-//! is the first reading's, unchanged. The other workbooks are not asked:
-//! a binary workbook's formulas are emptied before calamine sees them (see
-//! [`blank_formula_expressions`]), and anydoc's OpenDocument model keeps a
-//! cell's text and not its formula.
+//! workbook is opened on another day. Where the cells of such formulas
+//! stand in a page's text is given beside the text
+//! ([`ExtractedPage::volatile_spans`]); the text itself is read as it
+//! always was, unchanged. An Excel 2007 sheet is read a second time for
+//! its formulas ([`mark_volatile_cells`]); a binary workbook's formulas
+//! are walked in its record stream before they are emptied
+//! ([`legacy_volatile_cells`]). An OpenDocument spreadsheet is not asked:
+//! anydoc's model keeps a cell's text and not its formula. Neither is a
+//! CSV export, which has no formulas.
 //!
 //! anydoc's Markdown renders every cell of every sheet into a single page with
 //! no row or column cap, so spreadsheets route through this capped renderer
@@ -107,7 +109,8 @@ pub(crate) struct CappedSheet {
     start: (u32, u32),
     end: (u32, u32),
     /// Absolute `(row, column)` of the cells a formula that calls TODAY or
-    /// NOW worked out, where the reader asked (see [`mark_volatile_cells`]).
+    /// NOW worked out, where the reader asked (see [`mark_volatile_cells`]
+    /// and [`legacy_volatile_cells`]).
     volatile: Vec<(u32, u32)>,
 }
 
@@ -255,7 +258,9 @@ fn mark_volatile_cells(
 /// cell that stated the formula. calamine is asked for that index rather
 /// than for each cell's formula spelled out: spelling them out makes it
 /// keep a slot for every index up to the largest the file names, and the
-/// file names what it likes.
+/// file names what it likes. A formula entered over a range as one array
+/// is stated in the range's first cell, and calamine does not give its
+/// range: that cell is marked, and the others of the range are not.
 ///
 /// Rows are read in the order the file gives them and reading stops at the
 /// first row past the window, so a ledger of a hundred thousand rows is
@@ -508,6 +513,9 @@ fn extract_legacy_workbook(
     cancel: &CancellationToken,
 ) -> Result<ExtractedDocument, ExtractionError> {
     let mut stream = workbook_stream(path, limits)?;
+    // Read off the formulas while they are still there. Nothing of the
+    // stream is changed by it, and what it finds changes no text.
+    let mut volatile = legacy_volatile_cells(&stream);
     blank_formula_expressions(&mut stream)?;
     survey_legacy_workbook(&stream, limits)?;
     cancel.check()?;
@@ -520,13 +528,23 @@ fn extract_legacy_workbook(
     .map_err(legacy_workbook_error)?;
     let sheet_names = contained("sheet listing", || workbook.sheet_names())?;
     limits.validate_page_count(sheet_names.len())?;
+    // The cells found are a sheet's by its place in the workbook's list,
+    // which calamine's names follow. Two sheets under one name it reads as
+    // one sheet twice, and then whose cells are whose is not known.
+    let distinct = sheet_names.iter().collect::<HashSet<_>>().len();
+    if volatile.len() != sheet_names.len() || distinct != sheet_names.len() {
+        volatile.clear();
+    }
 
     let mut sheets = Vec::new();
-    for name in sheet_names {
+    for (index, name) in sheet_names.into_iter().enumerate() {
         cancel.check()?;
         let range = contained("worksheet read", || workbook.worksheet_range(&name))?
             .map_err(legacy_workbook_error)?;
-        let sheet = capped_range(&range, cancel)?;
+        let mut sheet = capped_range(&range, cancel)?;
+        if let (Some(sheet), Some(cells)) = (&mut sheet, volatile.get_mut(index)) {
+            sheet.volatile = std::mem::take(cells);
+        }
         sheets.push((Some(name), sheet));
     }
     workbook_document(sheets)
@@ -592,6 +610,7 @@ fn biff_records(stream: &[u8], from: usize) -> impl Iterator<Item = (u16, usize,
     })
 }
 
+const BIFF_BOF: u16 = 0x0809;
 const BIFF_EOF: u16 = 0x000A;
 const BIFF_FILEPASS: u16 = 0x002F;
 const BIFF_CONTINUE: u16 = 0x003C;
@@ -602,6 +621,21 @@ const BIFF_DIMENSIONS: u16 = 0x0200;
 const BIFF_STRING: u16 = 0x0207;
 const BIFF_MULRK: u16 = 0x00BD;
 const BIFF_FORMULA: u16 = 0x0006;
+/// A formula several cells share, and one a range of cells holds as an
+/// array: each follows the `Formula` record of the first of its cells.
+const BIFF_SHRFMLA: u16 = 0x04BC;
+const BIFF_ARRAY: u16 = 0x0221;
+/// The version a `BOF` record of an Excel 97-2003 workbook states. Older
+/// versions lay their formulas' tokens out differently.
+const BIFF8: u32 = 0x0600;
+/// Where NOW and TODAY stand in the table of functions a formula's tokens
+/// name them by.
+const FUNCTION_NOW: u32 = 74;
+const FUNCTION_TODAY: u32 = 221;
+/// The most cells of one binary workbook remembered as worked out by a
+/// TODAY or NOW formula. They are collected before anything has bounded
+/// what the workbook holds, and a window shows 6,000.
+const MAX_LEGACY_VOLATILE_CELLS: usize = 16 * MAX_SHEET_ROWS * MAX_SHEET_COLS;
 /// Every record type calamine turns into a cell, each of which starts with
 /// the cell's row and column as two 16-bit words.
 const BIFF_CELLS: [u16; 7] = [
@@ -772,6 +806,232 @@ fn formula_expressions(stream: &[u8]) -> Result<Vec<usize>, ExtractionError> {
         }
     }
     Ok(found)
+}
+
+/// For each sheet of a binary workbook, in the order the workbook lists
+/// them, the cells that a formula calling TODAY or NOW worked out; nothing
+/// at all for a workbook this does not read.
+///
+/// It reads the stream calamine will read, before the formulas in it are
+/// emptied, and only reads: each sheet's records from the offset its
+/// `BoundSheet8` record gives to its `EOF`, as the survey walks them. A
+/// `Formula` record's tokens are walked ([`tokens_call_today_or_now`]). A
+/// formula several cells share, or an array's, is stated once, in a
+/// `ShrFmla` or `Array` record right after the first of its cells, and
+/// each cell's own tokens only point at that cell: the cells take its
+/// answer. A value written over a cell after its formula takes the mark
+/// off again, as it takes the cell.
+///
+/// Only an Excel 97-2003 stream is read (`BOF` version 0x0600, the
+/// workbook's and each sheet's): older ones size their tokens differently,
+/// and are left unmarked. So is a password-protected one, whose records
+/// are noise. No more than [`MAX_LEGACY_VOLATILE_CELLS`] cells are
+/// remembered for a workbook, and the cells past them go unmarked. A
+/// panic here would be this function's own fault and not the document's,
+/// so one ends the marking and nothing else.
+fn legacy_volatile_cells(stream: &[u8]) -> Vec<Vec<(u32, u32)>> {
+    catch_unwind(|| {
+        let Ok(globals) = read_globals(stream) else {
+            return Vec::new();
+        };
+        let is_biff8 = |offset: usize| {
+            biff_records(stream, offset)
+                .next()
+                .is_some_and(|(kind, _, data)| kind == BIFF_BOF && word(data, 0) == Some(BIFF8))
+        };
+        if !is_biff8(0) {
+            return Vec::new();
+        }
+        let mut room = MAX_LEGACY_VOLATILE_CELLS;
+        globals
+            .sheet_offsets
+            .into_iter()
+            .map(|offset| {
+                if !is_biff8(offset) {
+                    return Vec::new();
+                }
+                let cells = legacy_sheet_volatile_cells(stream, offset, room);
+                room -= cells.len();
+                cells
+            })
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// One sheet's part of [`legacy_volatile_cells`]: at most `room` cells,
+/// in the order of their rows and columns.
+fn legacy_sheet_volatile_cells(stream: &[u8], offset: usize, room: usize) -> Vec<(u32, u32)> {
+    let mut volatile = HashSet::new();
+    // The cells whose shared or array formula calls TODAY or NOW: the
+    // ones the cells of such a formula point at.
+    let mut volatile_anchors = HashSet::new();
+    // The last record, when it was a formula that only points at a cell:
+    // the cell it is in, and the cell it points at.
+    let mut pointing: Option<((u32, u32), (u32, u32))> = None;
+    for (kind, _, data) in biff_records(stream, offset).skip(1) {
+        let pointed = pointing.take();
+        match kind {
+            BIFF_EOF => break,
+            BIFF_FORMULA => {
+                let (Some(row), Some(column)) = (word(data, 0), word(data, 2)) else {
+                    continue;
+                };
+                let tokens = word(data, 20)
+                    .and_then(|length| data.get(22..22 + length as usize))
+                    .unwrap_or_default();
+                let calls = match tokens {
+                    // PtgExp, alone: the formula is the one stated for the
+                    // cell it names.
+                    [0x01, target @ ..] if target.len() == 4 => {
+                        let anchor = (word(target, 0).unwrap_or(0), word(target, 2).unwrap_or(0));
+                        pointing = Some(((row, column), anchor));
+                        volatile_anchors.contains(&anchor)
+                    }
+                    tokens => tokens_call_today_or_now(tokens),
+                };
+                if !calls {
+                    volatile.remove(&(row, column));
+                } else if volatile.len() < room {
+                    volatile.insert((row, column));
+                }
+            }
+            BIFF_SHRFMLA | BIFF_ARRAY => {
+                // The range, then the tokens' length and the tokens: after
+                // two more bytes in a shared formula, six in an array.
+                let at = if kind == BIFF_SHRFMLA { 8 } else { 12 };
+                let tokens = word(data, at)
+                    .and_then(|length| data.get(at + 2..at + 2 + length as usize))
+                    .unwrap_or_default();
+                let Some((cell, anchor)) = pointed else {
+                    continue;
+                };
+                if !tokens_call_today_or_now(tokens) {
+                    volatile_anchors.remove(&anchor);
+                } else if volatile_anchors.len() < MAX_LEGACY_VOLATILE_CELLS {
+                    volatile_anchors.insert(anchor);
+                    if volatile.len() < room {
+                        volatile.insert(cell);
+                    }
+                }
+            }
+            BIFF_MULRK => {
+                // A row and a first column, six bytes a number, and the
+                // last column.
+                if let (Some(row), Some(first)) = (word(data, 0), word(data, 2))
+                    && !volatile.is_empty()
+                {
+                    for column in 0..(data.len().saturating_sub(6) / 6) as u32 {
+                        volatile.remove(&(row, first + column));
+                    }
+                }
+            }
+            kind if BIFF_CELLS.contains(&kind) => {
+                if let (Some(row), Some(column)) = (word(data, 0), word(data, 2)) {
+                    volatile.remove(&(row, column));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut cells = volatile.into_iter().collect::<Vec<_>>();
+    cells.sort_unstable();
+    cells
+}
+
+/// Whether the tokens of an Excel 97-2003 formula call TODAY or NOW.
+///
+/// A formula is stored as its tokens in the order a calculator would take
+/// them, each one byte saying what it is and a fixed number of bytes after
+/// it, but for a string, which says how long it is, and the table of jumps
+/// a CHOOSE carries. A function is a token of its own: the letters TODAY
+/// inside a string are a string's bytes and are stepped over with it, as
+/// a number's bytes and a CHOOSE's jumps are. The walk goes token by token
+/// and stops, with no call found, at the first byte that is no token it
+/// knows or at a token that runs past the end.
+///
+/// The tokens it knows are the ones whose size was checked: against the
+/// streams LibreOffice 24.2 writes (the test below holds them) or against
+/// calamine's own walk of the same tokens. The rest end the walk: a data
+/// table's pointer, a natural-language reference, and the three tokens
+/// that remember a constant area.
+///
+/// What it does not see: a defined name that stands for such a formula,
+/// and a cell that only refers to one that calls it.
+fn tokens_call_today_or_now(mut tokens: &[u8]) -> bool {
+    let names_either =
+        |function: Option<u32>| matches!(function, Some(FUNCTION_NOW | FUNCTION_TODAY));
+    while let Some((&token, rest)) = tokens.split_first() {
+        // An operand comes in three classes - reference, value, array -
+        // that differ in two bits and in nothing read here.
+        let token = match token {
+            0x00..=0x1F => token,
+            0x20..=0x7F => token & 0x1F | 0x20,
+            0x80..=0xFF => return false,
+        };
+        let length = match token {
+            // A pointer to a shared or array formula.
+            0x01 => 4,
+            // Operators, parentheses, a missing argument.
+            0x03..=0x16 => 0,
+            // A string: its length, whether its characters are two bytes
+            // wide, and the characters.
+            0x17 => {
+                let (Some(&characters), Some(&flags)) = (rest.first(), rest.get(1)) else {
+                    return false;
+                };
+                2 + usize::from(characters) * if flags & 1 == 0 { 1 } else { 2 }
+            }
+            // An attribute: its kind and a word, and for CHOOSE a jump for
+            // each choice and one more.
+            0x19 => {
+                let (Some(&kind), Some(choices)) = (rest.first(), word(rest, 1)) else {
+                    return false;
+                };
+                3 + if kind == 0x04 {
+                    (choices as usize + 1) * 2
+                } else {
+                    0
+                }
+            }
+            // An error or a truth value, an integer, a number.
+            0x1C | 0x1D => 1,
+            0x1E => 2,
+            0x1F => 8,
+            // An array constant, whose values follow the tokens.
+            0x20 => 7,
+            // A function of a fixed number of arguments: which one.
+            0x21 => {
+                if names_either(word(rest, 0)) {
+                    return true;
+                }
+                2
+            }
+            // A function of any number: how many, then which one - unless
+            // the top bit makes it a command.
+            0x22 => {
+                if names_either(word(rest, 1)) {
+                    return true;
+                }
+                3
+            }
+            // A defined name; a cell, an area, and their kinds.
+            0x23 | 0x24 | 0x2A | 0x2C => 4,
+            0x25 | 0x2B | 0x2D => 8,
+            // How many bytes of tokens work a reference out; they follow
+            // as tokens of their own.
+            0x29 => 2,
+            // A name, a cell or an area in another sheet.
+            0x39 | 0x3A | 0x3C => 6,
+            0x3B | 0x3D => 10,
+            _ => return false,
+        };
+        let Some(next) = rest.get(length..) else {
+            return false;
+        };
+        tokens = next;
+    }
+    false
 }
 
 /// Empties every formula's token stream, leaving its cached value.
@@ -1550,6 +1810,426 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/formats/ledger.xls");
         let stream = workbook_stream(&path, &ResourceLimits::default()).unwrap();
         assert_eq!(formula_expressions(&stream).unwrap().len(), 1);
+    }
+
+    /// The tokens LibreOffice 24.2 wrote for the formulas named - those of
+    /// `fixtures/formats/source/dated.fods` first - and tokens built to be
+    /// read at the wrong place. A call is a function token naming TODAY or NOW;
+    /// the same bytes inside a string, a number or a CHOOSE's jumps are
+    /// stepped over with what holds them, and a byte that is no token, or
+    /// a token cut short, ends the walk with nothing found.
+    #[test]
+    fn a_binary_formulas_tokens_call_today_or_now_only_in_a_function_token() {
+        let volatile = [0x19, 0x01, 0x00, 0x00];
+        let today = [0x41, 0xDD, 0x00];
+        let now = [0x41, 0x4A, 0x00];
+        let cell_b5 = [0x44, 0x04, 0x00, 0x01, 0xC0];
+        let calls: [(&str, Vec<u8>); 20] = [
+            ("TODAY()", [&volatile[..], &today].concat()),
+            ("NOW()", [&volatile[..], &now].concat()),
+            (
+                "TODAY()+30",
+                [&volatile[..], &today, &[0x1E, 0x1E, 0x00, 0x03]].concat(),
+            ),
+            (
+                "IF(B5=\"\",TODAY(),B5)",
+                [
+                    &volatile[..],
+                    &cell_b5,
+                    &[0x17, 0x00, 0x00, 0x0B, 0x19, 0x02, 0x07, 0x00],
+                    &today,
+                    &[0x19, 0x08, 0x0C, 0x00, 0x24, 0x04, 0x00, 0x01, 0xC0],
+                    &[0x19, 0x08, 0x03, 0x00, 0x42, 0x03, 0x01, 0x00],
+                ]
+                .concat(),
+            ),
+            (
+                "TEXT(TODAY(),\"MMMM D, YYYY\")",
+                [
+                    &volatile[..],
+                    &today,
+                    &[0x17, 0x0C, 0x00],
+                    b"MMMM D, YYYY",
+                    &[0x41, 0x30, 0x00],
+                ]
+                .concat(),
+            ),
+            (
+                "YEAR(NOW())",
+                [&volatile[..], &now, &[0x41, 0x45, 0x00]].concat(),
+            ),
+            (
+                "EOMONTH(TODAY(),0)",
+                [
+                    &volatile[..],
+                    &[0x39, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00],
+                    &today,
+                    &[0x1E, 0x00, 0x00, 0x42, 0x03, 0xFF, 0x00],
+                ]
+                .concat(),
+            ),
+            // A union and an intersection of areas, each under the token
+            // that says how many bytes work the reference out.
+            (
+                "SUM(C1:C2~D3)+TODAY()",
+                [
+                    &volatile[..],
+                    &[0x29, 0x0F, 0x00],
+                    &[0x25, 0x00, 0x00, 0x01, 0x00, 0x02, 0xC0, 0x02, 0xC0],
+                    &[0x24, 0x02, 0x00, 0x03, 0xC0, 0x10, 0x15],
+                    &[0x19, 0x10, 0x00, 0x00],
+                    &today,
+                    &[0x03],
+                ]
+                .concat(),
+            ),
+            (
+                "SUM(C1:D3 C2:D2)+NOW()",
+                [
+                    &volatile[..],
+                    &[0x29, 0x13, 0x00],
+                    &[0x25, 0x00, 0x00, 0x02, 0x00, 0x02, 0xC0, 0x03, 0xC0],
+                    &[0x25, 0x01, 0x00, 0x01, 0x00, 0x02, 0xC0, 0x03, 0xC0],
+                    &[0x0F, 0x19, 0x10, 0x00, 0x00],
+                    &now,
+                    &[0x03],
+                ]
+                .concat(),
+            ),
+            // The four jumps of a CHOOSE with three choices.
+            (
+                "CHOOSE(2,1,TODAY(),3)",
+                [
+                    &volatile[..],
+                    &[0x1E, 0x02, 0x00, 0x19, 0x04, 0x03, 0x00],
+                    &[0x08, 0x00, 0x0F, 0x00, 0x16, 0x00, 0x1D, 0x00],
+                    &[0x1E, 0x01, 0x00, 0x19, 0x08, 0x11, 0x00],
+                    &today,
+                    &[0x19, 0x08, 0x0A, 0x00, 0x1E, 0x03, 0x00],
+                    &[0x19, 0x08, 0x03, 0x00, 0x42, 0x04, 0x64, 0x00],
+                ]
+                .concat(),
+            ),
+            // A string of twelve two-byte characters before the call.
+            (
+                "IF(C1>0,\"text \u{ff}\u{141} wide\",\"\")&TEXT(NOW(),\"D\")",
+                [
+                    &volatile[..],
+                    &[0x44, 0x00, 0x00, 0x02, 0xC0, 0x1E, 0x00, 0x00, 0x0D],
+                    &[0x19, 0x02, 0x1F, 0x00, 0x17, 0x0C, 0x01],
+                    &[
+                        0x74, 0x00, 0x65, 0x00, 0x78, 0x00, 0x74, 0x00, 0x20, 0x00, 0xFF, 0x00,
+                    ],
+                    &[
+                        0x41, 0x01, 0x20, 0x00, 0x77, 0x00, 0x69, 0x00, 0x64, 0x00, 0x65, 0x00,
+                    ],
+                    &[
+                        0x19, 0x08, 0x0A, 0x00, 0x17, 0x00, 0x00, 0x19, 0x08, 0x03, 0x00,
+                    ],
+                    &[0x42, 0x03, 0x01, 0x00],
+                    &now,
+                    &[0x17, 0x01, 0x00, 0x44, 0x41, 0x30, 0x00, 0x08],
+                ]
+                .concat(),
+            ),
+            (
+                "{1,2,3}+TODAY()",
+                [
+                    &volatile[..],
+                    &[0x40, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+                    &today,
+                    &[0x03],
+                ]
+                .concat(),
+            ),
+            (
+                "Other!A1+TODAY()",
+                [
+                    &volatile[..],
+                    &[0x5A, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0],
+                    &today,
+                    &[0x03],
+                ]
+                .concat(),
+            ),
+            (
+                "SUM(Other!A1:B2)+TODAY()",
+                [
+                    &volatile[..],
+                    &[
+                        0x3B, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0xC0, 0x01, 0xC0,
+                    ],
+                    &[0x19, 0x10, 0x00, 0x00],
+                    &today,
+                    &[0x03],
+                ]
+                .concat(),
+            ),
+            ("-TODAY()%", [&volatile[..], &today, &[0x13, 0x14]].concat()),
+            (
+                "1.5+TODAY()",
+                [
+                    &volatile[..],
+                    &[0x1F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF8, 0x3F],
+                    &today,
+                    &[0x03],
+                ]
+                .concat(),
+            ),
+            (
+                "TRUE()+TODAY()",
+                [&volatile[..], &[0x1D, 0x01], &today, &[0x03]].concat(),
+            ),
+            // As rows 1 to 3 share it: an area written relative to the cell.
+            (
+                "SUM(C1:D1)+TODAY(), shared",
+                [
+                    &volatile[..],
+                    &[0x2D, 0x00, 0x00, 0x00, 0x00, 0x01, 0xC0, 0x02, 0xC0],
+                    &[0x19, 0x10, 0x00, 0x00],
+                    &today,
+                    &[0x03],
+                ]
+                .concat(),
+            ),
+            // The other two classes of the same token, and the token for
+            // a function of any number of arguments.
+            ("TODAY() as a reference", vec![0x21, 0xDD, 0x00]),
+            ("NOW() of no arguments", vec![0x62, 0x00, 0x4A, 0x00]),
+        ];
+        for (formula, tokens) in &calls {
+            assert!(tokens_call_today_or_now(tokens), "{formula}: {tokens:02x?}");
+        }
+
+        let calls_nothing: [(&str, Vec<u8>); 19] = [
+            ("nothing", vec![]),
+            ("B5+7", [&cell_b5[..], &[0x1E, 0x07, 0x00, 0x03]].concat()),
+            (
+                "\"Reply by TODAY() about this \"&A1",
+                [
+                    &[0x17, 0x1C, 0x00][..],
+                    b"Reply by TODAY() about this ",
+                    &[0x44, 0x00, 0x00, 0x00, 0xC0, 0x08],
+                ]
+                .concat(),
+            ),
+            ("ROW()", vec![0x42, 0x00, 0x08, 0x00]),
+            // A pointer at a shared formula says nothing by itself.
+            (
+                "the formula stated at B11",
+                vec![0x01, 0x0A, 0x00, 0x01, 0x00],
+            ),
+            // The bytes of a TODAY token inside what holds other things: a
+            // number's eight bytes, a string of two wide characters, the
+            // two jumps of a CHOOSE with one choice.
+            (
+                "a number",
+                vec![0x1F, 0x41, 0xDD, 0x00, 0x41, 0xDD, 0x00, 0x00, 0x00],
+            ),
+            (
+                "a wide string",
+                vec![0x17, 0x02, 0x01, 0x20, 0x00, 0x41, 0xDD, 0x00],
+            ),
+            (
+                "a CHOOSE's jumps",
+                vec![0x19, 0x04, 0x01, 0x00, 0x41, 0xDD, 0x00, 0x41],
+            ),
+            ("an integer", vec![0x1E, 0xDD, 0x00]),
+            // A command, not a function, though the low bits say 221.
+            ("a command", vec![0x42, 0x00, 0xDD, 0x80]),
+            // Cut short, or no token at all.
+            ("half a token", vec![0x41, 0xDD]),
+            (
+                "a string longer than the tokens",
+                vec![0x17, 0x09, 0x00, b'N'],
+            ),
+            (
+                "an unknown token before a call",
+                vec![0x30, 0x41, 0xDD, 0x00],
+            ),
+            ("a byte past the token classes", vec![0xC1, 0xDD, 0x00]),
+            // Tokens whose size was not checked end the walk, whatever
+            // follows them: a data table's pointer, a natural-language
+            // reference, a remembered area.
+            (
+                "a data table's pointer",
+                vec![0x02, 0x00, 0x00, 0x00, 0x00, 0x41, 0xDD, 0x00],
+            ),
+            (
+                "a natural-language reference",
+                vec![0x18, 0x01, 0x00, 0x00, 0x00, 0x00, 0x41, 0xDD, 0x00],
+            ),
+            (
+                "a remembered area",
+                vec![0x26, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x41, 0xDD, 0x00],
+            ),
+            // LibreOffice's SUM(C1:D3) and C1+70000.
+            (
+                "SUM(C1:D3)",
+                vec![
+                    0x25, 0x00, 0x00, 0x02, 0x00, 0x02, 0xC0, 0x03, 0xC0, 0x19, 0x10, 0x00, 0x00,
+                ],
+            ),
+            (
+                "C1+70000",
+                vec![
+                    0x44, 0x00, 0x00, 0x02, 0xC0, 0x1F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x17, 0xF1,
+                    0x40, 0x03,
+                ],
+            ),
+        ];
+        for (formula, tokens) in &calls_nothing {
+            assert!(
+                !tokens_call_today_or_now(tokens),
+                "{formula}: {tokens:02x?}"
+            );
+        }
+    }
+
+    /// [`workbook_of`], saying it is an Excel 97-2003 stream as a real one
+    /// does: every `BOF` record states version 0x0600.
+    fn biff8_workbook_of(sheets: &[Vec<Vec<u8>>]) -> Vec<u8> {
+        let mut stream = workbook_of(sheets);
+        let beginnings = biff_records(&stream, 0)
+            .filter(|(kind, _, _)| *kind == BIFF_BOF)
+            .map(|(_, at, _)| at)
+            .collect::<Vec<_>>();
+        for at in beginnings {
+            stream[at..at + 2].copy_from_slice(&0x0600_u16.to_le_bytes());
+        }
+        stream
+    }
+
+    /// A formula several cells share: the range it covers (`rows`, in
+    /// column `column`), then its tokens.
+    fn shared_formula(rows: std::ops::RangeInclusive<u16>, column: u8, tokens: &[u8]) -> Vec<u8> {
+        let mut data = rows.start().to_le_bytes().to_vec();
+        data.extend_from_slice(&rows.end().to_le_bytes());
+        data.extend_from_slice(&[column, column, 0, 2]);
+        data.extend_from_slice(&(tokens.len() as u16).to_le_bytes());
+        data.extend_from_slice(tokens);
+        record(BIFF_SHRFMLA, &data)
+    }
+
+    /// A formula a range of cells holds as one array (`rows`, in column
+    /// `column`), then its tokens.
+    fn array_formula(rows: std::ops::RangeInclusive<u16>, column: u8, tokens: &[u8]) -> Vec<u8> {
+        let mut data = rows.start().to_le_bytes().to_vec();
+        data.extend_from_slice(&rows.end().to_le_bytes());
+        data.extend_from_slice(&[column, column, 3, 0, 0, 0, 0, 0]);
+        data.extend_from_slice(&(tokens.len() as u16).to_le_bytes());
+        data.extend_from_slice(tokens);
+        record(BIFF_ARRAY, &data)
+    }
+
+    /// A cell's tokens when its formula is the one stated for `row`,
+    /// `column`.
+    fn pointer_at(row: u16, column: u16) -> Vec<u8> {
+        let mut tokens = vec![0x01];
+        tokens.extend_from_slice(&row.to_le_bytes());
+        tokens.extend_from_slice(&column.to_le_bytes());
+        tokens
+    }
+
+    /// A binary sheet's cells are marked from its records: a formula whose
+    /// own tokens call TODAY or NOW, and every cell of a shared formula or
+    /// of an array that does - stated once after the first of its cells,
+    /// which the rest only point at. A formula that calls neither, a
+    /// shared one or an array that calls neither, and a cell a value is
+    /// written over afterwards are not. Each sheet's cells are its own.
+    /// The shared formula's and the array's records are laid out as
+    /// LibreOffice 24.2 writes them.
+    #[test]
+    fn a_binary_sheets_cells_are_marked_from_its_formula_records() {
+        const TODAY: [u8; 3] = [0x41, 0xDD, 0x00];
+        const NOW: [u8; 3] = [0x41, 0x4A, 0x00];
+        const B1_PLUS_ONE: [u8; 9] = [0x44, 0x00, 0x00, 0x01, 0xC0, 0x1E, 0x01, 0x00, 0x03];
+        let first = vec![
+            formula(2, 1, &TODAY),
+            formula(3, 1, &B1_PLUS_ONE),
+            number_cell(4, 1),
+            // Rows 10 to 12 share TODAY()+ROW(); rows 13 to 14 share B1+1.
+            formula(10, 1, &pointer_at(10, 1)),
+            shared_formula(
+                10..=12,
+                1,
+                &[&TODAY[..], &[0x42, 0x00, 0x08, 0x00, 0x03]].concat(),
+            ),
+            formula(11, 1, &pointer_at(10, 1)),
+            formula(12, 1, &pointer_at(10, 1)),
+            formula(13, 1, &pointer_at(13, 1)),
+            shared_formula(13..=14, 1, &B1_PLUS_ONE),
+            formula(14, 1, &pointer_at(13, 1)),
+            // A formula, then a number written over its cell; and a row of
+            // numbers written over another.
+            formula(20, 1, &NOW),
+            number_cell(20, 1),
+            formula(21, 0, &TODAY),
+            number_run(21, 3),
+            // A pointer at a cell no formula was stated for.
+            formula(22, 1, &pointer_at(40, 1)),
+            // Rows 30 and 31 hold NOW()+1 as one array; row 32 holds an
+            // array that calls neither.
+            formula(30, 1, &pointer_at(30, 1)),
+            array_formula(30..=31, 1, &[&NOW[..], &[0x1E, 0x01, 0x00, 0x03]].concat()),
+            formula(31, 1, &pointer_at(30, 1)),
+            formula(32, 1, &pointer_at(32, 1)),
+            array_formula(32..=32, 1, &B1_PLUS_ONE),
+        ];
+        let second = vec![number_cell(0, 0), formula(2, 1, &NOW)];
+        let stream = biff8_workbook_of(&[first.clone(), second.clone()]);
+
+        assert_eq!(
+            legacy_volatile_cells(&stream),
+            [
+                vec![(2, 1), (10, 1), (11, 1), (12, 1), (30, 1), (31, 1)],
+                vec![(2, 1)]
+            ]
+        );
+        // Reading the formulas changes nothing of the stream calamine is
+        // handed, and they are still emptied afterwards.
+        let mut emptied = stream.clone();
+        blank_formula_expressions(&mut emptied).unwrap();
+        assert_ne!(emptied, stream);
+        assert_eq!(emptied.len(), stream.len());
+        assert!(legacy_volatile_cells(&emptied).iter().all(Vec::is_empty));
+
+        // A stream that does not say it is Excel 97-2003 sizes its tokens
+        // some other way, and is not read: the workbook's, or one sheet's.
+        let older = workbook_of(&[first.clone(), second.clone()]);
+        assert!(legacy_volatile_cells(&older).is_empty());
+        let mut one_older = stream.clone();
+        let second_sheet = read_globals(&one_older).unwrap().sheet_offsets[1];
+        one_older[second_sheet + 4..second_sheet + 6].copy_from_slice(&0x0500_u16.to_le_bytes());
+        assert_eq!(
+            legacy_volatile_cells(&one_older),
+            [
+                vec![(2, 1), (10, 1), (11, 1), (12, 1), (30, 1), (31, 1)],
+                vec![]
+            ]
+        );
+        // A password's records are noise.
+        let mut locked = record(BIFF_BOF, &[0, 6, 5, 0]);
+        locked.extend(record(BIFF_FILEPASS, &[1, 0, 1, 0]));
+        locked.extend(record(BIFF_EOF, &[]));
+        assert!(legacy_volatile_cells(&locked).is_empty());
+    }
+
+    /// No more cells are remembered than the bound, however many formulas
+    /// a workbook's sheets hold between them.
+    #[test]
+    fn the_marked_cells_of_a_binary_workbook_are_bounded() {
+        let sheet = |rows: u16| {
+            (0..rows)
+                .map(|row| formula(row, 0, &[0x41, 0xDD, 0x00]))
+                .collect::<Vec<_>>()
+        };
+        let stream = biff8_workbook_of(&[sheet(60_000), sheet(60_000), sheet(10)]);
+        let cells = legacy_volatile_cells(&stream);
+        assert_eq!(
+            cells.iter().map(Vec::len).collect::<Vec<_>>(),
+            [60_000, MAX_LEGACY_VOLATILE_CELLS - 60_000, 0]
+        );
     }
 
     /// Sheet B starts two bytes before sheet A's expression length, so that

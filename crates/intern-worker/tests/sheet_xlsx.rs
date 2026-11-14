@@ -450,7 +450,8 @@ fn marked(page: &intern_worker::extract::ExtractedPage) -> Vec<(&str, &str)> {
 /// another function around it, stated in the cell or shared with the cells
 /// around it - and no other cell is: not a typed date, not a formula that
 /// calls neither, not text that merely says TODAY. The text is the text
-/// the same values typed in give, to the byte.
+/// the same values typed in give, to the byte. One cell that should be
+/// marked is not: the second of an array's.
 #[test]
 fn cells_a_today_or_now_formula_worked_out_are_marked_and_the_text_is_unchanged() {
     let cells = [
@@ -499,6 +500,17 @@ fn cells_a_today_or_now_formula_worked_out_are_marked_and_the_text_is_unchanged(
         ),
         label("A13", "Shared sum too"),
         date("B13", Some("<f t=\"shared\" si=\"1\"/>"), "46097"),
+        // A formula entered over two cells as one array is stated in the
+        // first, and the second carries only its value: calamine does not
+        // give the range, so the second goes unmarked.
+        label("A14", "Array"),
+        date(
+            "B14",
+            Some("<f t=\"array\" ref=\"B14:B15\">TODAY()+{1;2}</f>"),
+            "46085",
+        ),
+        label("A15", "Array too"),
+        date("B15", None, "46086"),
     ];
     let directory = tempfile::tempdir().unwrap();
     let read = |file_name: &str, with_formulas: bool| {
@@ -527,7 +539,9 @@ fn cells_a_today_or_now_formula_worked_out_are_marked_and_the_text_is_unchanged(
                 | Shared | 2026-03-13 |\n\
                 | Shared too | 2026-03-14 |\n\
                 | Shared sum | 2026-03-15 |\n\
-                | Shared sum too | 2026-03-16 |\n";
+                | Shared sum too | 2026-03-16 |\n\
+                | Array | 2026-03-04 |\n\
+                | Array too | 2026-03-05 |\n";
     assert_eq!(computed.pages[0].text, text);
     assert_eq!(typed.pages[0].text, text);
     assert_eq!(computed.pages[0].layout, typed.pages[0].layout);
@@ -541,6 +555,7 @@ fn cells_a_today_or_now_formula_worked_out_are_marked_and_the_text_is_unchanged(
             ("2026-03-03", "| Either | 2026-03-03 |"),
             ("2026-03-13", "| Shared | 2026-03-13 |"),
             ("2026-03-14", "| Shared too | 2026-03-14 |"),
+            ("2026-03-04", "| Array | 2026-03-04 |"),
         ]
     );
     assert!(typed.pages[0].volatile_spans.is_empty());

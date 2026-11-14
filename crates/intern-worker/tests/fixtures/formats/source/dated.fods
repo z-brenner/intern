@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+                 xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"
+                 xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+                 xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+                 xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0"
+                 xmlns:of="urn:oasis:names:tc:opendocument:xmlns:of:1.2"
+                 office:version="1.3"
+                 office:mimetype="application/vnd.oasis.opendocument.spreadsheet">
+ <office:automatic-styles>
+  <number:date-style style:name="iso-date">
+   <number:year number:style="long"/>
+   <number:text>-</number:text>
+   <number:month number:style="long"/>
+   <number:text>-</number:text>
+   <number:day number:style="long"/>
+  </number:date-style>
+  <style:style style:name="date-cell" style:family="table-cell" style:data-style-name="iso-date"/>
+ </office:automatic-styles>
+ <office:body>
+  <office:spreadsheet>
+   <table:table table:name="Quotation">
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Quotation</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Quote date</text:p></table:table-cell>
+     <table:table-cell table:style-name="date-cell" table:formula="of:=TODAY()" office:value-type="date" office:date-value="2026-11-14"><text:p>2026-11-14</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Printed</text:p></table:table-cell>
+     <table:table-cell table:style-name="date-cell" table:formula="of:=NOW()" office:value-type="date" office:date-value="2026-11-14"><text:p>2026-11-14</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Valid until</text:p></table:table-cell>
+     <table:table-cell table:style-name="date-cell" table:formula="of:=TODAY()+30" office:value-type="date" office:date-value="2026-12-14"><text:p>2026-12-14</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Ordered</text:p></table:table-cell>
+     <table:table-cell table:style-name="date-cell" office:value-type="date" office:date-value="2026-03-03"><text:p>2026-03-03</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Ships</text:p></table:table-cell>
+     <table:table-cell table:style-name="date-cell" table:formula="of:=[.B5]+7" office:value-type="date" office:date-value="2026-03-10"><text:p>2026-03-10</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Note</text:p></table:table-cell>
+     <table:table-cell office:value-type="string"><text:p>Prices as of TODAY() and NOW()</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Reminder</text:p></table:table-cell>
+     <table:table-cell table:formula="of:=&quot;Reply by TODAY() about this &quot;&amp;[.A1]" office:value-type="string"><text:p>Reply by TODAY() about this Quotation</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Either</text:p></table:table-cell>
+     <table:table-cell table:style-name="date-cell" table:formula="of:=IF([.B5]=&quot;&quot;;TODAY();[.B5])" office:value-type="date" office:date-value="2026-03-03"><text:p>2026-03-03</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>In words</text:p></table:table-cell>
+     <table:table-cell table:formula="of:=TEXT(TODAY();&quot;MMMM D, YYYY&quot;)" office:value-type="string"><text:p>November 14, 2026</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Week 1</text:p></table:table-cell>
+     <table:table-cell table:style-name="date-cell" table:formula="of:=TODAY()+ROW()" office:value-type="date" office:date-value="2026-11-25"><text:p>2026-11-25</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Week 2</text:p></table:table-cell>
+     <table:table-cell table:style-name="date-cell" table:formula="of:=TODAY()+ROW()" office:value-type="date" office:date-value="2026-11-26"><text:p>2026-11-26</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Week 3</text:p></table:table-cell>
+     <table:table-cell table:style-name="date-cell" table:formula="of:=TODAY()+ROW()" office:value-type="date" office:date-value="2026-11-27"><text:p>2026-11-27</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Lot 1</text:p></table:table-cell>
+     <table:table-cell table:formula="of:=[.C14]*2" office:value-type="float" office:value="2"><text:p>2</text:p></table:table-cell>
+     <table:table-cell office:value-type="float" office:value="1"><text:p>1</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Lot 2</text:p></table:table-cell>
+     <table:table-cell table:formula="of:=[.C15]*2" office:value-type="float" office:value="4"><text:p>4</text:p></table:table-cell>
+     <table:table-cell office:value-type="float" office:value="2"><text:p>2</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Lot 3</text:p></table:table-cell>
+     <table:table-cell table:formula="of:=[.C16]*2" office:value-type="float" office:value="6"><text:p>6</text:p></table:table-cell>
+     <table:table-cell office:value-type="float" office:value="3"><text:p>3</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Year</text:p></table:table-cell>
+     <table:table-cell table:formula="of:=YEAR(NOW())" office:value-type="float" office:value="2026"><text:p>2026</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Month end</text:p></table:table-cell>
+     <table:table-cell table:style-name="date-cell" table:formula="of:=EOMONTH(TODAY();0)" office:value-type="date" office:date-value="2026-11-30"><text:p>2026-11-30</text:p></table:table-cell>
+    </table:table-row>
+   </table:table>
+  </office:spreadsheet>
+ </office:body>
+</office:document>

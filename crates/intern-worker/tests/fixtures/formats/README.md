@@ -20,6 +20,9 @@ and checks that all four facts come out.
 | `ledger.ods` | OpenDocument Spreadsheet | `source/ledger.fods` |
 | `ledger.csv` | CSV: comma, double quotes, UTF-8 | `source/ledger.fods` |
 | `ledger-encrypted.xls` | Excel 97-2003, password `intern` | `source/ledger.fods` |
+| `dated.xls` | Excel 97-2003 | `source/dated.fods` |
+| `dated.xlsm` | Excel 2007 macro-enabled | `source/dated.fods` |
+| `dated.ods` | OpenDocument Spreadsheet | `source/dated.fods` |
 
 Two fax pages stand apart from the letter: `fax-msb.tif` and `fax-lsb.tif`
 are one Group 4 page stored most and least significant bit first (TIFF
@@ -33,6 +36,16 @@ libtiff 4.7.1.
 The ledger holds a real date cell (2025-04-14) and a formula
 (`=B7+1500`), so the workbook readers show that a stored date comes out as
 the date it means and a formula as the value it last calculated.
+
+`dated.*` is another document: a quotation whose dates are worked out by
+formulas that call `TODAY` or `NOW` (alone, with arithmetic, inside `IF`,
+`TEXT`, `YEAR` and `EOMONTH`, and filled down three rows, which the binary
+format stores as one shared formula), beside a typed date, formulas that
+call neither, and text that only says "TODAY()". LibreOffice works the
+formulas out as it converts, so each file holds the day it was generated
+(2026-11-14 for the ones committed), which is the point: that day is the
+file's and not the quotation's. `tests/formats.rs` checks which cells each
+workbook reader marks as worked out by such a formula.
 
 ## Regenerating
 
