@@ -715,3 +715,45 @@ Claude Code; this record is written under that standing instruction, as the
 alpha.13, alpha.14 and alpha.17 records were, and says so rather than naming a
 person who did not look. Acceptance was recorded at `2026-11-14T18:39:46Z`. No acceptance
 from alpha.17 or an earlier release is carried forward.
+
+
+## Alpha.19 fresh capture — accepted by Claude Code under the maintainer's instruction
+
+Whole-product QA run `43685838406`, attempt `1`, completed successfully on
+main commit `ac7f859a51f4bffcb9b5412c74052d489561d3c3`.
+Release-input digest: `c29aeeffd45717e4ef4069f5d6c3879645285858ab19c421798f382036d0f23f`.
+Capture SHA-256: `6da10423c61e4ee03a742c9e0d33c420a8036507a6a6f5e7373acdb27c6022e0`.
+The committed capture is the exact 1536x1024 image from that artifact. It is
+byte for byte the capture accepted for alpha.18, so its SHA-256 is the same
+value as in that record; the value here was computed from this run's artifact,
+not carried forward. The artifact's own digest was checked against the one
+GitHub reports, all eleven manifest file hashes were verified, and the
+release-input digest was recomputed on main and equals the one the run
+recorded. Model and installed-core gates passed. The artifact correctly
+recorded rendered-fidelity acceptance as pending.
+
+Claude Code inspected the image at full size. The header states “Private · On
+this device”. The counts strip and toolbar, the queue table and the review
+panel read as distinct planes. Status comes first, with original filename,
+proposed filename and description contiguous; proposed filenames are
+date-first. Ready, Needs review, Proposing a name and Waiting have distinct
+icons as well as color. The panel opens with “What to check”, Analysis details
+is collapsed, and Approve & rename and Keep original stay pinned with their
+shortcuts. Filename focus and row selection remain visibly distinct. No
+unintended clipping, collisions or illegible text were observed; the ellipsis
+in the Check cell is deliberate. This frame does not establish every native
+window or interaction state. In particular it shows nothing of what this
+release changes in the review window: a press on a button that has just come
+under the pointer does nothing, and what was typed and not filed is kept
+across a close. Neither draws anything in this frame. Browser tests, in
+Chromium on Linux and Windows, are the evidence for those; nobody has run
+either change in the Windows app's own window.
+
+No person looked at this capture. The maintainer, Zachary Brenner, was told
+before the merge that this record would name Claude Code as reviewer and say
+that no person looked, and that he could look himself instead; his instruction
+was to merge and release. This record is written under that instruction, as
+the alpha.13, alpha.14, alpha.17 and alpha.18 records were written under
+theirs, and says so rather than naming a person who did not look. Acceptance
+was recorded at `2026-11-15T08:16:06Z`. No acceptance from alpha.18 or an earlier release is
+carried forward.
