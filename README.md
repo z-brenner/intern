@@ -193,7 +193,9 @@ changes by itself while your hand is on its way. Nothing on screen says the
 click was not taken: look at what is under the pointer now, then click
 again. Once the half second has passed, a click there acts on whatever is
 there, whether or not it is what you first meant to press; sooner, it does
-nothing again. In a tall window the next document's buttons can be drawn in
+nothing again, and so does a click made within about a third of a second of
+one that was not taken, so clicking fast gets nothing until you stop for a
+moment. In a tall window the next document's buttons can be drawn in
 another place than the last one's, and a click on them less than half a
 second after they show is not taken either. This was tried in the browser
 build of the window; nobody has yet run the Windows app's own window with it.

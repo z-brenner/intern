@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { REACH_PX, SETTLE_MS } from '../../src/lib/aimedPress';
+import { AGAIN_MS, REACH_PX, SETTLE_MS } from '../../src/lib/aimedPress';
 import { openDetails, queueCell, untilSettled } from './grid';
 
 /*
@@ -197,8 +197,11 @@ test('a press refused on Approve & rename and made again at once approves one do
   await expect(shown).toHaveText(LEASE);
   await expect(completed).toHaveText(/1$/);
 
-  // Made again once the button has been there for the settle time: counted second, and taken.
+  // Made again once the button has been there for the settle time, and not
+  // at once after the refused press (that would be a double-click's second
+  // click, refused too): counted second, and taken.
   await page.waitForFunction((settled) => performance.now() - (window as unknown as { changedAt: number }).changedAt > settled, SETTLE_MS + 100);
+  await page.waitForTimeout(AGAIN_MS);
   await press(2);
   await expect(shown).toHaveText('Employment Agreement - John Smith.pdf');
   await expect(completed).toHaveText(/2$/);

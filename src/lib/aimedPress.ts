@@ -20,12 +20,17 @@
   nothing: the page hears of no button going down and of no click, the
   focus and any selection stay as they were, and nothing is shown. The
   press is to be made again, and made again within the settle time it is
-  refused again. Made again after it, at the same place, it acts on whatever
-  has come there: nothing said that the first press was refused, so what is
-  there is to be looked at before pressing again. (A press made again at
-  once is counted by the browser as the second click of a double-click;
-  the buttons that act on a first press only take it all the same when the
-  press before it was refused: `firstPress`, below.)
+  refused again. So is one made within `AGAIN_MS` of a refused press,
+  whatever the settle time says by then: the second click of a double-click
+  that began too soon is no press made again, and would otherwise be taken
+  the moment the settle time ran out under it. Made again after both, at
+  the same place, it acts on whatever has come there: nothing said that the
+  first press was refused, so what is there is to be looked at before
+  pressing again. (A press made again within the double-click time is
+  counted by the browser as the second click of a double-click; the buttons
+  that act on a first press only take it all the same when every press
+  before it was refused and no key was pressed between: `firstPress`,
+  below.)
 
   One kind of control is taken sooner: one that came where it is in answer
   to the person's own press or key - an item of a menu just opened, the
@@ -87,6 +92,22 @@ export const SETTLE_MS = 500;
  * double-click, or a finger between two taps on one spot, was not measured.
  */
 export const REACH_PX = 24;
+
+/**
+ * How soon after a refused press another press on a control that acts is
+ * refused as well, in milliseconds.
+ *
+ * A double-click's two presses come 100 to 250 ms apart. One that begins
+ * inside the settle time has its first press refused; its second can land
+ * after the settle time has run out, and was then taken, on a reading the
+ * person had half a second to see and did not: the settle time was in
+ * effect shortened by the gap between two presses. A person who presses
+ * again because nothing happened takes longer than a double-click's gap to
+ * notice. 300 is a chosen number between the two; what it costs is that a
+ * person hammering a button faster than that gets nothing until they stop
+ * for a third of a second.
+ */
+export const AGAIN_MS = 300;
 
 /** A control's box in the window, as `getBoundingClientRect` gives it. */
 export interface Box { left: number; top: number; right: number; bottom: number }
@@ -265,8 +286,10 @@ const firstOfTheirRun = new WeakSet<Event>();
  * when nothing of its run reached the page before it - every press before
  * it was refused. A press that did reach the page, on a control that acts
  * or on anything else (a row, More, the page itself), whether or not a
- * click came of it, and a click made from the keyboard in between, each
- * leave the clicks counted after them what they were: not first.
+ * click came of it, a click made from the keyboard in between, and any key
+ * pressed in between (Ctrl+Enter decides a document as a click does, and
+ * the next press would land on the document after it), each leave the
+ * clicks counted after them what they were: not first.
  *
  * In a window the rule is not applied to (`takeOnlyAimedPresses` not
  * called: a test that draws one component), only the count is asked.
@@ -292,6 +315,8 @@ export function takeOnlyAimedPresses(view: Window = window, clock: () => number 
   let own: Event | undefined;
   // The press that is down, or was last: refused, and so is all that follows from it.
   let refused = false;
+  // When a press on a control that acts was last refused (`AGAIN_MS`).
+  let refusedAt: number | undefined;
   // The run of quick clicks being made (the browser counts them: 1, 2, 3):
   // whether a press before this one reached the page (`ranOn`), and whether
   // this one has (`reached`).
@@ -316,7 +341,13 @@ export function takeOnlyAimedPresses(view: Window = window, clock: () => number 
     own = undefined;
     look();
     const control = event.target instanceof Element ? event.target.closest(ACTS) : null;
-    return control !== null && aim.refuses(controls.known(control), event.clientX, event.clientY, clock());
+    if (control === null) return false;
+    const now = clock();
+    // Too soon after its coming there, or too soon after a press that was
+    // refused: the second click of a double-click, not a press made again.
+    const missed = aim.refuses(controls.known(control), event.clientX, event.clientY, now) || (refusedAt !== undefined && now - refusedAt < AGAIN_MS);
+    if (missed) refusedAt = now;
+    return missed;
   };
   /** A press begins: what the one before it did is now behind it. */
   const pressBegins = () => { ranOn = ranOn || reached; reached = false; };
@@ -372,10 +403,13 @@ export function takeOnlyAimedPresses(view: Window = window, clock: () => number 
     if (refused) drop(event);
   };
   const typed = (event: Event) => { theirs(event); look(); };
+  // A key does what a click does (Ctrl+Enter approves, Alt+K keeps): the
+  // press counted after it is no first press of a run in which nothing was done.
+  const keyDown = (event: Event) => { ranOn = true; theirs(event); };
   observer.observe(page.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
   const capture: Array<[EventTarget, string, (event: never) => void]> = [
     [view, 'pointerdown', pointerDown], [view, 'mousedown', mouseDown], [view, 'pointerup', pointerUp], [view, 'mouseup', mouseUp],
-    [view, 'click', click], [view, 'dblclick', doubleClick], [view, 'pointermove', moved], [view, 'keydown', theirs], [view, 'keyup', theirs], [view, 'input', typed],
+    [view, 'click', click], [view, 'dblclick', doubleClick], [view, 'pointermove', moved], [view, 'keydown', keyDown], [view, 'keyup', theirs], [view, 'input', typed],
     [page, 'scroll', look], [view, 'resize', look],
   ];
   const bubbled = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'dblclick', 'keydown', 'keyup', 'input'];

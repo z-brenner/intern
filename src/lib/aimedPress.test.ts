@@ -1,6 +1,6 @@
 import { fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { REACH_PX, SETTLE_MS, createAim, firstPress, takeOnlyAimedPresses } from './aimedPress';
+import { AGAIN_MS, REACH_PX, SETTLE_MS, createAim, firstPress, takeOnlyAimedPresses } from './aimedPress';
 import type { Box } from './aimedPress';
 
 /*
@@ -385,8 +385,8 @@ describe('a press in a window that takes only aimed presses', () => {
     expect(document.activeElement).toBe(field);
     events.length = 0;
 
-    // After the settle time the same press is an ordinary one.
-    now = 10_000 + SETTLE_MS;
+    // After the settle time, and not at once after the refused press, the same press is an ordinary one.
+    now = 10_250 + AGAIN_MS;
     expect(press(550, 415)).toBe(true);
     expect(events).toEqual(['pointerdown:Approve & rename', 'mousedown:Approve & rename', 'pointerup:Approve & rename', 'mouseup:Approve & rename', 'click:Approve & rename']);
   });
@@ -485,7 +485,7 @@ describe('a press in a window that takes only aimed presses', () => {
     now = 10_250;
     expect(press(550, 415)).toBe(false);
     expect(events).toEqual([]);
-    now = 10_000 + SETTLE_MS;
+    now = 10_250 + AGAIN_MS;
     expect(press(550, 415)).toBe(true);
     expect(renameAll.isConnected).toBe(true);
   });
@@ -593,7 +593,7 @@ describe('a press in a window that takes only aimed presses', () => {
     fireEvent.pointerMove(cancel, { clientX: 550, clientY: 415, pointerId: 1, isPrimary: true });
     expect(press(550, 415)).toBe(false);
     expect(events).toEqual([]);
-    now = 10_000 + SETTLE_MS;
+    now = 10_250 + AGAIN_MS;
     expect(press(550, 415)).toBe(true);
   });
 
@@ -612,7 +612,7 @@ describe('a press in a window that takes only aimed presses', () => {
     now = 10_250;
     expect(fireEvent.pointerDown(approve, at)).toBe(false);
     expect(events).toEqual([]);
-    now = 10_000 + SETTLE_MS;
+    now = 10_250 + AGAIN_MS;
     expect(fireEvent.pointerDown(approve, at)).toBe(true);
     expect(events).toEqual(['pointerdown:Approve & rename']);
   });
@@ -715,9 +715,86 @@ describe('a press in a window that takes only aimed presses', () => {
     expect(press(550, 315, { detail: 1 })).toBe(false);
     now = 20_350;
     expect(press(550, 315, { detail: 2 })).toBe(false);
-    now = 20_600;
+    now = 20_350 + AGAIN_MS;
     expect(press(550, 315, { detail: 3 })).toBe(true);
     expect(got).toEqual(['click 3 on Approve & rename: a first press']);
+  });
+
+  it('refuses the second click of a double-click whose first was refused, though the settle time has run out by then', async () => {
+    start();
+    const approve = button('Approve & rename', box(500, 300));
+    await changed();
+    const got = clicks();
+    // The button comes under the pointer by itself; a double-click begins 405 ms later and ends at 542.
+    now = 10_000;
+    put(approve, box(500, 400));
+    approve.setAttribute('data-moved', '');
+    await changed();
+    now = 10_405;
+    expect(press(550, 415, { detail: 1 })).toBe(false);
+    now = 10_542;
+    expect(press(550, 415, { detail: 2 })).toBe(false);
+    expect(got).toEqual([]);
+    // Three quick presses, the last after the settle time: each within the time of the one before, none taken.
+    now = 20_000;
+    put(approve, box(500, 300));
+    approve.setAttribute('data-moved', 'back');
+    await changed();
+    for (const [at, detail] of [[20_253, 1], [20_394, 2], [20_563, 3]] as const) { now = at; expect(press(550, 315, { detail })).toBe(false); }
+    expect(got).toEqual([]);
+    // One made after a pause is a press made again: taken, and a first press.
+    now = 20_563 + AGAIN_MS;
+    expect(press(550, 315, { detail: 1 })).toBe(true);
+    expect(got).toEqual(['click 1 on Approve & rename: a first press']);
+    // A press on another control that acts, at once after a refused one, is refused too; on one that does not act it is not.
+    const keep = button('Keep original', box(700, 300));
+    const row = button('A row', box(100, 100), false);
+    await changed();
+    now = 30_000;
+    put(approve, box(500, 500));
+    approve.setAttribute('data-moved', 'again');
+    await changed();
+    now = 30_200;
+    expect(press(550, 515, { detail: 1 })).toBe(false);
+    now = 30_300;
+    expect(press(150, 115, { detail: 1 })).toBe(true);
+    now = 30_350;
+    expect(press(750, 315, { detail: 1 })).toBe(false);
+    now = 30_350 + AGAIN_MS;
+    expect(press(750, 315, { detail: 1 })).toBe(true);
+    expect(keep.isConnected && row.isConnected).toBe(true);
+  });
+
+  it('does not take for a first press a click counted second after a refused press and a key: the key may have decided the document', async () => {
+    start();
+    const approve = button('Approve & rename', box(500, 300));
+    await changed();
+    const got = clicks();
+    now = 10_000;
+    put(approve, box(500, 400));
+    approve.setAttribute('data-moved', '');
+    await changed();
+    now = 10_340;
+    expect(press(550, 415, { detail: 1 })).toBe(false);
+    // Ctrl+Enter decides the document from the keyboard; the next document's button is in the same place.
+    now = 10_500;
+    fireEvent.keyDown(document.body, { key: 'Enter', ctrlKey: true });
+    fireEvent.keyUp(document.body, { key: 'Enter', ctrlKey: true });
+    now = 10_700;
+    expect(press(550, 415, { detail: 2 })).toBe(true);
+    expect(got).toEqual(['click 2 on Approve & rename: not a first press']);
+    // With no key between, the same press is a first press (the test above); a key before the run began changes nothing.
+    got.length = 0;
+    now = 20_000;
+    put(approve, box(500, 300));
+    approve.setAttribute('data-moved', 'back');
+    await changed();
+    fireEvent.keyDown(document.body, { key: 'j' });
+    now = 20_300;
+    expect(press(550, 315, { detail: 1 })).toBe(false);
+    now = 20_700;
+    expect(press(550, 315, { detail: 2 })).toBe(true);
+    expect(got).toEqual(['click 2 on Approve & rename: a first press']);
   });
 
   it('does not take the second click of a double-click for a first press, on the button the first was on or on what the first opened', async () => {

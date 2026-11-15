@@ -937,8 +937,14 @@ shifts a little and stays under the pointer is the same button. Otherwise
 the press does nothing - the page hears of no button going down and of no
 click, the focus and any selection stay where they were, and nothing is
 shown - and is to be made again. Made again within the half second it is
-refused again. Made again after it, at the same place, it acts on whatever
-has come there: Rename all ready, where the press was on its way to Close
+refused again, and so is a press on any control that acts within 300 ms
+(`AGAIN_MS`) of a refused one, whatever the half second says by then: the
+second click of a double-click that began 405 ms after the button came was
+otherwise taken at 542 ms, on a reading nobody had looked at, and the half
+second was in effect as short as the gap between two clicks. Each press
+refused starts the 300 ms again, so presses made faster than that do
+nothing until there is a pause. Made again after both, at the same place,
+it acts on whatever has come there: Rename all ready, where the press was on its way to Close
 review, renames the ready documents at that second press. Nothing said the
 first press was refused, so what is under the pointer is to be looked at
 before pressing again. A browser counts a press made again within the
@@ -948,9 +954,13 @@ remove, Use date & rename, Back to Intern's proposal, Discard what I had
 and Done - did nothing on it for as long as the person went on pressing. A
 click counted second or later is now a first press (`firstPress`) when
 nothing of its run of clicks reached the page before it, every press before
-it having been refused; a press that did reach the page, on anything, and a
-click from the keyboard in between leave the clicks after them what they
-were, so a double-click on Approve & rename still approves one document.
+it having been refused; a press that did reach the page, on anything, a
+click from the keyboard in between, and any key pressed in between leave
+the clicks after them what they were, so a double-click on Approve & rename
+still approves one document. (The key is there because Ctrl+Enter and Alt+K
+decide a document as a click does: a press refused, the key, and a press
+counted second at the same place approved the next document, 12 times of 12
+in the check of this rule, before a key counted.)
 The count a real mouse gives was not checked: tests and journeys give it.
 The click is judged where it lands as well
 as where the press went down, since a finger's click goes to what is under
@@ -993,6 +1003,7 @@ seen.
 
 What it costs is a press that has to be made again: on a control within half
 a second of its coming under the pointer after the wheel or a resize; on
+any control that acts within 300 ms of a press that was refused; on
 a note's button pressed as soon as it appears; on Approve & rename or Keep
 original within half a second of its coming back for the same document;
 and, where a command is answered later than the press that sent it, on the
