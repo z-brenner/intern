@@ -10,9 +10,10 @@ Status: research summary, 2026-11-15, after v0.1.0-alpha.19. Three questions wer
 Five research passes ran, and four of them were then checked by an independent pass whose
 job was to find what was wrong. Each finding says whether it was **measured here** (counted
 from this repository's recordings or code), **checked** (a fact read from its primary page
-on 2026-11-15) or **reported** (a vendor's or author's claim nobody here has run). No model
-was run and no workflow was dispatched for this document. The third question has its own
-report: [`bench/reports/review-levels-2026-11`](../bench/reports/review-levels-2026-11/README.md).
+on 2026-11-15) or **reported** (a vendor's or author's claim nobody here has run). The
+research passes ran no model. One screen was run afterwards, of the one candidate they
+found, and its result is in section 1. The third question has its own report:
+[`bench/reports/review-levels-2026-11`](../bench/reports/review-levels-2026-11/README.md).
 
 Development documents here means InternBench (77) and the real sets 1 to 6. The two held-out
 sets were not opened by any research pass.
@@ -22,7 +23,7 @@ sets were not opened by any research pass.
 | Question | Answer | Confidence |
 |---|---|---|
 | A better model? | None is known. No large lab has released a small general model since the 2026-11-03 survey. | Checked, not exhaustive |
-| A faster model? | Possibly: one 4B-class family has never been run here (Spark-X, below). It needs a same-run screen; its vendor's own long-context rows put it level with Qwen3.5 4B, not the 9B. | Reported |
+| A faster model? | No. The one 4B-class family never run here, Spark-X, was screened on 2026-11-15: 60 of 77 names right against 69 for Qwen3.5 4B and 72 for the 9B in the same run, and more wrong names filed at every gate. | Measured here, one run, InternBench only |
 | A faster runtime? | No untried flag and no newer llama.cpp build is a free win. Two things have never been measured and need a real laptop: Windows throttling a minimised model on battery, and the integrated GPU. | Measured here / checked |
 | Rules instead of the model? | No. Rules alone name 14 of 25 documents exactly where they can name one at all; the pipeline names 17 of the same 25. At most 15% of model time would be saved. | Measured here |
 | Rules as a veto or an override? | No. An override spoils more than it fixes; a veto would have held 7 right names and caught none of the wrong ones. | Measured here |
@@ -39,8 +40,8 @@ sets were not opened by any research pass.
    and plans have one party, the company itself, and often no date; today they are held for
    review by construction (read from the code, not run). Probably the largest single change
    in what files by itself for this user. Needs set 1 to measure.
-3. **Screen Spark-X2.6-4B** against same-run 4B and 9B controls. About 5 runner-hours a pass.
-   The likeliest outcome is that it lands near the 4B.
+3. ~~Screen Spark-X2.6-4B against same-run 4B and 9B controls.~~ Done on 2026-11-15: it reads
+   worse than the 4B it would replace (section 1). No model change is proposed.
 4. **Measure on a laptop**: ten documents in front on mains, ten minimised on mains, ten
    minimised on battery. An afternoon; possibly the largest speed number in this document, in
    either direction.
@@ -86,10 +87,9 @@ half": only the file is).
     reasoning 56.3 against 57.0 (4B) and 63.0 (9B). All its figures are in thinking mode at
     temperature 1.0; the app runs thinking off at temperature 0 under a grammar, and this
     repository has already found that such figures predicted nothing.
-  - Not verified: that b11946 loads its architecture with the app's flags, and that the
-    server reuses the cached instruction block for it (for LFM3 it did not, at 3 to 5 s a
-    document: check `cached_tokens` on the first run). The publisher needs a person's look
-    before anything ships.
+  - Both open questions about running it were settled by the screen below: b11946 loads it
+    with the app's flags, and the server reuses the cached instruction block (for LFM3 it did
+    not, at 3 to 5 s a document).
 - **NuExtract3** (a Qwen3.5-4B fine-tune for extraction, Apache-2.0) is still unrun here and
   cannot be screened as the workflow stands. Its chat template picks its mode from a
   `template` argument the app does not send; without it the model runs in its
@@ -113,9 +113,10 @@ half": only the file is).
   2026-11-03, none led); LFM3, LFM2.5 and d1 (revenue cap in the licence); MiMo-V2.6 distil
   (a 9B, so no faster, tuned for agents and code); anything 27B and up.
 
-### The screen, when it is run
+### The screen, as run (measured here, 2026-11-15)
 
-`candidate-bench.yml`, input `candidates`:
+`candidate-bench.yml` run 43750632377 on `main` (v0.1.0-alpha.19), InternBench only, four
+threads, llama.cpp b11946, input `candidates`:
 
 ```json
 [
@@ -125,17 +126,65 @@ half": only the file is).
 ]
 ```
 
-All three URLs answered on 2026-11-15 with the size and hash listed. Sets:
-`internbench,real1,real2` for the first pass, never `real7` or `real8`.
+The three recordings were then replayed through the alpha.19 bench at three gates. A gate
+changes which names are ready, not the names.
 
-Read the result the way [`model-candidates.md`](model-candidates.md) prescribes, not by exact
-names on InternBench alone: the engine's rules were fitted to the Qwen models, and as found
-the 9B itself named 55 of 77 against the 2B's 71. Use type, date and parties, the wrong names
-filed at the shipped gate, and a gate sweep for the newcomer. A 4B-class model replaces the
-9B only if, on InternBench plus real sets 1 to 6 and in two runs, it names at least as many
-right as the same-run 9B, files no more wrong names and takes at most 0.6 of its time. It
-replaces the quick tier if it beats the same-run 4B by more than the 4B's own run-to-run
-spread (6 names) in both runs.
+| Of 77 | Spark-X2.6-4B | Qwen3.5 4B | Qwen3.5 9B |
+|---|---:|---:|---:|
+| Names right | 60 | 69 | 72 |
+| Type right | 72 | 73 | 75 |
+| Date right | 73 | 76 | 74 |
+| Parties right | 74 | 76 | 77 |
+| Relation right (who sent it, who it is for) | 67 of 74 | 76 of 77 | 77 of 77 |
+| Ready at 0.5, and wrong among them | 52, 5 | 47, 3 | 63, 2 |
+| Ready at 0.7, and wrong among them | 39, 4 | 26, 1 | 37, 1 |
+| Ready at 0.8, and wrong among them | 33, 4 | 15, 1 | 28, 0 |
+| Peak server memory | 3.29 GB | 3.34 GB | 6.23 GB |
+
+The ready rows show what the gate alone would do. In the app a quick-tier reading is never
+ready, whatever the gate.
+
+What it shows:
+
+- **Spark-X2.6-4B is below the 4B on every fact**, and 9 names below it, where the switch
+  rule at the end of this section asks for more than 6 above. It named 12 documents wrong
+  that the 4B named right and 3 the other way. Of the 12: four dates (two long reports left
+  undated, one given a bare year, one form given a different day), five relations (four name
+  the party the document is for or to as its sender, one calls a bank statement an agreement
+  with the bank), two invoices with the sender left out, one newsletter named by its masthead.
+- **Its confidence marks its mistakes worse.** The four wrong names still ready at 0.8 are
+  those four senders: the customer on a statement, the lender of a loaned painting, the
+  insurer on a loss notice, the supplier paid on a remittance advice, with a least token
+  probability of 0.82 to 0.92. The 9B has no wrong name ready at 0.8 and the 4B one. Spark
+  files no wrong name only from a gate of 0.93, which leaves 15 ready against the 9B's 28 at
+  its shipped 0.8, and that 0.93 is read off these same 77 documents.
+- **It runs.** b11946 loads it with the app's flags and grammar, all 77 readings completed, and
+  the server reused the cached instruction block (508 cached tokens at the median; this was
+  the open question after LFM3).
+- **Speed was not measured like for like.** The three jobs landed on three CPU models (Xeon
+  6975P-C for Spark, EPYC 9V45 for the 4B, EPYC 9V74 for the 9B). Spark took 32.3 s a
+  document, the 4B 18.0 s and the 9B 45.1 s; Spark read 56 prompt tokens a second and wrote
+  7.2, the 4B 98 and 10.9. The one figure in the same run that does not depend on the model,
+  OCR time, was 28% longer on Spark's machine, which accounts for some of that gap and not
+  all of it. Spark also writes more: 106 reply tokens a document against 90. Nothing here
+  suggests it is faster than the 4B; whether it is slower was not established.
+
+Decided: no second pass on the real sets and no model change. The 4B-class slot it was a
+candidate for is the quick tier, and it reads worse than the model already there.
+
+Limits of this screen: one run; InternBench only, which is synthetic and is the set the
+engine's rules were fitted on with Qwen models, so exact names favour the incumbents
+([`model-candidates.md`](model-candidates.md) says to read type, date and parties for that
+reason, and those are lower too, relation most of all); two 4B runs have differed by 6 names
+before. A 9-name deficit with a worse relation score and worse-marked mistakes was judged
+not worth a second pass (this one took 2.1 runner-hours for 77 documents). That is a
+judgement, and the workflow input above reruns it.
+
+The rule for any later candidate stands: a 4B-class model replaces the 9B only if, on
+InternBench plus real sets 1 to 6 and in two runs, it names at least as many right as the
+same-run 9B, files no more wrong names and takes at most 0.6 of its time. It replaces the
+quick tier if it beats the same-run 4B by more than the 4B's own run-to-run spread (6 names)
+in both runs. Never screen on `real7` or `real8`.
 
 ## 2. Speed without a new model
 
@@ -339,8 +388,9 @@ the inventory faster than anything here.
 
 ## What was not verified
 
-- No model was run. Every speed and memory figure for a candidate is scaled from this
-  repository's measurements of Qwen3.5 files.
+- One model was run, once, on InternBench (section 1). Every other speed and memory figure
+  for a candidate is scaled from this repository's measurements of Qwen3.5 files. The screen's
+  three jobs ran on three CPU models, so its times compare nothing.
 - llama.cpp's release notes and pull requests were read through a summarising fetch tool, not
   as diffs; GitHub pages were not reachable for the checkers.
 - The rules prototype is one draft and one revision, not the engine. The engine's own readers
