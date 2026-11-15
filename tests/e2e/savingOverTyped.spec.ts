@@ -11,9 +11,10 @@ import { openDetails, queueCell } from './grid';
   review. The warning is words only, and it goes when the choice is taken
   back. Its coming and going moves nothing a person could be about to press:
   the footer grows upward over the sections' last lines once, and keeps
-  that room, blank, when the warning has gone. The journey further down
-  holds what that leaves: nothing that acts comes under a pointer at rest
-  where the warning was.
+  that room, blank, when the warning has gone. The journeys further down
+  hold what that leaves: nothing that acts comes under a pointer at rest
+  where the warning was, and the one thing that does move, by the person's
+  own choice only, is the sections scrolling to keep that choice in view.
 
   The demo does not act out automatic renaming: nothing in it is renamed by
   itself. So this journey ends at the save. What becomes of the document and
@@ -193,6 +194,7 @@ const at = (page: Page, place: { x: number; y: number }) => page.evaluate(({ x, 
   return top ? `no control: ${top.tagName}.${top.className}` : 'nothing';
 }, place);
 const edges = async (locator: Locator) => { const box = (await locator.boundingBox())!; return `${Math.round(box.y)}..${Math.round(box.y + box.height)}`; };
+const middle = async (locator: Locator) => { const box = (await locator.boundingBox())!; return { x: box.x + box.width / 2, y: box.y + box.height / 2 }; };
 
 for (const [width, height] of [[1280, 800], [800, 600]] as const) {
   test(`a warning that goes by itself leaves nothing that acts where it was, at ${width} by ${height}`, async ({ page }) => {
@@ -256,3 +258,139 @@ for (const [width, height] of [[1280, 800], [800, 600]] as const) {
     await expect(settings.dialog.getByRole('status', { name: 'Update status' })).toBeVisible();
   });
 }
+
+/*
+  The footer grows over the last lines the sections show, and the checkbox
+  just ticked can be among them: from the keyboard at 1280 by 800 it always
+  was, and it stayed behind the footer with the focus on it. When the
+  person's own choice makes the footer grow over the control they chose
+  with, the sections now scroll just far enough to keep it in view. That is
+  the one thing that moves, and only by their own press or key: a warning
+  that comes by itself scrolls nothing.
+*/
+/** Scrolls the sections so that the checkbox's line ends `above` px above the end of their view. */
+const putCheckbox = (automatic: Locator, above: number) => automatic.evaluate((input, above) => {
+  const view = input.closest('.dialog-body')!;
+  view.scrollTop += input.closest('label')!.getBoundingClientRect().bottom - (view.getBoundingClientRect().bottom - above);
+}, above);
+/** How far the checkbox's line ends above the end of the sections' view; negative when it is cut off. */
+const clear = (automatic: Locator) => automatic.evaluate((input) => input.closest('.dialog-body')!.getBoundingClientRect().bottom - input.closest('label')!.getBoundingClientRect().bottom);
+/** A little above the footer: the 4px the sections leave under it, give or take a pixel of rounding. */
+const justInView = async (automatic: Locator) => {
+  await expect(automatic).toBeInViewport({ ratio: 1 });
+  const room = await clear(automatic);
+  expect(room).toBeGreaterThanOrEqual(3);
+  expect(room).toBeLessThan(6);
+};
+/** How far down each control is, by its name, to tell a scroll of the sections from anything else moving. */
+const tops = (dialog: Locator) => dialog.locator('button, summary, input, select, textarea').evaluateAll((all) => all.filter((control) => control.checkVisibility()).map((control) => ({
+  inSections: control.closest('.dialog-body') !== null, top: control.getBoundingClientRect().top, left: control.getBoundingClientRect().left,
+})));
+
+test('the choice that brings the warning stays in view: the sections scroll for it by the key or the press that made it, and never by themselves', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/?queue=changes');
+  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  const panel = await openDetails(page, LEASE);
+  await panel.getByLabel('Filename').fill('2023-09-15 Lease of 123 Main St');
+
+  // From the keyboard. The checkbox is 30px above the end of the view, where the warning's room will be.
+  let settings = await openSettings(page);
+  await settings.balanced.check();
+  await putCheckbox(settings.automatic, 30);
+  await settings.automatic.focus();
+  let before = await tops(settings.dialog);
+  await page.keyboard.press('Space');
+  await expect(settings.warning).toHaveText(ONE);
+  // It is whole and in view, with the focus on it, a little above the footer.
+  await expect(settings.automatic).toBeFocused();
+  await justInView(settings.automatic);
+  expect(await settings.automatic.evaluate((input) => { const box = input.getBoundingClientRect(); return document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) === input; })).toBe(true);
+  // The sections scrolled, all of a piece, and nothing outside them moved: not Save, not Close.
+  const after = await tops(settings.dialog);
+  expect(after.filter((control, index) => !control.inSections && control.top !== before[index].top)).toEqual([]);
+  expect(after.every((control, index) => control.left === before[index].left)).toBe(true);
+  const scrolled = after.flatMap((control, index) => control.inSections ? [before[index].top - control.top] : []);
+  expect(Math.min(...scrolled)).toBeGreaterThan(30);
+  expect(Math.max(...scrolled) - Math.min(...scrolled)).toBeLessThan(0.01);
+  // Taken back and chosen again from there: the room is taken already, and nothing moves at all.
+  before = after;
+  await page.keyboard.press('Space');
+  await expect(settings.warning).toHaveCount(0);
+  await expect(settings.automatic).toBeInViewport({ ratio: 1 });
+  expect(await tops(settings.dialog)).toEqual(before);
+  await page.keyboard.press('Space');
+  await expect(settings.warning).toHaveText(ONE);
+  expect(await tops(settings.dialog)).toEqual(before);
+  await page.keyboard.press('Escape');
+  await expect(settings.dialog).toBeHidden();
+
+  // With the pointer, on a checkbox that the footer will cover whole. It comes back into view above the footer,
+  // and what is under the pointer, left where it pressed, is the warning's words: nothing to press a second time.
+  settings = await openSettings(page);
+  await expect(settings.balanced).not.toBeChecked();
+  await settings.balanced.check();
+  await putCheckbox(settings.automatic, 30);
+  const place = await middle(settings.automatic);
+  await page.mouse.move(place.x, place.y);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(settings.warning).toHaveText(ONE);
+  await expect(settings.automatic).toBeChecked();
+  await justInView(settings.automatic);
+  expect(await at(page, place)).toMatch(/^no control: (P\.save-warning|DIV\.dialog-actions)$/);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(settings.automatic).toBeChecked();
+  await page.keyboard.press('Escape');
+  await expect(settings.dialog).toBeHidden();
+
+  // With the pointer, on a checkbox the footer will cover only in part: its line ends 10px into the room the
+  // warning will take, and the press is on the part of it that stays in view. Under the pointer afterwards is the
+  // gap under that line, or the line itself: no other control.
+  settings = await openSettings(page);
+  await settings.balanced.check();
+  await putCheckbox(settings.automatic, 30);
+  await settings.automatic.focus();
+  await page.keyboard.press('Space');
+  await expect(settings.warning).toHaveText(ONE);
+  const footerGrew = await settings.sections.evaluate((view) => view.getBoundingClientRect().bottom);
+  await page.keyboard.press('Escape');
+  await expect(settings.dialog).toBeHidden();
+  settings = await openSettings(page);
+  await settings.balanced.check();
+  const grows = await settings.sections.evaluate((view, shrunk) => view.getBoundingClientRect().bottom - shrunk, footerGrew);
+  expect(grows).toBeGreaterThan(40);
+  await putCheckbox(settings.automatic, grows - 10);
+  const part = await middle(settings.automatic);
+  await page.mouse.move(part.x, part.y);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(settings.warning).toHaveText(ONE);
+  await expect(settings.automatic).toBeChecked();
+  await justInView(settings.automatic);
+  expect(await at(page, part)).toMatch(/^(no control: (DETAILS|P)\.|LABEL Automatically rename ready documents|INPUT $)/);
+  await page.keyboard.press('Escape');
+  await expect(settings.dialog).toBeHidden();
+
+  // By itself, nothing scrolls. The choice is made while the lease is being read, so there is nothing to warn of
+  // and no room is taken. The focus is left on the checkbox, low in the view. Then the lease comes back to wait.
+  await byItself(page, 'read again');
+  settings = await openSettings(page);
+  await settings.balanced.check();
+  await putCheckbox(settings.automatic, 30);
+  await settings.automatic.focus();
+  await page.keyboard.press('Space');
+  await expect(settings.automatic).toBeChecked();
+  await expect(settings.warning).toHaveCount(0);
+  const guide = settings.dialog.getByRole('button', { name: 'Open the guide' });
+  await settings.save.hover();
+  before = await tops(settings.dialog);
+  await byItself(page, 'back with a reading');
+  await expect(settings.warning).toHaveText(ONE);
+  // The warning is there above Save, and every control is where it was: the checkbox is behind the footer now,
+  // to be scrolled to, which is the price of nothing moving under a pointer at rest.
+  expect(await tops(settings.dialog)).toEqual(before);
+  expect(await clear(settings.automatic)).toBeLessThan(0);
+  await expect(guide).toBeAttached();
+});

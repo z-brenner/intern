@@ -384,6 +384,123 @@ describe('the warning in Settings', () => {
     }
   });
 
+  // Places given, as above: the warning is 88px tall with Save 12px under it,
+  // so the footer grows by 100px; the sections' view ends at 608 once it has,
+  // and the checkbox's line ends at 628, 20px behind it.
+  it('scrolls the sections to keep the control just used in view when the person\'s own choice brings the warning over it, and never when it comes by itself', async () => {
+    const rect = (top: number, height: number) => ({ top, bottom: top + height, left: 0, right: 0, x: 0, y: top, width: 0, height, toJSON: () => ({}) }) as DOMRect;
+    let lineEnds = 628;
+    const layout = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('save-warning')) return rect(623, 88);
+      if (this.classList.contains('dialog-body')) return rect(91, 517);
+      if (this.tagName === 'LABEL' && this.textContent === 'Automatically rename ready documents') return rect(lineEnds - 26, 26);
+      // Save is under the warning, in the footer: lower than the sections' view ends, and not theirs to scroll to.
+      if (this.textContent === 'Save settings') return rect(723, 42);
+      return rect(0, 0);
+    });
+    const open = async (typed: TypedWaiting) => {
+      const view = renderDialog(older, typed);
+      const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+      return { ...view, dialog, sections: dialog.querySelector<HTMLElement>('.dialog-body')! };
+    };
+    try {
+      // The person's own choice, with the focus on the checkbox they ticked: its line and 4px under it are shown.
+      let settings = await open({ ready: 1, review: 0 });
+      automatic(settings.dialog).focus();
+      fireEvent.click(automatic(settings.dialog));
+      expect(warning(settings.dialog)).toHaveTextContent(ONE);
+      expect(settings.sections.scrollTop).toBe(24);
+      // Taken back and chosen again: the room is the footer's already, so nothing is covered anew and nothing scrolls.
+      fireEvent.click(automatic(settings.dialog));
+      fireEvent.click(automatic(settings.dialog));
+      expect(warning(settings.dialog)).toHaveTextContent(ONE);
+      expect(settings.sections.scrollTop).toBe(24);
+      settings.unmount();
+
+      // By itself: the choice was made with nothing to warn of, and a document comes back to wait. The focus is
+      // still on the checkbox, behind the footer now, and the sections do not move for it.
+      settings = await open(NOTHING_TYPED);
+      automatic(settings.dialog).focus();
+      fireEvent.click(automatic(settings.dialog));
+      expect(warning(settings.dialog)).toBeNull();
+      settings.rerender(older, { ready: 1, review: 0 });
+      expect(warning(settings.dialog)).toHaveTextContent(ONE);
+      expect(settings.sections.scrollTop).toBe(0);
+      // Nor when a later choice of the person's changes the warning without making it taller.
+      fireEvent.click(balanced(settings.dialog));
+      expect(settings.sections.scrollTop).toBe(0);
+      settings.unmount();
+
+      // The focus on Save, which is not in the sections: nothing of theirs to keep in view.
+      settings = await open({ ready: 1, review: 0 });
+      saveButton(settings.dialog).focus();
+      fireEvent.click(automatic(settings.dialog));
+      expect(warning(settings.dialog)).toHaveTextContent(ONE);
+      expect(settings.sections.scrollTop).toBe(0);
+      settings.unmount();
+
+      // The checkbox's line whole above the footer: it is in view as it is.
+      lineEnds = 600;
+      settings = await open({ ready: 1, review: 0 });
+      automatic(settings.dialog).focus();
+      fireEvent.click(automatic(settings.dialog));
+      expect(warning(settings.dialog)).toHaveTextContent(ONE);
+      expect(settings.sections.scrollTop).toBe(0);
+      settings.unmount();
+
+      // Just covered, to the last pixel the footer took: shown again. One pixel further down it was out of view
+      // before the footer grew, not covered by it, and the sections are not sent after it.
+      lineEnds = 708;
+      settings = await open({ ready: 1, review: 0 });
+      automatic(settings.dialog).focus();
+      fireEvent.click(automatic(settings.dialog));
+      expect(settings.sections.scrollTop).toBe(104);
+      settings.unmount();
+      lineEnds = 709;
+      settings = await open({ ready: 1, review: 0 });
+      automatic(settings.dialog).focus();
+      fireEvent.click(automatic(settings.dialog));
+      expect(warning(settings.dialog)).toHaveTextContent(ONE);
+      expect(settings.sections.scrollTop).toBe(0);
+      settings.unmount();
+
+      // The warning grown by a line, by the person's own choice: only what that line covered is scrolled for.
+      lineEnds = 620;
+      const lines = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains('save-warning')) return this.textContent?.startsWith('1 document') ? rect(623, 88) : rect(605, 106);
+        if (this.classList.contains('dialog-body')) return rect(91, this.closest('.settings-dialog')?.querySelector('.save-warning')?.textContent?.startsWith('1 document') ? 517 : 499);
+        if (this.tagName === 'LABEL' && this.textContent?.startsWith('Balanced')) return rect(lineEnds - 145, 145);
+        if (this.textContent === 'Save settings') return rect(723, 42);
+        return rect(0, 0);
+      });
+      try {
+        settings = await open({ ready: 1, review: 2 });
+        fireEvent.click(automatic(settings.dialog));
+        expect(warning(settings.dialog)).toHaveTextContent(ONE);
+        expect(settings.sections.scrollTop).toBe(0);
+        // Balanced adds the two in review: five lines, 18px more of footer. Its own label ends at 620, 30px
+        // behind the footer now, of which the footer took only 18 just now: it was cut off before, and is left.
+        balanced(settings.dialog).focus();
+        fireEvent.click(balanced(settings.dialog));
+        expect(warning(settings.dialog)).toHaveTextContent(several(3));
+        expect(settings.sections.scrollTop).toBe(0);
+        settings.unmount();
+        // Ending at 600, it is 10px behind the footer, all of it just taken: shown again.
+        lineEnds = 600;
+        settings = await open({ ready: 1, review: 2 });
+        fireEvent.click(automatic(settings.dialog));
+        balanced(settings.dialog).focus();
+        fireEvent.click(balanced(settings.dialog));
+        expect(warning(settings.dialog)).toHaveTextContent(several(3));
+        expect(settings.sections.scrollTop).toBe(14);
+      } finally {
+        lines.mockRestore();
+      }
+    } finally {
+      layout.mockRestore();
+    }
+  });
+
   it('takes no room before it has been shown', async () => {
     renderDialog(older, { ready: 1, review: 0 });
     const dialog = await screen.findByRole('dialog', { name: 'Settings' });

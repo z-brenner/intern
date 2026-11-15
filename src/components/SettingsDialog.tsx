@@ -260,10 +260,39 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   // footer).
   const overTypedBox = useRef<HTMLParagraphElement>(null);
   const [overTypedRoom, setOverTypedRoom] = useState(0);
+  const sections = useRef<HTMLDivElement>(null);
+  // The two choices the warning follows from, to tell a warning the
+  // person's own choice brought from one that came by itself.
+  const choices = `${Boolean(next.automaticRename)} ${reviewLevelOf(next)}`;
+  const choicesSeen = useRef(choices);
   useLayoutEffect(() => {
+    const chosen = choicesSeen.current !== choices;
+    choicesSeen.current = choices;
     const box = overTypedBox.current?.getBoundingClientRect();
-    if (box) setOverTypedRoom((room) => Math.max(room, box.height));
-  }, [overTyped]);
+    if (!box || box.height <= overTypedRoom) return;
+    // How much taller the footer has just become: the box's new lines, and
+    // the first time its distance to the row under it as well.
+    const under = overTypedBox.current?.nextElementSibling?.getBoundingClientRect();
+    const grew = box.height - overTypedRoom + (overTypedRoom === 0 && under ? under.top - box.bottom : 0);
+    setOverTypedRoom(box.height);
+    // The footer has just grown over the last lines the sections show. When
+    // it was the person's own choice that brought the warning, the control
+    // they chose with can be among those lines, with the focus on it: from
+    // the keyboard at 1280 by 800 the checkbox always was, and it stayed
+    // out of sight. So the sections scroll just far enough to show its
+    // line again, and 4px under it. Under a pointer left where it pressed,
+    // that brings the same line or the gap under it (6px under the
+    // checkbox's, more under a level's), or the pointer is over the footer
+    // by then: nothing else to press. Only for a line the footer has just
+    // covered, so never by more than the footer grew: one that was out of
+    // view already is left where it is. And never for a warning that came
+    // by itself: that would move every section under a pointer at rest.
+    const view = sections.current;
+    const used = document.activeElement?.closest('label') ?? document.activeElement;
+    if (!chosen || !view || !used || !view.contains(used)) return;
+    const cut = used.getBoundingClientRect().bottom - view.getBoundingClientRect().bottom;
+    if (cut > 0 && cut <= grew) view.scrollTop += Math.ceil(cut) + 4;
+  }, [overTyped, choices]);
   const [status, setStatus] = useState<UpdateStatus>();
   const [checking, setChecking] = useState(false);
   const [installing, setInstalling] = useState(false);
@@ -560,7 +589,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   */
   return <div className="dialog-backdrop" role="presentation"><section ref={dialog} className="settings-dialog settings-panel" role="dialog" aria-modal="true" aria-label="Settings">
     <div className="dialog-head"><h2>Settings</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close settings"><Icon icon={X} /></button></div>
-    <div className="dialog-body">
+    <div className="dialog-body" ref={sections}>
       {/*
         A settings file Intern could not read in full is reported here rather
         than beside the watched folder, because the intake panel is hidden
@@ -795,7 +824,11 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         Here, where the dialog is as tall as the window lets it be (it is at
         1280 by 800 and at 800 by 600), nothing moves when it comes: the
         footer grows upward, Save and the sections stay where they are, and
-        the sections lose their last lines from view, to be scrolled to.
+        the sections lose their last lines from view, to be scrolled to. But
+        for one thing, and only by the person's own choice: when the control
+        they chose with is among those lines, the sections scroll to keep it
+        in view (the layout effect above). A warning that comes by itself
+        scrolls nothing, and can leave the control with the focus behind it.
 
         And the footer never grows smaller again while the dialog is open. A
         count that takes fewer lines is shown in the room the longer one
