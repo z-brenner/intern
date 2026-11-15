@@ -14,6 +14,7 @@
 //!                  [--pipeline evidence|digest] [--id-style stable|ordinal]
 //!                  [--retrieval-tier auto|whole|small|normal|dense] [--context-tokens N]
 //!                  [--prompt-profile bonsai_2] [--min-token-confidence 0.5]
+//!                  [--review-level strict|balanced]
 //! intern-bench compare --before a.json --after b.json [--markdown diff.md] [--output diff.json]
 //! intern-bench report  --input report.json --markdown out.md
 //! intern-bench merge-recordings --base bench/recording.json --add new.json --output merged.json
@@ -48,6 +49,7 @@ const USAGE: &str = "usage:
                    [--pipeline evidence|digest] [--id-style stable|ordinal]
                    [--retrieval-tier auto|whole|small|normal|dense] [--context-tokens N]
                    [--prompt-profile bonsai_2] [--min-token-confidence X]
+                   [--review-level strict|balanced]
   intern-bench compare --before A.json --after B.json [--markdown DIFF.md] [--output DIFF.json]
   intern-bench report --input REPORT.json --markdown OUT.md
   intern-bench merge-recordings --base A.json --add B.json --output C.json
@@ -89,6 +91,7 @@ const RUN_KEYS: &[&str] = &[
     "context-tokens",
     "prompt-profile",
     "min-token-confidence",
+    "review-level",
     "bench-profile",
     "wire-output",
 ];
@@ -251,6 +254,7 @@ fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
                 "pipeline",
                 "context-tokens",
                 "prompt-profile",
+                "review-level",
                 "bench-profile",
                 "wire-output",
             ],
@@ -413,6 +417,42 @@ mod tests {
             let error = options_error(&[&base[..], &["--worker", "w"], extra].concat());
             assert!(error.contains(refused), "{error}");
         }
+    }
+
+    /// The review level is read for a replay or a live run, strict when it
+    /// is not given, and refused where it means nothing or names no level.
+    #[test]
+    fn the_review_level_is_an_option_of_a_scored_run() {
+        use intern_engine::ReviewLevel;
+        let base = ["--corpus", "c", "--gold", "g.json", "--replay", "r.json"];
+        assert_eq!(
+            options(&base).unwrap().engine.review_level,
+            ReviewLevel::Strict
+        );
+        for level in ReviewLevel::ALL {
+            let parsed = options(&[&base[..], &["--review-level", level.as_str()]].concat());
+            assert_eq!(parsed.unwrap().engine.review_level, level);
+        }
+        let unknown = options_error(&[&base[..], &["--review-level", "relaxed"]].concat());
+        assert!(
+            unknown.contains("--review-level is strict or balanced"),
+            "{unknown}"
+        );
+        let extract = options_error(&[
+            "--corpus",
+            "c",
+            "--gold",
+            "g.json",
+            "--extract-only",
+            "--worker",
+            "w",
+            "--review-level",
+            "balanced",
+        ]);
+        assert!(
+            extract.contains("--review-level is not for --extract-only runs"),
+            "{extract}"
+        );
     }
 
     fn options_error(arguments: &[&str]) -> String {

@@ -4,8 +4,9 @@
 use std::collections::BTreeMap;
 
 use intern_engine::{
-    DigestBudget, DocumentAnalysis, DocumentSource, ValidatedFacts,
-    domain::{PartyRole, ProposalStatus, Support},
+    DigestBudget, DocumentAnalysis, DocumentSource, ReviewLevel, ValidatedFacts,
+    domain::{PartyRole, Support},
+    readiness,
     retrieve::RetrievalConfig,
 };
 use serde::{Deserialize, Serialize};
@@ -245,6 +246,8 @@ pub struct Observation<'a> {
     pub budget: DigestBudget,
     /// The retrieval the `context_*` scores measure.
     pub retrieval: &'a RetrievalConfig,
+    /// The review level the record's readiness is judged at.
+    pub review_level: ReviewLevel,
     pub exchanges: &'a [Exchange],
     /// The last prompt sent to the model, in full.
     pub last_prompt: Option<&'a str>,
@@ -300,7 +303,10 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
 
     let outcome = match observation.analysis {
         Some(analysis) => {
-            let ready = analysis.status == ProposalStatus::Ready;
+            // The level's answer, not the engine's own status: at strict
+            // the two are the same, and at balanced the record, and every
+            // score read from its readiness, is what the app would do.
+            let ready = readiness(analysis, observation.review_level).ready;
             record.filename = Some(analysis.filename.clone());
             record.description = Some(analysis.description.clone());
             record.readiness = Some(if ready { "ready" } else { "needs_review" }.to_owned());
@@ -405,6 +411,7 @@ mod tests {
                 source: None,
                 budget: DigestBudget::default(),
                 retrieval: &retrieval,
+                review_level: ReviewLevel::Strict,
                 exchanges: &[],
                 last_prompt: None,
                 timings: Timings::default(),
@@ -462,6 +469,7 @@ mod tests {
                     source: None,
                     budget: DigestBudget::default(),
                     retrieval: &retrieval,
+                    review_level: ReviewLevel::Strict,
                     exchanges: &[],
                     last_prompt: None,
                     timings: timing::empty(),
@@ -530,6 +538,95 @@ mod tests {
         assert_eq!(read.relation, record.relation);
     }
 
+    /// The review level decides a record's readiness and every score read
+    /// from it, and nothing else: the reasons, the name and the scores of
+    /// what was read are the same at both levels. Here a reading whose only
+    /// reason is a note, right in one case and wrong in the other.
+    #[test]
+    fn the_review_level_decides_readiness_and_the_scores_read_from_it() {
+        let document = |document_type: &str| GoldDocument {
+            id: "minutes".into(),
+            file: "minutes.docx".into(),
+            pages: 1,
+            gold: GoldAnswer {
+                document_type: Some(document_type.into()),
+                document_date: Some("2018-06-14".into()),
+                parties: Some(Vec::new()),
+                expected_readiness: Some("ready".into()),
+                ..GoldAnswer::default()
+            },
+            ..GoldDocument::default()
+        };
+        let analysis: DocumentAnalysis = serde_json::from_value(serde_json::json!({
+            "filename": "2018-06-14 Minutes.docx", "description": "",
+            "status": "needs_review", "reviewReasons": ["type_inferred"],
+            "proposal": {"document_type": "Minutes", "document_date": "2018-06-14",
+                "date_role": null, "parties": [], "party_relation": "none",
+                "description": "", "confidence": 0.9,
+                "evidence": {"date": null, "document_type": null, "parties": []}},
+            "telemetry": {"sourceCharacters": 1, "digestCharacters": 1, "compressionRatio": 1.0,
+                "distillMicros": 1, "inferenceMillis": 1}
+        }))
+        .unwrap();
+        let retrieval = RetrievalConfig::default();
+        let observe = |document: &GoldDocument, review_level: ReviewLevel| {
+            scored_record(
+                document,
+                Observation {
+                    status: COMPLETED,
+                    error: None,
+                    analysis: Some(&analysis),
+                    source: None,
+                    budget: DigestBudget::default(),
+                    retrieval: &retrieval,
+                    review_level,
+                    exchanges: &[],
+                    last_prompt: None,
+                    timings: timing::empty(),
+                    timings_recorded: true,
+                    memory: MemoryPeaks::default(),
+                    replayed: true,
+                    stale: false,
+                },
+            )
+        };
+        let flags = |record: &DocumentRecord| {
+            [
+                "filename_correct",
+                "ready",
+                "readiness_match",
+                "unsafe_ready",
+                "needless_review",
+            ]
+            .map(|key| record.bool_score(key).unwrap_or_else(|| panic!("{key}")))
+        };
+
+        let right = document("Minutes");
+        let strict = observe(&right, ReviewLevel::Strict);
+        let balanced = observe(&right, ReviewLevel::Balanced);
+        assert_eq!(strict.readiness.as_deref(), Some("needs_review"));
+        assert_eq!(flags(&strict), [true, false, false, false, true]);
+        assert_eq!(balanced.readiness.as_deref(), Some("ready"));
+        assert_eq!(flags(&balanced), [true, true, true, false, false]);
+        assert_eq!(balanced.review_reasons, ["TYPE_INFERRED"], "still said");
+
+        // The same reading of a document that is something else: a wrong
+        // name held at strict, and filed at balanced.
+        let wrong = document("Resolution");
+        let strict = observe(&wrong, ReviewLevel::Strict);
+        let balanced = observe(&wrong, ReviewLevel::Balanced);
+        assert_eq!(flags(&strict), [false, false, false, false, false]);
+        assert_eq!(flags(&balanced), [false, true, true, true, false]);
+
+        // Nothing but readiness and what is scored from it differs.
+        let mut as_strict = serde_json::to_value(&balanced).unwrap();
+        as_strict["readiness"] = "needs_review".into();
+        for key in ["ready", "readiness_match", "unsafe_ready"] {
+            as_strict["scores"][key] = strict.scores[key].clone();
+        }
+        assert_eq!(as_strict, serde_json::to_value(&strict).unwrap());
+    }
+
     /// A document that was read carries what its evidence context costs
     /// beside what it holds, as an extract run's record does.
     #[test]
@@ -553,6 +650,7 @@ mod tests {
                 source: Some(&source),
                 budget: DigestBudget::default(),
                 retrieval: &retrieval,
+                review_level: ReviewLevel::Strict,
                 exchanges: &[],
                 last_prompt: None,
                 timings: timing::empty(),
