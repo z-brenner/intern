@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { QueueItem } from '../../types';
 import { keptText, proposalOf, typedAndNotFiled } from './drafts';
-import { MAX_DESCRIPTION, MAX_NAME, MAX_STORED, TYPED_KEY, documentOf, keepTypedBetweenLaunches, readingOf, storedTyped, windowStorage } from './typedStore';
+import { CLOSED_KEY, MAX_DESCRIPTION, MAX_NAME, MAX_STORED, TYPED_KEY, documentOf, keepTypedBetweenLaunches, readingOf, storedTyped, windowStorage } from './typedStore';
 
 /*
   A name or a description typed in review and not filed was the window's
@@ -11,8 +11,14 @@ import { MAX_DESCRIPTION, MAX_NAME, MAX_STORED, TYPED_KEY, documentOf, keepTyped
   the fields over the reading it was typed over, set aside beside any other,
   dropped with a document that is no longer in the queue.
 
+  Into the fields only when the window before closed in the ordinary way,
+  which it marks in storage as it goes; found with no mark, all of it is set
+  aside.
+
   Here the storage is one handed in, and a launch is a new keeper told the
-  queue it starts with.
+  queue it starts with. Unless a test says how the window before it ended,
+  it closed in the ordinary way: its mark is in storage as the launch
+  begins.
 */
 describe('what was typed in review and not filed, through closing Intern', () => {
   const lease: QueueItem = { id: '7', originalFilename: 'scan.pdf', status: 'review', proposedFilename: '2024-03-01 Lease.pdf', description: 'A lease.', confidence: 0.8, proposalRevision: '1', readBy: { tier: 'accurate', modelId: 'accurate-a', displayName: 'Accurate' } };
@@ -23,6 +29,8 @@ describe('what was typed in review and not filed, through closing Intern', () =>
   const NAME = '2024-03-01 Lease of Unit 4';
   const SENTENCE = 'A lease of Unit 4, countersigned.';
 
+  /** What each storage below holds, to put a mark in without a call that a test counts. */
+  const holding = new WeakMap<object, Map<string, string>>();
   /** Storage as a window has it, holding what it is given. */
   const storageOf = (held: Record<string, string> = {}) => {
     const values = new Map(Object.entries(held));
@@ -34,10 +42,21 @@ describe('what was typed in review and not filed, through closing Intern', () =>
       removeItem: vi.fn((key: string) => { values.delete(key); }),
       clear: () => values.clear(),
     };
+    holding.set(storage, values);
     return storage as Storage & typeof storage;
   };
-  /** Intern starting: a window of its own, told the queue once it has been read. */
-  const launch = (storage: Storage | undefined, queue: readonly QueueItem[]) => {
+  /** The window before closed in the ordinary way: what it stored, if anything, is marked. */
+  const closedOrdinarily = (storage: Storage | undefined) => {
+    const values = storage && holding.get(storage);
+    if (values?.has(TYPED_KEY)) values.set(CLOSED_KEY, '1');
+  };
+  /**
+   * Intern starting: a window of its own, told the queue once it has been
+   * read. The window before it `closed` in the ordinary way, or was `killed`:
+   * storage is as its last change left it, with no mark.
+   */
+  const launch = (storage: Storage | undefined, queue: readonly QueueItem[], before: 'closed' | 'killed' = 'closed') => {
+    if (before === 'closed') closedOrdinarily(storage);
     const kept = keepTypedBetweenLaunches(() => storage, () => {});
     kept.queueIs(queue, true);
     return kept;
@@ -45,8 +64,8 @@ describe('what was typed in review and not filed, through closing Intern', () =>
   const typedOver = (item: QueueItem, stem = NAME, description = SENTENCE) => ({ item: item.id, for: proposalOf(item), stem, description, edited: true });
   const stored = (storage: Storage) => storage.getItem(TYPED_KEY);
   /** What a launch with this queue finds typed for the lease: in the fields, and set aside. */
-  const found = (storage: Storage, queue: readonly QueueItem[], id = lease.id) => {
-    const kept = launch(storage, queue);
+  const found = (storage: Storage, queue: readonly QueueItem[], id = lease.id, before: 'closed' | 'killed' = 'closed') => {
+    const kept = launch(storage, queue, before);
     return { fields: kept.drafts.get(id), aside: (kept.earlier.get(id) ?? []).map(({ text, edited }) => ({ text, edited })), kept };
   };
 
@@ -64,6 +83,150 @@ describe('what was typed in review and not filed, through closing Intern', () =>
     expect(kept.drafts.size).toBe(1);
     // And is still there at the launch after that, with nothing typed in between.
     expect(found(storage, [lease, invoice]).fields).toMatchObject({ stem: NAME, description: SENTENCE });
+  });
+
+  it('is set aside, never in the fields, when the window before did not close in the ordinary way', () => {
+    const storage = storageOf();
+    const first = launch(storage, [lease, invoice]);
+    first.drafts.set(lease.id, typedOver(lease));
+    first.earlier.set(invoice.id, [keptText('2024-04-01 Invoice 17', true)]);
+
+    // Killed, or the power cut: the document as it was typed over, and all the same not in its fields.
+    const { fields, aside, kept } = found(storage, [lease, invoice], lease.id, 'killed');
+    expect(fields).toBeUndefined();
+    expect(aside).toEqual([{ text: `${NAME}\n\n${SENTENCE}`, edited: true }]);
+    expect(kept.drafts.size).toBe(0);
+    // It still counts as typed and not filed, so Rename all ready leaves the document out; what was set aside before is as it was.
+    expect(typedAndNotFiled(kept.drafts, kept.earlier, lease.id)).toBe(true);
+    expect((kept.earlier.get(invoice.id) ?? []).map(({ text }) => text)).toEqual(['2024-04-01 Invoice 17']);
+    // Set aside is how it is stored from then on, and how it stays after an ordinary close.
+    expect(JSON.parse(stored(storage)!).documents).toEqual([
+      { id: lease.id, document: documentOf(lease), earlier: [`${NAME}\n\n${SENTENCE}`] },
+      { id: invoice.id, document: documentOf(invoice), earlier: ['2024-04-01 Invoice 17'] },
+    ]);
+    expect(found(storage, [lease, invoice])).toMatchObject({ fields: undefined, aside: [{ text: `${NAME}\n\n${SENTENCE}` }] });
+  });
+
+  it('is set aside when a name taken back is in storage again after a kill: the disk was behind', () => {
+    const storage = storageOf();
+    const first = launch(storage, [lease]);
+    first.drafts.set(lease.id, typedOver(lease, '2024-03-01 Lease WRONG'));
+    const behind = stored(storage)!;
+    // Back to Intern's proposal: out of storage at once, as far as the window can tell.
+    first.drafts.delete(lease.id);
+    expect(stored(storage)).toBeNull();
+    // Killed before that reached the disk: the next window finds the older copy.
+    storage.setItem(TYPED_KEY, behind);
+
+    expect(found(storage, [lease], lease.id, 'killed')).toMatchObject({ fields: undefined, aside: [{ text: '2024-03-01 Lease WRONG\n\nA lease of Unit 4, countersigned.' }] });
+  });
+
+  it('is marked as left by an ordinary close as the window goes, and the next window takes the mark out before anything else', () => {
+    const storage = storageOf();
+    const first = launch(storage, [lease]);
+    first.drafts.set(lease.id, typedOver(lease));
+    // No mark while the window is open.
+    expect(storage.getItem(CLOSED_KEY)).toBeNull();
+    first.closing();
+    expect(storage.getItem(CLOSED_KEY)).toBe('1');
+
+    storage.getItem.mockClear();
+    storage.setItem.mockClear();
+    storage.removeItem.mockClear();
+    const second = found(storage, [lease], lease.id, 'killed');
+    expect(second.fields).toMatchObject({ stem: NAME, description: SENTENCE });
+    // The mark is asked for and taken out before what was typed is read, and before anything is written.
+    expect(storage.getItem.mock.calls.map(([key]) => key)).toEqual([CLOSED_KEY, TYPED_KEY]);
+    expect(storage.removeItem.mock.calls).toEqual([[CLOSED_KEY]]);
+    expect(storage.removeItem.mock.invocationCallOrder[0]).toBeLessThan(storage.getItem.mock.invocationCallOrder[1]);
+    expect(storage.getItem(CLOSED_KEY)).toBeNull();
+    // So that window killed in its turn leaves none, and the same text is set aside at the start after it.
+    expect(found(storage, [lease], lease.id, 'killed')).toMatchObject({ fields: undefined, aside: [{ text: `${NAME}\n\n${SENTENCE}` }] });
+  });
+
+  it('is not marked where nothing is stored, nor by a window that stores again after all', () => {
+    const storage = storageOf();
+    const first = launch(storage, [lease]);
+    // Nothing typed: nothing is left in storage by closing.
+    first.closing();
+    expect(storage.length).toBe(0);
+    first.drafts.set(lease.id, typedOver(lease, 'typed'));
+    first.closing();
+    expect(storage.getItem(CLOSED_KEY)).toBe('1');
+    // The window was kept and is shown again; what it stores now was not left by an ordinary close.
+    first.drafts.set(lease.id, typedOver(lease));
+    expect(storage.getItem(CLOSED_KEY)).toBeNull();
+    expect(found(storage, [lease], lease.id, 'killed')).toMatchObject({ fields: undefined, aside: [{ text: `${NAME}\n\n${SENTENCE}` }] });
+    // Taken back and closed: nothing stored, so no mark either.
+    const third = launch(storage, [lease]);
+    third.earlier.delete(lease.id);
+    third.closing();
+    expect(storage.length).toBe(0);
+  });
+
+  it('is stored as the window goes when storage would not take it as it was typed, and marked then', () => {
+    const storage = storageOf();
+    const first = launch(storage, [lease]);
+    const write = storage.setItem.getMockImplementation()!;
+    storage.setItem.mockImplementation(() => { throw new DOMException('The quota has been exceeded.', 'QuotaExceededError'); });
+    first.drafts.set(lease.id, typedOver(lease));
+    expect(stored(storage)).toBeNull();
+    // Still refusing as the window goes: nothing stored, so nothing marked.
+    first.closing();
+    expect(storage.length).toBe(0);
+    // Room again by the time it goes: stored whole, and marked.
+    storage.setItem.mockImplementation(write);
+    first.closing();
+    expect(storage.getItem(CLOSED_KEY)).toBe('1');
+    expect(found(storage, [lease], lease.id, 'killed').fields).toMatchObject({ stem: NAME, description: SENTENCE });
+  });
+
+  it('takes a mark that cannot be read, or taken out, or written, for no mark, and throws nothing', () => {
+    const refusing = () => { throw new DOMException('The operation is insecure.', 'SecurityError'); };
+    const typed = () => { const storage = storageOf(); const first = launch(storage, [lease]); first.drafts.set(lease.id, typedOver(lease)); return { storage, first }; };
+
+    // The mark cannot be read.
+    const unread = typed();
+    unread.first.closing();
+    const read = unread.storage.getItem.getMockImplementation()!;
+    unread.storage.getItem.mockImplementation((key: string) => (key === CLOSED_KEY ? refusing() : read(key)));
+    expect(found(unread.storage, [lease], lease.id, 'killed')).toMatchObject({ fields: undefined, aside: [{ text: `${NAME}\n\n${SENTENCE}` }] });
+
+    // It cannot be taken out: it would still be there for the window after this one, whatever became of this one.
+    const stuck = typed();
+    stuck.first.closing();
+    const remove = stuck.storage.removeItem.getMockImplementation()!;
+    stuck.storage.removeItem.mockImplementation((key: string) => (key === CLOSED_KEY ? refusing() : remove(key)));
+    expect(found(stuck.storage, [lease], lease.id, 'killed')).toMatchObject({ fields: undefined, aside: [{ text: `${NAME}\n\n${SENTENCE}` }] });
+
+    // It cannot be written: the window closes all the same, and the next sets aside what it finds.
+    const unwritten = typed();
+    const write = unwritten.storage.setItem.getMockImplementation()!;
+    unwritten.storage.setItem.mockImplementation((key: string, value: string) => (key === CLOSED_KEY ? refusing() : write(key, value)));
+    expect(() => unwritten.first.closing()).not.toThrow();
+    expect(found(unwritten.storage, [lease], lease.id, 'killed')).toMatchObject({ fields: undefined, aside: [{ text: `${NAME}\n\n${SENTENCE}` }] });
+    // No storage at all, or one the window refuses to hand over.
+    expect(() => launch(undefined, [lease]).closing()).not.toThrow();
+    const refused = keepTypedBetweenLaunches(refusing, () => {});
+    refused.queueIs([lease], true);
+    refused.drafts.set(lease.id, typedOver(lease));
+    expect(() => refused.closing()).not.toThrow();
+  });
+
+  it('is typed over the reading its document has now, once what was typed before was taken back', () => {
+    const again = { ...lease, readBy: { tier: 'fast' as const, modelId: 'fast-b', displayName: 'Fast' } };
+    for (const takenBack of ['one draft deleted', 'every draft cleared'] as const) {
+      const storage = storageOf();
+      const first = launch(storage, [lease]);
+      first.drafts.set(lease.id, typedOver(lease, '2024-03-01 Lease of'));
+      // Taken back; then read again by another model to the same name and sentence; then typed over that.
+      if (takenBack === 'one draft deleted') first.drafts.delete(lease.id); else first.drafts.clear();
+      first.queueIs([again], true);
+      first.drafts.set(lease.id, typedOver(lease));
+      expect(found(storage, [again]), takenBack).toMatchObject({ fields: { stem: NAME, description: SENTENCE }, aside: [] });
+      // And not over the reading before it.
+      expect(found(storage, [lease]), takenBack).toMatchObject({ fields: undefined, aside: [{ text: `${NAME}\n\n${SENTENCE}` }] });
+    }
   });
 
   it('is stored in the change itself, so closing the window straight after a letter loses nothing', () => {
@@ -219,6 +382,7 @@ describe('what was typed in review and not filed, through closing Intern', () =>
   it('is not put back, and storage is left as it is, until the queue has been read', () => {
     const storage = storageOf();
     launch(storage, [lease]).drafts.set(lease.id, typedOver(lease));
+    closedOrdinarily(storage);
     const before = stored(storage);
     storage.getItem.mockClear();
     storage.setItem.mockClear();
@@ -229,11 +393,21 @@ describe('what was typed in review and not filed, through closing Intern', () =>
     kept.queueIs([], false);
     kept.queueIs([], false);
     expect(kept.drafts.size).toBe(0);
+    // Closed in the ordinary way before its queue could be read, it has dropped nothing, and the mark of the window before is as it was.
+    kept.closing();
     expect(storage.getItem).not.toHaveBeenCalled();
     expect(storage.setItem).not.toHaveBeenCalled();
     expect(storage.removeItem).not.toHaveBeenCalled();
-    // A window closed before its queue could be read has dropped nothing.
+    storage.getItem.mockClear();
     expect(stored(storage)).toBe(before);
+    expect(storage.getItem(CLOSED_KEY)).toBe('1');
+    // Nor has it marked what a window before it left unmarked: that would pass a kill off as an ordinary close.
+    const unmarked = storageOf({ [TYPED_KEY]: before! });
+    const unread = keepTypedBetweenLaunches(() => unmarked, () => {});
+    unread.queueIs([], false);
+    unread.closing();
+    expect(unmarked.getItem(CLOSED_KEY)).toBeNull();
+    expect(found(unmarked, [lease], lease.id, 'killed')).toMatchObject({ fields: undefined, aside: [{ text: `${NAME}\n\n${SENTENCE}` }] });
     kept.queueIs([lease], true);
     expect(kept.drafts.get(lease.id)).toMatchObject({ stem: NAME, description: SENTENCE });
     // Once: a queue read again later puts nothing back that has since been dropped, and storage is not read for it again.
@@ -255,7 +429,8 @@ describe('what was typed in review and not filed, through closing Intern', () =>
     storage.removeItem.mockClear();
 
     launch(storage, [lease, invoice, unreadable]);
-    expect(storage.removeItem).not.toHaveBeenCalled();
+    // Only the mark of the window before is taken out.
+    expect(storage.removeItem.mock.calls).toEqual([[CLOSED_KEY]]);
     for (const [, value] of storage.setItem.mock.calls) {
       for (const text of [NAME, '2024-04-01 Invoice 17', '2024-05-05 Fax']) expect(value).toContain(text);
     }
@@ -267,6 +442,7 @@ describe('what was typed in review and not filed, through closing Intern', () =>
     first.drafts.set(lease.id, typedOver(lease, 'stored'));
     first.drafts.set(invoice.id, typedOver(invoice, '2024-04-01 Invoice 17', ''));
     const before = stored(storage);
+    closedOrdinarily(storage);
     const kept = keepTypedBetweenLaunches(() => storage, () => {});
     kept.queueIs([], false);
     kept.drafts.set(lease.id, typedOver(lease, 'typed since'));
@@ -547,6 +723,7 @@ describe('what was typed in review and not filed, through closing Intern', () =>
   it('says so when a document gains or loses a draft as it is put back', async () => {
     const storage = storageOf();
     launch(storage, [lease]).drafts.set(lease.id, typedOver(lease));
+    closedOrdinarily(storage);
     const onChange = vi.fn();
     const kept = keepTypedBetweenLaunches(() => storage, onChange);
     kept.queueIs([lease], true);

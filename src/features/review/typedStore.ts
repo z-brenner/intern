@@ -18,6 +18,17 @@ import type { EarlierDrafts, ReviewDrafts } from './drafts';
 export const TYPED_KEY = 'intern.typedInReview.v1';
 
 /**
+ * The mark that the window which stored the value above closed in the
+ * ordinary way: written as the window goes (`pagehide`), with what was
+ * typed as it stood then, and taken out again by the next window before it
+ * reads or writes anything else. A window that finds what was typed and no
+ * mark does not know how the one before it ended - killed, the power cut,
+ * or one of the ways out that end the process with no word to the page -
+ * and so does not know that the stored text is the last there was.
+ */
+export const CLOSED_KEY = 'intern.typedInReview.closed';
+
+/**
  * How much is stored. A name that can be filed is at most 512 bytes
  * (MAX_FILENAME_BYTES) and a description is a sentence or two, so a name or
  * a description longer than these is not stored; nor is a document's typing
@@ -181,6 +192,8 @@ export interface TypedBetweenLaunches {
    * the first queue that was read.
    */
   queueIs(items: readonly QueueItem[], read: boolean): void;
+  /** The window is going in the ordinary way (`pagehide`): what is stored is marked as left by an ordinary close. */
+  closing(): void;
 }
 
 /**
@@ -202,21 +215,55 @@ export interface TypedBetweenLaunches {
  * the browser killed 2 s after the last letter, none of it was, and 8 s
  * after, all of it; a letter every half second for 40 s and then killed,
  * the disk had the first 5 s of them. A name taken back with Back to
- * Intern's proposal just before such a kill was in its field again at the
+ * Intern's proposal just before such a kill was in storage again at the
  * next start. So after a kill or a power cut what comes back can be half
  * a minute old or more: its last letters missing, something since dropped
  * back. The desktop window's engine (WebView2) has not been run for this.
  *
+ * So what comes back goes into the fields only after an ordinary close.
+ * As the window goes (`closing`, on `pagehide`) what is stored is marked
+ * (`CLOSED_KEY`); the next window takes the mark out before anything else
+ * and, where it found none, sets aside everything it puts back: read-only
+ * beside the document, where no key and no press files it. A kill and a
+ * power cut leave no mark. Measured in Chromium with a profile on disk,
+ * one run each: the window closed straight after the last letter, the name
+ * was in its field at the next start; typed, left 8 s, taken back and
+ * killed at once - the case above - it was set aside, the field Intern's
+ * proposal; the same typed, left 8 s and filed, or just left 8 s, before
+ * the kill. The whole browser closed by the test driver, not the window by
+ * itself, left no mark (nothing a page wrote on `pagehide`, `unload` or
+ * `visibilitychange` was there afterwards, 2 of 2), and the name was set
+ * aside.
+ *
+ * The desktop window has not been run. Two of its ways out leave no mark:
+ * Quit Intern in the notification area and the restart after an update end
+ * the process with no word to the page - and where Intern stays in the
+ * background, closing the window only hides it, so Quit is the one way
+ * out. Whether its window sends `pagehide` when it does close in the
+ * ordinary way has not been observed; where it does not, what was typed
+ * always comes back set aside, to be copied into its field by hand.
+ *
+ * One case is left in which an older copy comes back in the fields. A
+ * window that started after an ordinary close and is killed before its
+ * first change to the storage has reached the disk - the mark's removal is
+ * that first change - leaves the disk as the window before it did, mark
+ * and all, whatever was taken back in those seconds. Measured as above: a
+ * name taken back 1.7, 3.1 and 5.0 s after such a start, and the browser
+ * killed at once, was in its field at the start after; taken back 9.0 and
+ * 21 s after, it was set aside.
+ *
  * Put back once, when the queue has first been read - never before, when an
  * empty list would say every document had gone, and nothing is written
- * until then, so a queue that cannot be read leaves what is stored for the
- * next launch. Each document's typing goes back to where the window would
- * have it now. The document is in the queue under the reading it was typed
- * over, and can be filed: in the fields. It is there with another reading
- * (`readingOf`), or cannot be filed as it stands: set aside, after whatever
- * was set aside for it before, read-only beside the document as it now is.
- * The document is not in the queue, or its number is another document's
- * (`documentOf`): dropped. Nothing takes the focus for any of it.
+ * until then, so a queue that cannot be read leaves what is stored, and its
+ * mark, for the next launch. Each document's typing goes back to where the
+ * window would have it now. The document is in the queue under the reading
+ * it was typed over, can be filed, and the window before closed in the
+ * ordinary way: in the fields. It is there with another reading
+ * (`readingOf`), or cannot be filed as it stands, or there is no mark: set
+ * aside, after whatever was set aside for it before, read-only beside the
+ * document as it now is. The document is not in the queue, or its number is
+ * another document's (`documentOf`): dropped. Nothing takes the focus for
+ * any of it.
  *
  * Storage that cannot be read or written changes nothing in the window: it
  * keeps what is typed while it is open, as it did before. A write that
@@ -229,6 +276,8 @@ export function keepTypedBetweenLaunches(storage: () => Storage | undefined, onC
   let restoring = false;
   // What storage holds, as far as this window knows: a value, `null` for none, `undefined` for not known.
   let written: string | null | undefined;
+  // Whether this window has marked what is stored as left by an ordinary close (`closing`).
+  let marked = false;
   // The reading each draft was typed over, found while the queue showed it, and the document each number means.
   const readings = new Map<string, { for: string; reading: string }>();
   const documents = new Map<string, string>();
@@ -288,6 +337,8 @@ export function keepTypedBetweenLaunches(storage: () => Storage | undefined, onC
     let store: Storage | undefined;
     try {
       store = storage();
+      // The window is still here after all (a page kept and shown again): what it stores from now on is not what an ordinary close left.
+      if (marked) { store?.removeItem(CLOSED_KEY); marked = false; }
       if (next === null) store?.removeItem(TYPED_KEY); else store?.setItem(TYPED_KEY, next);
       written = next;
     } catch {
@@ -300,13 +351,32 @@ export function keepTypedBetweenLaunches(storage: () => Storage | undefined, onC
     if (id !== undefined) changedAt.set(id, changes += 1);
     save();
   };
-  const drafts = told(watchedDrafts(onChange), changed);
+  const drafts = told(watchedDrafts(onChange), (id) => {
+    // A draft that is gone takes with it the reading it was typed over: what
+    // is typed for the document next is typed over the reading it has then.
+    if (id === undefined) readings.clear(); else if (!drafts.has(id)) readings.delete(id);
+    changed(id);
+  });
   const earlier: EarlierDrafts = told(new Map(), changed);
+
+  /** Whether the window before this one marked what it stored as it closed. The mark is taken out: it was that window's. */
+  const closedOrdinarily = (): boolean => {
+    try {
+      const store = storage();
+      const mark = store?.getItem(CLOSED_KEY) ?? null;
+      if (mark !== null) store?.removeItem(CLOSED_KEY);
+      return mark !== null;
+    } catch {
+      // A mark that cannot be read, or cannot be taken out, is no mark.
+      return false;
+    }
+  };
 
   const restore = () => {
     restored = true;
     restoring = true;
     try {
+      const ordinary = closedOrdinarily();
       const listed = new Map(items.map((item) => [item.id, item]));
       for (const stored of storedTyped(storage())) {
         const item = listed.get(stored.id);
@@ -315,7 +385,7 @@ export function keepTypedBetweenLaunches(storage: () => Storage | undefined, onC
         const aside = (stored.earlier ?? []).map((text) => keptText(text, true));
         if (stored.draft) {
           const { reading, stem, description } = stored.draft;
-          if (reading === readingOf(item) && itemActions(item).approve) drafts.set(item.id, { item: item.id, for: proposalOf(item), stem, description, edited: true });
+          if (ordinary && reading === readingOf(item) && itemActions(item).approve) drafts.set(item.id, { item: item.id, for: proposalOf(item), stem, description, edited: true });
           else aside.push(keptText(nameThenDescription(stem, description), true));
         }
         if (aside.length > 0) earlier.set(item.id, aside);
@@ -336,6 +406,16 @@ export function keepTypedBetweenLaunches(storage: () => Storage | undefined, onC
     queueIs(list, read) {
       items = list;
       if (read && !restored) restore();
+    },
+    closing() {
+      // What storage would not take as it was typed is tried once more.
+      save();
+      // Only what this window wrote whole is marked. Nothing where nothing
+      // is stored; and nothing before the queue was read, when this window
+      // has written nothing and taken no mark out: what is there then is as
+      // the window before left it, with its mark or without.
+      if (typeof written !== 'string') return;
+      try { storage()?.setItem(CLOSED_KEY, '1'); marked = true; } catch { /* Not marked: the next window sets aside what it finds. */ }
     },
   };
 }

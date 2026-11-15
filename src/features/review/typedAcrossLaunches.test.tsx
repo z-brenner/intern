@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
@@ -16,9 +16,13 @@ import { TYPED_KEY } from './typedStore';
   It is stored as it changes, and put back when Intern starts and reads its
   queue: in the fields when the document has the reading it was typed over,
   set aside read-only beside another, dropped with a document that is no
-  longer in the queue. Here closing Intern is taking the window down, and
-  starting it is a new window on a queue of its own; what is stored is what
-  jsdom's storage holds between the two.
+  longer in the queue. In the fields only after an ordinary close: a window
+  that went with no word to the page (killed, the power cut) leaves no mark
+  in storage, and what the next one finds is all set aside. Here closing
+  Intern is the window told it is going (`pagehide`) and taken down, a kill
+  is the window taken down untold, and starting it is a new window on a
+  queue of its own; what is stored is what jsdom's storage holds between
+  the two.
 */
 describe('what was typed in review and not filed, after Intern is closed and opened', () => {
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -45,7 +49,8 @@ describe('what was typed in review and not filed, after Intern is closed and ope
   /**
    * Intern starting: a window on a queue as the demo starts with it, or with
    * `changed` made of it while Intern was closed - a document's fields, or
-   * `'gone'`. `close` takes the window down.
+   * `'gone'`. `close` takes the window down as an ordinary close does, the
+   * page told first; `kill` takes it down untold.
    */
   const launch = async (changed: Record<string, Partial<QueueItem> | 'gone'> = {}, options: Parameters<typeof createInMemoryBridge>[0] = {}) => {
     const base = createInMemoryBridge(options);
@@ -62,7 +67,7 @@ describe('what was typed in review and not filed, after Intern is closed and ope
     };
     const view = render(<App bridge={bridge} />);
     await screen.findByRole('grid', { name: 'Queue' }, { timeout: 5000 });
-    return { bridge, close: () => view.unmount() };
+    return { bridge, close: () => { window.dispatchEvent(new Event('pagehide')); view.unmount(); }, kill: () => view.unmount() };
   };
   const panel = () => screen.queryByRole('complementary', { name: 'Review item' }) ?? screen.queryByRole('dialog', { name: 'Review item' });
   const filename = () => screen.getByLabelText('Filename');
@@ -106,6 +111,90 @@ describe('what was typed in review and not filed, after Intern is closed and ope
     // Filed, it is what was typed that is filed.
     fireEvent.click(screen.getByRole('button', { name: /Approve & rename/ }));
     await waitFor(() => expect(third.bridge.approve).toHaveBeenCalledWith('lease', `${TYPED}.pdf`, DESCRIBED));
+  });
+
+  it('is set aside, not in its fields, when the window before went without closing in the ordinary way', async () => {
+    windowOf(false);
+    const first = await launch();
+    await openDetails(LEASE);
+    type();
+    first.kill();
+
+    // The Lease as it was typed over, and all the same its fields are Intern's proposal: what was typed is beside them, read-only.
+    const second = await launch();
+    await waitFor(() => expect(panel()).toHaveTextContent(LEASE));
+    expectProposed();
+    expect(kept()).toHaveLength(1);
+    expect(kept()[0]).toHaveValue(`${TYPED}\n\n${DESCRIBED}`);
+    expect(kept()[0]).toHaveAttribute('readonly');
+    expect(document.body).toHaveFocus();
+    expect(screen.queryByRole('button', { name: 'Back to Intern\'s proposal' })).not.toBeInTheDocument();
+    // Closed in the ordinary way this time: set aside is how it stays.
+    second.close();
+    const third = await launch();
+    await waitFor(() => expect(panel()).toHaveTextContent(LEASE));
+    expectProposed();
+    expect(kept()[0]).toHaveValue(`${TYPED}\n\n${DESCRIBED}`);
+    // What is filed is the name on screen, not the one that was put back.
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/ }));
+    await waitFor(() => expect(third.bridge.approve).toHaveBeenCalledWith('lease', `${PROPOSED}.pdf`, PROPOSED_DESCRIPTION));
+  });
+
+  it('goes from storage with a document that Discard waiting or Clear history takes out of the queue, and with no other', async () => {
+    windowOf(false);
+    type Changing = { change(id: string, change: Partial<QueueItem>): void };
+    const EMPLOYMENT_TYPED = '2024-01-15 Employment Agreement, signed copy';
+    /** A window with something typed for the Employment Agreement and for the Lease, and the Lease then changed by itself. */
+    const typedThenChanged = async (change: Partial<QueueItem>, bridgeOver: (base: ReturnType<typeof createInMemoryBridge>) => Partial<ReturnType<typeof createInMemoryBridge>> = () => ({})) => {
+      window.localStorage.clear();
+      let queue: Changing | undefined;
+      const base = createInMemoryBridge({ liveEvents: true, byItself: (changing) => { queue = changing; } });
+      const view = render(<App bridge={{ ...base, ...bridgeOver(base) }} />);
+      await screen.findByRole('grid', { name: 'Queue' }, { timeout: 5000 });
+      await openDetails(EMPLOYMENT);
+      fireEvent.change(filename(), { target: { value: EMPLOYMENT_TYPED } });
+      selectRow(LEASE);
+      await waitFor(() => expect(panel()).toHaveTextContent(LEASE));
+      type();
+      await act(async () => { queue!.change('lease', change); await new Promise((resolve) => setTimeout(resolve, 0)); });
+      await waitFor(() => expect(window.localStorage.getItem(TYPED_KEY)).toContain('"earlier"'));
+      expect(window.localStorage.getItem(TYPED_KEY)).toContain(TYPED);
+      return view;
+    };
+    const discardWaiting = async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'More queue actions' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Discard waiting items' }));
+      await waitFor(() => expect(said()).toHaveTextContent(/^Discarded \d+ waiting items\.$/));
+    };
+
+    // The Lease went back to waiting by itself, with what was typed for it set aside; Discard waiting takes it out of the queue.
+    let view = await typedThenChanged({ status: 'waiting', proposedFilename: undefined, description: undefined });
+    await discardWaiting();
+    expect(screen.queryByText(LEASE)).not.toBeInTheDocument();
+    // What was typed for it is out of storage now, not at the next start; what was typed for a document still in the queue stays.
+    expect(window.localStorage.getItem(TYPED_KEY)).not.toContain(TYPED);
+    expect(window.localStorage.getItem(TYPED_KEY)).toContain(EMPLOYMENT_TYPED);
+    view.unmount();
+
+    // Filed from somewhere else, it is in the history; Clear history takes it out.
+    view = await typedThenChanged({ status: 'completed', filedName: `${PROPOSED}.pdf` });
+    fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear history' }));
+    await waitFor(() => expect(said()).toHaveTextContent('History cleared.'));
+    expect(window.localStorage.getItem(TYPED_KEY)).not.toContain(TYPED);
+    expect(window.localStorage.getItem(TYPED_KEY)).toContain(EMPLOYMENT_TYPED);
+    view.unmount();
+
+    // The queue could not be read after the command: nothing says the Lease is gone, and what was typed for it stays where it was.
+    let unreadable = false;
+    view = await typedThenChanged({ status: 'waiting', proposedFilename: undefined, description: undefined }, (base) => ({
+      discardWaiting: async () => { const count = await base.discardWaiting(); unreadable = true; return count; },
+      listItems: async () => { if (unreadable) throw new Error('The queue could not be read.'); return base.listItems(); },
+    }));
+    await discardWaiting();
+    expect(window.localStorage.getItem(TYPED_KEY)).toContain(TYPED);
+    expect(window.localStorage.getItem(TYPED_KEY)).toContain(EMPLOYMENT_TYPED);
+    view.unmount();
   });
 
   it('is in the document\'s drawer when asked for in a narrow window, which opens nothing as it starts', async () => {
