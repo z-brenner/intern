@@ -41,7 +41,7 @@ use crate::extract::{
     OLE_MAGIC, PageSource, anydoc_document, enforce_office_decompressed_limit, link_sections,
     reject_encrypted_ole,
 };
-use crate::limits::ResourceLimits;
+use crate::limits::{MAX_PAGE_COUNT, ResourceLimits};
 
 /// Rows rendered per sheet before elision.
 pub const MAX_SHEET_ROWS: usize = 200;
@@ -843,7 +843,11 @@ fn formula_expressions(stream: &[u8]) -> Result<Vec<usize>, ExtractionError> {
 /// Only an Excel 97-2003 stream is read (`BOF` version 0x0600, the
 /// workbook's and each sheet's): older ones size their tokens differently,
 /// and are left unmarked. So is a password-protected one, whose records
-/// are noise. No more than [`MAX_LEGACY_VOLATILE_CELLS`] cells are
+/// are noise, and so is a workbook that lists more sheets than a document
+/// may have pages ([`MAX_PAGE_COUNT`]): the limits the worker runs with
+/// refuse it a few lines on, and a forged stream can list sheets by the
+/// million, each of which would be given a list of its own here before
+/// that. No more than [`MAX_LEGACY_VOLATILE_CELLS`] cells are
 /// remembered for a workbook, and the cells past them go unmarked. A
 /// panic here would be this function's own fault and not the document's,
 /// so one ends the marking and nothing else.
@@ -852,6 +856,9 @@ fn legacy_volatile_cells(stream: &[u8]) -> Vec<Vec<(u32, u32)>> {
         let Ok(globals) = read_globals(stream) else {
             return Vec::new();
         };
+        if globals.sheet_offsets.len() > MAX_PAGE_COUNT {
+            return Vec::new();
+        }
         let is_biff8 = |offset: usize| {
             biff_records(stream, offset)
                 .next()
@@ -2278,6 +2285,26 @@ mod tests {
             cells.iter().map(Vec::len).collect::<Vec<_>>(),
             [60_000, MAX_LEGACY_VOLATILE_CELLS - 60_000, 0]
         );
+    }
+
+    /// A workbook that lists more sheets than a document may have pages is
+    /// refused by the survey, and is not walked for its formulas first: a
+    /// list of cells is made for every sheet listed, and a forged stream
+    /// can list them by the million. At the limit every sheet is still
+    /// read.
+    #[test]
+    fn a_binary_workbook_that_lists_more_sheets_than_the_page_limit_is_not_walked() {
+        let sheet = vec![formula(0, 0, &[0x41, 0xDD, 0x00])];
+        let at_the_limit = biff8_workbook_of(&vec![sheet.clone(); MAX_PAGE_COUNT]);
+        let cells = legacy_volatile_cells(&at_the_limit);
+        assert_eq!(cells.len(), MAX_PAGE_COUNT);
+        assert!(cells.iter().all(|cells| cells == &[(0, 0)]));
+        survey_legacy_workbook(&at_the_limit, &ResourceLimits::default()).unwrap();
+
+        let one_more = biff8_workbook_of(&vec![sheet; MAX_PAGE_COUNT + 1]);
+        assert!(legacy_volatile_cells(&one_more).is_empty());
+        let error = survey_legacy_workbook(&one_more, &ResourceLimits::default()).unwrap_err();
+        assert_eq!(error.code(), "RESOURCE_LIMIT_EXCEEDED");
     }
 
     /// Sheet B starts two bytes before sheet A's expression length, so that
