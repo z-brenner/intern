@@ -394,8 +394,11 @@ describe('the warning in Settings', () => {
       if (this.classList.contains('save-warning')) return rect(623, 88);
       if (this.classList.contains('dialog-body')) return rect(91, 517);
       if (this.tagName === 'LABEL' && this.textContent === 'Automatically rename ready documents') return rect(lineEnds - 26, 26);
-      // Save is under the warning, in the footer: lower than the sections' view ends, and not theirs to scroll to.
+      // Save is under the warning, in the footer, 12px below its box.
       if (this.textContent === 'Save settings') return rect(723, 42);
+      // Not where it is drawn: given the checkbox's place, to see that a control outside the sections is not
+      // scrolled for, wherever it is.
+      if (this.getAttribute('aria-label') === 'Close settings') return rect(lineEnds - 26, 26);
       return rect(0, 0);
     });
     const open = async (typed: TypedWaiting) => {
@@ -431,13 +434,15 @@ describe('the warning in Settings', () => {
       expect(settings.sections.scrollTop).toBe(0);
       settings.unmount();
 
-      // The focus on Save, which is not in the sections: nothing of theirs to keep in view.
-      settings = await open({ ready: 1, review: 0 });
-      saveButton(settings.dialog).focus();
-      fireEvent.click(automatic(settings.dialog));
-      expect(warning(settings.dialog)).toHaveTextContent(ONE);
-      expect(settings.sections.scrollTop).toBe(0);
-      settings.unmount();
+      // The focus on a control that is not in the sections: nothing of theirs to keep in view.
+      for (const outside of ['Save settings', 'Close settings']) {
+        settings = await open({ ready: 1, review: 0 });
+        within(settings.dialog).getByRole('button', { name: outside }).focus();
+        fireEvent.click(automatic(settings.dialog));
+        expect(warning(settings.dialog)).toHaveTextContent(ONE);
+        expect(settings.sections.scrollTop, outside).toBe(0);
+        settings.unmount();
+      }
 
       // The checkbox's line whole above the footer: it is in view as it is.
       lineEnds = 600;
