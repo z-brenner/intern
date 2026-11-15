@@ -1,5 +1,7 @@
 import { LocalModel } from '../features/settings/LocalModel';
 import { ReviewLevelChoice } from '../features/settings/ReviewLevel';
+import { NOTHING_TYPED, renamedOverTyped, typedWarning } from '../features/settings/savingOverTyped';
+import type { TypedWaiting } from '../features/settings/savingOverTyped';
 import { useModelSetup } from '../features/setup/useModelSetup';
 import { IntakeHealthNotice } from '../features/intake/IntakeHealth';
 import { MicrosoftIntakeSettings } from '../features/intake/MicrosoftIntakeSettings';
@@ -223,6 +225,13 @@ interface Props {
   hideSharePointConnection?: boolean;
   /** Open guided folder setup in place of this dialog. */
   onChooseFolder?(): void;
+  /**
+   * How many documents in the queue have a name or a description a person
+   * typed and did not file, as the window knows it now (`typedWaiting`). The
+   * backend does not, and a save that lets Intern rename them by itself
+   * says so first. None where there is no queue yet.
+   */
+  typed?: TypedWaiting;
 }
 
 /**
@@ -235,11 +244,29 @@ interface ExistingDocuments {
   process: boolean;
 }
 
-export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, renameApplying = false, hideSharePointConnection = false, onChooseFolder }: Props) {
+export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, renameApplying = false, hideSharePointConnection = false, onChooseFolder, typed = NOTHING_TYPED }: Props) {
   const [next, setNext] = useState(settings);
   // Where each local model is, live while one downloads behind the window.
   const localModel = useModelSetup(bridge, selection);
   const shortOwnNames = tooShortOwnNames(next.ourNames);
+  // What this save can do to documents a person was naming, in words, or
+  // nothing (savingOverTyped). Worked out at each render, so it follows the
+  // draft and the queue: the count changes, and the warning comes and goes,
+  // as documents are read or filed elsewhere while the dialog is open.
+  const overTyped = typedWarning(renamedOverTyped(settings, next, typed));
+  // The room the warning takes above Save: its own height, and how far it
+  // pushes the row under it. Measured where it is drawn, since its lines
+  // break by the font. Once taken, the room is not given back while the
+  // dialog is open (see the footer, and the end of the sections).
+  const overTypedBox = useRef<HTMLParagraphElement>(null);
+  const [overTypedRoom, setOverTypedRoom] = useState({ box: 0, row: 0 });
+  useLayoutEffect(() => {
+    const box = overTypedBox.current?.getBoundingClientRect();
+    const below = overTypedBox.current?.nextElementSibling?.getBoundingClientRect();
+    if (!box || !below) return;
+    const now = { box: box.height, row: below.top - box.top };
+    setOverTypedRoom((room) => room.box === now.box && room.row === now.row ? room : now);
+  }, [overTyped]);
   const [status, setStatus] = useState<UpdateStatus>();
   const [checking, setChecking] = useState(false);
   const [installing, setInstalling] = useState(false);
@@ -753,9 +780,43 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           <button type="button" className="link-out" onClick={() => void runGuide()}>Open the guide<Icon icon={ExternalLink} /></button>
         </div>
         <p className="check-hint">Opens in your browser.</p>
+        {/*
+          The room the warning above Save took, kept here once it has gone.
+          While it shows, the sections are that much shorter and scroll that
+          much further. Without this they would lose that at the moment it
+          goes, and a person who had scrolled to their end would have every
+          one of them move down under the pointer, by itself.
+        */}
+        {!overTyped && overTypedRoom.row > 0 && <div aria-hidden="true" style={{ height: overTypedRoom.row }} />}
       </section>
     </div>
     <div className="dialog-actions">
+      {/*
+        What this save can do to documents a person was naming, said before
+        it is pressed. Words only: Save is not held back, and nothing here
+        acts.
+
+        Above Save, not beside the two choices it follows from. The footer
+        stays in view wherever the sections are scrolled to, so it is seen as
+        either choice is made; the line under the checkbox is below the fold
+        at 800 by 600 when Balanced is chosen. And it comes and goes by
+        itself: under the checkbox, every section after it would move each
+        time, buttons and all, under a pointer at rest. Here nothing moves.
+        The dialog is as tall as the window lets it be, so the footer grows
+        upward: Save and the sections stay where they are, and the sections
+        lose their last lines from view. It never grows smaller again while
+        the dialog is open, which would move the sections of a person who had
+        scrolled to their end: a count that takes fewer lines is shown in the
+        room the longer one took, and when the warning goes the sections keep
+        its room at their end.
+
+        One case is not looked after. In a window over about 1070px high,
+        with every section closed, the dialog is shorter than the window
+        lets it be. A warning that first appears then, by itself, makes it
+        taller about its middle: the sections go up and Save down, by up to
+        half the warning's height. After that it has its room.
+      */}
+      {overTyped && <p ref={overTypedBox} className="save-warning" role="alert" style={overTypedRoom.box ? { minHeight: overTypedRoom.box } : undefined}>{overTyped}</p>}
       {saveError && <p className="form-error save-error" role="alert">{saveError}</p>}
       <button type="button" className="primary" disabled={saving} onClick={() => void runSave()}>{saving ? 'Saving…' : 'Save settings'}</button>
     </div>

@@ -47,6 +47,7 @@ import { useReviewShortcuts } from './features/review/useReviewShortcuts';
 import type { ReviewInspectorHandle } from './features/review/useReviewShortcuts';
 import { modelReady, useModelSetup } from './features/setup/useModelSetup';
 import { accuracyStatus } from './features/settings/LocalModel';
+import { typedWaiting } from './features/settings/savingOverTyped';
 import type { AddReport, AppSettings, QueueItem, QueueView, SetupState } from './types';
 
 type Gate =
@@ -418,6 +419,14 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // filed as proposed, what they typed was gone without a word. Its count
   // is of what it will rename.
   const readyUntyped = readyItems.filter((item) => !typedOver(item.id));
+  // Automatic renaming has no such care: the backend renames whatever is
+  // ready and does not know what was typed here. So Settings is told how
+  // many documents that is, and warns before a save that would let Intern
+  // rename them (savingOverTyped). Counted at each render, so the warning
+  // follows the queue and what is typed while Settings is open. Both
+  // Settings dialogs are given it: the queue is read behind the setup
+  // screen too, and until it has been read there is nothing to count.
+  const typedNotFiled = typedWaiting(items, typedOver);
   // Installing an update hands Intern to the installer, which closes it. A
   // rename in its applying stage is the one piece of work that cannot be
   // canceled, and closing underneath it leaves the journal to finish the move
@@ -1053,7 +1062,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       onCancel={model.cancel}
       onChooseExisting={model.chooseExisting}
     />
-    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={() => setSettingsOpen(false)} onSave={async (next) => { await saveSettings(next); setSettingsOpen(false); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
+    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={() => setSettingsOpen(false)} onSave={async (next) => { await saveSettings(next); setSettingsOpen(false); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} typed={typedNotFiled} />}
   </>;
   return <main className="app-shell" aria-label="Intern">
     <p className="sr-only" role="status" aria-label="Queue status" aria-live="polite" aria-atomic="true">{queueStatus}</p>
@@ -1222,7 +1231,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     </div>
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))}
       notes={new Map(renamedWithNotes.map((item) => [item.id, { label: checkText(item), text: itemNote(item)?.text ?? '' }]))} onClose={closeHistory} />}
-    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next, after) => { await saveSettings(next); closeSettings(); void (after?.processExisting ? queueWhatIsThere() : refreshAfterSettings()); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
+    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next, after) => { await saveSettings(next); closeSettings(); void (after?.processExisting ? queueWhatIsThere() : refreshAfterSettings()); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} typed={typedNotFiled} />}
   </main>;
 }
 

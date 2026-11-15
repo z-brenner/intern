@@ -533,6 +533,9 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .check-label + .check-hint { margin-left: 26px; }
 .settings-dialog .primary { border: 0; min-height: 42px; padding: 0 16px; }
 .settings-dialog .save-error { margin: 0 0 4px; }
+/* What this save can do to documents a person was naming. Review's amber and
+   not an error's red: nothing has gone wrong, and Save is not held back. */
+.settings-dialog .save-warning { margin: 0 0 4px; padding: 8px 10px; border-left: 3px solid var(--review); border-radius: var(--radius-sm); background: var(--surface); font-size: 12.5px; line-height: 18px; color: var(--text); }
 .link-out svg { width: 16px; height: 16px; }
 
 .folder-row { display: flex; align-items: flex-end; gap: 10px; margin: 0 0 12px; }

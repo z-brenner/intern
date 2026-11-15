@@ -1,0 +1,655 @@
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { App } from '../../App';
+import { SettingsDialog } from '../../components/SettingsDialog';
+import { createInMemoryBridge } from '../../lib/inMemoryBridge';
+import { TauriBridge } from '../../lib/tauriBridge';
+import type { QueueEventSource } from '../../lib/tauriBridge';
+import type { AppSettings, QueueItem } from '../../types';
+import { openDetails, queueCell } from '../queue/gridTesting';
+import { keptText, typedAndNotFiled } from '../review/drafts';
+import type { EarlierDrafts, ReviewDrafts } from '../review/drafts';
+import { NOTHING_TYPED, renamedOverTyped, typedWaiting, typedWarning } from './savingOverTyped';
+import type { TypedWaiting } from './savingOverTyped';
+
+/*
+  With automatic renaming on, the backend renames every ready document nobody
+  has approved, and does not know what a person typed in review and did not
+  file. Two saves in Settings can so rename a document under the very name
+  its person was correcting: automatic renaming switched on while a ready
+  document has something typed for it, and Strict changed to Balanced with
+  automatic renaming on, which makes ready some of the documents waiting in
+  review. Settings says so, above Save, before either is saved.
+*/
+
+const ONE = '1 document has a name or a description you typed and did not file. When you save, Intern can rename it under its own name. You can file it first, or take back what you typed. What you typed is kept with the document, but is not filed.';
+const several = (count: number) => `${count} documents have a name or a description you typed and did not file. When you save, Intern can rename them under its own names. You can file them first, or take back what you typed. What you typed is kept with each document, but is not filed.`;
+
+/** Settings as an older backend sends them: no review level at all. */
+const older: AppSettings = { destination: 'D:\\Filed', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: 'D:\\In', intakeEnabled: true, intakeLocalOnly: true, processOthersUploads: false, machineLabel: 'Front desk', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'openai_compatible', hostedBaseUrl: '', hostedModel: '' };
+
+describe('the documents a save could rename over what was typed, counted', () => {
+  const row = (id: string, status: QueueItem['status'], more: Partial<QueueItem> = {}): QueueItem => ({ id, originalFilename: `${id}.pdf`, status, proposedFilename: `2024-05-01 ${id}.pdf`, ...more });
+  const items: QueueItem[] = [
+    row('ready-typed', 'ready'),
+    row('ready-plain', 'ready'),
+    row('ready-noted-typed', 'ready', { reasonCodes: ['TYPE_INFERRED'] }),
+    row('review-typed', 'review', { reasonCodes: ['LOW_CONFIDENCE'] }),
+    row('review-plain', 'review'),
+    row('review-set-aside', 'review'),
+    row('completed-typed', 'completed', { filedName: '2024-05-01 completed-typed.pdf', undoable: true }),
+    row('reading-typed', 'processing', { stage: 'reading' }),
+    row('renaming-typed', 'processing', { stage: 'filing', cancelable: false }),
+    row('waiting-typed', 'waiting', { proposedFilename: undefined }),
+    row('failed-typed', 'failed'),
+  ];
+  const typedFor = (...ids: string[]) => (id: string) => ids.includes(id);
+
+  it('counts ready documents and documents in review apart, and only those with something typed', () => {
+    expect(typedWaiting(items, typedFor('ready-typed', 'ready-noted-typed', 'review-typed'))).toEqual({ ready: 2, review: 1 });
+    expect(typedWaiting(items, typedFor('review-typed', 'review-set-aside'))).toEqual({ ready: 0, review: 2 });
+    expect(typedWaiting(items, typedFor())).toEqual(NOTHING_TYPED);
+    expect(typedWaiting([], typedFor('ready-typed'))).toEqual(NOTHING_TYPED);
+  });
+
+  it('does not count a document being read, renamed, failed, completed or not yet read, whatever was typed for it', () => {
+    expect(typedWaiting(items, typedFor('completed-typed', 'reading-typed', 'renaming-typed', 'waiting-typed', 'failed-typed'))).toEqual(NOTHING_TYPED);
+    // Everything typed for: still only the three ready and the three in review.
+    expect(typedWaiting(items, () => true)).toEqual({ ready: 3, review: 3 });
+  });
+
+  it('does not count what Intern has no name for or will not name by itself: an unreadable document, an approved one, a staged copy', () => {
+    const others: QueueItem[] = [
+      // Could not be read: it waits in review with no proposal, and a person types its name.
+      row('unreadable', 'review', { proposedFilename: undefined, errorCode: 'PASSWORD_PROTECTED' }),
+      // Approved by a person, waiting for the queue to be free: filed under what they approved.
+      row('approved', 'ready', { approved: true }),
+      // A duplicate staged as a copy: named after its original, by nobody.
+      row('copy', 'ready', { copyOf: '2024-05-01 original.pdf' }),
+    ];
+    expect(typedWaiting(others, () => true)).toEqual(NOTHING_TYPED);
+  });
+
+  it('takes typed as the window does: in the fields now, or set aside when the document changed, and never Intern\'s own proposal', () => {
+    const drafts: ReviewDrafts = new Map();
+    const earlier: EarlierDrafts = new Map();
+    const typed = (id: string) => typedAndNotFiled(drafts, earlier, id);
+    expect(typedWaiting(items, typed)).toEqual(NOTHING_TYPED);
+    // Shown in the panel and not changed: no edit.
+    drafts.set('ready-plain', { item: 'ready-plain', for: 'x', stem: '2024-05-01 ready-plain', description: '', edited: false });
+    drafts.set('review-plain', { item: 'review-plain', for: 'x', stem: '2024-05-01 review-plain', description: '', edited: false });
+    // Kept only to hold the caret when a field went: Intern's proposal, not typed.
+    earlier.set('review-plain', [keptText('2024-05-01 review-plain', false)]);
+    expect(typedWaiting(items, typed)).toEqual(NOTHING_TYPED);
+    drafts.set('ready-typed', { item: 'ready-typed', for: 'x', stem: '2024-05-01 My own name', description: '', edited: true });
+    drafts.set('review-typed', { item: 'review-typed', for: 'x', stem: '2024-05-01 Mine too', description: 'A sentence of mine.', edited: true });
+    expect(typedWaiting(items, typed)).toEqual({ ready: 1, review: 1 });
+    // Set aside when the document was read again, and still not filed.
+    earlier.set('review-set-aside', [keptText('2024-05-01 Typed before it was read again', true)]);
+    earlier.set('completed-typed', [keptText('2024-05-01 Typed before it was filed elsewhere', true)]);
+    expect(typedWaiting(items, typed)).toEqual({ ready: 1, review: 2 });
+    // Filed, taken back or discarded: no longer typed.
+    drafts.delete('review-typed');
+    earlier.delete('review-set-aside');
+    expect(typedWaiting(items, typed)).toEqual({ ready: 1, review: 0 });
+  });
+});
+
+describe('whether a save lets Intern rename them', () => {
+  const typed: TypedWaiting = { ready: 2, review: 5 };
+  const settings = (automaticRename: boolean, reviewLevel?: unknown): AppSettings => (reviewLevel === undefined ? { ...older, automaticRename } : { ...older, automaticRename, reviewLevel } as AppSettings);
+  // [automatic before, level before, automatic after, level after, the documents counted]
+  const cases: Array<[boolean, unknown, boolean, unknown, number]> = [
+    // Automatic renaming off once saved: nothing is renamed by itself.
+    [false, 'strict', false, 'strict', 0],
+    [false, 'strict', false, 'balanced', 0],
+    [false, 'balanced', false, 'strict', 0],
+    [true, 'strict', false, 'strict', 0],
+    [true, 'strict', false, 'balanced', 0],
+    [true, 'balanced', false, 'balanced', 0],
+    // Switched on by this save: the ready ones; and those in review too when the level goes to Balanced.
+    [false, 'strict', true, 'strict', 2],
+    [false, 'strict', true, 'balanced', 7],
+    [false, 'balanced', true, 'balanced', 2],
+    [false, 'balanced', true, 'strict', 2],
+    // On already: only the level going from Strict to Balanced makes anything ready.
+    [true, 'strict', true, 'strict', 0],
+    [true, 'strict', true, 'balanced', 5],
+    [true, 'balanced', true, 'balanced', 0],
+    [true, 'balanced', true, 'strict', 0],
+    // No level, or one this build does not know, is Strict.
+    [true, undefined, true, 'balanced', 5],
+    [false, undefined, true, undefined, 2],
+    [true, 'lenient', true, 'balanced', 5],
+    [true, 'balanced', true, 'lenient', 0],
+    [true, 'strict', true, 'lenient', 0],
+  ];
+  it.each(cases)('automatic %s at %s, saved as automatic %s at %s: %i', (automaticBefore, levelBefore, automaticAfter, levelAfter, count) => {
+    expect(renamedOverTyped(settings(automaticBefore, levelBefore), settings(automaticAfter, levelAfter), typed)).toBe(count);
+  });
+
+  it('counts none where nothing is typed, whatever is saved', () => {
+    for (const [automaticBefore, levelBefore, automaticAfter, levelAfter] of cases) {
+      expect(renamedOverTyped(settings(automaticBefore, levelBefore), settings(automaticAfter, levelAfter), NOTHING_TYPED)).toBe(0);
+    }
+  });
+
+  it('counts each kind only for the change that lets it be renamed', () => {
+    expect(renamedOverTyped(settings(false, 'strict'), settings(true, 'strict'), { ready: 0, review: 4 })).toBe(0);
+    expect(renamedOverTyped(settings(true, 'strict'), settings(true, 'balanced'), { ready: 4, review: 0 })).toBe(0);
+    expect(renamedOverTyped(settings(false, 'strict'), settings(true, 'balanced'), { ready: 1, review: 0 })).toBe(1);
+    expect(renamedOverTyped(settings(false, 'strict'), settings(true, 'balanced'), { ready: 0, review: 1 })).toBe(1);
+  });
+});
+
+describe('the warning\'s words', () => {
+  it('says how many documents, that Intern can rename them under its own names, what to do first, and where what was typed is afterwards', () => {
+    expect(typedWarning(1)).toBe(ONE);
+    expect(typedWarning(2)).toBe(several(2));
+    expect(typedWarning(14)).toBe(several(14));
+  });
+
+  it('is nothing for no document', () => {
+    expect(typedWarning(0)).toBe('');
+    expect(typedWarning(-1)).toBe('');
+  });
+
+  it('says "can", since not every document in review becomes ready, and has no long dash', () => {
+    for (const words of [ONE, several(3)]) {
+      expect(words).toContain('Intern can rename');
+      expect(words).not.toMatch(/\bwill\b/);
+      expect(words).not.toMatch(/[\u2012-\u2015]/);
+    }
+  });
+});
+
+const level = (dialog: HTMLElement) => within(dialog).getByRole('group', { name: 'Which documents are ready' });
+const strict = (dialog: HTMLElement) => within(level(dialog)).getByRole('radio', { name: /^Strict \(default\)/ });
+const balanced = (dialog: HTMLElement) => within(level(dialog)).getByRole('radio', { name: /^Balanced/ });
+const automatic = (dialog: HTMLElement) => within(dialog).getByRole('checkbox', { name: 'Automatically rename ready documents' });
+const saveButton = (dialog: HTMLElement) => within(dialog).getByRole('button', { name: 'Save settings' });
+/** The warning, or nothing: the one alert in Settings that speaks of what was typed. */
+const warning = (dialog: HTMLElement) => within(dialog).queryAllByRole('alert').find((alert) => alert.textContent?.includes('you typed and did not file')) ?? null;
+
+function renderDialog(settings: AppSettings, typed?: TypedWaiting) {
+  const onSave = vi.fn(async (_settings: AppSettings) => undefined);
+  const props = { bridge: createInMemoryBridge(), onSave, onClose: vi.fn(), onCheckForUpdate: async () => ({ state: 'unsupported' as const }), onInstallUpdate: async () => undefined };
+  const view = render(typed ? <SettingsDialog settings={settings} typed={typed} {...props} /> : <SettingsDialog settings={settings} {...props} />);
+  return { onSave, unmount: view.unmount, rerender: (next: AppSettings, counts: TypedWaiting) => view.rerender(<SettingsDialog settings={next} typed={counts} {...props} />) };
+}
+
+describe('the warning in Settings', () => {
+  it('comes and goes with the two choices: Strict to Balanced with automatic renaming on, for a document in review', async () => {
+    renderDialog({ ...older, reviewLevel: 'strict' }, { ready: 0, review: 1 });
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(warning(dialog)).toBeNull();
+    // Balanced alone renames nothing by itself.
+    fireEvent.click(balanced(dialog));
+    expect(warning(dialog)).toBeNull();
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toHaveTextContent(ONE);
+    // Either choice taken back, it goes.
+    fireEvent.click(strict(dialog));
+    expect(warning(dialog)).toBeNull();
+    fireEvent.click(balanced(dialog));
+    expect(warning(dialog)).toHaveTextContent(ONE);
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toBeNull();
+  });
+
+  it('comes and goes with automatic renaming switched on, for ready documents, and counts those in review once Balanced is chosen too', async () => {
+    renderDialog(older, { ready: 2, review: 1 });
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(warning(dialog)).toBeNull();
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toHaveTextContent(several(2));
+    fireEvent.click(balanced(dialog));
+    expect(warning(dialog)).toHaveTextContent(several(3));
+    fireEvent.click(strict(dialog));
+    expect(warning(dialog)).toHaveTextContent(several(2));
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toBeNull();
+  });
+
+  it('counts only documents in review when automatic renaming was on already', async () => {
+    renderDialog({ ...older, automaticRename: true, reviewLevel: 'strict' }, { ready: 4, review: 1 });
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    // Nothing this save changes: the ready ones are renamed with or without it.
+    expect(warning(dialog)).toBeNull();
+    fireEvent.click(balanced(dialog));
+    expect(warning(dialog)).toHaveTextContent(ONE);
+  });
+
+  it('never warns of Balanced back to Strict, of automatic renaming switched off, or of a save that changes neither', async () => {
+    renderDialog({ ...older, automaticRename: true, reviewLevel: 'balanced' }, { ready: 3, review: 3 });
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(warning(dialog)).toBeNull();
+    fireEvent.click(strict(dialog));
+    expect(warning(dialog)).toBeNull();
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toBeNull();
+    fireEvent.click(balanced(dialog));
+    expect(warning(dialog)).toBeNull();
+    // Another setting changed: still nothing of this.
+    fireEvent.change(within(dialog).getByLabelText("This machine's name"), { target: { value: 'Reception' } });
+    expect(warning(dialog)).toBeNull();
+  });
+
+  it('is absent where nothing is typed, and where Settings is given no count', async () => {
+    const first = renderDialog(older, NOTHING_TYPED);
+    let dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    fireEvent.click(balanced(dialog));
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toBeNull();
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+    first.unmount();
+
+    renderDialog(older);
+    dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    fireEvent.click(balanced(dialog));
+    fireEvent.click(automatic(dialog));
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('follows the count while Settings is open, and leaves the choices as they are', async () => {
+    const { rerender } = renderDialog(older, { ready: 0, review: 1 });
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    fireEvent.click(balanced(dialog));
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toHaveTextContent(ONE);
+    // A document becomes ready with something typed for it.
+    rerender(older, { ready: 1, review: 1 });
+    expect(warning(dialog)).toHaveTextContent(several(2));
+    // Both are read again, or filed from another computer.
+    rerender(older, NOTHING_TYPED);
+    expect(warning(dialog)).toBeNull();
+    // One comes back from being read.
+    rerender(older, { ready: 0, review: 1 });
+    expect(warning(dialog)).toHaveTextContent(ONE);
+    expect(balanced(dialog)).toBeChecked();
+    expect(automatic(dialog)).toBeChecked();
+  });
+
+  // App reads the settings a render after it mounts. What was loaded is what
+  // arrived, not the placeholders the dialog opened with.
+  it('goes by the settings that arrive after it opened: automatic renaming that was on already is not this save\'s doing', async () => {
+    const { rerender } = renderDialog({ ...older, reviewLevel: 'strict' }, { ready: 1, review: 0 });
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toHaveTextContent(ONE);
+    rerender({ ...older, automaticRename: true, reviewLevel: 'strict' }, { ready: 1, review: 0 });
+    expect(automatic(dialog)).toBeChecked();
+    expect(warning(dialog)).toBeNull();
+  });
+
+  it('is heard when it appears and when its count changes, and stands above Save, outside the choice of level', async () => {
+    const { rerender } = renderDialog(older, { ready: 1, review: 0 });
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    fireEvent.click(automatic(dialog));
+    const shown = warning(dialog)!;
+    // An alert, as the dialog's other notices that matter before going on: read out when it is put on the page.
+    expect(shown).toHaveAttribute('role', 'alert');
+    expect(shown).toHaveClass('save-warning');
+    // An error's red is for something that went wrong.
+    expect(shown).not.toHaveClass('form-error');
+    // In the footer, straight before Save, which stays in view wherever the sections are scrolled to.
+    expect(shown.parentElement).toHaveClass('dialog-actions');
+    expect(shown.nextElementSibling).toBe(saveButton(dialog));
+    expect(dialog.querySelector('.dialog-body')!.contains(shown)).toBe(false);
+    // Not in the choice of level, whose words hold no figure.
+    expect(level(dialog).contains(shown)).toBe(false);
+    expect(level(dialog).textContent).not.toMatch(/\d/);
+    // The same element says the new count, so the change is read out too.
+    rerender(older, { ready: 3, review: 0 });
+    expect(warning(dialog)).toBe(shown);
+    expect(shown).toHaveTextContent(several(3));
+  });
+
+  // The page has no layout here, so the heights are given: one document's
+  // warning takes four lines, several documents' five, and the row under it
+  // starts 12px below it. What is checked is what Settings does with them.
+  it('never gives back the room it took while Settings is open: a shorter count keeps the taller box, and the sections keep its room once it has gone', async () => {
+    const rect = (top: number, height: number) => ({ top, bottom: top + height, left: 0, right: 0, x: 0, y: top, width: 0, height, toJSON: () => ({}) }) as DOMRect;
+    const drawn = (box: HTMLElement) => Math.max(box.textContent?.startsWith('1 document') ? 88 : 106, parseFloat(box.style.minHeight) || 0);
+    const layout = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('save-warning')) return rect(400, drawn(this));
+      const above = this.previousElementSibling;
+      if (above instanceof HTMLElement && above.classList.contains('save-warning')) return rect(400 + drawn(above) + 12, 42);
+      return rect(0, 0);
+    });
+    try {
+      const { rerender } = renderDialog(older, { ready: 1, review: 0 });
+      const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+      const sections = dialog.querySelector<HTMLElement>('.dialog-body')!;
+      const room = () => sections.querySelector<HTMLElement>('.settings-group:last-child > div[aria-hidden="true"]:last-child');
+      expect(room()).toBeNull();
+      fireEvent.click(automatic(dialog));
+      expect(warning(dialog)).toHaveTextContent(ONE);
+      expect(warning(dialog)).toHaveStyle({ minHeight: '88px' });
+      // More documents, more lines: the box grows, and that is its room from then on.
+      rerender(older, { ready: 3, review: 0 });
+      expect(warning(dialog)).toHaveTextContent(several(3));
+      expect(warning(dialog)).toHaveStyle({ minHeight: '106px' });
+      // Fewer lines again: the box stays as tall as it was.
+      rerender(older, { ready: 1, review: 0 });
+      expect(warning(dialog)).toHaveTextContent(ONE);
+      expect(warning(dialog)).toHaveStyle({ minHeight: '106px' });
+      expect(room()).toBeNull();
+      // Gone: the sections end with the room it took, the box and the gap to the row under it, and nothing in it.
+      rerender(older, NOTHING_TYPED);
+      expect(warning(dialog)).toBeNull();
+      expect(room()).toHaveStyle({ height: '118px' });
+      expect(room()).toBeEmptyDOMElement();
+      // The last section is still the last, so its own spacing is as it was.
+      expect(room()!.parentElement).toBe(sections.lastElementChild);
+      expect(room()!.parentElement).toHaveTextContent('Help & support');
+      // Back: in the room it had, which the sections give up in the same moment.
+      rerender(older, { ready: 1, review: 0 });
+      expect(warning(dialog)).toHaveStyle({ minHeight: '106px' });
+      expect(room()).toBeNull();
+    } finally {
+      layout.mockRestore();
+    }
+  });
+
+  it('takes no room before it has been shown', async () => {
+    renderDialog(older, { ready: 1, review: 0 });
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(dialog.querySelector('.dialog-body div[aria-hidden="true"]')).toBeNull();
+    expect(dialog.querySelector('.dialog-actions')!.children).toHaveLength(1);
+  });
+
+  it('is words only: no button, nothing that acts, and Save is not held back', async () => {
+    renderDialog(older, { ready: 1, review: 2 });
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    const buttons = within(dialog).getAllByRole('button').length;
+    fireEvent.click(balanced(dialog));
+    fireEvent.click(automatic(dialog));
+    const shown = warning(dialog)!;
+    expect(shown).toHaveTextContent(several(3));
+    expect(shown.querySelector('button, a, input, [tabindex]')).toBeNull();
+    expect(shown.closest('[data-acts]')).toBeNull();
+    expect(dialog.querySelector('[data-acts]')).toBeNull();
+    expect(within(dialog).getAllByRole('button')).toHaveLength(buttons);
+    expect(saveButton(dialog)).toBeEnabled();
+    // Tab goes past it: from the last control of the sections to Save, as before.
+    const guide = within(dialog).getByRole('button', { name: 'Open the guide' });
+    guide.focus();
+    fireEvent.keyDown(guide, { key: 'Tab' });
+    expect(saveButton(dialog)).toHaveFocus();
+  });
+
+  it('changes nothing of what Save sends', async () => {
+    const choose = async () => {
+      const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+      fireEvent.click(balanced(dialog));
+      fireEvent.click(automatic(dialog));
+      return dialog;
+    };
+    // As it was before the warning: Settings given no count.
+    const before = renderDialog(older);
+    let dialog = await choose();
+    expect(warning(dialog)).toBeNull();
+    fireEvent.click(saveButton(dialog));
+    await waitFor(() => expect(before.onSave).toHaveBeenCalledOnce());
+    before.unmount();
+
+    const warned = renderDialog(older, { ready: 2, review: 3 });
+    dialog = await choose();
+    expect(warning(dialog)).toHaveTextContent(several(5));
+    fireEvent.click(saveButton(dialog));
+    await waitFor(() => expect(warned.onSave).toHaveBeenCalledOnce());
+    expect(warned.onSave.mock.calls).toEqual(before.onSave.mock.calls);
+    // The whole settings object with the two choices, and nothing beside it.
+    expect(warned.onSave.mock.calls[0]).toEqual([{ ...older, reviewLevel: 'balanced', automaticRename: true }]);
+  });
+});
+
+async function openSettings() {
+  fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
+  const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+  fireEvent.click(within(dialog).getByText('Naming and filing', { selector: 'summary' }));
+  return dialog;
+}
+const closeSettings = async (dialog: HTMLElement) => {
+  fireEvent.keyDown(saveButton(dialog), { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument());
+};
+
+describe('the count Settings is given by the window', () => {
+  const LEASE = 'Lease Agreement - 123 Main St.pdf';
+  const EMPLOYMENT = 'Employment Agreement - John Smith.pdf';
+  const typeName = async (document: string, name: string) => {
+    const panel = await openDetails(document);
+    fireEvent.change(within(panel).getByLabelText('Filename'), { target: { value: name } });
+    return panel;
+  };
+
+  it('is of the documents with something typed and not filed: one waiting in review, then a ready one as well', async () => {
+    render(<App bridge={createInMemoryBridge()} />);
+    await screen.findByRole('grid', { name: 'Queue' });
+    // Nothing typed: no warning, whatever is chosen.
+    let dialog = await openSettings();
+    fireEvent.click(balanced(dialog));
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toBeNull();
+    await closeSettings(dialog);
+
+    await typeName(LEASE, '2023-09-15 Lease of 123 Main St');
+    dialog = await openSettings();
+    expect(warning(dialog)).toBeNull();
+    // The lease waits in review: automatic renaming alone does not reach it.
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toBeNull();
+    fireEvent.click(balanced(dialog));
+    expect(warning(dialog)).toHaveTextContent(ONE);
+    fireEvent.click(strict(dialog));
+    expect(warning(dialog)).toBeNull();
+    await closeSettings(dialog);
+
+    await typeName(EMPLOYMENT, '2024-04-12 Employment Agreement of John Smith');
+    dialog = await openSettings();
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toHaveTextContent(ONE);
+    fireEvent.click(balanced(dialog));
+    expect(warning(dialog)).toHaveTextContent(several(2));
+  });
+
+  it('no longer counts a document whose typed name was taken back, or filed', async () => {
+    const base = createInMemoryBridge();
+    render(<App bridge={base} />);
+    await screen.findByRole('grid', { name: 'Queue' });
+    let panel = await typeName(EMPLOYMENT, '2024-04-12 Employment Agreement of John Smith');
+    let dialog = await openSettings();
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toHaveTextContent(ONE);
+    await closeSettings(dialog);
+
+    fireEvent.click(within(panel).getByRole('button', { name: "Back to Intern's proposal" }));
+    dialog = await openSettings();
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toBeNull();
+    await closeSettings(dialog);
+
+    // Typed again and filed under what was typed: the person's own rename.
+    panel = await typeName(EMPLOYMENT, '2024-04-12 Employment Agreement of John Smith');
+    fireEvent.click(within(panel).getByRole('button', { name: /^Apply rename/ }));
+    await waitFor(async () => expect((await base.listItems()).find((item) => item.id === 'employment')?.status).toBe('completed'));
+    dialog = await openSettings();
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toBeNull();
+  });
+
+  // The queue changes with nobody asking while Settings is open, and the
+  // warning follows it: what was typed stays typed, set aside, but a document
+  // being read is not one Intern can rename.
+  it('follows the queue while Settings is open: gone while the document is read again, back when it waits again', async () => {
+    const base = createInMemoryBridge({ liveEvents: true }) as ReturnType<typeof createInMemoryBridge> & QueueEventSource;
+    const changes = new Map<string, Partial<QueueItem>>();
+    let queueChanged = () => {};
+    const bridge = {
+      ...base,
+      listItems: async () => (await base.listItems()).map((item) => ({ ...item, ...changes.get(item.id) }) as QueueItem),
+      subscribeQueue: (listener: Parameters<QueueEventSource['subscribeQueue']>[0]) => { queueChanged = () => listener({ type: 'changed' }); return base.subscribeQueue(listener); },
+    };
+    const byItself = async (id: string, change: Partial<QueueItem>) => {
+      changes.set(id, change);
+      await act(async () => { queueChanged(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    };
+    render(<App bridge={bridge} />);
+    await screen.findByRole('grid', { name: 'Queue' });
+    await typeName(LEASE, '2023-09-15 Lease of 123 Main St');
+    const dialog = await openSettings();
+    fireEvent.click(balanced(dialog));
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toHaveTextContent(ONE);
+
+    await byItself('lease', { status: 'processing', stage: 'reading', proposedFilename: undefined, description: undefined, reason: undefined });
+    await waitFor(() => expect(warning(dialog)).toBeNull());
+    // The choices stand, and Settings is still open.
+    expect(balanced(dialog)).toBeChecked();
+    expect(automatic(dialog)).toBeChecked();
+
+    await byItself('lease', { status: 'review', proposedFilename: '2023-09-15 Lease between ABC Properties and TenantCo.pdf', description: 'A lease of 123 Main St.', proposalRevision: '1' });
+    await waitFor(() => expect(warning(dialog)).toHaveTextContent(ONE));
+
+    // Filed from another computer: completed, and no longer counted.
+    await byItself('lease', { status: 'completed', filedName: '2023-09-15 Lease between ABC Properties and TenantCo.pdf', undoable: true });
+    await waitFor(() => expect(warning(dialog)).toBeNull());
+  });
+});
+
+/*
+  What the warning says of afterwards, run: a document Intern renames by
+  itself while it has something typed for it. The demo does not act out
+  automatic renaming, so the queue here is rows as the desktop backend sends
+  them (queue_item_dto), read through TauriBridge, with the backend's part
+  played out: judged again as ready, renamed under Intern's name with its
+  reasons kept, and an undo that puts it back in review.
+*/
+describe('a document Intern renamed by itself while it had something typed', () => {
+  type Sent = Record<string, unknown> & { id: number };
+  const TYPED_NAME = '2025-05-01 Letter to Halvorsen about the fixtures';
+  const TYPED_SENTENCE = 'Their reply to our notice of 12 April.';
+
+  async function start() {
+    const sent: Sent[] = [
+      { id: 31, originalFilename: 'Scan 0601.pdf', status: 'needs_review', proposedFilename: '2025-05-01 Letter to Halvorsen Fixture Works LLC.pdf', confidence: 1, description: 'Letter to Halvorsen Fixture Works LLC.', reason: 'TYPE_INFERRED, LOW_CONFIDENCE', proposalRevision: '1', approved: false, parked: false, undoable: false },
+      { id: 32, originalFilename: 'Scan 0602.pdf', status: 'ready', proposedFilename: '2025-05-02 Invoice from Brightwater Supply Co.pdf', confidence: 0.98, description: 'Invoice from Brightwater Supply Co.', proposalRevision: '1', approved: false, parked: false, undoable: false },
+      { id: 33, originalFilename: 'Scan 0603.pdf', status: 'needs_review', proposedFilename: '2025-05-03 Notice to Contoso Ltd.pdf', confidence: 0.9, description: 'Notice to Contoso Ltd.', reason: 'DATE_AMBIGUOUS', proposalRevision: '1', approved: false, parked: false, undoable: false },
+    ];
+    const change = (id: number, to: Record<string, unknown>) => { const index = sent.findIndex((row) => row.id === id); sent[index] = { ...sent[index], ...to }; };
+    const desktop = new TauriBridge({ invoke: async <T,>(command: string) => { if (command !== 'queue_list') throw new Error(`not played out here: ${command}`); return sent.map((row) => ({ ...row })) as T; }, listen: async () => () => {} });
+    const base = createInMemoryBridge({ liveEvents: true }) as ReturnType<typeof createInMemoryBridge> & QueueEventSource;
+    let settings: AppSettings = { ...(await base.getSettings()) };
+    let queueChanged = () => {};
+    const saveSettings = vi.fn(async (next: AppSettings) => {
+      settings = { ...next };
+      // Judged again at Balanced: its type and the model's doubt no longer hold it.
+      if (next.reviewLevel === 'balanced') change(31, { status: 'ready' });
+    });
+    const bridge = {
+      ...base,
+      listItems: () => desktop.listItems(),
+      getSettings: async () => ({ ...settings }),
+      saveSettings,
+      approve: vi.fn(base.approve),
+      // As an undone rename is left: back under its own name, waiting, with UNDONE beside what it carried.
+      undo: vi.fn(async (id: string) => {
+        const row = sent.find((each) => String(each.id) === id)!;
+        change(row.id, { status: 'needs_review', reason: [row.reason, 'UNDONE'].filter(Boolean).join(', '), filedName: null, filedPath: null, undoable: false });
+      }),
+      subscribeQueue: (listener: Parameters<QueueEventSource['subscribeQueue']>[0]) => { queueChanged = () => listener({ type: 'changed' }); return base.subscribeQueue(listener); },
+    };
+    /** The backend does something with nobody asking, and says the queue changed. */
+    const byItself = async (run: () => void) => { run(); await act(async () => { queueChanged(); await new Promise((resolve) => setTimeout(resolve, 0)); }); };
+    const renaming = (id: number) => change(id, { status: 'applying' });
+    const renamed = (id: number) => { const row = sent.find((each) => each.id === id)!; change(id, { status: 'completed', filedName: row.proposedFilename, filedPath: `C:\\Filed\\${String(row.proposedFilename)}`, keptOriginal: false, undoable: true }); };
+    render(<App bridge={bridge} />);
+    await screen.findByRole('grid', { name: 'Queue' });
+    return { bridge, byItself, renaming, renamed };
+  }
+  const saveWith = async (choose: (dialog: HTMLElement) => void) => {
+    const dialog = await openSettings();
+    choose(dialog);
+    const said = warning(dialog)?.textContent;
+    fireEvent.click(saveButton(dialog));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    return said;
+  };
+  const kept = () => screen.queryAllByLabelText<HTMLTextAreaElement>('What you had typed');
+
+  it('keeps what was typed with the document, read-only, under Intern\'s name: from review, by way of Balanced', async () => {
+    const { bridge, byItself, renaming, renamed } = await start();
+    const panel = await openDetails('Scan 0601.pdf');
+    fireEvent.change(within(panel).getByLabelText('Filename'), { target: { value: TYPED_NAME } });
+    fireEvent.change(within(panel).getByLabelText('Description'), { target: { value: TYPED_SENTENCE } });
+
+    // The warning said so before the save, and the save went through as chosen.
+    expect(await saveWith((dialog) => { fireEvent.click(balanced(dialog)); fireEvent.click(automatic(dialog)); })).toBe(ONE);
+    expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ reviewLevel: 'balanced', automaticRename: true }));
+    // Ready now, and what was typed is still in its fields.
+    await waitFor(() => expect(queueCell('Scan 0601.pdf', 'status')).toHaveTextContent('Ready with a note'));
+    expect(within(panel).getByLabelText('Filename')).toHaveValue(TYPED_NAME);
+    expect(kept()).toHaveLength(0);
+
+    // Intern renames it. The fields go; what they held is set aside, where typing changes nothing.
+    await byItself(() => renaming(31));
+    await waitFor(() => expect(within(panel).queryByLabelText('Filename')).not.toBeInTheDocument());
+    expect(kept()).toHaveLength(1);
+    expect(kept()[0]).toHaveValue(`${TYPED_NAME}\n\n${TYPED_SENTENCE}`);
+    expect(kept()[0]).toHaveAttribute('readonly');
+
+    await byItself(() => renamed(31));
+    await waitFor(() => expect(panel).toHaveTextContent('Renamed to 2025-05-01 Letter to Halvorsen Fixture Works LLC.pdf'));
+    // Under Intern's name, not the one typed; and nobody approved anything.
+    expect(panel).not.toHaveTextContent(`Renamed to ${TYPED_NAME}`);
+    expect(bridge.approve).not.toHaveBeenCalled();
+    expect(kept()).toHaveLength(1);
+    expect(kept()[0]).toHaveValue(`${TYPED_NAME}\n\n${TYPED_SENTENCE}`);
+    expect(panel).toContainElement(kept()[0]);
+    expect(within(panel).getByRole('group', { name: 'Kept from before this document changed' })).toHaveTextContent('They are kept here as you had them, name first, and nothing here is filed.');
+    // Nothing else on screen says it happened: no result, and nothing above the queue.
+    expect(document.querySelector('.toasts')).toBeNull();
+    expect(screen.queryByRole('group', { name: /^Kept from Scan/ })).not.toBeInTheDocument();
+
+    // It is with the document wherever that is listed: in Completed, opened again.
+    fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
+    expect(queueCell('Scan 0601.pdf', 'status')).toHaveTextContent('Completed with a note');
+    const filed = await openDetails('Scan 0601.pdf');
+    expect(within(filed).getByLabelText('What you had typed')).toHaveValue(`${TYPED_NAME}\n\n${TYPED_SENTENCE}`);
+    expect(within(filed).getByRole('button', { name: 'Undo' })).toBeEnabled();
+  });
+
+  it('says nothing when the document is not on screen, keeps what was typed all the same, and still has it after Undo: a ready one, by way of automatic renaming', async () => {
+    const { bridge, byItself, renamed } = await start();
+    const panel = await openDetails('Scan 0602.pdf');
+    fireEvent.change(within(panel).getByLabelText('Filename'), { target: { value: '2025-05-02 Invoice 4471 from Brightwater' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Review item' })).not.toBeInTheDocument());
+
+    expect(await saveWith((dialog) => { fireEvent.click(automatic(dialog)); })).toBe(ONE);
+    await byItself(() => renamed(32));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Completed, 1' })).toBeInTheDocument());
+    // No word of it anywhere: the document has only left the queue for Completed.
+    expect(document.querySelector('.toasts')).toBeNull();
+    expect(kept()).toHaveLength(0);
+    expect(screen.queryByRole('group', { name: /^Kept from/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Completed, 1' }));
+    const filed = await openDetails('Scan 0602.pdf');
+    expect(filed).toHaveTextContent('Renamed to 2025-05-02 Invoice from Brightwater Supply Co.pdf');
+    expect(within(filed).getByLabelText('What you had typed')).toHaveValue('2025-05-02 Invoice 4471 from Brightwater\n\nInvoice from Brightwater Supply Co.');
+
+    // Undone, it waits in review under Intern's proposal, and what was typed is still beside it, not in the field.
+    fireEvent.click(within(filed).getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(bridge.undo).toHaveBeenCalledWith('32'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Completed, 0' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /^Queue, / }));
+    const again = await openDetails('Scan 0602.pdf');
+    expect(queueCell('Scan 0602.pdf', 'status')).toHaveTextContent('Needs review');
+    expect(within(again).getByLabelText('Filename')).toHaveValue('2025-05-02 Invoice from Brightwater Supply Co');
+    expect(within(again).getByLabelText('What you had typed')).toHaveValue('2025-05-02 Invoice 4471 from Brightwater\n\nInvoice from Brightwater Supply Co.');
+  });
+});
