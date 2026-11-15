@@ -761,9 +761,9 @@ pub enum ReviewReason {
     /// formula calls TODAY or NOW: what the formula last worked out from
     /// the day the workbook was open, not a date the document was given.
     DateIsFormula,
-    /// The quick local model read the document while its readings were
-    /// always held for a person, in builds before both models were judged
-    /// alike. Kept so an analysis stored by one of them still reads.
+    /// The quick local model read the document. Its readings always wait
+    /// for a person, whatever validation made of them and at every review
+    /// level ([`crate::tiers::hold_fast_reading`]).
     FastModelReading,
 }
 

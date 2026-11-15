@@ -18,7 +18,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::domain::{DocumentAnalysis, ProposalStatus, ReviewReason, ValidatedProposal};
+use crate::domain::{DocumentAnalysis, ProposalStatus, ReviewReason};
 use crate::naming::{DEFAULT_TYPE, Spelling, type_segment};
 use crate::validate::READY_CONFIDENCE;
 
@@ -133,7 +133,8 @@ impl Readiness {
 ///    [`READY_CONFIDENCE`], or the reading stores no reply to read it from,
 ///    it waits.
 /// 4. The proposal has a document type. A name that would say "Document"
-///    waits.
+///    waits, whatever the proposal's type is: none, the word itself, or the
+///    word with the file's extension after it, which a name leaves out.
 /// 5. A title did not stand in for a type the document did not support:
 ///    [`ReviewReason::TypeUnsupported`] and [`ReviewReason::TypeInferred`]
 ///    together, without [`ReviewReason::TypeMissing`], wait.
@@ -156,7 +157,7 @@ pub fn readiness(analysis: &DocumentAnalysis, level: ReviewLevel) -> Readiness {
         };
     }
     let has = |reason: ReviewReason| reasons.contains(&reason);
-    let typed = names_a_type(&analysis.proposal);
+    let typed = names_a_type(analysis);
     let title_stood_in = has(ReviewReason::TypeUnsupported)
         && has(ReviewReason::TypeInferred)
         && !has(ReviewReason::TypeMissing);
@@ -191,19 +192,42 @@ fn dated(analysis: &DocumentAnalysis) -> bool {
         .is_some_and(|date| !date.is_empty() && analysis.filename.starts_with(date))
 }
 
-/// Whether the proposal has a document type a name can say: one that is
+/// Whether the reading has a document type a name can say: one that is
 /// there, and that does not come out of [`type_segment`] as the word a name
 /// says when there is none.
-fn names_a_type(proposal: &ValidatedProposal) -> bool {
-    proposal.document_type.as_deref().is_some_and(|stated| {
-        !type_segment(Some(stated), "", Spelling::Document).eq_ignore_ascii_case(DEFAULT_TYPE)
-    })
+///
+/// The type is read the way the reading's name was composed, with the
+/// file's extension. A reply sometimes ends the type with it, and the name
+/// leaves it out: "Document.pdf" on a PDF is named "Document". Read with no
+/// extension, that type counted as one.
+fn names_a_type(analysis: &DocumentAnalysis) -> bool {
+    let extension = extension_of(&analysis.filename);
+    analysis
+        .proposal
+        .document_type
+        .as_deref()
+        .is_some_and(|stated| {
+            !type_segment(Some(stated), extension, Spelling::Document)
+                .eq_ignore_ascii_case(DEFAULT_TYPE)
+        })
+}
+
+/// The extension `filename` ends with, as a composed name writes one
+/// ([`crate::naming::compose_filename`]): letters and digits after the last
+/// period. Empty when the name has none.
+fn extension_of(filename: &str) -> &str {
+    filename
+        .rsplit_once('.')
+        .map(|(_, extension)| extension)
+        .filter(|extension| extension.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{AnalysisTelemetry, ModelProposal};
+    use crate::domain::{AnalysisTelemetry, ModelProposal, ValidatedProposal};
+    use crate::naming::compose_filename;
 
     const DATE: &str = "2026-01-16";
 
@@ -502,6 +526,39 @@ mod tests {
         kept.proposal.document_type = Some("Document Retention Policy".into());
         kept.filename = format!("{DATE} Document Retention Policy.pdf");
         assert!(balanced(&kept).ready);
+
+        // A reply sometimes ends the type with the file's extension, and
+        // the name drops it: "Document.pdf" on a PDF is named "Document".
+        for word in ["Document.pdf", "document.PDF", "Document.pdf.pdf", ".pdf"] {
+            let mut analysis = reading(&[ReviewReason::TypeUnsupported]);
+            analysis.proposal.document_type = Some(word.into());
+            analysis.filename = compose_filename(&analysis.proposal, "pdf", &[]).value;
+            assert!(
+                analysis
+                    .filename
+                    .eq_ignore_ascii_case(&format!("{DATE} Document.pdf")),
+                "{word:?} is named {}",
+                analysis.filename
+            );
+            assert_eq!(
+                balanced(&analysis),
+                waits(&[ReviewReason::TypeUnsupported]),
+                "{word:?}"
+            );
+        }
+        // A type that says more than "Document" is a type with the
+        // extension dropped too, and another file's extension is no part of
+        // this one's name to drop.
+        for (word, named) in [
+            ("Dispatch Note.pdf", "Dispatch Note"),
+            ("Document.docx", "Document.docx"),
+        ] {
+            let mut analysis = reading(&[ReviewReason::TypeUnsupported]);
+            analysis.proposal.document_type = Some(word.into());
+            analysis.filename = compose_filename(&analysis.proposal, "pdf", &[]).value;
+            assert_eq!(analysis.filename, format!("{DATE} {named}.pdf"), "{word:?}");
+            assert_eq!(balanced(&analysis), Readiness::ready(), "{word:?}");
+        }
 
         let stood_in = reading(&[ReviewReason::TypeMissing, ReviewReason::TypeInferred]);
         assert_eq!(balanced(&stood_in), Readiness::ready());
