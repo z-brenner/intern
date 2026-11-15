@@ -134,7 +134,9 @@ impl Readiness {
 ///    it waits.
 /// 4. The proposal has a document type. A name that would say "Document"
 ///    waits, whatever the proposal's type is: none, the word itself, or the
-///    word with the file's extension after it, which a name leaves out.
+///    word with the file's extension after it, which a name leaves out. So
+///    does a name that would say "Document" and an ending that looks like
+///    another extension, "Document.docx" on a PDF.
 /// 5. A title did not stand in for a type the document did not support:
 ///    [`ReviewReason::TypeUnsupported`] and [`ReviewReason::TypeInferred`]
 ///    together, without [`ReviewReason::TypeMissing`], wait.
@@ -193,13 +195,20 @@ fn dated(analysis: &DocumentAnalysis) -> bool {
 }
 
 /// Whether the reading has a document type a name can say: one that is
-/// there, and that does not come out of [`type_segment`] as the word a name
-/// says when there is none.
+/// there, and that says more than the word a name says when there is none.
 ///
-/// The type is read the way the reading's name was composed, with the
-/// file's extension. A reply sometimes ends the type with it, and the name
-/// leaves it out: "Document.pdf" on a PDF is named "Document". Read with no
-/// extension, that type counted as one.
+/// The type is read the way the reading's name was composed
+/// ([`type_segment`]), with the file's extension. A reply sometimes ends
+/// the type with it, and the name leaves it out: "Document.pdf" on a PDF is
+/// named "Document". Read with no extension, that type counted as one.
+///
+/// A name keeps any other ending that looks like an extension
+/// ([`without_extension_like_endings`]): "Document.docx" on a PDF is named
+/// "Document.docx.pdf", and so is "Document.docx." with a period after it.
+/// Such a name says no more about the document than "Document" does, so
+/// that type is no type either. A type with words of its own stays one,
+/// whatever periods it has: "Document Retention Policy", "Document.Review
+/// Memo".
 fn names_a_type(analysis: &DocumentAnalysis) -> bool {
     let extension = extension_of(&analysis.filename);
     analysis
@@ -207,14 +216,46 @@ fn names_a_type(analysis: &DocumentAnalysis) -> bool {
         .document_type
         .as_deref()
         .is_some_and(|stated| {
-            !type_segment(Some(stated), extension, Spelling::Document)
-                .eq_ignore_ascii_case(DEFAULT_TYPE)
+            let named = type_segment(Some(stated), extension, Spelling::Document);
+            let words = without_extension_like_endings(&named);
+            !words.is_empty() && !words.eq_ignore_ascii_case(DEFAULT_TYPE)
         })
 }
 
-/// The extension `filename` ends with, as a composed name writes one
-/// ([`crate::naming::compose_filename`]): letters and digits after the last
-/// period. Empty when the name has none.
+/// The most letters or digits an ending can have and still look like an
+/// extension: "docx", "xlsx", "jpeg" and "pages" do, "Review" does not.
+const EXTENSION_LIKE_MAX: usize = 5;
+
+/// `segment` without the periods and spaces it ends with, and without the
+/// endings that look like an extension: a period and one to
+/// [`EXTENSION_LIKE_MAX`] letters or digits. Every one of them, as a name drops
+/// the file's own extension from a type however often the type repeats it.
+/// Nothing is left of a segment that is only such endings.
+fn without_extension_like_endings(segment: &str) -> &str {
+    let mut words = segment;
+    loop {
+        words = words.trim_end_matches(['.', ' ']);
+        match words.rsplit_once('.') {
+            Some((before, ending))
+                if (1..=EXTENSION_LIKE_MAX).contains(&ending.len())
+                    && ending.bytes().all(|byte| byte.is_ascii_alphanumeric()) =>
+            {
+                words = before;
+            }
+            _ => return words,
+        }
+    }
+}
+
+/// What follows the last period of `filename`, when that is letters and
+/// digits only, and nothing otherwise. A composed name ends with the file's
+/// extension when the file has one ([`crate::naming::compose_filename`]),
+/// and then this is that extension. A file with none is named with none,
+/// and then this is whatever the name happens to end with after a period:
+/// "2" for a name that ends "v1.2". [`names_a_type`] only takes it off the
+/// end of the type, as the name did, so a wrong one can only shorten a type
+/// that ends the same way. That can make it no type, and never makes a type
+/// of what is none.
 fn extension_of(filename: &str) -> &str {
     filename
         .rsplit_once('.')
@@ -547,21 +588,77 @@ mod tests {
             );
         }
         // A type that says more than "Document" is a type with the
-        // extension dropped too, and another file's extension is no part of
-        // this one's name to drop.
-        for (word, named) in [
-            ("Dispatch Note.pdf", "Dispatch Note"),
-            ("Document.docx", "Document.docx"),
-        ] {
-            let mut analysis = reading(&[ReviewReason::TypeUnsupported]);
-            analysis.proposal.document_type = Some(word.into());
-            analysis.filename = compose_filename(&analysis.proposal, "pdf", &[]).value;
-            assert_eq!(analysis.filename, format!("{DATE} {named}.pdf"), "{word:?}");
-            assert_eq!(balanced(&analysis), Readiness::ready(), "{word:?}");
-        }
+        // extension dropped too.
+        let mut analysis = reading(&[ReviewReason::TypeUnsupported]);
+        analysis.proposal.document_type = Some("Dispatch Note.pdf".into());
+        analysis.filename = compose_filename(&analysis.proposal, "pdf", &[]).value;
+        assert_eq!(analysis.filename, format!("{DATE} Dispatch Note.pdf"));
+        assert_eq!(balanced(&analysis), Readiness::ready());
 
         let stood_in = reading(&[ReviewReason::TypeMissing, ReviewReason::TypeInferred]);
         assert_eq!(balanced(&stood_in), Readiness::ready());
+    }
+
+    /// A reading of a PDF whose reply gave the type `word`, with a note
+    /// about the type, named as the engine names it.
+    fn typed(word: &str) -> DocumentAnalysis {
+        let mut analysis = reading(&[ReviewReason::TypeUnsupported]);
+        analysis.proposal.document_type = Some(word.into());
+        analysis.filename = compose_filename(&analysis.proposal, "pdf", &[]).value;
+        analysis
+    }
+
+    /// Clause 4, where the type is "Document" with an ending that looks
+    /// like an extension and is not the file's: another kind of file's, or
+    /// the file's own with a period after it. The name keeps such an
+    /// ending, "Document.docx.pdf", and says no more about the document
+    /// than "Document" does: it waits. A type with words of its own is a
+    /// type, whatever periods it has.
+    #[test]
+    fn a_type_that_is_document_with_an_ending_like_an_extension_waits_at_balanced() {
+        for (word, named) in [
+            ("Document.docx", "Document.docx"),
+            ("Document.pdf.", "Document.pdf"),
+            ("Document.docx.", "Document.docx"),
+            ("Document.docx.pdf", "Document.docx"),
+            ("Document .docx", "Document .docx"),
+            ("Document..docx", "Document..docx"),
+            ("Document.docx.xlsx", "Document.docx.xlsx"),
+            ("Document.c", "Document.c"),
+            ("Document.xhtml", "Document.xhtml"),
+            ("Document.12345", "Document.12345"),
+            (".docx", ".docx"),
+        ] {
+            let analysis = typed(word);
+            assert_eq!(analysis.filename, format!("{DATE} {named}.pdf"), "{word:?}");
+            assert_eq!(
+                balanced(&analysis),
+                waits(&[ReviewReason::TypeUnsupported]),
+                "{word:?}"
+            );
+        }
+        // Whatever its capitals.
+        for word in ["DOCUMENT.DOCX", "document.Docx"] {
+            assert_eq!(
+                balanced(&typed(word)),
+                waits(&[ReviewReason::TypeUnsupported]),
+                "{word:?}"
+            );
+        }
+        // Words of its own before or after, and an ending too long or too
+        // odd to be an extension.
+        for word in [
+            "Document Retention Policy",
+            "Document.Review Memo",
+            "Document v1.2",
+            "Document No. 5",
+            "Document.Policy",
+            "Document.a-b",
+            "Documents.docx",
+            "Board Document.docx",
+        ] {
+            assert_eq!(balanced(&typed(word)), Readiness::ready(), "{word:?}");
+        }
     }
 
     /// Clause 5: a title that stood in for a type the document did not
