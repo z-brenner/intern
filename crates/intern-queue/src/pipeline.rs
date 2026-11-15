@@ -4450,12 +4450,12 @@ impl Pipeline {
     /// were read while automatic renaming was off are both filed once it is
     /// on.
     ///
-    /// What it costs at a looser level: one near-duplicate lookup for each
-    /// filing without approval, on top of the one made when the document
-    /// was read. Each asks the queue's own filings and, finding no repeat
-    /// among them, the duplicate oracle. With a shared filed index that
-    /// reads every marker in the shared folder, as the lookup at reading
-    /// does.
+    /// What it costs at a looser level: one more near-duplicate lookup for
+    /// each filing without approval, after the one made when the document
+    /// was read and the one made if a level made it ready. Each asks the
+    /// queue's own filings and, finding no repeat among them, the duplicate
+    /// oracle. With a shared filed index that reads every marker in the
+    /// index's folder, as the lookup at reading does.
     fn held_as_near_duplicate(
         &self,
         item: &QueueItem,
@@ -9785,7 +9785,8 @@ mod hold_tests {
     /// same attempt files it at strict, where a reading is compared when it
     /// is read and not again. At balanced it files a name a person
     /// approved, and a name with no reading behind it: the stored record of
-    /// one carries no text today, and would not be compared if it did.
+    /// one carries no text fingerprint today, and would not be compared if
+    /// it did.
     #[test]
     fn a_filing_looks_for_a_near_duplicate_only_where_it_should() {
         const FINGERPRINT: u64 = 0x5eed_cafe_f00d_d00d;
