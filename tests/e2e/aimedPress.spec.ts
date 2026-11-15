@@ -55,6 +55,8 @@ const rows = (page: Page) => page.locator('.queue-grid tbody tr').evaluateAll((a
  */
 async function withinTheSettleTime(page: Page, journey: () => Promise<void>) {
   for (let attempt = 1; ; attempt += 1) {
+    // Made again, it starts as the first did: with nothing stored of what the run before typed and did not file.
+    if (attempt > 1) await page.evaluate(() => window.localStorage.clear());
     await journey();
     if (await sinceItChanged(page) < SETTLE_MS - 50) return;
     if (attempt === 3) throw new Error('Three presses in a row came later than the settle time after the change: this machine is too slow for the journey to say anything.');
