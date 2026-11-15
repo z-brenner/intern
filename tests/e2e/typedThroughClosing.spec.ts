@@ -14,6 +14,10 @@ import { openDetails, queueCell, untilSettled } from './grid';
   Intern closed and opened: the window and everything it kept are gone, its
   storage stays, and the queue is as the backend would list it at the start.
   Each journey has a browser context, and so a storage, of its own.
+
+  A reload stands in for a close and says nothing about what reaches the
+  disk: the browser goes on running, and its storage with it. What a real
+  close, a kill or a power cut leave on disk is not tried by these journeys.
 */
 
 const LEASE = 'Lease Agreement - 123 Main St.pdf';
@@ -26,6 +30,7 @@ const REREAD = '2023-09-15 Lease between ABC Properties and TenantCo';
 const WIDE = { width: 1400, height: 900 };
 const NARROW = { width: 800, height: 600 };
 const STORED = 'intern.typedInReview.v1';
+const CLOSED = 'intern.typedInReview.closed';
 
 /** Types on at the end of the name and of the description, as a person correcting them does. */
 async function typeInTheLease(page: Page) {
@@ -89,6 +94,60 @@ for (const size of [WIDE, NARROW]) {
     await expect(again.getByRole('textbox', { name: 'Description' })).toHaveValue(PROPOSED_DESCRIPTION);
   });
 }
+
+/*
+  Only an ordinary close is known to leave the last of what was typed. The
+  window says so in storage as it goes (on `pagehide`); one that ended with
+  no word to the page - killed, the power cut - leaves no such mark, and
+  what the next window finds it sets aside, read-only, where no key and no
+  press files it. A reload is an ordinary close, so here the mark it leaves
+  is taken out again before the next window starts - once, by a script that
+  runs ahead of the page's own: storage is then as a kill straight after
+  the last letter would leave it, had all of it reached the disk.
+*/
+test('what was typed is set aside, not in its fields, after a window that went without closing in the ordinary way, and Ctrl+Enter then files the proposal', async ({ page }) => {
+  await page.setViewportSize(WIDE);
+  await page.goto('/');
+  await typeInTheLease(page);
+  expect(await stored(page)).toContain(TYPED);
+  await page.addInitScript((key) => {
+    if (window.sessionStorage.getItem('markTakenOut')) return;
+    window.sessionStorage.setItem('markTakenOut', String(window.localStorage.getItem(key)));
+    window.localStorage.removeItem(key);
+  }, CLOSED);
+  await page.reload();
+  // The reload did leave the mark: it is its absence that is tried here.
+  expect(await page.evaluate(() => window.sessionStorage.getItem('markTakenOut'))).toBe('1');
+
+  // The Lease under the reading it was typed over, and its fields are Intern's proposal all the same.
+  const panel = page.getByRole('complementary', { name: 'Review item' });
+  await expect(panel).toContainText(LEASE);
+  await expect(panel.getByRole('textbox', { name: 'Filename' })).toHaveValue(PROPOSED);
+  await expect(panel.getByRole('textbox', { name: 'Description' })).toHaveValue(PROPOSED_DESCRIPTION);
+  const kept = page.getByRole('textbox', { name: 'What you had typed' });
+  await expect(kept).toHaveValue(`${TYPED}\n\n${DESCRIBED}`);
+  await expect(kept).toHaveAttribute('readonly', '');
+  expect(await focused(page)).toBe('BODY');
+  expect(await page.evaluate((key) => window.localStorage.getItem(key), CLOSED)).toBeNull();
+
+  // Closed in the ordinary way now, it stays set aside: the mark is there as the window goes, and gone once the next has started.
+  await page.evaluate((key) => window.addEventListener('pagehide', () => { window.sessionStorage.setItem('markAsItWent', String(window.localStorage.getItem(key))); }), CLOSED);
+  await page.reload();
+  await expect(page.getByRole('complementary', { name: 'Review item' })).toContainText(LEASE);
+  expect(await page.evaluate(() => window.sessionStorage.getItem('markAsItWent'))).toBe('1');
+  expect(await page.evaluate((key) => window.localStorage.getItem(key), CLOSED)).toBeNull();
+  await expect(kept).toHaveValue(`${TYPED}\n\n${DESCRIBED}`);
+  await expect(panel.getByRole('textbox', { name: 'Filename' })).toHaveValue(PROPOSED);
+
+  // Ctrl+Enter with nothing focused files what the panel shows: the proposal, not the name that was put back.
+  expect(await focused(page)).toBe('BODY');
+  await page.keyboard.press('Control+Enter');
+  await expect(page.locator('.toasts')).toContainText('Renamed 1 document.');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: /^Completed/ }).click();
+  await expect(queueCell(page, LEASE, 'proposed')).toContainText(`${PROPOSED}.pdf`);
+  await expect(queueCell(page, LEASE, 'proposed')).not.toContainText('v2 signed');
+});
 
 test('what was typed for a document that then changed by itself is still set aside beside it after Intern is closed and opened', async ({ page }) => {
   await page.setViewportSize(WIDE);
