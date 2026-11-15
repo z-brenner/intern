@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { SETTLE_MS } from '../../src/lib/aimedPress';
-import { openDetails, untilSettled } from './grid';
+import { REACH_PX, SETTLE_MS } from '../../src/lib/aimedPress';
+import { openDetails, queueCell, untilSettled } from './grid';
 
 /*
   A press of the pointer acts only on a control it can have been aimed at
@@ -26,10 +26,11 @@ const NARROW = { width: 800, height: 600 };
 
 type QueueByItself = { change(id: string, change: Record<string, unknown>): void; leave(id: string): void };
 /** Changes the queue with nobody asking, and notes when by the page's own clock. */
-const byItself = (page: Page, how: 'left the queue' | 'read again') => page.evaluate((how) => {
+const byItself = (page: Page, how: 'left the queue' | 'read again' | 'back with a reading') => page.evaluate((how) => {
   const queue = (window as unknown as { internQueue: QueueByItself }).internQueue;
   if (how === 'left the queue') queue.leave('lease');
-  else queue.change('lease', { status: 'processing', stage: 'reading', proposedFilename: undefined, description: undefined, reason: undefined });
+  else if (how === 'read again') queue.change('lease', { status: 'processing', stage: 'reading', proposedFilename: undefined, description: undefined, reason: undefined });
+  else queue.change('lease', { status: 'review', stage: undefined, proposedFilename: '2023-09-15 Lease between ABC Properties and TenantCo.pdf', description: 'A lease of 123 Main St.', reason: 'Two dates were found.' });
   (window as unknown as { changedAt: number }).changedAt = performance.now();
 }, how);
 /** Milliseconds since the queue changed by itself, by the page's own clock. */
@@ -158,4 +159,85 @@ test('one document after another is approved with the pointer at rest on Approve
     await expect(shown).toHaveText(next);
   }
   await expect(page.getByRole('button', { name: /^Completed, / })).toHaveText(/4$/);
+});
+
+/*
+  A refused press shows nothing, so a person makes it again at once - and a
+  browser counts a press made again within the double-click time as the
+  second click of a double-click, whatever became of the first. Approve &
+  rename acts on a first press only: the second click of a double-click
+  lands on the next document's button. So the press made again after a
+  refused one is taken for a first press, and the one after that is not. The
+  count is given here, as a browser gives it to two and three presses in
+  quick succession; the times are those of a person pressing again.
+*/
+test('a press refused on Approve & rename and made again at once approves one document, and a third press no other', async ({ page }) => {
+  await page.setViewportSize(NARROW);
+  let at = { x: 0, y: 0 };
+  const panel = page.getByRole('dialog', { name: 'Review item' });
+  const shown = panel.locator('.selected-file');
+  const approve = panel.getByRole('button', { name: 'Approve & rename' });
+  const completed = page.getByRole('button', { name: /^Completed, / });
+  const press = async (count: number) => { await page.mouse.down({ clickCount: count }); await page.mouse.up({ clickCount: count }); };
+  await withinTheSettleTime(page, async () => {
+    await page.goto('/?queue=changes');
+    await openDetails(page, LEASE);
+    at = middle(await approve.boundingBox());
+    await page.mouse.move(at.x, at.y);
+    await untilSettled(page);
+    // The document is read again by itself and is back with another reading: the button went, and has come back.
+    await byItself(page, 'read again');
+    await expect(approve).toHaveCount(0);
+    await byItself(page, 'back with a reading');
+    await expect(approve).toBeEnabled();
+    await press(1);
+  });
+  expect(await buttonAt(page, at)).toContain('Approve & rename');
+  await page.waitForTimeout(200);
+  await expect(shown).toHaveText(LEASE);
+  await expect(completed).toHaveText(/1$/);
+
+  // Made again once the button has been there for the settle time: counted second, and taken.
+  await page.waitForFunction((settled) => performance.now() - (window as unknown as { changedAt: number }).changedAt > settled, SETTLE_MS + 100);
+  await press(2);
+  await expect(shown).toHaveText('Employment Agreement - John Smith.pdf');
+  await expect(completed).toHaveText(/2$/);
+  // And once more, on the next document's button (a ready one's is named Apply rename), there in the same place: nothing.
+  await expect(panel.getByRole('button', { name: 'Apply rename' })).toBeEnabled();
+  expect(await buttonAt(page, at)).toContain('Apply rename');
+  await press(3);
+  await page.waitForTimeout(300);
+  await expect(shown).toHaveText('Employment Agreement - John Smith.pdf');
+  await expect(completed).toHaveText(/2$/);
+  // A press of its own approves it.
+  await press(1);
+  await expect(completed).toHaveText(/3$/);
+});
+
+/*
+  What a key of the person's own changes is theirs, also when the page stops
+  the key on its way: Escape takes back the question before a removal, the
+  panel's buttons are there again, and a press on one of them made at once,
+  the pointer having gone to it, is taken.
+*/
+test('Escape takes back the question before a removal, and Keep original pressed at once is taken', async ({ page }) => {
+  await page.setViewportSize(WIDE);
+  await page.goto('/?queue=changes');
+  const panel = await openDetails(page, LEASE);
+  const to = middle(await panel.getByRole('button', { name: 'Keep original' }).boundingBox());
+  // The pointer rests far from the button: going to it is the aim.
+  await page.mouse.move(40, 40);
+  expect(Math.hypot(to.x - 40, to.y - 40)).toBeGreaterThan(REACH_PX);
+  await panel.locator('h2').focus();
+  await page.keyboard.press('Delete');
+  await expect(panel.getByRole('group', { name: 'Confirm removal' })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Keep original' })).toHaveCount(0);
+  await untilSettled(page);
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => { (window as unknown as { changedAt: number }).changedAt = performance.now(); });
+  await page.mouse.click(to.x, to.y);
+  // Within the settle time of the key, or the press says nothing of whose the change was.
+  expect(await sinceItChanged(page)).toBeLessThan(SETTLE_MS - 50);
+  await expect(page.getByRole('button', { name: /^Completed, / })).toHaveText(/2$/);
+  await expect(queueCell(page, LEASE)).toHaveCount(0);
 });

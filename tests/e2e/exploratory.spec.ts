@@ -203,6 +203,9 @@ test('pause, resume, apply all ready, and discard waiting all report what they d
   // The window opened a moment ago, and its buttons with it: not at once (untilSettled).
   await untilSettled(page);
   await page.getByRole('button', { name: /Rename all ready/i }).click();
+  // It was taken: the documents are renamed, and none is left ready.
+  await expect(page.locator('.toasts')).toContainText(/Renamed \d+ documents\./);
+  await expect(page.getByRole('button', { name: /Rename all ready/i })).toHaveCount(0);
   await shot(page, 'apply-all-ready');
   await page.getByRole('button', { name: /^Completed/ }).click();
   await expect(page.getByRole('row')).not.toHaveCount(1);
@@ -213,6 +216,7 @@ test('pause, resume, apply all ready, and discard waiting all report what they d
   if (await more.isVisible()) {
     await more.click();
     await page.getByRole('menuitem', { name: /Discard waiting/i }).click();
+    await expect(page.getByRole('status', { name: 'Action status' })).toHaveText(/^Discarded \d+ waiting items?\.$/);
     await shot(page, 'discard-waiting');
   }
 });
