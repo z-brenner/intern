@@ -930,8 +930,10 @@ fn two_scans_made_ready_before_either_is_filed_are_not_both_filed() {
     by_hand.pipeline.run_until_idle().unwrap();
     assert_only_the_first_scan_is_filed(&by_hand, first, second);
 
-    // The same at balanced from the start: two scans read while automatic
-    // renaming is off are both ready, and only one is filed once it is on.
+    // The same at balanced from the start: these two scans, read while
+    // automatic renaming is off, are both ready, and only one is filed once
+    // it is on. Two scans strict calls ready, and a pair of which strict
+    // calls one ready, have tests of their own below.
     let balanced = Rig::new(BALANCED, false);
     let first = balanced.read("scan-1.pdf", noted(APRIL));
     let second = balanced.read("scan-2.pdf", noted(APRIL));
@@ -988,32 +990,242 @@ fn two_scans_made_ready_while_another_document_is_read_are_not_both_filed() {
     assert_eq!(rig.status(other), QueueStatus::NeedsReview);
 }
 
-/// The look at filing is for readings only a looser level makes ready. A
-/// reading strict calls ready is filed as every release has filed it, at
-/// both levels: it was compared with the filings when it was read, and is
-/// not compared again. So two scans strict calls ready, read while
-/// automatic renaming is off, are both filed once it is on, as before the
-/// levels. Strict is left exactly as it was.
+/// At strict a filing looks for no near duplicate: a reading is compared
+/// with the filings when it is read, and not again. So two scans strict
+/// calls ready, read while automatic renaming is off, are both filed once
+/// it is on, as every release before the levels filed them. Strict is left
+/// exactly as it was.
 #[test]
-fn a_reading_strict_calls_ready_is_filed_as_before_at_both_levels() {
-    for level in ReviewLevel::ALL {
-        let rig = Rig::new(level, false);
-        let first = rig.read("scan-1.pdf", plain(APRIL));
-        let second = rig.read("scan-2.pdf", plain(APRIL));
-        assert_eq!(rig.status(first), QueueStatus::Ready, "{level:?}");
-        assert_eq!(rig.status(second), QueueStatus::Ready, "{level:?}");
+fn at_strict_two_scans_strict_calls_ready_are_both_filed_as_before() {
+    let rig = Rig::new(STRICT, false);
+    let first = rig.read("scan-1.pdf", plain(APRIL));
+    let second = rig.read("scan-2.pdf", plain(APRIL));
+    assert_eq!(rig.status(first), QueueStatus::Ready);
+    assert_eq!(rig.status(second), QueueStatus::Ready);
+    rig.save(|settings| settings.automatic_rename = true);
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(rig.status(first), QueueStatus::Completed);
+    assert_eq!(rig.status(second), QueueStatus::Completed);
+    assert_eq!(rig.record(second).near_duplicate_of, None);
+    assert_eq!(rig.filed_names().len(), 2);
+}
+
+/// What one of two scans of one document is once the queue has filed the
+/// other with no person: `held`, whose reading carries the reasons `notes`,
+/// waits in review as a near duplicate of the filing of `filed`, approved
+/// by nobody, and the output folder holds one file.
+fn assert_one_scan_is_filed_and_the_other_held(rig: &Rig, filed: i64, held: i64, notes: &[&str]) {
+    assert_eq!(rig.status(filed), QueueStatus::Completed);
+    assert_eq!(rig.status(held), QueueStatus::NeedsReview);
+    let record = rig.record(held);
+    assert_eq!(record.status, ProposalStatus::NeedsReview);
+    let mut reasons = notes.to_vec();
+    reasons.push(NEAR_DUPLICATE);
+    assert_eq!(record.reasons, reasons);
+    assert_eq!(
+        record.near_duplicate_of.as_deref(),
+        Some(name_for(APRIL.0).as_str())
+    );
+    assert!(!record.approved);
+    assert_eq!(rig.filed_names(), [name_for(APRIL.0)], "not filed twice");
+}
+
+/// At balanced every filing without a person's approval looks for a near
+/// duplicate, whatever strict would say of the reading. The same two scans
+/// strict calls ready, read while automatic renaming is off, are both
+/// ready, and once it is on the first is filed and the second waits for a
+/// person as a near duplicate of it. Strict files both; balanced files
+/// more with no person, and so looks once more before each such filing.
+#[test]
+fn at_balanced_the_second_of_two_scans_strict_calls_ready_waits_as_a_near_duplicate() {
+    let rig = Rig::new(BALANCED, false);
+    let first = rig.read("scan-1.pdf", plain(APRIL));
+    let second = rig.read("scan-2.pdf", plain(APRIL));
+    assert_eq!(rig.status(first), QueueStatus::Ready);
+    assert_eq!(rig.status(second), QueueStatus::Ready);
+    assert_eq!(rig.record(second).near_duplicate_of, None);
+    rig.save(|settings| settings.automatic_rename = true);
+    rig.pipeline.run_until_idle().unwrap();
+    assert_one_scan_is_filed_and_the_other_held(&rig, first, second, &[]);
+
+    // The hold is the queue's own, and no level lifts it: back at strict,
+    // which would have filed this scan, it still waits for a person.
+    let held = rig.record(second);
+    rig.set_level(STRICT);
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(rig.status(second), QueueStatus::NeedsReview);
+    assert_eq!(rig.record(second), held);
+    assert_eq!(rig.filed_names(), [name_for(APRIL.0)]);
+}
+
+/// A pair of scans of one document of which strict calls only one ready:
+/// the reading of `weak` carries a note about its type, and the reading of
+/// `good` carries nothing. `first` and `second` are the same two in the
+/// order they were read.
+struct MixedPair {
+    weak: i64,
+    good: i64,
+    first: i64,
+    second: i64,
+}
+
+impl MixedPair {
+    /// Reads the two scans, the weak one first when `weak_first` says so.
+    fn read(rig: &Rig, weak_first: bool) -> MixedPair {
+        let scan = |name: &str, weak: bool| {
+            let doc = if weak { noted(APRIL) } else { plain(APRIL) };
+            rig.read(name, doc)
+        };
+        let first = scan("scan-1.pdf", weak_first);
+        let second = scan("scan-2.pdf", !weak_first);
+        let (weak, good) = if weak_first {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        MixedPair {
+            weak,
+            good,
+            first,
+            second,
+        }
+    }
+
+    /// The reasons the reading of scan `id` carries.
+    fn notes(&self, id: i64) -> &'static [&'static str] {
+        if id == self.weak {
+            &["TYPE_INFERRED"]
+        } else {
+            &[]
+        }
+    }
+}
+
+/// At strict such a pair is filed once, as it always was: the scan strict
+/// calls ready is filed when automatic renaming is turned on, and the other
+/// stays in review as it was read, in either order of reading.
+#[test]
+fn at_strict_a_pair_of_which_one_scan_is_ready_is_filed_once() {
+    for weak_first in [true, false] {
+        let rig = Rig::new(STRICT, false);
+        let pair = MixedPair::read(&rig, weak_first);
+        let as_read = rig.record(pair.weak);
+        assert_eq!(rig.status(pair.weak), QueueStatus::NeedsReview);
+        assert_eq!(rig.status(pair.good), QueueStatus::Ready);
         rig.save(|settings| settings.automatic_rename = true);
         rig.pipeline.run_until_idle().unwrap();
-        assert_eq!(rig.status(first), QueueStatus::Completed, "{level:?}");
-        assert_eq!(rig.status(second), QueueStatus::Completed, "{level:?}");
-        assert_eq!(rig.record(second).near_duplicate_of, None);
-        assert_eq!(rig.filed_names().len(), 2, "{level:?}");
+        assert_eq!(rig.status(pair.good), QueueStatus::Completed);
+        assert_eq!(rig.status(pair.weak), QueueStatus::NeedsReview);
+        assert_eq!(rig.record(pair.weak), as_read, "weak first: {weak_first}");
+        assert_eq!(rig.filed_names(), [name_for(APRIL.0)]);
     }
+}
+
+/// At balanced both scans of such a pair are ready, and they are not both
+/// filed with no person. Read while automatic renaming is off and filed
+/// once it is on, the one read first is filed and the other waits as a
+/// near duplicate of it.
+fn a_pair_ready_at_balanced_is_filed_once(weak_first: bool) {
+    let rig = Rig::new(BALANCED, false);
+    let pair = MixedPair::read(&rig, weak_first);
+    assert_eq!(rig.status(pair.first), QueueStatus::Ready);
+    assert_eq!(rig.status(pair.second), QueueStatus::Ready);
+    assert_eq!(rig.record(pair.second).near_duplicate_of, None);
+    assert!(rig.filed_names().is_empty(), "automatic renaming is off");
+    rig.save(|settings| settings.automatic_rename = true);
+    rig.pipeline.run_until_idle().unwrap();
+    assert_one_scan_is_filed_and_the_other_held(
+        &rig,
+        pair.first,
+        pair.second,
+        pair.notes(pair.second),
+    );
+}
+
+/// Read weak scan first, both used to be filed: the look at filing was only
+/// for a reading strict holds, and the good scan, filed second, is not one.
+#[test]
+fn at_balanced_a_pair_read_weak_scan_first_is_filed_once() {
+    a_pair_ready_at_balanced_is_filed_once(true);
+}
+
+/// Read good scan first, the weak scan is the one held.
+#[test]
+fn at_balanced_a_pair_read_good_scan_first_is_filed_once() {
+    a_pair_ready_at_balanced_is_filed_once(false);
+}
+
+/// The same pair read at strict with automatic renaming off, where the weak
+/// scan waits in review and the good scan is ready. Balanced is chosen,
+/// which makes the weak scan ready too, and automatic renaming is turned on
+/// in a later save. The one read first is filed, and the other is held.
+fn a_pair_is_filed_once_when_balanced_comes_first(weak_first: bool) {
+    let rig = Rig::new(STRICT, false);
+    let pair = MixedPair::read(&rig, weak_first);
+    assert_eq!(rig.status(pair.weak), QueueStatus::NeedsReview);
+    assert_eq!(rig.status(pair.good), QueueStatus::Ready);
+    rig.set_level(BALANCED);
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(rig.status(pair.weak), QueueStatus::Ready);
+    assert_eq!(rig.status(pair.good), QueueStatus::Ready);
+    assert!(rig.filed_names().is_empty(), "automatic renaming is off");
+    rig.save(|settings| settings.automatic_rename = true);
+    rig.pipeline.run_until_idle().unwrap();
+    assert_one_scan_is_filed_and_the_other_held(
+        &rig,
+        pair.first,
+        pair.second,
+        pair.notes(pair.second),
+    );
+}
+
+#[test]
+fn balanced_then_automatic_renaming_file_a_pair_read_weak_scan_first_once() {
+    a_pair_is_filed_once_when_balanced_comes_first(true);
+}
+
+#[test]
+fn balanced_then_automatic_renaming_file_a_pair_read_good_scan_first_once() {
+    a_pair_is_filed_once_when_balanced_comes_first(false);
+}
+
+/// And when one Settings save turns automatic renaming on and chooses
+/// balanced, as the app saves it: stored, then the queue is told the level
+/// changed, then the scheduler runs. The weak scan is made ready and filed
+/// inside the save. The good scan, ready all along, is the scheduler's to
+/// file, and it repeats a filing by then: it waits as a near duplicate,
+/// whichever was read first.
+fn a_pair_is_filed_once_when_one_save_brings_both(weak_first: bool) {
+    let rig = Rig::new(STRICT, false);
+    let pair = MixedPair::read(&rig, weak_first);
+    assert_eq!(rig.status(pair.weak), QueueStatus::NeedsReview);
+    assert_eq!(rig.status(pair.good), QueueStatus::Ready);
+    let previous = rig.save(|settings| {
+        settings.automatic_rename = true;
+        settings.review_level = BALANCED;
+    });
+    rig.pipeline
+        .review_level_changed(previous.review_level, BALANCED)
+        .unwrap();
+    assert_eq!(rig.status(pair.weak), QueueStatus::Completed);
+    assert_eq!(rig.status(pair.good), QueueStatus::Ready);
+    rig.pipeline.run_until_idle().unwrap();
+    assert_one_scan_is_filed_and_the_other_held(&rig, pair.weak, pair.good, &[]);
+}
+
+#[test]
+fn balanced_and_automatic_renaming_in_one_save_file_a_pair_read_weak_scan_first_once() {
+    a_pair_is_filed_once_when_one_save_brings_both(true);
+}
+
+#[test]
+fn balanced_and_automatic_renaming_in_one_save_file_a_pair_read_good_scan_first_once() {
+    a_pair_is_filed_once_when_one_save_brings_both(false);
 }
 
 /// Nor does the look at filing second-guess a person. Two scans ready at
 /// balanced, neither filed: a person approves one and then the other, and
-/// both are filed, as two scans strict calls ready always were.
+/// both are filed, as two scans a person approves always were.
 #[test]
 fn a_name_a_person_approved_is_filed_whatever_it_repeats() {
     let rig = Rig::new(BALANCED, false);
@@ -1029,6 +1241,28 @@ fn a_name_a_person_approved_is_filed_whatever_it_repeats() {
     }
     assert_eq!(rig.record(second).near_duplicate_of, None);
     assert_eq!(rig.filed_names().len(), 2);
+}
+
+/// The same for two scans strict calls ready, at both levels: a person
+/// approves one and then the other, and both are filed. At balanced the
+/// queue would hold the second if it were filing it with no person.
+#[test]
+fn two_scans_strict_calls_ready_that_a_person_approves_are_both_filed() {
+    for level in ReviewLevel::ALL {
+        let rig = Rig::new(level, false);
+        let first = rig.read("scan-1.pdf", plain(APRIL));
+        let second = rig.read("scan-2.pdf", plain(APRIL));
+        for id in [first, second] {
+            assert_eq!(rig.status(id), QueueStatus::Ready, "{level:?}");
+            let name = rig.record(id).filename;
+            rig.pipeline
+                .approve(id, &name, "A sentence about the agreement.")
+                .unwrap();
+            assert_eq!(rig.status(id), QueueStatus::Completed, "{level:?}");
+        }
+        assert_eq!(rig.record(second).near_duplicate_of, None);
+        assert_eq!(rig.filed_names().len(), 2, "{level:?}");
+    }
 }
 
 /// A document held as a near duplicate when it was read stays held when the

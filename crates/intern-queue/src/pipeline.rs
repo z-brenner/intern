@@ -4021,7 +4021,9 @@ impl Pipeline {
     /// here and stays in review. Where it is not - the queue is paused, or
     /// reading another document, or automatic renaming is off - both become
     /// ready, and the second is held when the queue files them
-    /// ([`Self::held_as_near_duplicate`]).
+    /// ([`Self::held_as_near_duplicate`]). So is a scan of the same
+    /// document that both levels call ready, which is not judged here: the
+    /// queue comes to file it after the one this made ready, and holds it.
     ///
     /// Toward a stricter level, a ready document no person approved whose
     /// reading waits at `to` goes back to review
@@ -4419,9 +4421,9 @@ impl Pipeline {
         Ok(true)
     }
 
-    /// Puts the ready `item` in review as a near duplicate where `record`,
-    /// which no person has approved, is a reading only a level looser than
-    /// strict calls ready and its text nearly repeats a filing
+    /// Puts the ready `item` in review as a near duplicate where the review
+    /// level in force, `level`, is looser than strict, `record` is a
+    /// reading no person has approved, and its text nearly repeats a filing
     /// ([`Self::near_duplicate_of`]), and says whether it did. A row that
     /// could not be put in review is not filed either, as in
     /// [`Self::held_for_review_level`].
@@ -4429,23 +4431,39 @@ impl Pipeline {
     /// A reading is compared with the filings when it is read
     /// ([`Self::record_for`]) and when a level makes it ready
     /// ([`Self::make_ready_at`]), and a filing can be made after both. Two
-    /// scans of one document that a change of level made ready while the
-    /// queue was paused, or reading another document, repeat no filing
-    /// then: neither is filed yet. The scheduler files them one after the
-    /// other, and the second repeats the first once the first is filed. So
-    /// the filing itself looks once more.
+    /// scans of one document that are ready together, neither filed,
+    /// repeat no filing yet. The queue files them one after the other, and
+    /// the second repeats the first once the first is filed. So the filing
+    /// itself looks once more.
     ///
-    /// Only for a reading strict would hold. One strict calls ready is
-    /// filed as every release before the levels filed it, compared when it
-    /// was read and not again: strict stays exactly what it was, and such a
-    /// reading is filed alike at every level.
+    /// At a looser level it looks for every reading no person approved,
+    /// whatever strict would say of that reading. A looser level files a
+    /// scan strict holds, and a scan of the same document that strict calls
+    /// ready can be waiting beside it: filed after it, that one is the
+    /// repeat. Asking only for a reading strict holds filed both. A name a
+    /// person approved is filed whatever it repeats, and a name with no
+    /// reading behind it has no text to compare.
+    ///
+    /// At strict it does not look. There a reading is compared when it is
+    /// read and not again, as in every release before the levels, so strict
+    /// files exactly what it filed then: two scans strict calls ready that
+    /// were read while automatic renaming was off are both filed once it is
+    /// on.
+    ///
+    /// What it costs at a looser level: one near-duplicate lookup for each
+    /// filing without approval, on top of the one made when the document
+    /// was read. Each asks the queue's own filings and, finding no repeat
+    /// among them, the duplicate oracle. With a shared filed index that
+    /// reads every marker in the shared folder, as the lookup at reading
+    /// does.
     fn held_as_near_duplicate(
         &self,
         item: &QueueItem,
         record: &ProposalRecord,
+        level: ReviewLevel,
     ) -> PipelineResult<bool> {
-        let asked = |record: &ProposalRecord| waits_at(record, ReviewLevel::Strict);
-        if !asked(record) {
+        let asked = |record: &ProposalRecord| !record.approved && !record.is_synthetic();
+        if level == ReviewLevel::Strict || !asked(record) {
             return Ok(false);
         }
         let Some(filing) = self.near_duplicate_of(item.id, &record.analysis) else {
@@ -4527,11 +4545,11 @@ impl Pipeline {
         {
             return Ok(());
         }
-        // Nor a reading only a looser level calls ready whose text nearly
+        // Nor, at a level looser than strict, a reading whose text nearly
         // repeats a filing made since it was compared with them: the second
-        // of two scans that became ready together.
+        // of two scans that were ready together.
         if let Some(record) = proposal.as_ref()
-            && self.held_as_near_duplicate(item, record)?
+            && self.held_as_near_duplicate(item, record, settings.review_level)?
         {
             return Ok(());
         }
@@ -9537,13 +9555,13 @@ mod hold_tests {
     use intern_engine::{
         DocumentAnalysis, DocumentSource, Evidence, ExtractProgress, HouseRule, PartyRelation,
         ProposalStatus, ReviewLevel, ReviewReason, RuleKind, ValidatedProposal,
-        compose_styled_filename,
+        compose_styled_filename, fingerprint,
     };
     use rusqlite::{Connection, params};
 
     use super::{
-        AnalyzerBoundary, ModelFailure, Pipeline, PipelineEventSink, PipelineProgress,
-        ProposalRecord, WorkerBoundary, WorkerFailure,
+        AnalyzerBoundary, ModelFailure, NEAR_DUPLICATE, Pipeline, PipelineEventSink,
+        PipelineProgress, ProposalRecord, WorkerBoundary, WorkerFailure,
     };
     use crate::settings::{AppSettings, SettingsStore};
 
@@ -9756,6 +9774,121 @@ mod hold_tests {
                 assert_eq!(stored.status, ProposalStatus::NeedsReview);
                 assert_eq!(stored.reasons, record.reasons, "nothing added");
                 assert!(source.exists() && !destination.exists(), "{level:?}");
+            }
+        }
+    }
+
+    /// A filing looks for a near duplicate itself, whoever asked for the
+    /// filing, and only where it should. A ready agreement strict calls
+    /// ready, whose text repeats a filing made since it was read, is put in
+    /// review as a near duplicate by the filing attempt at balanced. The
+    /// same attempt files it at strict, where a reading is compared when it
+    /// is read and not again. At balanced it files a name a person
+    /// approved, and a name with no reading behind it: the stored record of
+    /// one carries no text today, and would not be compared if it did.
+    #[test]
+    fn a_filing_looks_for_a_near_duplicate_only_where_it_should() {
+        const FINGERPRINT: u64 = 0x5eed_cafe_f00d_d00d;
+        const EARLIER: &str = "2024-04-12 Employment Agreement.pdf";
+        for (level, approved, manual, held) in [
+            (ReviewLevel::Balanced, false, false, true),
+            (ReviewLevel::Strict, false, false, false),
+            (ReviewLevel::Balanced, true, false, false),
+            (ReviewLevel::Balanced, false, true, false),
+        ] {
+            let case = format!("{level:?}, approved {approved}, typed by hand {manual}");
+            let temp = tempfile::tempdir().unwrap();
+            let database = temp.path().join("queue.sqlite3");
+            let pipeline = Pipeline::with_local_files(
+                &database,
+                Arc::new(Unread),
+                Arc::new(Unread),
+                Arc::new(Unread),
+                SettingsStore::new(temp.path().join("settings.json")),
+            )
+            .unwrap();
+            let inbox = temp.path().join("Inbox");
+            let filed = temp.path().join("Filed");
+            std::fs::create_dir_all(&inbox).unwrap();
+            std::fs::create_dir_all(&filed).unwrap();
+            let inbox = inbox.canonicalize().unwrap();
+            let filed = filed.canonicalize().unwrap();
+            let enqueue = |name: &str| {
+                let source = inbox.join(name);
+                std::fs::write(&source, name.as_bytes()).unwrap();
+                let hash = pipeline.files.fingerprint(&source).unwrap();
+                (pipeline.store.enqueue(&source, &hash).unwrap().id, source)
+            };
+            let (earlier, _) = enqueue("earlier.pdf");
+            let (id, source) = enqueue("again.pdf");
+
+            // As a reading strict calls ready is stored, with the text's
+            // fingerprint, and as the filing of an earlier scan of the same
+            // agreement is remembered.
+            let mut record = ProposalRecord::synthetic(String::new(), String::new());
+            record.manual = manual;
+            record.approved = approved;
+            record.analysis.proposal = ValidatedProposal {
+                document_type: Some("Employment Agreement".into()),
+                document_date: Some("2024-04-12".into()),
+                date_role: None,
+                parties: vec!["John Smith".into(), "Acme Corporation".into()],
+                party_relation: PartyRelation::Between,
+                description: "An agreement.".into(),
+                confidence: 0.9,
+                evidence: Evidence::default(),
+            };
+            record.filename =
+                compose_styled_filename(&record.styled_proposal(), &[], "pdf", &[]).value;
+            record.analysis.filename.clone_from(&record.filename);
+            record.analysis.status = ProposalStatus::Ready;
+            record.analysis.text_fingerprint = Some(fingerprint::encode(FINGERPRINT));
+            record.status = ProposalStatus::Ready;
+            let connection = Connection::open(&database).unwrap();
+            connection
+                .execute(
+                    "UPDATE queue_items SET status = 'ready' WHERE id = ?1",
+                    params![id],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO proposals(queue_item_id, proposal_json, created_at) VALUES (?1, ?2, 1)",
+                    params![id, serde_json::to_string(&record).unwrap()],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO fingerprints(queue_item_id, fingerprint, filed_name, filed_at)
+                     VALUES (?1, ?2, ?3, 1)",
+                    params![earlier, FINGERPRINT as i64, EARLIER],
+                )
+                .unwrap();
+
+            let item = pipeline.store.get(id).unwrap().unwrap();
+            let settings = AppSettings {
+                destination: filed.to_string_lossy().into_owned(),
+                automatic_rename: true,
+                review_level: level,
+                ..AppSettings::default()
+            };
+            pipeline
+                .apply_if_unchanged(&item, &record.filename, &settings)
+                .unwrap();
+
+            let row = pipeline.store.get(id).unwrap().unwrap();
+            let stored = pipeline.repository.load_proposal(id).unwrap().unwrap();
+            let destination = filed.join(&record.filename);
+            if held {
+                assert_eq!(row.status, QueueStatus::NeedsReview, "{case}");
+                assert_eq!(stored.status, ProposalStatus::NeedsReview, "{case}");
+                assert_eq!(stored.reasons, [NEAR_DUPLICATE], "{case}");
+                assert_eq!(stored.near_duplicate_of.as_deref(), Some(EARLIER));
+                assert!(source.exists() && !destination.exists(), "{case}");
+            } else {
+                assert_eq!(row.status, QueueStatus::Completed, "{case}");
+                assert_eq!(stored.near_duplicate_of, None, "{case}");
+                assert!(destination.exists() && !source.exists(), "{case}");
             }
         }
     }
