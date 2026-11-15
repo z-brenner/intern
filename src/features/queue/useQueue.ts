@@ -10,6 +10,11 @@ interface QueueIssue { kind: 'snapshot' | 'subscription'; cause: unknown }
 
 export function useQueue(bridge: DesktopBridge) {
   const [items, setItems] = useState<QueueItem[]>([]);
+  // Whether the queue has been read at all. Until it has, the empty list
+  // above is not a queue with nothing in it: what was typed for a document
+  // and stored is put back, or dropped with its document, only against a
+  // queue that was read (see keepTypedBetweenLaunches).
+  const [read, setRead] = useState(false);
   const [paused, setPaused] = useState(false);
   // Why the queue stopped taking work, when it stopped itself. Held until the
   // queue reports that it is running again, because nothing else on screen
@@ -34,7 +39,7 @@ export function useQueue(bridge: DesktopBridge) {
     let stop: (() => void) | undefined;
     const reader = createQueueReader(
       () => bridge.listItems(),
-      (read) => { setItems((previous) => shareUnchanged(previous, read)); setReadError(null); },
+      (listed) => { setItems((previous) => shareUnchanged(previous, listed)); setRead(true); setReadError(null); },
       (cause) => setReadError({ kind: 'snapshot', cause }),
     );
     connection.current = { bridge, reader };
@@ -91,7 +96,7 @@ export function useQueue(bridge: DesktopBridge) {
   }, [bridge, connectionAttempt]);
 
   const execute = useCallback(async (action: () => Promise<void>) => { await action(); await refresh(); }, [refresh]);
-  return { items, paused, setPaused, refresh, execute, error: readError ?? subscriptionError, pipelineError, reconnect };
+  return { items, read, paused, setPaused, refresh, execute, error: readError ?? subscriptionError, pipelineError, reconnect };
 }
 
 /**

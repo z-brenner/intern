@@ -39,8 +39,9 @@ import { useQueue } from './features/queue/useQueue';
 import { useBatchProgress } from './features/queue/batch';
 import { requestAttentionIfUnfocused, setTaskbarProgress } from './lib/windowSignals';
 import { isParked, isUnreadable, itemActions, keptOriginal, nextUndecided, undecidedOrder } from './features/review/actions';
-import { keptText, setAsideOutdatedDrafts, typedAndNotFiled, watchedDrafts } from './features/review/drafts';
-import type { EarlierDrafts, KeptText, ReviewDrafts } from './features/review/drafts';
+import { keptText, setAsideOutdatedDrafts, typedAndNotFiled } from './features/review/drafts';
+import type { KeptText } from './features/review/drafts';
+import { keepTypedBetweenLaunches, windowStorage } from './features/review/typedStore';
 import { useReviewShortcuts } from './features/review/useReviewShortcuts';
 import type { ReviewInspectorHandle } from './features/review/useReviewShortcuts';
 import { modelReady, useModelSetup } from './features/setup/useModelSetup';
@@ -128,7 +129,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const historyTrigger = useRef<HTMLElement | null>(null);
   const reviewTrigger = useRef<{ element: HTMLElement; itemId: string } | null>(null);
   const focusRestoreVersion = useRef(0);
-  const { items, paused, setPaused, refresh, error: queueError, pipelineError, reconnect } = useQueue(bridge);
+  const { items, read: queueRead, paused, setPaused, refresh, error: queueError, pipelineError, reconnect } = useQueue(bridge);
   const inspectorHandle = useRef<ReviewInspectorHandle>(null);
   // Where focus goes once the item it is meant for is on screen: its row, or
   // its name or heading in the review panel.
@@ -162,9 +163,19 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // now is, and into what the panel shows beside them (EarlierDrafts) - and
   // only the person drops it: by filing it, by deciding the document some
   // other way, by having it read again, or by discarding it.
+  //
+  // Not by closing Intern either: both are stored as they change, in the
+  // window's own storage, and put back when the queue is first read at the
+  // next launch (keepTypedBetweenLaunches) - in the fields over the reading
+  // they were typed over, set aside beside any other, dropped with a
+  // document that is no longer in the queue. They are put back here, as the
+  // window is about to show that queue, so the panel never shows a document
+  // before what was typed for it is back; and nothing is given the focus
+  // for it.
   const [, redrawForTyped] = useState(0);
-  const [reviewDrafts] = useState<ReviewDrafts>(() => watchedDrafts(() => redrawForTyped((count) => count + 1)));
-  const [earlierDrafts] = useState<EarlierDrafts>(() => new Map());
+  const [typedKept] = useState(() => keepTypedBetweenLaunches(windowStorage, () => redrawForTyped((count) => count + 1)));
+  const { drafts: reviewDrafts, earlier: earlierDrafts } = typedKept;
+  typedKept.queueIs(items, queueRead);
   const forgetTyped = (id: string) => { const typed = reviewDrafts.delete(id); if (earlierDrafts.delete(id) || typed) redrawForTyped((count) => count + 1); };
   const typedOver = (id: string) => typedAndNotFiled(reviewDrafts, earlierDrafts, id);
   // What a person had in a name and a description when the panel they were
