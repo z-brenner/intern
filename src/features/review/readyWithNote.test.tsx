@@ -310,3 +310,115 @@ describe('a document renamed with a note, afterwards', () => {
     expect(within(dialog).queryByRole('note')).not.toBeInTheDocument();
   });
 });
+
+/*
+  TYPE_MISSING is raised for a type that is a general word alone ("Letter",
+  "Agreement", "Notice"), and at Balanced such a reading is ready only when
+  its name has a type. The Check cell said "Note: No document type" beside a
+  name that had one, in the queue, in the copied text and in Rename history.
+*/
+describe('a note that the type is a general word', () => {
+  const fromBackend = (sent: unknown[]) => new TauriBridge({ invoke: async <T,>() => sent as T, listen: async () => () => {} }).listItems();
+  const name = '2024-03-08 Letter to Fabrikam Inc.pdf';
+
+  it('never says the name has no type: ready, renamed, and in Rename history', async () => {
+    const items = await fromBackend([
+      { id: 31, originalFilename: 'Scan 0601.pdf', status: 'ready', proposedFilename: name, confidence: 0.97, description: 'Letter to Fabrikam Inc.', reason: 'TYPE_MISSING', proposalRevision: '1', approved: false },
+      { id: 32, originalFilename: 'Scan 0602.pdf', status: 'completed', proposedFilename: '2024-03-09 Agreement with Contoso Ltd.pdf', filedName: '2024-03-09 Agreement with Contoso Ltd.pdf', filedPath: 'C:\\Filed\\2024-03-09 Agreement with Contoso Ltd.pdf', keptOriginal: false, parked: false, undoable: true, approved: false, reason: 'TYPE_MISSING, LOW_CONFIDENCE', proposalRevision: '1' },
+    ]);
+    const history: HistoryEntry[] = [{ receiptId: '7', queueItemId: '32', at: 1716369307, direction: 'apply', kind: 'rename', stage: 'complete', originalPath: 'C:\\In\\Scan 0602.pdf', newPath: 'C:\\Filed\\2024-03-09 Agreement with Contoso Ltd.pdf' }];
+    await start(items, { history, settings: { reviewLevel: 'balanced' } });
+    expect(queueCell('Scan 0601.pdf', 'status')).toHaveTextContent('Ready with a note');
+    expect(queueCell('Scan 0601.pdf', 'proposed')).toHaveTextContent(name);
+    expect(queueCell('Scan 0601.pdf', 'check')).toHaveTextContent(/^Note: No specific type$/);
+    expect(queueCell('Scan 0601.pdf', 'check')).toHaveAttribute('title', 'No specific document type was identified.');
+    const panel = await openDetails('Scan 0601.pdf');
+    expect(within(panel).getByRole('region', { name: "Intern's note" })).toHaveTextContent('No specific document type was identified.');
+    expect(document.body).not.toHaveTextContent('No document type');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
+    expect(queueCell('Scan 0602.pdf', 'status')).toHaveTextContent('Completed with a note');
+    expect(queueCell('Scan 0602.pdf', 'check')).toHaveTextContent('Note: No specific type +1 more');
+    fireEvent.click(screen.getByRole('button', { name: 'History' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Rename history' });
+    expect(await within(dialog).findByRole('note')).toHaveTextContent('Note: No specific type (+1 more)');
+    expect(document.body).not.toHaveTextContent('No document type');
+  });
+
+  it('is still "No document type" on a document in review, where the name may have none', async () => {
+    const items = await fromBackend([{ id: 33, originalFilename: 'Scan 0603.pdf', status: 'needs_review', proposedFilename: '2024-03-08 Document.pdf', confidence: 0.9, reason: 'TYPE_MISSING', proposalRevision: '1', approved: false }]);
+    await start(items);
+    expect(queueCell('Scan 0603.pdf', 'status')).toHaveTextContent('Needs review');
+    expect(queueCell('Scan 0603.pdf', 'check')).toHaveTextContent(/^No document type$/);
+  });
+});
+
+/*
+  A document with notes is not always ready or renamed. While Intern renames
+  it the backend calls it applying, and one that already had exactly the name
+  Intern would give it is completed under that name, ALREADY_NAMED added to
+  the reasons it carried. Neither waits for a person, and the panel's closing
+  note told the person to check both.
+*/
+describe('a document with notes that is being renamed, or was completed under the name it had', () => {
+  const fromBackend = (sent: unknown[]) => new TauriBridge({ invoke: async <T,>() => sent as T, listen: async () => () => {} }).listItems();
+  const instruction = /Check that it names the document|Check the name against the document|Check the type/;
+  const alreadyNamed = 'This document already had this name, so nothing was renamed.';
+  const sent = [
+    { id: 41, originalFilename: 'Scan 0701.pdf', status: 'applying', proposedFilename: '2024-03-09 Letter to Contoso Ltd.pdf', confidence: 1, reason: 'TYPE_INFERRED, LOW_CONFIDENCE', proposalRevision: '1', approved: false },
+    { id: 42, originalFilename: '2024-03-08 Letter to Fabrikam Inc.pdf', status: 'completed', proposedFilename: '2024-03-08 Letter to Fabrikam Inc.pdf', confidence: 1, filedName: null, filedPath: null, keptOriginal: true, parked: false, undoable: false, approved: false, reason: 'TYPE_INFERRED, LOW_CONFIDENCE, ALREADY_NAMED', proposalRevision: '2' },
+    // Already named after a person's approval, or at Strict: the one reason, as before.
+    { id: 43, originalFilename: '2024-03-07 Invoice INV-7 from Litware Inc.pdf', status: 'completed', proposedFilename: '2024-03-07 Invoice INV-7 from Litware Inc.pdf', filedName: null, filedPath: null, keptOriginal: true, parked: false, undoable: false, approved: false, reason: 'ALREADY_NAMED', proposalRevision: '2' },
+    // Kept under its own name by a person, from review: the review's words, as before.
+    { id: 44, originalFilename: 'Scan 0704.pdf', status: 'completed', proposedFilename: '2024-03-06 Notice.pdf', filedName: null, filedPath: null, keptOriginal: true, parked: false, undoable: false, approved: false, reason: 'TYPE_INFERRED, LOW_CONFIDENCE', proposalRevision: '1' },
+  ];
+
+  it('says what Intern noted while the document is renamed, and tells nobody to check it', async () => {
+    const items = await fromBackend(sent);
+    expect(items[0]).toMatchObject({ status: 'processing', stage: 'filing', reasonCodes: codes });
+    await start(items);
+    expect(queueCell('Scan 0701.pdf', 'status')).toHaveTextContent('Renaming');
+    const panel = await openDetails('Scan 0701.pdf');
+    const note = within(panel).getByRole('heading', { name: 'Note' }).closest('section')!;
+    expect(note).toHaveTextContent(describeNotes(codes));
+    expect(panel).not.toHaveTextContent(instruction);
+    // Not ready and not renamed: no "with a note" of either kind, and nothing of a review.
+    expect(within(panel).queryByRole('region', { name: "Intern's note" })).not.toBeInTheDocument();
+    expect(within(panel).queryByRole('heading', { name: 'What to check' })).not.toBeInTheDocument();
+  });
+
+  it('says first that the document already had its name, then the notes, in the panel and the Check cell', async () => {
+    await start(await fromBackend(sent));
+    fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
+    const row = '2024-03-08 Letter to Fabrikam Inc.pdf';
+    expect(queueCell(row, 'status')).toHaveTextContent(/^Completed$/);
+    const check = queueCell(row, 'check');
+    expect(check).toHaveTextContent('Already had this name +2 more');
+    expect(check.querySelector('.check-label')).toHaveClass('quiet');
+    expect(check).toHaveAttribute('title', `${alreadyNamed} ${describeNotes(codes)}`);
+    // Nothing was renamed, so it is not among those renamed with a note.
+    expect(screen.queryByRole('button', { name: /with a note/ })).not.toBeInTheDocument();
+
+    const panel = await openDetails(row);
+    expect(panel).toHaveTextContent('Kept its original name');
+    const note = within(panel).getByRole('heading', { name: 'Note' }).closest('section')!;
+    expect(note).toHaveTextContent(`${alreadyNamed} ${describeNotes(codes)}`);
+    expect(panel).not.toHaveTextContent(instruction);
+    // "The model was unsure" beside its own 100%: explained, as on a review and on a note.
+    fireEvent.click(within(panel).getByText('Analysis details'));
+    expect(within(panel).getByRole('note', { name: "About the model's own confidence" })).toBeInTheDocument();
+  });
+
+  it('leaves a document already named with nothing noted, and one a person kept, as they were', async () => {
+    await start(await fromBackend(sent));
+    fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
+    expect(queueCell('2024-03-07 Invoice INV-7 from Litware Inc.pdf', 'check')).toHaveTextContent(/^Already had this name$/);
+    const panel = await openDetails('2024-03-07 Invoice INV-7 from Litware Inc.pdf');
+    expect(within(panel).getByRole('heading', { name: 'Note' }).closest('section')).toHaveTextContent(new RegExp(`^Note${alreadyNamed.replace(/[.]/g, '\\.')}$`));
+    // A person's Keep original leaves the review's codes on the record; that row is the released one's.
+    expect(queueCell('Scan 0704.pdf', 'check')).toHaveTextContent('Type supplied by Intern +1 more');
+    expect(queueCell('Scan 0704.pdf', 'check')).toHaveAttribute('title', humanizeReason(codes.join(', ')));
+    await openDetails('Scan 0704.pdf');
+    expect(within(panel).getByRole('heading', { name: 'Note' }).closest('section')).toHaveTextContent(humanizeReason(codes.join(', ')));
+  });
+});

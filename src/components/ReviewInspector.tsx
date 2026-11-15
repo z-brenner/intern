@@ -9,7 +9,7 @@ import { TypedKept } from './TypedKept';
 import { isUnreadable, itemActions, keptOriginal, withoutReviewPrefix } from '../features/review/actions';
 import { proposalOf } from '../features/review/drafts';
 import type { KeptText, ReviewDraft, ReviewDrafts } from '../features/review/drafts';
-import { itemFlaggedFields, itemNote, itemReasonCodes, nameParts, partyGiven, withParty } from '../features/queue/check';
+import { carriedNotes, itemFlaggedFields, itemNote, itemReasonCodes, nameParts, partyGiven, withParty } from '../features/queue/check';
 import type { ReasonField } from '../lib/reasons';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
@@ -472,10 +472,15 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // first, as what to check is, and as a note: the document is not in
   // review, so nothing below is marked "check this" for it.
   const note = itemNote(item);
+  // The same notes on a document Intern is renaming, or completed under the
+  // name it already had: neither ready nor renamed, so not said first, and
+  // not waiting, so said under "Note" below as notes and not as a review's
+  // instructions.
+  const carried = carriedNotes(item);
   // In review because the model was unsure (LOW_CONFIDENCE) while the model's
   // own figure, shown under Analysis details, says it was sure. The same
   // two can stand side by side on a document with that as its note.
-  const unsureCodes = item.status === 'review' ? itemReasonCodes(item) : note?.codes ?? [];
+  const unsureCodes = item.status === 'review' ? itemReasonCodes(item) : note?.codes ?? (carried ? item.reasonCodes ?? [] : []);
   const sureByItsOwnFigure = item.confidence !== undefined && item.confidence >= SELF_RATED_UNSURE && unsureCodes.includes('LOW_CONFIDENCE');
   /*
     The Parties row is another matter whoever read it: what the backend
@@ -694,7 +699,8 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     {/* Settled, a reason is no longer why the item waits - "already had this name" is a note about what happened. */}
     {/* A waiting document is not in review: its reason says why it waits (a document in doubt, to be read again once Intern has shown it can read). */}
     {/* Not a second time for a document whose note is said first, above. */}
-    {item.reason && !reviewNote && !note && <section className="note"><h3>{completed ? 'Note' : item.status === 'waiting' ? 'Why it is waiting' : 'Note'}</h3><p>{item.reason}</p>
+    {/* A document being renamed, or completed under the name it had, says what it carried as notes: nothing here tells the person to check a document that is not waiting. */}
+    {item.reason && !reviewNote && !note && <section className="note"><h3>{completed ? 'Note' : item.status === 'waiting' ? 'Why it is waiting' : 'Note'}</h3><p>{carried ?? item.reason}</p>
       {/*
         The sentence says "a document that was filed already"; this says
         which one, so the person can open it and compare rather than take

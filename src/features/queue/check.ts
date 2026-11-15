@@ -1,4 +1,4 @@
-import { describeNotes, flaggedFields, humanizeReason, noteCodes, reasonCodes, shortReason } from '../../lib/reasons';
+import { describeNotes, flaggedFields, humanizeReason, noteCodes, outcomeFirst, reasonCodes, shortNote, shortOutcome, shortReason } from '../../lib/reasons';
 import type { ReasonField } from '../../lib/reasons';
 import type { QueueItem } from '../../types';
 import { keptOriginal } from '../review/actions';
@@ -57,6 +57,34 @@ export function itemNote(item: QueueItem): ItemNote | undefined {
   return undefined;
 }
 
+/**
+ * The notes a document carries through two states in which it is neither
+ * ready nor renamed, said as notes; undefined for every other row, whose
+ * reason stands as it came.
+ *
+ * While Intern renames a ready document that had notes, the row is being
+ * renamed with the reasons still on it (a person's approval clears them, so
+ * a rename a person asked for carries none). And a document that already
+ * had the name Intern would give it is completed under that name with
+ * ALREADY_NAMED added to the reasons it had - beside other codes only when
+ * Intern completed it by itself, for the same reason. Neither waits for a
+ * person, and the reason both arrive with is the review's sentences, which
+ * tell the person to check the name. A completed one says first what
+ * became of the file.
+ *
+ * Only a reason whose codes this build knows is said again: the codes are
+ * what the sentences were made from. A document a person kept under its own
+ * name from review has no ALREADY_NAMED and keeps the review's words, as it
+ * always has.
+ */
+export function carriedNotes(item: QueueItem): string | undefined {
+  const codes = item.reasonCodes ?? [];
+  if (!item.reason || !codes.length) return undefined;
+  if (item.status === 'processing' && item.stage === 'filing') return describeNotes(codes);
+  if (item.status === 'completed' && codes.includes('ALREADY_NAMED')) return describeNotes(outcomeFirst(codes));
+  return undefined;
+}
+
 /** How a Check cell is drawn. `noted`: a note on a row that is not waiting (not `note`, which the stylesheet uses for a boxed notice). */
 export type CheckTone = 'review' | 'failed' | 'ready' | 'noted' | 'quiet';
 
@@ -102,19 +130,21 @@ export function checkCell(item: QueueItem): CheckCell | undefined {
     // Renamed with something noted: the mark that finds it again among the filed.
     const note = itemNote(item);
     if (note) return noteCell(note);
-    const short = shortReason(itemReasonCodes(item));
-    return short ? { ...short, tone: 'quiet', title } : undefined;
+    // Not renamed with a note: what became of the file leads, and anything it carried is said as a note.
+    const short = shortOutcome(itemReasonCodes(item));
+    return short ? { ...short, tone: 'quiet', title: carriedNotes(item) ?? title } : undefined;
   }
   return undefined;
 }
 
 /**
- * The Check cell of a row with a note: "Note:" and the same few words a
- * review of that code gets, so a copied cell still says the row was not
- * waiting, with the note's sentences as the tooltip.
+ * The Check cell of a row with a note: "Note:" and the few words for it -
+ * a review's for that code, unless those would be false of a row that is
+ * not waiting - so a copied cell still says the row was not waiting, with
+ * the note's sentences as the tooltip.
  */
 function noteCell(note: ItemNote): CheckCell {
-  const short = shortReason(note.codes);
+  const short = shortNote(note.codes);
   return short
     ? { text: `Note: ${short.text}`, more: short.more, tone: 'noted', title: note.text }
     : { text: `Note: ${note.text}`, more: 0, tone: 'noted', title: note.text };

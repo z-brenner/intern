@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { describeActionError } from './actionErrors';
-import { describeNotes, describeQueueStop, humanizeReason, noteCodes, shortReason } from './reasons';
+import { describeNotes, describeQueueStop, humanizeReason, noteCodes, outcomeFirst, shortNote, shortOutcome, shortReason } from './reasons';
 
 describe('humanizeReason', () => {
   it('translates a single code into its sentence', () => {
@@ -282,6 +282,46 @@ describe('a note on a document that is not waiting', () => {
     expect(noteCodes(['EXACT_COPY'])).toEqual([]);
     // Anything else is a note, a code nobody has heard of included: it is shown, not dropped.
     expect(noteCodes(['SOMETHING_NEW'])).toEqual(['SOMETHING_NEW']);
+  });
+
+  /*
+    The few words for a note are the review's, except where those would be
+    false of a document that is ready or renamed. TYPE_MISSING is raised for
+    a type that is a general word alone ("Letter"), and the level lets such a
+    reading be ready only when its name has a type: "No document type" then
+    contradicts the name beside it.
+  */
+  it('has a few words for every note, none of which says the name has no type', () => {
+    for (const code of carried) {
+      const short = shortNote([code]);
+      expect(short, code).toBeDefined();
+      expect(short?.text, code).not.toMatch(/^No document type$/);
+      expect(short?.more, code).toBe(0);
+    }
+    expect(shortNote(['TYPE_MISSING'])).toEqual({ text: 'No specific type', more: 0 });
+    // The others are the review's own few words.
+    for (const code of carried.filter((code) => code !== 'TYPE_MISSING')) expect(shortNote([code]), code).toEqual(shortReason([code]));
+    // Ranked as a review's are: a note about a part of the name leads, the rest are counted.
+    expect(shortNote(['LOW_CONFIDENCE', 'TYPE_MISSING'])).toEqual({ text: 'No specific type', more: 1 });
+    expect(shortNote(['TYPE_INFERRED', 'TYPE_MISSING', 'LOW_CONFIDENCE'])).toEqual({ text: 'Type supplied by Intern', more: 2 });
+    expect(shortNote(['NOT_A_CODE'])).toBeUndefined();
+    expect(shortNote([])).toBeUndefined();
+    // The review's few words for the same code are as they were.
+    expect(shortReason(['TYPE_MISSING'])).toEqual({ text: 'No document type', more: 0 });
+    expect(shortReason(['LOW_CONFIDENCE', 'TYPE_MISSING'])).toEqual({ text: 'No document type', more: 1 });
+  });
+
+  it('leads with what became of the file on a filed document, and says it first', () => {
+    expect(shortOutcome(['TYPE_INFERRED', 'LOW_CONFIDENCE', 'ALREADY_NAMED'])).toEqual({ text: 'Already had this name', more: 2 });
+    expect(shortOutcome(['ALREADY_NAMED'])).toEqual({ text: 'Already had this name', more: 0 });
+    expect(shortOutcome(['EXACT_COPY'])).toEqual({ text: 'Exact copy', more: 0 });
+    // With nothing said of the file, exactly the review's few words.
+    for (const codes of [['TYPE_INFERRED', 'LOW_CONFIDENCE'], ['LOW_CONFIDENCE', 'DATE_AMBIGUOUS'], ['TYPE_MISSING'], ['NOT_A_CODE'], []]) {
+      expect(shortOutcome(codes), codes.join()).toEqual(shortReason(codes));
+    }
+    expect(outcomeFirst(['TYPE_INFERRED', 'LOW_CONFIDENCE', 'ALREADY_NAMED'])).toEqual(['ALREADY_NAMED', 'TYPE_INFERRED', 'LOW_CONFIDENCE']);
+    expect(outcomeFirst(['TYPE_INFERRED', 'LOW_CONFIDENCE'])).toEqual(['TYPE_INFERRED', 'LOW_CONFIDENCE']);
+    expect(describeNotes(outcomeFirst(['TYPE_INFERRED', 'ALREADY_NAMED']))).toBe(`${humanizeReason('ALREADY_NAMED')} ${describeNotes(['TYPE_INFERRED'])}`);
   });
 
   it('leaves every review sentence as it was', () => {
