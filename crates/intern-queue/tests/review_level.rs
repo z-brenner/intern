@@ -802,6 +802,31 @@ fn two_scans_the_level_makes_ready_are_not_both_filed() {
     assert_eq!(rig.record(second), held);
 }
 
+/// A document held as a near duplicate when it was read stays held when the
+/// level changes, also once the filing it repeats is gone: the hold is the
+/// queue's own, and no level lifts it. The rename taken back is a person's
+/// decision, and stays in review too.
+#[test]
+fn a_document_held_as_a_near_duplicate_is_no_levels_to_make_ready() {
+    let rig = Rig::new(STRICT, true);
+    let original = rig.read("scan-1.pdf", plain(APRIL));
+    assert_eq!(rig.status(original), QueueStatus::Completed);
+    let rescan = rig.read("scan-2.pdf", noted(APRIL));
+    let held = rig.record(rescan);
+    assert_eq!(rig.status(rescan), QueueStatus::NeedsReview);
+    assert_eq!(held.reasons, ["TYPE_INFERRED", NEAR_DUPLICATE]);
+
+    rig.pipeline.undo(original).unwrap();
+    assert_eq!(rig.status(original), QueueStatus::NeedsReview);
+    assert!(rig.filed_names().is_empty());
+
+    rig.set_level(BALANCED);
+    assert_eq!(rig.status(rescan), QueueStatus::NeedsReview);
+    assert_eq!(rig.record(rescan), held);
+    assert_eq!(rig.status(original), QueueStatus::NeedsReview);
+    assert!(rig.filed_names().is_empty(), "nothing is filed again");
+}
+
 /// A document left in review for something no level decides stays there:
 /// one once held for a learned spelling that was forgotten since, whose
 /// reading both levels call ready. The level changing is not what would
