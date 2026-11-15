@@ -1114,6 +1114,110 @@ ones is left to put the old text after the new. There is no button that
 puts a set-aside text back into the fields: it is copied from where it is
 kept.
 
+What was typed and not filed is not the window's alone either. Closing
+Intern, a crash, or the restart an update's installer makes threw away
+every name and description typed and not filed, with no notice. The drafts
+and what was set aside are stored as they change and put back when Intern
+next starts (`keepTypedBetweenLaunches` in
+`src/features/review/typedStore.ts`).
+
+Where: one key of the window's own storage, `intern.typedInReview.v1` in
+`localStorage`, where the Details preference is (`intern.detailsPanel`) - on
+this computer, and not in anything the backend keeps: the store calls no
+command of it, and no table was added for it. For each document the value
+holds its number in the queue,
+the name and the description typed for it, the texts set aside for it, and
+two checksums of sixteen hexadecimal digits that stand for what Intern
+read: which document the number meant (`documentOf`: the number and the
+file's own name, without the `NEEDS REVIEW - ` mark and the ` (2)` that
+mark can take), and which reading the draft was typed over (`readingOf`:
+the proposal as `proposalOf` tells it, the file's name, and the model that
+read it). The file name and Intern's proposal are not in the value. The
+checksums are for comparing, not for keeping a name secret: what the person
+typed is there as typed, and that is usually most of the name.
+
+When it is written: in the change itself, with no timer between, so nothing
+waits to be written when the window closes. A letter typed, a draft set
+aside, and each way a draft is dropped - the document filed, its name kept,
+the document removed or read again at the person's word, Back to Intern's
+proposal, a set-aside text discarded - are in the stored value before the
+change returns, and when nothing typed is left the key is removed. Removing
+a document removes what was stored for it at once. What was typed for a
+document that stops being listed while Intern is open, without the person
+having decided it, is left as the window leaves it, and stays stored until
+the next start drops it. Only what a person typed is stored: a text kept
+beside a document just to hold the caret is Intern's proposal, and is not;
+and the copy of a field shown above the queue when its panel went by itself
+is not stored on its own - what was typed in it is its document's draft.
+
+When it is put back: once, when the queue has first been read after a start
+(`queueIs`; `useQueue` says when), never against the empty list a window
+has before that, which would say every document had gone. Nothing is
+written before then either, so a start whose queue cannot be read leaves
+the stored value for the next. It is put back while the window renders that
+queue, so the first frame that shows a document has what was typed for it,
+and Rename all ready never counts the document in. Each document's typing
+goes where the window would have it now. Into the fields, when the document
+is in the queue under the number and the file name it had, with the reading
+it was typed over, and can be filed. Set aside, read-only beside the
+document as it now is, with any other reading - read again while Intern was
+closed, even to the same words by another model - or when the document
+cannot be filed as it stands; and set aside is how it stays, at a later
+start under the first reading too. Dropped, and removed from storage, when
+the document is not in the queue or its number is another file's. Nothing
+is given the focus for any of it. What else a listing says of a reading -
+its status, the reasons it waits for, the model's confidence - is not part
+of which reading it is: a reading validated again after an update that
+keeps its name and sentence keeps what was typed over it. The identity is
+stricter than the one a session goes by (`proposalOf`), because a session
+watches a document change and a start does not: the reading is noted when
+a draft is first seen over it, and one made again since that says the same
+is another. What a start cannot tell apart is a reading made again by the
+same model to the same revision, name and sentence in a change no window
+saw: what was typed goes back into its fields.
+
+The numbers are `queue_items.id`, which SQLite never gives twice
+(`AUTOINCREMENT`), sent to the window as the item's `id`: within one queue
+database the number alone says which document. The file name is for a
+database replaced while the window's storage stayed, where the number is
+another document's.
+
+Limits. A name longer than 1,000 characters or a description longer than
+5,000 is not stored, and no older copy of it stays: that document's typing
+is the window's alone again, and gone when Intern closes. The whole value
+is at most 200,000 characters; past that, the documents whose typing was
+kept longest ago are left out. A value under the key that Intern did not
+write - not JSON, another version, longer than Intern stores - is ignored
+and removed, and an entry in it that is not as Intern writes it is passed
+over. Storage that cannot be read or written - full, or refused by the
+profile - changes nothing on screen: the window keeps what is typed while
+it is open, as before, and a write that fails removes the stored value, so
+that an older copy cannot bring back at the next start what has since been
+dropped. Nothing tells the person that what they type is not being stored.
+
+When the window's storage reaches the disk is the browser engine's
+business, and a page cannot hurry it. Measured in Chromium (the browser
+build, a few words typed into a name): the window closed in the ordinary
+way straight after the last letter, all of it was there at the next start,
+2 of 2; every process of the browser killed straight after the last letter
+or 2 s after it, none of it, 4 of 4, and 8 s after, all of it, 2 of 2; a
+letter every half second for 40 s and then killed, the disk had the first
+10 of 80 letters.
+A name typed, left for 8 s, taken back with Back to Intern's proposal and
+followed at once by such a kill was in its field again at the next start, 2
+of 2. So after a kill or a power cut what comes back can be half a minute
+old or more - its last letters missing, something dropped since then back -
+and it comes back with nothing on screen that says so, beyond the name
+being in its field under Back to Intern's proposal. The desktop window's
+engine (WebView2) has not been run for any of this. Two of Intern's own
+ways out end the process without closing the window first - Quit Intern in
+the notification area (`shutdown_and_exit`) and the updater's install step,
+both through `std::process::exit` - and whether WebView2 writes the
+window's storage out then has not been observed: until it has, count what
+was typed in the last minute before either as possibly missing. Storing at
+each letter cost, in Chromium, a mean of 0.02 ms a change with one
+document's typing stored and 0.12 ms with the value near its limit.
+
 ## Model and runtime
 
 | | |

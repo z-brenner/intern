@@ -177,10 +177,10 @@ Clicking a row selects it; the **Details** button above the table opens the
 review panel for the selected row, and it stays open, following the selection,
 until it is closed. A name or a description typed there and not filed stays
 with its document - through closing the panel, making the window narrower or
-wider, and going on to other documents - until you file the document, decide
-it some other way, have it read again, or close Intern. If the document
-changes by itself meanwhile - Intern reads it again, or another computer
-files it - the panel
+wider, going on to other documents, and closing Intern - until you file the
+document, decide it some other way, have it read again, or take it back. If
+the document changes by itself meanwhile - Intern reads it again, or another
+computer files it - the panel
 shows it as it now is, and what you had typed is kept beside it, read-only,
 until you discard it. If that happens while you are typing, or the panel
 closes under the cursor, the cursor stays in what you had typed: nothing typed
@@ -193,6 +193,17 @@ changes by itself while your hand is on its way: click again.
 **Back to Intern's proposal**, above the name while it differs, drops what
 you typed for a document. **Rename all ready** leaves alone a ready
 document whose name or description you typed and did not file, and says so.
+What you typed and did not file is stored as you type it, on this computer
+only, in the window's own storage, and is there when Intern is opened again:
+in the fields if the document still has the reading you typed over, beside
+the document and read-only if it was read again while Intern was closed. The
+cursor is put in no field for it, and what was typed for a document that is
+no longer in the queue is dropped. A name longer than 1,000 characters or a
+description longer than 5,000 is not stored, and lasts only while Intern is
+open. If Intern is killed or the computer loses power, what you typed in the
+last half minute or more can be missing when it starts again, and a name you
+had just taken back can be in its field again: look at a name that came back
+before you file it.
 In a window narrower than 1100 pixels the panel is a drawer over the queue,
 and it opens only when you ask for it there. Everything still in progress is
 in **Queue**, with a count of what needs review in its toolbar. The table selects cells like a
