@@ -983,7 +983,7 @@ refused again, and so is a press on any control that acts within 300 ms
 (`AGAIN_MS`) of a refused one, whatever the half second says by then: the
 second click of a double-click that began 405 ms after the button came was
 otherwise taken at 542 ms, on a reading nobody had looked at, and the half
-second was in effect as short as the gap between two clicks. Each press
+second was in effect shorter by the gap between two clicks. Each press
 refused starts the 300 ms again, so presses made faster than that do
 nothing until there is a pause. Made again after both, at the same place,
 it acts on whatever has come there: Rename all ready, where the press was on its way to Close
@@ -997,12 +997,15 @@ and Done - did nothing on it for as long as the person went on pressing. A
 click counted second or later is now a first press (`firstPress`) when
 nothing of its run of clicks reached the page before it, every press before
 it having been refused; a press that did reach the page, on anything, a
-click from the keyboard in between, and any key pressed in between leave
-the clicks after them what they were, so a double-click on Approve & rename
-still approves one document. (The key is there because Ctrl+Enter and Alt+K
-decide a document as a click does: a press refused, the key, and a press
-counted second at the same place approved the next document, 12 times of 12
-in the check of this rule, before a key counted.)
+click from the keyboard in between, and any key pressed since the first
+press of the run went down leave the clicks after them what they were, so a
+double-click on Approve & rename still approves one document. (The key is
+there because Ctrl+Enter and Alt+K decide a document as a click does: a
+press refused, the key, and a press counted second at the same place
+approved the next document, 12 times of 12 in the check of this rule,
+before a key counted; and 18 times of 18, with the key pressed while the
+refused press was still down and a backend that answered 20 to 150 ms
+later, until the click that ends such a press stopped forgetting the key.)
 The count a real mouse gives was not checked: tests and journeys give it.
 The click is judged where it lands as well
 as where the press went down, since a finger's click goes to what is under
@@ -1045,7 +1048,11 @@ seen.
 
 What it costs is a press that has to be made again: on a control within half
 a second of its coming under the pointer after the wheel or a resize; on
-any control that acts within 300 ms of a press that was refused; on
+any control that acts within 300 ms of a press that was refused; on a
+button that acts on a first click only, pressed again within the
+double-click time of a refused press with any key pressed in between -
+Shift alone, or a key held down and repeating - which does nothing until a
+press the browser counts as a first one; on
 a note's button pressed as soon as it appears; on Approve & rename or Keep
 original within half a second of its coming back for the same document;
 and, where a command is answered later than the press that sent it, on the
