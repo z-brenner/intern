@@ -765,6 +765,34 @@ describe('a press in a window that takes only aimed presses', () => {
     expect(keep.isConnected && row.isConnected).toBe(true);
   });
 
+  it('does not forget a key pressed while the refused press was still down: the click that ends that press is counted 1', async () => {
+    start();
+    const approve = button('Approve & rename', box(500, 300));
+    await changed();
+    const got = clicks();
+    now = 10_000;
+    put(approve, box(500, 400));
+    approve.setAttribute('data-moved', '');
+    await changed();
+    const at = { clientX: 550, clientY: 415, button: 0, buttons: 1, pointerId: 1, isPrimary: true };
+
+    // The button goes down too soon and is refused; Ctrl+Enter decides the document while it is still down.
+    now = 10_340;
+    expect(fireEvent.pointerDown(approve, at)).toBe(false);
+    now = 10_375;
+    fireEvent.keyDown(document.body, { key: 'Enter', ctrlKey: true });
+    fireEvent.keyUp(document.body, { key: 'Enter', ctrlKey: true });
+    // Let go on the next document's button, in the same place: the browser counts that click 1, and it begins a run.
+    now = 10_480;
+    fireEvent.pointerUp(approve, { ...at, buttons: 0 });
+    fireEvent.click(approve, { ...at, buttons: 0, detail: 1 });
+    expect(got).toEqual([]);
+    // Pressed again, counted 2, 300 ms and more after the first: the rule takes it, and it is no first press.
+    now = 10_700;
+    expect(press(550, 415, { detail: 2 })).toBe(true);
+    expect(got).toEqual(['click 2 on Approve & rename: not a first press']);
+  });
+
   it('does not take for a first press a click counted second after a refused press and a key: the key may have decided the document', async () => {
     start();
     const approve = button('Approve & rename', box(500, 300));

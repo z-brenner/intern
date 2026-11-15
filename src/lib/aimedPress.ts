@@ -29,8 +29,8 @@
   pressing again. (A press made again within the double-click time is
   counted by the browser as the second click of a double-click; the buttons
   that act on a first press only take it all the same when every press
-  before it was refused and no key was pressed between: `firstPress`,
-  below.)
+  before it was refused and no key was pressed since the first of them
+  went down: `firstPress`, below.)
 
   One kind of control is taken sooner: one that came where it is in answer
   to the person's own press or key - an item of a menu just opened, the
@@ -287,9 +287,10 @@ const firstOfTheirRun = new WeakSet<Event>();
  * it was refused. A press that did reach the page, on a control that acts
  * or on anything else (a row, More, the page itself), whether or not a
  * click came of it, a click made from the keyboard in between, and any key
- * pressed in between (Ctrl+Enter decides a document as a click does, and
- * the next press would land on the document after it), each leave the
- * clicks counted after them what they were: not first.
+ * pressed since the first press of the run went down (Ctrl+Enter decides a
+ * document as a click does, and the next press would land on the document
+ * after it), each leave the clicks counted after them what they were: not
+ * first.
  *
  * In a window the rule is not applied to (`takeOnlyAimedPresses` not
  * called: a test that draws one component), only the count is asked.
@@ -322,6 +323,10 @@ export function takeOnlyAimedPresses(view: Window = window, clock: () => number 
   // this one has (`reached`).
   let ranOn = false;
   let reached = false;
+  // A key was pressed since the press that is down, or was last, began. The
+  // click that ends a refused press is counted 1 and begins a run: it does
+  // not forget a key pressed while the button was still down.
+  let keyed = false;
   const controls = acting(page);
   // A change is the person's only while the browser is still handing their
   // event to the page (`view.event`). One that is stopped on its way never
@@ -350,7 +355,7 @@ export function takeOnlyAimedPresses(view: Window = window, clock: () => number 
     return missed;
   };
   /** A press begins: what the one before it did is now behind it. */
-  const pressBegins = () => { ranOn = ranOn || reached; reached = false; };
+  const pressBegins = () => { ranOn = ranOn || reached; reached = false; keyed = false; };
   /** A press, or its click, is let through to the page. */
   const taken = (event: Event) => { reached = true; theirs(event); };
   const pointerDown = (event: PointerEvent) => {
@@ -381,8 +386,9 @@ export function takeOnlyAimedPresses(view: Window = window, clock: () => number 
     // From the keyboard, or from code: no press of the pointer. It did
     // something all the same, as far as a run of clicks around it goes.
     if (event.detail === 0) { ranOn = true; theirs(event); return; }
-    // The first click of a run: nothing has been done in it yet.
-    if (event.detail === 1) ranOn = false;
+    // The first click of a run: nothing has been done in it yet, unless a
+    // key was pressed while its button was down.
+    if (event.detail === 1) ranOn = keyed;
     // Judged again where it lands: a finger's click goes to what is under
     // it as it lifts, which the press itself can have uncovered.
     if (refused || misses(event)) { drop(event); return; }
@@ -405,7 +411,7 @@ export function takeOnlyAimedPresses(view: Window = window, clock: () => number 
   const typed = (event: Event) => { theirs(event); look(); };
   // A key does what a click does (Ctrl+Enter approves, Alt+K keeps): the
   // press counted after it is no first press of a run in which nothing was done.
-  const keyDown = (event: Event) => { ranOn = true; theirs(event); };
+  const keyDown = (event: Event) => { ranOn = true; keyed = true; theirs(event); };
   observer.observe(page.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
   const capture: Array<[EventTarget, string, (event: never) => void]> = [
     [view, 'pointerdown', pointerDown], [view, 'mousedown', mouseDown], [view, 'pointerup', pointerUp], [view, 'mouseup', mouseUp],
