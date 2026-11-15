@@ -95,6 +95,27 @@
      <table:table-cell table:style-name="date-cell" table:formula="of:=EOMONTH(TODAY();0)" office:value-type="date" office:date-value="2026-11-30"><text:p>2026-11-30</text:p></table:table-cell>
     </table:table-row>
    </table:table>
+   <table:table table:name="Terms">
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Terms</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Payment</text:p></table:table-cell>
+     <table:table-cell office:value-type="string"><text:p>Net 30</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Delivery</text:p></table:table-cell>
+     <table:table-cell office:value-type="string"><text:p>Within 10 days</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Warranty</text:p></table:table-cell>
+     <table:table-cell office:value-type="string"><text:p>12 months</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Printed</text:p></table:table-cell>
+     <table:table-cell table:style-name="date-cell" table:formula="of:=NOW()" office:value-type="date" office:date-value="2026-11-14"><text:p>2026-11-14</text:p></table:table-cell>
+    </table:table-row>
+   </table:table>
   </office:spreadsheet>
  </office:body>
 </office:document>

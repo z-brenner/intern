@@ -3187,6 +3187,36 @@ This Intercompany Agreement is effective as of April 1, 2026 between Acme and Ac
         assert!(!stated_only_by_volatile_formulas(&pieced, "2026-03-03"));
     }
 
+    /// The date is read line by line, and a sheet's row is one line: a
+    /// date whose pieces stand on two lines is not put together, on
+    /// either reading, and nothing is held for it. Between two rows of a
+    /// sheet stand the pipes that end one and begin the next. A line break
+    /// with nothing but space around it the worker never writes into a
+    /// sheet's page - a cell's own line breaks become spaces - but the
+    /// text comes from outside the engine, and read as one stretch such a
+    /// page would be held.
+    #[test]
+    fn a_date_that_runs_across_two_lines_is_not_read_and_not_held() {
+        for wrapped in [
+            // Over two rows, a formula's cell on each.
+            "| Printed | «March 3,» |\n| --- | --- |\n| «2026» |  |\n",
+            // Over a line break inside one formula's cell.
+            "| Printed | «March 3,\n2026» |\n| --- | --- |\n",
+            // Over a line break, the day a formula's and the year typed.
+            "| Printed | «March 3,»\n2026 |\n| --- | --- |\n",
+        ] {
+            assert!(
+                !stated_only_by_volatile_formulas(&workbook(&[wrapped]), "2026-03-03"),
+                "{wrapped}"
+            );
+        }
+        // The same cell on one line is the formula's alone.
+        assert!(stated_only_by_volatile_formulas(
+            &workbook(&["| Printed | «March 3, 2026» |\n| --- | --- |\n"]),
+            "2026-03-03"
+        ));
+    }
+
     /// Nothing is held for a document no page of which carries a marked
     /// cell: a letter, a workbook of typed dates, and every extraction
     /// stored or recorded before the worker marked them, which reads back

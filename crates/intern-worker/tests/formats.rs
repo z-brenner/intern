@@ -115,24 +115,32 @@ fn workbook_dates_and_tables_survive_every_workbook_format() {
     assert!(ods.contains("| Fee with expenses | 50000 |"), "{ods}");
 }
 
-/// The label of each row a marked stretch of a sheet's text stands on,
-/// having checked that the stretch is the whole of the row's second cell.
-fn marked_rows(document: &ExtractedDocument) -> Vec<&str> {
-    let mut labels = Vec::new();
-    for page in &document.pages {
-        for &(start, end) in &page.volatile_spans {
-            let line_start = page.text[..start].rfind('\n').map_or(0, |at| at + 1);
-            let line_end = page.text[end..]
-                .find('\n')
-                .map_or(page.text.len(), |at| end + at);
-            let mut cells = page.text[line_start..line_end]
-                .trim_start_matches("| ")
-                .split(" | ");
-            labels.push(cells.next().unwrap());
-            assert_eq!(cells.next(), Some(&page.text[start..end]));
-        }
-    }
-    labels
+/// Page by page, the label of each row a marked stretch of the page's text
+/// stands on, having checked that the stretch is the whole of the row's
+/// second cell.
+fn marked_rows(document: &ExtractedDocument) -> Vec<Vec<&str>> {
+    document
+        .pages
+        .iter()
+        .map(|page| {
+            page.volatile_spans
+                .iter()
+                .map(|&(start, end)| {
+                    let line_start = page.text[..start].rfind('\n').map_or(0, |at| at + 1);
+                    let line_end = page.text[end..]
+                        .find('\n')
+                        .map_or(page.text.len(), |at| end + at);
+                    let mut cells = page.text[line_start..line_end]
+                        .trim_start_matches("| ")
+                        .trim_end_matches(" |")
+                        .split(" | ");
+                    let label = cells.next().unwrap();
+                    assert_eq!(cells.next(), Some(&page.text[start..end]));
+                    label
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// A quotation dated by `=TODAY()`, as LibreOffice wrote it. Both Excel
@@ -141,9 +149,13 @@ fn marked_rows(document: &ExtractedDocument) -> Vec<&str> {
 /// down three rows, which the binary format keeps as one shared formula -
 /// and no other: not the typed date, not `=B5+7`, not the text that only
 /// says TODAY(), not the formula whose string says it, not the shared
-/// `=C14*2`. The two readers mark the same stretches of the same text,
-/// but for the second `=NOW()` was worked out in. An OpenDocument
-/// spreadsheet's formulas are not read, so nothing of it is marked.
+/// `=C14*2`. A second sheet holds one `=NOW()`, in the cell where the
+/// first holds its typed date, and typed terms in the cells where the
+/// first holds its first three formulas: each sheet's cells are marked on
+/// its own page, and a sheet given another's would show it here. The two
+/// readers mark the same stretches of the same text, but for the second
+/// `=NOW()` was worked out in. An OpenDocument spreadsheet's formulas are
+/// not read, so nothing of it is marked.
 #[test]
 fn a_today_or_now_formulas_cells_are_marked_in_both_excel_formats() {
     let workbook = read("dated.xlsm").unwrap();
@@ -152,19 +164,27 @@ fn a_today_or_now_formulas_cells_are_marked_in_both_excel_formats() {
         assert_eq!(
             marked_rows(document),
             [
-                "Quote date",
-                "Printed",
-                "Valid until",
-                "Either",
-                "In words",
-                "Week 1",
-                "Week 2",
-                "Week 3",
-                "Year",
-                "Month end",
+                vec![
+                    "Quote date",
+                    "Printed",
+                    "Valid until",
+                    "Either",
+                    "In words",
+                    "Week 1",
+                    "Week 2",
+                    "Week 3",
+                    "Year",
+                    "Month end",
+                ],
+                vec!["Printed"],
             ],
             "{name}"
         );
+        assert!(
+            document.pages[0].text.starts_with("## Quotation\n\n"),
+            "{name}"
+        );
+        assert!(document.pages[1].text.starts_with("## Terms\n\n"), "{name}");
         let text = text_of(document);
         for typed in [
             "| Ordered | 2026-03-03 |  |",
@@ -174,15 +194,22 @@ fn a_today_or_now_formulas_cells_are_marked_in_both_excel_formats() {
             "| Either | 2026-03-03 |  |",
             "| Lot 1 | 2 | 1 |",
             "| Lot 3 | 6 | 3 |",
+            "| Payment | Net 30 |",
+            "| Delivery | Within 10 days |",
+            "| Warranty | 12 months |",
         ] {
             assert!(text.contains(typed), "{name} lacks {typed:?}:\n{text}");
         }
         assert!(document.warnings.is_empty(), "{name}");
     }
-    assert_eq!(
-        workbook.pages[0].volatile_spans,
-        binary.pages[0].volatile_spans
-    );
+    let ranges = |document: &ExtractedDocument| {
+        document
+            .pages
+            .iter()
+            .map(|page| page.volatile_spans.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ranges(&workbook), ranges(&binary));
     let but_for_now = |document: &ExtractedDocument| {
         text_of(document)
             .lines()
@@ -194,7 +221,10 @@ fn a_today_or_now_formulas_cells_are_marked_in_both_excel_formats() {
 
     let open_document = read("dated.ods").unwrap();
     assert!(text_of(&open_document).contains("| Ordered | 2026-03-03 |"));
-    assert!(marked_rows(&open_document).is_empty());
+    assert_eq!(
+        marked_rows(&open_document),
+        [Vec::<&str>::new(), Vec::new()]
+    );
 }
 
 /// Word has saved RTF under `.doc` for as long as both have existed.

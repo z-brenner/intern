@@ -41,11 +41,14 @@ the date it means and a formula as the value it last calculated.
 formulas that call `TODAY` or `NOW` (alone, with arithmetic, inside `IF`,
 `TEXT`, `YEAR` and `EOMONTH`, and filled down three rows, which the binary
 format stores as one shared formula), beside a typed date, formulas that
-call neither, and text that only says "TODAY()". LibreOffice works the
-formulas out as it converts, so each file holds the day it was generated
-(2026-11-14 for the ones committed), which is the point: that day is the
-file's and not the quotation's. `tests/formats.rs` checks which cells each
-workbook reader marks as worked out by such a formula.
+call neither, and text that only says "TODAY()". A second sheet of typed
+terms holds one `=NOW()` more, in a cell the first sheet has a typed date
+in, so that a reader which gave one sheet's cells to another would show.
+LibreOffice works the formulas out as it converts, so each file holds the
+day it was generated (2026-11-15 for the ones committed), which is the
+point: that day is the file's and not the quotation's. `tests/formats.rs`
+checks which cells each workbook reader marks as worked out by such a
+formula, page by page.
 
 ## Regenerating
 

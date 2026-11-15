@@ -765,3 +765,149 @@ fn a_cell_stated_twice_is_marked_by_the_statement_that_is_shown() {
         ]
     );
 }
+
+/// A formula that holds no value is no part of a sheet's window, whose
+/// corner is the first value's, so it can stand above that corner or to
+/// its left. The second reading meets such cells before any cell it marks
+/// and passes them by: the cells of the window are marked all the same.
+/// Measured from the corner without first asking which side of it the
+/// cell is on, its place is a subtraction that overflows, and in a build
+/// that checks for that the sheet's marking ends there.
+#[test]
+fn formulas_with_no_value_before_a_sheets_first_value_do_not_end_its_marking() {
+    let cells = [
+        // Above the first value.
+        date("D1", Some("<f>TODAY()</f>"), ""),
+        date("D2", Some("<f>TODAY()</f>"), ""),
+        // In its row and the next, to its left.
+        date("A5", Some("<f>TODAY()</f>"), ""),
+        label("C5", "Date"),
+        date("D5", Some("<f>TODAY()</f>"), "46084"),
+        date("A6", Some("<f>NOW()</f>"), ""),
+        label("C6", "Typed"),
+        date("D6", None, "46054"),
+    ];
+    let directory = tempfile::tempdir().unwrap();
+    let read = |file_name: &str, with_formulas: bool| {
+        let path = write_workbook(
+            &directory,
+            file_name,
+            &[("Quote", dated_rows(&cells, with_formulas))],
+            Some(DATE_STYLES),
+        );
+        extract_xlsx(&path, &ResourceLimits::default(), &CancellationToken::new()).unwrap()
+    };
+    let computed = read("computed.xlsx", true);
+
+    assert_eq!(
+        computed.pages[0].text,
+        "## Quote\n\n\
+         | Date | 2026-03-03 |\n\
+         | --- | --- |\n\
+         | Typed | 2026-02-01 |\n"
+    );
+    assert_eq!(
+        computed.pages[0].text,
+        read("typed.xlsx", false).pages[0].text
+    );
+    assert_eq!(
+        marked(&computed.pages[0]),
+        [("2026-03-03", "| Date | 2026-03-03 |")]
+    );
+}
+
+/// A date cell left blank until something is entered,
+/// `=IF(B9="","",TODAY())`, calls TODAY and shows an empty string. There
+/// is nothing of the text to mark for it: it gets no range, not an empty
+/// one, and the cells around it keep theirs.
+#[test]
+fn a_today_formula_that_shows_an_empty_string_has_no_range() {
+    let cells = [
+        label("A1", "Date"),
+        date("B1", Some("<f>TODAY()</f>"), "46084"),
+        label("A2", "Paid"),
+        DatedCell {
+            at: "B2".to_owned(),
+            attributes: " t=\"str\"",
+            formula: Some("<f>IF(B9=\"\",\"\",TODAY())</f>"),
+            value: "",
+        },
+        label("A3", "Due"),
+        date("B3", Some("<f>TODAY()+30</f>"), "46114"),
+    ];
+    let directory = tempfile::tempdir().unwrap();
+    let read = |file_name: &str, with_formulas: bool| {
+        let path = write_workbook(
+            &directory,
+            file_name,
+            &[("Quote", dated_rows(&cells, with_formulas))],
+            Some(DATE_STYLES),
+        );
+        extract_xlsx(&path, &ResourceLimits::default(), &CancellationToken::new()).unwrap()
+    };
+    let computed = read("computed.xlsx", true);
+
+    assert_eq!(
+        computed.pages[0].text,
+        "## Quote\n\n\
+         | Date | 2026-03-03 |\n\
+         | --- | --- |\n\
+         | Paid |  |\n\
+         | Due | 2026-04-02 |\n"
+    );
+    assert_eq!(
+        computed.pages[0].text,
+        read("typed.xlsx", false).pages[0].text
+    );
+    assert_eq!(
+        marked(&computed.pages[0]),
+        [
+            ("2026-03-03", "| Date | 2026-03-03 |"),
+            ("2026-04-02", "| Due | 2026-04-02 |"),
+        ]
+    );
+}
+
+/// The second reading stops at the first row past the window, so that a
+/// long ledger is not parsed twice. What that costs is held here: in a
+/// file that states a row of the window after a row past it, that row's
+/// text is shown as it always was, and its cells go unmarked.
+#[test]
+fn a_row_of_the_window_stated_after_a_row_past_it_is_shown_and_not_marked() {
+    let cells = [
+        label("A1", "Date"),
+        date("B1", Some("<f>TODAY()</f>"), "46084"),
+        label("A300", "Late"),
+        date("B300", Some("<f>TODAY()</f>"), "46084"),
+        label("A2", "After"),
+        date("B2", Some("<f>TODAY()</f>"), "46084"),
+    ];
+    let directory = tempfile::tempdir().unwrap();
+    let read = |file_name: &str, with_formulas: bool| {
+        let path = write_workbook(
+            &directory,
+            file_name,
+            &[("Quote", dated_rows(&cells, with_formulas))],
+            Some(DATE_STYLES),
+        );
+        extract_xlsx(&path, &ResourceLimits::default(), &CancellationToken::new()).unwrap()
+    };
+    let computed = read("computed.xlsx", true);
+
+    assert_eq!(
+        computed.pages[0].text,
+        "## Quote\n\n\
+         | Date | 2026-03-03 |\n\
+         | --- | --- |\n\
+         | After | 2026-03-03 |\n\n\
+         [... 298 more rows not shown]\n"
+    );
+    assert_eq!(
+        computed.pages[0].text,
+        read("typed.xlsx", false).pages[0].text
+    );
+    assert_eq!(
+        marked(&computed.pages[0]),
+        [("2026-03-03", "| Date | 2026-03-03 |")]
+    );
+}
