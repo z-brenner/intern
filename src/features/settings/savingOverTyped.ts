@@ -34,11 +34,15 @@ export const NOTHING_TYPED: TypedWaiting = { ready: 0, review: 0 };
  * ready document a person approved is theirs already, and a staged copy is
  * named after its original. A document being read, renamed, failed or
  * completed is not waiting for a name.
+ *
+ * No name is a name left out, and also one that is null: the desktop backend
+ * always sends the key (QueueItemDto has no skip on it), and the bridge
+ * hands a null on as it came, whatever `QueueItem` says of its type.
  */
 export function typedWaiting(items: readonly QueueItem[], typed: (id: string) => boolean): TypedWaiting {
   const counts = { ready: 0, review: 0 };
   for (const item of items) {
-    if (item.proposedFilename === undefined || !typed(item.id)) continue;
+    if (!item.proposedFilename || !typed(item.id)) continue;
     if (item.status === 'review') counts.review += 1;
     else if (item.status === 'ready' && item.approved !== true && item.copyOf === undefined) counts.ready += 1;
   }

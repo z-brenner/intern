@@ -61,13 +61,24 @@ describe('the documents a save could rename over what was typed, counted', () =>
   it('does not count what Intern has no name for or will not name by itself: an unreadable document, an approved one, a staged copy', () => {
     const others: QueueItem[] = [
       // Could not be read: it waits in review with no proposal, and a person types its name.
+      // The demo and an older backend leave the name out.
       row('unreadable', 'review', { proposedFilename: undefined, errorCode: 'PASSWORD_PROTECTED' }),
+      // The desktop backend sends the key all the same, holding null, and the bridge hands it on.
+      row('unreadable-as-sent', 'review', { proposedFilename: null as unknown as undefined, errorCode: 'PASSWORD_PROTECTED' }),
+      row('unverified-as-sent', 'review', { proposedFilename: null as unknown as undefined, errorCode: 'UPLOADER_UNVERIFIED' }),
+      row('ready-with-no-name', 'ready', { proposedFilename: null as unknown as undefined }),
+      // An empty name is no name either.
+      row('empty-name', 'review', { proposedFilename: '' }),
       // Approved by a person, waiting for the queue to be free: filed under what they approved.
       row('approved', 'ready', { approved: true }),
       // A duplicate staged as a copy: named after its original, by nobody.
       row('copy', 'ready', { copyOf: '2024-05-01 original.pdf' }),
     ];
     expect(typedWaiting(others, () => true)).toEqual(NOTHING_TYPED);
+    // Each alone, so that no one of them is let through by another.
+    for (const other of others) expect(typedWaiting([other], () => true), other.id).toEqual(NOTHING_TYPED);
+    // Beside ones that do count, they change nothing.
+    expect(typedWaiting([...others, row('review-typed', 'review'), row('ready-typed', 'ready')], () => true)).toEqual({ ready: 1, review: 1 });
   });
 
   it('takes typed as the window does: in the fields now, or set aside when the document changed, and never Intern\'s own proposal', () => {
@@ -520,26 +531,80 @@ describe('the count Settings is given by the window', () => {
 });
 
 /*
+  A queue row as the desktop backend sends it (QueueItemDto in
+  src-tauri/src/commands.rs, filled by queue_item_dto). Every field without a
+  skip attribute is there, and holds null where the backend has nothing: a
+  document with no proposal has a `proposedFilename` key, and it is null. The
+  demo leaves such keys out, which is how a count that looked only for a
+  missing key came to count a document Intern has no name for.
+*/
+type Sent = Record<string, unknown> & { id: string };
+const sentRow = (id: number, originalFilename: string, status: string, more: Record<string, unknown> = {}): Sent => ({
+  id: String(id), originalFilename, status,
+  proposedFilename: null, confidence: null, description: null, evidence: null, reason: null, errorCode: null,
+  undoable: false, approved: false, proposalRevision: null, reconciliation: null,
+  filedPath: null, filedName: null, keptOriginal: false, parked: false,
+  ...more,
+});
+/** What a reading adds to a row: a name, a sentence, and where in the document each part was found. */
+const sentProposal = (proposedFilename: string, description: string, confidence: number) => ({ proposedFilename, description, confidence, proposalRevision: '1', evidence: { date: null, type: null, parties: null } });
+const desktopOver = (sent: () => Sent[]) => new TauriBridge({ invoke: async <T,>(command: string) => { if (command !== 'queue_list') throw new Error(`not played out here: ${command}`); return sent().map((row) => ({ ...row })) as T; }, listen: async () => () => {} });
+
+describe('the count over rows as the desktop backend sends them', () => {
+  it('leaves out a document with no proposal, whose name arrives as null, and counts the others as ever', async () => {
+    const sent = [
+      sentRow(1, 'Scan 0601.pdf', 'needs_review', { ...sentProposal('2025-05-01 Letter to Halvorsen Fixture Works LLC.pdf', 'A letter.', 1), reason: 'TYPE_INFERRED, LOW_CONFIDENCE' }),
+      sentRow(2, 'Scan 0602.pdf', 'ready', sentProposal('2025-05-02 Invoice from Brightwater Supply Co.pdf', 'An invoice.', 0.98)),
+      sentRow(3, 'Scan 0603.pdf', 'needs_review', { ...sentProposal('2025-05-03 Notice to Contoso Ltd.pdf', 'A notice.', 0.9), reason: 'DATE_AMBIGUOUS' }),
+      // In review with no proposal at all: could not be read, sent by someone not verified, a duplicate found before reading.
+      sentRow(4, 'NEEDS REVIEW - Lease scan.pdf', 'needs_review', { errorCode: 'PASSWORD_PROTECTED', fileModifiedDate: '2026-01-02' }),
+      sentRow(5, 'Scan 0605.pdf', 'needs_review', { errorCode: 'UPLOADER_UNVERIFIED' }),
+      sentRow(6, 'Scan 0606.pdf', 'needs_review', { errorCode: 'DUPLICATE', reason: 'Duplicate of 2025-05-02 Invoice from Brightwater Supply Co.pdf' }),
+      // Ready, but not Intern's to rename by itself: approved by a person, and a staged copy.
+      sentRow(7, 'Scan 0607.pdf', 'ready', { ...sentProposal('2025-05-07 Memo.pdf', 'A memo.', 0.97), approved: true }),
+      sentRow(8, 'Scan 0608.pdf', 'ready', { ...sentProposal('COPY - 2025-05-02 Invoice from Brightwater Supply Co.pdf', '', 0), confidence: null, copyOf: '2025-05-02 Invoice from Brightwater Supply Co.pdf' }),
+      // Not waiting for a name.
+      sentRow(9, 'Scan 0609.pdf', 'completed', { ...sentProposal('2025-05-09 Receipt.pdf', 'A receipt.', 0.99), filedName: '2025-05-09 Receipt.pdf', filedPath: 'C:\\Filed\\2025-05-09 Receipt.pdf', undoable: true }),
+      sentRow(10, 'Scan 0610.pdf', 'failed', { errorCode: 'MODEL_FAILED' }),
+      sentRow(11, 'Scan 0611.pdf', 'analyzing'),
+      sentRow(12, 'Scan 0612.pdf', 'queued'),
+    ];
+    const items = await desktopOver(() => sent).listItems();
+    expect(items).toHaveLength(12);
+    // Everything typed for: only the letter and the notice in review, and the invoice that is ready.
+    expect(typedWaiting(items, () => true)).toEqual({ ready: 1, review: 2 });
+    const typedFor = (...ids: number[]) => (id: string) => ids.map(String).includes(id);
+    expect(typedWaiting(items, typedFor(4, 5, 6))).toEqual(NOTHING_TYPED);
+    expect(typedWaiting(items, typedFor(4))).toEqual(NOTHING_TYPED);
+    expect(typedWaiting(items, typedFor(5))).toEqual(NOTHING_TYPED);
+    expect(typedWaiting(items, typedFor(1, 4))).toEqual({ ready: 0, review: 1 });
+    expect(typedWaiting(items, typedFor(7, 8, 9, 10, 11, 12))).toEqual(NOTHING_TYPED);
+  });
+});
+
+/*
   What the warning says of afterwards, run: a document Intern renames by
   itself while it has something typed for it. The demo does not act out
-  automatic renaming, so the queue here is rows as the desktop backend sends
-  them (queue_item_dto), read through TauriBridge, with the backend's part
-  played out: judged again as ready, renamed under Intern's name with its
-  reasons kept, and an undo that puts it back in review.
+  automatic renaming, so the queue here is rows shaped as the desktop backend
+  sends them (`sentRow`: every key it always sends, null where it has
+  nothing), read through TauriBridge, with the backend's part played out by
+  hand: judged again as ready, renamed under Intern's name with its reasons
+  kept, and an undo that puts it back in review. No backend ran.
 */
 describe('a document Intern renamed by itself while it had something typed', () => {
-  type Sent = Record<string, unknown> & { id: number };
   const TYPED_NAME = '2025-05-01 Letter to Halvorsen about the fixtures';
   const TYPED_SENTENCE = 'Their reply to our notice of 12 April.';
 
   async function start() {
     const sent: Sent[] = [
-      { id: 31, originalFilename: 'Scan 0601.pdf', status: 'needs_review', proposedFilename: '2025-05-01 Letter to Halvorsen Fixture Works LLC.pdf', confidence: 1, description: 'Letter to Halvorsen Fixture Works LLC.', reason: 'TYPE_INFERRED, LOW_CONFIDENCE', proposalRevision: '1', approved: false, parked: false, undoable: false },
-      { id: 32, originalFilename: 'Scan 0602.pdf', status: 'ready', proposedFilename: '2025-05-02 Invoice from Brightwater Supply Co.pdf', confidence: 0.98, description: 'Invoice from Brightwater Supply Co.', proposalRevision: '1', approved: false, parked: false, undoable: false },
-      { id: 33, originalFilename: 'Scan 0603.pdf', status: 'needs_review', proposedFilename: '2025-05-03 Notice to Contoso Ltd.pdf', confidence: 0.9, description: 'Notice to Contoso Ltd.', reason: 'DATE_AMBIGUOUS', proposalRevision: '1', approved: false, parked: false, undoable: false },
+      sentRow(31, 'Scan 0601.pdf', 'needs_review', { ...sentProposal('2025-05-01 Letter to Halvorsen Fixture Works LLC.pdf', 'Letter to Halvorsen Fixture Works LLC.', 1), reason: 'TYPE_INFERRED, LOW_CONFIDENCE' }),
+      sentRow(32, 'Scan 0602.pdf', 'ready', sentProposal('2025-05-02 Invoice from Brightwater Supply Co.pdf', 'Invoice from Brightwater Supply Co.', 0.98)),
+      sentRow(33, 'Scan 0603.pdf', 'needs_review', { ...sentProposal('2025-05-03 Notice to Contoso Ltd.pdf', 'Notice to Contoso Ltd.', 0.9), reason: 'DATE_AMBIGUOUS' }),
+      // Could not be read: it waits in review with no proposal, so its name is null.
+      sentRow(34, 'NEEDS REVIEW - Lease scan.pdf', 'needs_review', { errorCode: 'PASSWORD_PROTECTED', fileModifiedDate: '2026-01-02' }),
     ];
-    const change = (id: number, to: Record<string, unknown>) => { const index = sent.findIndex((row) => row.id === id); sent[index] = { ...sent[index], ...to }; };
-    const desktop = new TauriBridge({ invoke: async <T,>(command: string) => { if (command !== 'queue_list') throw new Error(`not played out here: ${command}`); return sent.map((row) => ({ ...row })) as T; }, listen: async () => () => {} });
+    const change = (id: number, to: Record<string, unknown>) => { const index = sent.findIndex((row) => row.id === String(id)); sent[index] = { ...sent[index], ...to }; };
+    const desktop = desktopOver(() => sent);
     const base = createInMemoryBridge({ liveEvents: true }) as ReturnType<typeof createInMemoryBridge> & QueueEventSource;
     let settings: AppSettings = { ...(await base.getSettings()) };
     let queueChanged = () => {};
@@ -556,15 +621,15 @@ describe('a document Intern renamed by itself while it had something typed', () 
       approve: vi.fn(base.approve),
       // As an undone rename is left: back under its own name, waiting, with UNDONE beside what it carried.
       undo: vi.fn(async (id: string) => {
-        const row = sent.find((each) => String(each.id) === id)!;
-        change(row.id, { status: 'needs_review', reason: [row.reason, 'UNDONE'].filter(Boolean).join(', '), filedName: null, filedPath: null, undoable: false });
+        const row = sent.find((each) => each.id === id)!;
+        change(Number(row.id), { status: 'needs_review', reason: [row.reason, 'UNDONE'].filter(Boolean).join(', '), filedName: null, filedPath: null, undoable: false });
       }),
       subscribeQueue: (listener: Parameters<QueueEventSource['subscribeQueue']>[0]) => { queueChanged = () => listener({ type: 'changed' }); return base.subscribeQueue(listener); },
     };
     /** The backend does something with nobody asking, and says the queue changed. */
     const byItself = async (run: () => void) => { run(); await act(async () => { queueChanged(); await new Promise((resolve) => setTimeout(resolve, 0)); }); };
     const renaming = (id: number) => change(id, { status: 'applying' });
-    const renamed = (id: number) => { const row = sent.find((each) => each.id === id)!; change(id, { status: 'completed', filedName: row.proposedFilename, filedPath: `C:\\Filed\\${String(row.proposedFilename)}`, keptOriginal: false, undoable: true }); };
+    const renamed = (id: number) => { const row = sent.find((each) => each.id === String(id))!; change(id, { status: 'completed', filedName: row.proposedFilename, filedPath: `C:\\Filed\\${String(row.proposedFilename)}`, keptOriginal: false, undoable: true }); };
     render(<App bridge={bridge} />);
     await screen.findByRole('grid', { name: 'Queue' });
     return { bridge, byItself, renaming, renamed };
@@ -651,5 +716,29 @@ describe('a document Intern renamed by itself while it had something typed', () 
     expect(queueCell('Scan 0602.pdf', 'status')).toHaveTextContent('Needs review');
     expect(within(again).getByLabelText('Filename')).toHaveValue('2025-05-02 Invoice from Brightwater Supply Co');
     expect(within(again).getByLabelText('What you had typed')).toHaveValue('2025-05-02 Invoice 4471 from Brightwater\n\nInvoice from Brightwater Supply Co.');
+  });
+
+  // Intern proposed no name for it, so there is none to rename it under, at
+  // either level: the warning would say something untrue of it.
+  it('is not warned of for a document Intern could not read, whatever is typed for it: its name arrives as null', async () => {
+    await start();
+    const lease = await openDetails('NEEDS REVIEW - Lease scan.pdf');
+    fireEvent.change(within(lease).getByLabelText('Filename'), { target: { value: '2026-01-02 Lease typed by hand' } });
+    let dialog = await openSettings();
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toBeNull();
+    fireEvent.click(balanced(dialog));
+    expect(warning(dialog)).toBeNull();
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+    await closeSettings(dialog);
+
+    // A letter in review that Intern does have a name for, typed for as well: that one is counted, and only it.
+    const letter = await openDetails('Scan 0601.pdf');
+    fireEvent.change(within(letter).getByLabelText('Filename'), { target: { value: TYPED_NAME } });
+    dialog = await openSettings();
+    fireEvent.click(automatic(dialog));
+    expect(warning(dialog)).toBeNull();
+    fireEvent.click(balanced(dialog));
+    expect(warning(dialog)).toHaveTextContent(ONE);
   });
 });
