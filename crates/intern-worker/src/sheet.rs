@@ -210,8 +210,20 @@ pub fn extract_xlsx(
 /// that one did not (a shared formula with no index, a range that does not
 /// parse). A sheet whose formulas do not read keeps the cells found up to
 /// there and the rest go unmarked, as every cell did before; after a panic
-/// the workbook is not read again, so the sheets after it go unmarked too.
-/// Only cancellation is passed on.
+/// the workbook is not read again, so the sheets after it go unmarked too
+/// (no test makes calamine panic, so none holds that). Only cancellation
+/// is passed on.
+///
+/// What it costs in memory is a formula's length. The first reading steps
+/// over a formula's text in the buffer it was read into; calamine's
+/// formula reader copies the text out of its buffer whole, as a string,
+/// and offers no cap. One formula is held at a time, and nothing here
+/// keeps it. A hand-made workbook with one formula of 300 MB took 5.6 s
+/// and 319 MB at its peak before this reading and 13.6 s and 619 MB with
+/// it, and one of 64 MB took 83 MB before and 146 MB with it (debug
+/// builds). What a workbook may unpack to
+/// ([`enforce_office_decompressed_limit`], 1 GiB) bounds a formula's
+/// length, so the most this reading adds is about that much again.
 fn mark_volatile_cells(
     workbook: &mut Xlsx<BufReader<File>>,
     sheets: &mut [(Option<String>, Option<CappedSheet>)],
@@ -266,7 +278,10 @@ fn mark_volatile_cells(
 /// first row past the window, so a ledger of a hundred thousand rows is
 /// not parsed twice. In a file that puts a row of the window after a row
 /// past it, that row goes unmarked. Where a file states one cell twice,
-/// the last statement that has a value is the one asked.
+/// the last statement this reading finds a value in is the one asked. A
+/// statement whose value comes before its formula is empty to the value
+/// reading, so the two can differ there: the text shows an earlier
+/// statement's value, and the answer is the later statement's.
 fn volatile_cells(
     workbook: &mut Xlsx<BufReader<File>>,
     name: &str,
@@ -530,7 +545,10 @@ fn extract_legacy_workbook(
     limits.validate_page_count(sheet_names.len())?;
     // The cells found are a sheet's by its place in the workbook's list,
     // which calamine's names follow. Two sheets under one name it reads as
-    // one sheet twice, and then whose cells are whose is not known.
+    // one sheet twice, and then whose cells are whose is not known. No test
+    // holds either half of this check: none hands calamine a stream it
+    // opens with two sheets under one name, or with a list of sheets other
+    // than the one read here.
     let distinct = sheet_names.iter().collect::<HashSet<_>>().len();
     if volatile.len() != sheet_names.len() || distinct != sheet_names.len() {
         volatile.clear();
