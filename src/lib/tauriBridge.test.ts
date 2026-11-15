@@ -60,6 +60,29 @@ function fakeTransport(responses: Record<string, unknown> = {}) {
 }
 
 describe('TauriBridge', () => {
+  // The review level crosses to the backend as `reviewLevel`, "strict" or
+  // "balanced", inside the settings object, which the bridge passes whole in
+  // both directions: it adds no level to settings that have none, and takes
+  // none away.
+  it('passes the review level to and from the backend as it is, under reviewLevel', async () => {
+    const stored = { destination: 'C:\\Output', destinationLayout: 'flat', startMinimized: false, automaticRename: true, reviewLevel: 'balanced', intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '' } as const;
+    const fake = fakeTransport({ settings_get: stored });
+    const bridge = new TauriBridge(fake.transport);
+
+    const read = await bridge.getSettings();
+    expect(read.reviewLevel).toBe('balanced');
+    await bridge.saveSettings({ ...read, reviewLevel: 'strict' });
+    const { reviewLevel: _reviewLevel, ...older } = read;
+    await bridge.saveSettings(older);
+
+    expect(fake.calls).toEqual([
+      { command: 'settings_get', args: undefined },
+      { command: 'settings_save', args: { settings: { ...stored, reviewLevel: 'strict' } } },
+      { command: 'settings_save', args: { settings: older } },
+    ]);
+    expect('reviewLevel' in (fake.calls[2].args!.settings as object)).toBe(false);
+  });
+
   it('starts managed Microsoft sign-in and fixed Inbox pairing without identifier payloads', async () => {
     const fake = fakeTransport();
     const bridge = new TauriBridge(fake.transport);

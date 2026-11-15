@@ -225,6 +225,24 @@ describe('a document renamed with a note, afterwards', () => {
     expect(within(panel).queryByRole('button', { name: /rename|Keep original/i })).not.toBeInTheDocument();
   });
 
+  it('is marked from what the desktop backend sends for a filed row: its reasons, and that it was renamed', async () => {
+    // queue_item_dto, for a document Intern renamed by itself, one a person approved (its reasons cleared), and one kept under its own name.
+    const sent = [
+      { id: 21, originalFilename: 'Scan 0501.pdf', status: 'completed', proposedFilename: '2025-05-01 Letter to Halvorsen Fixture Works LLC.pdf', filedName: '2025-05-01 Letter to Halvorsen Fixture Works LLC.pdf', filedPath: 'C:\\Filed\\2025-05-01 Letter to Halvorsen Fixture Works LLC.pdf', keptOriginal: false, parked: false, undoable: true, approved: false, reason: 'TYPE_INFERRED, LOW_CONFIDENCE', proposalRevision: '1' },
+      { id: 22, originalFilename: 'Scan 0502.pdf', status: 'completed', proposedFilename: '2025-05-02 Invoice.pdf', filedName: '2025-05-02 Invoice.pdf', filedPath: 'C:\\Filed\\2025-05-02 Invoice.pdf', keptOriginal: false, parked: false, undoable: true, approved: false, proposalRevision: '2' },
+      { id: 23, originalFilename: 'Scan 0503.pdf', status: 'completed', proposedFilename: '2025-05-03 Notice.pdf', filedName: null, filedPath: null, keptOriginal: true, parked: false, undoable: false, approved: false, reason: 'TYPE_INFERRED, LOW_CONFIDENCE', proposalRevision: '1' },
+    ];
+    const items = await new TauriBridge({ invoke: async <T,>() => sent as T, listen: async () => () => {} }).listItems();
+    await start(items);
+    fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
+    expect(queueCell('Scan 0501.pdf', 'status')).toHaveTextContent('Completed with a note');
+    expect(queueCell('Scan 0501.pdf', 'check')).toHaveTextContent('Note: Type supplied by Intern +1 more');
+    expect(queueCell('Scan 0502.pdf', 'status')).toHaveTextContent(/^Completed$/);
+    expect(queueCell('Scan 0503.pdf', 'status')).toHaveTextContent(/^Completed$/);
+    expect(queueCell('Scan 0503.pdf', 'check').querySelector('.check-label')).toHaveClass('quiet');
+    expect(screen.getByRole('button', { name: '1 with a note' })).toBeInTheDocument();
+  });
+
   it('can be listed alone in Completed, and the list lets go when none is left', async () => {
     await start([renamed, renamedPlain, inReview]);
     // Not offered in the queue, where nothing is filed.
