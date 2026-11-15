@@ -22,8 +22,8 @@ import type { TypedWaiting } from './savingOverTyped';
   review. Settings says so, above Save, before either is saved.
 */
 
-const ONE = '1 document has a name or a description you typed and did not file. When you save, Intern can rename it under its own name. You can file it first, or take back what you typed. What you typed is kept with the document, but is not filed.';
-const several = (count: number) => `${count} documents have a name or a description you typed and did not file. When you save, Intern can rename them under its own names. You can file them first, or take back what you typed. What you typed is kept with each document, but is not filed.`;
+const ONE = '1 document has a name or a description you typed and did not file. When you save, Intern can rename it under the name it proposed. You can file it first, or take back what you typed. What you typed is kept with the document, but is not filed.';
+const several = (count: number) => `${count} documents have a name or a description you typed and did not file. When you save, Intern can rename them under the names it proposed. You can file them first, or take back what you typed. What you typed is kept with each document, but is not filed.`;
 
 /** Settings as an older backend sends them: no review level at all. */
 const older: AppSettings = { destination: 'D:\\Filed', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: 'D:\\In', intakeEnabled: true, intakeLocalOnly: true, processOthersUploads: false, machineLabel: 'Front desk', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'openai_compatible', hostedBaseUrl: '', hostedModel: '' };
@@ -143,7 +143,7 @@ describe('whether a save lets Intern rename them', () => {
 });
 
 describe('the warning\'s words', () => {
-  it('says how many documents, that Intern can rename them under its own names, what to do first, and where what was typed is afterwards', () => {
+  it('says how many documents, that Intern can rename them under the names it proposed, what to do first, and where what was typed is afterwards', () => {
     expect(typedWarning(1)).toBe(ONE);
     expect(typedWarning(2)).toBe(several(2));
     expect(typedWarning(14)).toBe(several(14));

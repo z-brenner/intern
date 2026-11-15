@@ -19,8 +19,8 @@ import { openDetails, queueCell } from './grid';
 
 const LEASE = 'Lease Agreement - 123 Main St.pdf';
 const EMPLOYMENT = 'Employment Agreement - John Smith.pdf';
-const ONE = '1 document has a name or a description you typed and did not file. When you save, Intern can rename it under its own name. You can file it first, or take back what you typed. What you typed is kept with the document, but is not filed.';
-const TWO = '2 documents have a name or a description you typed and did not file. When you save, Intern can rename them under its own names. You can file them first, or take back what you typed. What you typed is kept with each document, but is not filed.';
+const ONE = '1 document has a name or a description you typed and did not file. When you save, Intern can rename it under the name it proposed. You can file it first, or take back what you typed. What you typed is kept with the document, but is not filed.';
+const TWO = '2 documents have a name or a description you typed and did not file. When you save, Intern can rename them under the names it proposed. You can file them first, or take back what you typed. What you typed is kept with each document, but is not filed.';
 
 /** Settings, at "Naming and filing", where the two choices are. */
 async function openSettings(page: Page) {

@@ -47,8 +47,8 @@ export function typedWaiting(items: readonly QueueItem[], typed: (id: string) =>
 
 /**
  * How many documents with something typed and not filed Intern can rename
- * under its own names once `draft` is saved over `loaded`. None unless the
- * draft has automatic renaming on. Then:
+ * under the names it proposed once `draft` is saved over `loaded`. None
+ * unless the draft has automatic renaming on. Then:
  *
  * - the ready ones, when automatic renaming was off: it is this save that
  *   lets Intern rename them;
@@ -71,14 +71,16 @@ export function renamedOverTyped(loaded: AppSettings, draft: AppSettings, typed:
  * The warning for `count` such documents, none for none. It says only what
  * was seen to happen: a document renamed by Intern while it had something
  * typed for it keeps that text beside it, read-only, in its details
- * (`setAsideOutdatedDrafts`), and its name is Intern's.
+ * (`setAsideOutdatedDrafts`), and its name is Intern's. "The name it
+ * proposed", not "its own name", which of a document means the name it
+ * came with.
  */
 export function typedWarning(count: number): string {
   if (count <= 0) return '';
   const one = count === 1;
   return [
     `${one ? '1 document has' : `${count} documents have`} a name or a description you typed and did not file.`,
-    `When you save, Intern can rename ${one ? 'it under its own name' : 'them under its own names'}.`,
+    `When you save, Intern can rename ${one ? 'it under the name' : 'them under the names'} it proposed.`,
     `You can file ${one ? 'it' : 'them'} first, or take back what you typed.`,
     `What you typed is kept with ${one ? 'the' : 'each'} document, but is not filed.`,
   ].join(' ');
