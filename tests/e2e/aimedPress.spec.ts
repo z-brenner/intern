@@ -46,6 +46,8 @@ const borderAt = (page: Page, at: { x: number; y: number }) => page.evaluate(({ 
   return button ? getComputedStyle(button).borderTopStyle : null;
 }, at);
 const middle = (box: { x: number; y: number; width: number; height: number } | null) => ({ x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 });
+/** Whether what is on top at a place is part of the review panel. */
+const onPanelAt = (page: Page, at: { x: number; y: number }) => page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('#review-panel') != null, at);
 /** Every row of the queue as it reads: its name, its status and the name proposed for it. */
 const rows = (page: Page) => page.locator('.queue-grid tbody tr').evaluateAll((all) => all.map((row) => `${row.querySelector('[data-column="original"]')?.textContent} | ${row.querySelector('[data-column="status"]')?.textContent} | ${row.querySelector('[data-column="proposed"]')?.textContent}`));
 
@@ -67,18 +69,31 @@ async function withinTheSettleTime(page: Page, journey: () => Promise<void>) {
 for (const size of [WIDE, NARROW]) {
   test(`a press on its way to the panel does nothing on Rename all ready, which came there as the document left the queue, at ${size.width}x${size.height}`, async ({ page }) => {
     await page.setViewportSize(size);
-    let aimedAt = { x: 0, y: 0 };
-    let before: string[] = [];
-    await withinTheSettleTime(page, async () => {
+    const leaseOpen = async () => {
       await page.goto('/?queue=changes');
       const panel = await openDetails(page, LEASE);
       // The focus on the heading, not in a field: nothing typed is kept above the queue to move the toolbar.
       await panel.getByRole('heading', { name: 'Review item' }).click();
-      aimedAt = middle(await panel.getByRole('button', { name: size === WIDE ? 'Close review' : 'Next undecided' }).boundingBox());
-      before = (await rows(page)).filter((row) => !row.startsWith(LEASE));
-      await untilSettled(page);
+    };
+    const leaves = async () => {
       await byItself(page, 'left the queue');
       await expect(page.locator('#review-panel')).toHaveCount(0);
+    };
+    // Where Rename all ready comes when the document leaves is for the
+    // machine's fonts to say - on Windows it is not where the drawer's Next
+    // undecided was, as it is on Linux - so the journey looks first, in a
+    // run of its own, and presses there in the next.
+    await leaseOpen();
+    await leaves();
+    const aimedAt = middle(await page.getByRole('button', { name: 'Rename all ready' }).boundingBox());
+    let before: string[] = [];
+    await withinTheSettleTime(page, async () => {
+      await leaseOpen();
+      // The press is on its way to the panel: the panel is what is there until the document leaves.
+      expect(await onPanelAt(page, aimedAt)).toBe(true);
+      before = (await rows(page)).filter((row) => !row.startsWith(LEASE));
+      await untilSettled(page);
+      await leaves();
       await page.mouse.click(aimedAt.x, aimedAt.y);
     });
     // It is Rename all ready that the press landed on, or the journey shows nothing.
