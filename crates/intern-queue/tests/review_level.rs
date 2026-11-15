@@ -14,7 +14,10 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
+        mpsc,
     },
+    thread,
+    time::Duration,
 };
 
 use intern_core::QueueStatus;
@@ -94,7 +97,12 @@ struct Office {
     reading: Mutex<Option<Doc>>,
     extractions: AtomicUsize,
     readings: AtomicUsize,
+    while_reading: Mutex<Option<WhileReading>>,
 }
+
+/// What a test does once, while the queue is in the middle of reading the
+/// next document: it holds the queue there for a Settings save to land.
+type WhileReading = Box<dyn FnOnce() + Send>;
 
 impl WorkerBoundary for Office {
     fn extract(
@@ -108,6 +116,10 @@ impl WorkerBoundary for Office {
             return Err(WorkerFailure::new("PARSE_FAILED", false, false));
         };
         self.extractions.fetch_add(1, Ordering::SeqCst);
+        let held = self.while_reading.lock().unwrap().take();
+        if let Some(hold) = held {
+            hold();
+        }
         let source = DocumentSource::from_pages(vec![SourcePage::new(
             1,
             agreement(doc.written),
@@ -750,6 +762,33 @@ fn a_change_back_to_strict_that_never_reached_the_queue_files_nothing() {
     scenario(&|rig| rig.reopened());
 }
 
+/// The scheduler's pass alone sends such a document back, whatever
+/// automatic renaming says: with it off nothing is filed and nothing else
+/// looks at the row before the next recovery pass, and a reading strict
+/// holds must not be left one click from "Rename all ready".
+#[test]
+fn the_scheduler_pass_alone_sends_back_what_strict_holds() {
+    let rig = Rig::new(BALANCED, false);
+    let noted_id = rig.read("noted.pdf", noted(APRIL));
+    let plain_id = rig.read("plain.pdf", plain(MAY));
+    assert_eq!(rig.status(noted_id), QueueStatus::Ready);
+    let as_read = rig.record(noted_id);
+
+    // Saved back to strict, and the queue never told. Automatic renaming
+    // stays off. One pass in the queue that is running: not opened again,
+    // and no recovery pass.
+    rig.save(|settings| settings.review_level = STRICT);
+    rig.pipeline.run_until_idle().unwrap();
+
+    assert_eq!(rig.status(noted_id), QueueStatus::NeedsReview);
+    let sent_back = rig.record(noted_id);
+    assert_eq!(sent_back.status, ProposalStatus::NeedsReview);
+    assert_eq!(sent_back.reasons, ["TYPE_INFERRED"], "nothing added");
+    assert_eq!(sent_back.filename, as_read.filename);
+    assert_eq!(rig.status(plain_id), QueueStatus::Ready);
+    assert!(rig.filed_names().is_empty(), "automatic renaming is off");
+}
+
 /// Settings that cannot be read mean strict: a reading made then waits as
 /// strict has it wait, and a ready document only balanced made ready goes
 /// back to review at the next recovery pass.
@@ -772,8 +811,9 @@ fn settings_that_cannot_be_read_mean_strict() {
 }
 
 /// Two scans of one document waiting at strict are not both filed when
-/// the level makes their readings ready: they are judged one at a time,
-/// and the second meets the first one's filing as any later reading would.
+/// the level makes their readings ready. Here the queue is free, so the
+/// first is filed as it becomes ready: they are judged one at a time, and
+/// the second meets the first one's filing as any later reading would.
 #[test]
 fn two_scans_the_level_makes_ready_are_not_both_filed() {
     let rig = Rig::new(STRICT, true);
@@ -800,6 +840,167 @@ fn two_scans_the_level_makes_ready_are_not_both_filed() {
     rig.set_level(BALANCED);
     assert_eq!(rig.status(second), QueueStatus::NeedsReview);
     assert_eq!(rig.record(second), held);
+}
+
+/// What the second of two scans is once the first has been filed: in
+/// review as a near duplicate of that filing, with only the first in the
+/// output folder.
+fn assert_only_the_first_scan_is_filed(rig: &Rig, first: i64, second: i64) {
+    assert_eq!(rig.status(first), QueueStatus::Completed);
+    assert_eq!(rig.status(second), QueueStatus::NeedsReview);
+    let held = rig.record(second);
+    assert_eq!(held.status, ProposalStatus::NeedsReview);
+    assert_eq!(held.reasons, ["TYPE_INFERRED", NEAR_DUPLICATE]);
+    assert_eq!(
+        held.near_duplicate_of.as_deref(),
+        Some(name_for(APRIL.0).as_str())
+    );
+    assert!(!held.approved);
+    assert_eq!(rig.filed_names(), [name_for(APRIL.0)], "not filed twice");
+}
+
+/// The same two scans when the first is not filed as the level makes it
+/// ready, because the queue is paused, or because automatic renaming is
+/// off and is turned on later. Both become ready: neither repeats a filing
+/// yet. When the queue files them the first is filed, and the second,
+/// which repeats a filing by then, waits for a person as a near duplicate.
+/// Both used to be filed, the second as "... (2).pdf".
+#[test]
+fn two_scans_made_ready_before_either_is_filed_are_not_both_filed() {
+    let both_ready = |rig: &Rig, first: i64, second: i64| {
+        assert_eq!(rig.status(first), QueueStatus::Ready);
+        assert_eq!(rig.status(second), QueueStatus::Ready);
+        assert_eq!(rig.record(second).near_duplicate_of, None);
+        assert!(rig.filed_names().is_empty());
+    };
+
+    let paused = Rig::new(STRICT, true);
+    let first = paused.read("scan-1.pdf", noted(APRIL));
+    let second = paused.read("scan-2.pdf", noted(APRIL));
+    paused.pipeline.pause();
+    paused.set_level(BALANCED);
+    both_ready(&paused, first, second);
+    paused.pipeline.resume();
+    paused.pipeline.run_until_idle().unwrap();
+    assert_only_the_first_scan_is_filed(&paused, first, second);
+    // Held as a near duplicate, it is no level's to make ready.
+    let held = paused.record(second);
+    paused.set_level(STRICT);
+    paused.set_level(BALANCED);
+    paused.pipeline.run_until_idle().unwrap();
+    assert_eq!(paused.status(second), QueueStatus::NeedsReview);
+    assert_eq!(paused.record(second), held);
+    assert_eq!(paused.filed_names(), [name_for(APRIL.0)]);
+
+    let by_hand = Rig::new(STRICT, false);
+    let first = by_hand.read("scan-1.pdf", noted(APRIL));
+    let second = by_hand.read("scan-2.pdf", noted(APRIL));
+    by_hand.set_level(BALANCED);
+    by_hand.pipeline.run_until_idle().unwrap();
+    both_ready(&by_hand, first, second);
+    by_hand.save(|settings| settings.automatic_rename = true);
+    by_hand.pipeline.run_until_idle().unwrap();
+    assert_only_the_first_scan_is_filed(&by_hand, first, second);
+
+    // The same at balanced from the start: two scans read while automatic
+    // renaming is off are both ready, and only one is filed once it is on.
+    let balanced = Rig::new(BALANCED, false);
+    let first = balanced.read("scan-1.pdf", noted(APRIL));
+    let second = balanced.read("scan-2.pdf", noted(APRIL));
+    both_ready(&balanced, first, second);
+    balanced.save(|settings| settings.automatic_rename = true);
+    balanced.pipeline.run_until_idle().unwrap();
+    assert_only_the_first_scan_is_filed(&balanced, first, second);
+}
+
+/// How long a test waits for the other thread before it gives up.
+const PATIENCE: Duration = Duration::from_secs(30);
+
+/// And when the Settings save lands while the queue is reading another
+/// document: a rename asked for then is put off until the queue is between
+/// documents, so both scans are left ready, and the scheduler's next pass
+/// files the first and holds the second.
+#[test]
+fn two_scans_made_ready_while_another_document_is_read_are_not_both_filed() {
+    let rig = Rig::new(STRICT, true);
+    let first = rig.read("scan-1.pdf", noted(APRIL));
+    let second = rig.read("scan-2.pdf", noted(APRIL));
+
+    // The queue stays in the middle of reading a third document until the
+    // save, on another thread as in the app, has come and gone.
+    let (reading, is_reading) = mpsc::channel();
+    let (saved, is_saved) = mpsc::channel();
+    *rig.office.while_reading.lock().unwrap() = Some(Box::new(move || {
+        reading.send(()).unwrap();
+        is_saved.recv_timeout(PATIENCE).expect("the save");
+    }));
+    let (other, during) = thread::scope(|scope| {
+        let read = scope.spawn(|| {
+            rig.read(
+                "other.pdf",
+                doc(JUNE.0, JUNE.1, &[ReviewReason::PartyUnsupported]),
+            )
+        });
+        is_reading.recv_timeout(PATIENCE).expect("the read");
+        rig.set_level(BALANCED);
+        let during = (rig.status(first), rig.status(second), rig.filed_names());
+        saved.send(()).unwrap();
+        (read.join().unwrap(), during)
+    });
+    assert_eq!(
+        during,
+        (QueueStatus::Ready, QueueStatus::Ready, Vec::new()),
+        "ready, and not filed while the queue reads"
+    );
+    assert_eq!(rig.status(other), QueueStatus::NeedsReview);
+
+    // The scheduler's next pass.
+    rig.pipeline.run_until_idle().unwrap();
+    assert_only_the_first_scan_is_filed(&rig, first, second);
+    assert_eq!(rig.status(other), QueueStatus::NeedsReview);
+}
+
+/// The look at filing is for readings only a looser level makes ready. A
+/// reading strict calls ready is filed as every release has filed it, at
+/// both levels: it was compared with the filings when it was read, and is
+/// not compared again. So two scans strict calls ready, read while
+/// automatic renaming is off, are both filed once it is on, as before the
+/// levels. Strict is left exactly as it was.
+#[test]
+fn a_reading_strict_calls_ready_is_filed_as_before_at_both_levels() {
+    for level in ReviewLevel::ALL {
+        let rig = Rig::new(level, false);
+        let first = rig.read("scan-1.pdf", plain(APRIL));
+        let second = rig.read("scan-2.pdf", plain(APRIL));
+        assert_eq!(rig.status(first), QueueStatus::Ready, "{level:?}");
+        assert_eq!(rig.status(second), QueueStatus::Ready, "{level:?}");
+        rig.save(|settings| settings.automatic_rename = true);
+        rig.pipeline.run_until_idle().unwrap();
+        assert_eq!(rig.status(first), QueueStatus::Completed, "{level:?}");
+        assert_eq!(rig.status(second), QueueStatus::Completed, "{level:?}");
+        assert_eq!(rig.record(second).near_duplicate_of, None);
+        assert_eq!(rig.filed_names().len(), 2, "{level:?}");
+    }
+}
+
+/// Nor does the look at filing second-guess a person. Two scans ready at
+/// balanced, neither filed: a person approves one and then the other, and
+/// both are filed, as two scans strict calls ready always were.
+#[test]
+fn a_name_a_person_approved_is_filed_whatever_it_repeats() {
+    let rig = Rig::new(BALANCED, false);
+    let first = rig.read("scan-1.pdf", noted(APRIL));
+    let second = rig.read("scan-2.pdf", noted(APRIL));
+    for id in [first, second] {
+        assert_eq!(rig.status(id), QueueStatus::Ready);
+        let name = rig.record(id).filename;
+        rig.pipeline
+            .approve(id, &name, "A sentence about the agreement.")
+            .unwrap();
+        assert_eq!(rig.status(id), QueueStatus::Completed);
+    }
+    assert_eq!(rig.record(second).near_duplicate_of, None);
+    assert_eq!(rig.filed_names().len(), 2);
 }
 
 /// A document held as a near duplicate when it was read stays held when the
