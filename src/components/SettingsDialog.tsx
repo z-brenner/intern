@@ -1,4 +1,5 @@
 import { LocalModel } from '../features/settings/LocalModel';
+import { ReviewLevelChoice } from '../features/settings/ReviewLevel';
 import { useModelSetup } from '../features/setup/useModelSetup';
 import { IntakeHealthNotice } from '../features/intake/IntakeHealth';
 import { MicrosoftIntakeSettings } from '../features/intake/MicrosoftIntakeSettings';
@@ -10,6 +11,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { AppSettings, CloudLocation, CloudRoot, DestinationLayout, IntakeStatus, LearnedRule } from '../types';
 import { GUIDE_URL } from '../lib/bridge';
 import { tooShortOwnNames } from '../lib/ownNames';
+import { reviewLevelOf, withKnownReviewLevel, withReviewLevel } from '../lib/reviewLevel';
 import type { DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateProgressListener, UpdateStatus } from '../lib/bridge';
 import { installingLabel } from '../lib/format';
 import { useEditsOnlyInside } from '../lib/dialogEdits';
@@ -456,7 +458,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     setSaving(true);
     setSaveError('');
     try {
-      const draft = withOwnNames(next);
+      const draft = withKnownReviewLevel(withOwnNames(next));
       const processExisting = !managed && existingDocuments?.process === true && draft.intakeFolder !== settings.intakeFolder;
       const saved = managed ? withManagedValues(draft, settings) : draft;
       await (processExisting ? onSave(saved, { processExisting: true }) : onSave(saved));
@@ -602,8 +604,17 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         <label>Your organization's names<textarea rows={3} aria-describedby={shortOwnNames.length > 0 ? 'own-names-hint own-names-short' : 'own-names-hint'} value={(next.ourNames ?? []).join('\n')} onChange={(event) => setNext({ ...next, ourNames: event.target.value.split(/\r?\n/) })} /></label>
         <p className="check-hint" id="own-names-hint">Your own firm's names. When a document names your firm and someone else, the filename and the Party folder use the other side.</p>
         {shortOwnNames.length > 0 && <p className="check-hint" id="own-names-short">{shortOwnNames.map((name) => `“${name}”`).join(', ')} {shortOwnNames.length === 1 ? 'is' : 'are'} too short to match safely and will not be used. Add the name as your documents print it in full.</p>}
-        <label className="check-label"><input type="checkbox" checked={Boolean(next.automaticRename)} onChange={(event) => setNext({ ...next, automaticRename: event.target.checked })} />Automatically rename high-confidence files</label>
-        <p className="check-hint">Anything Intern is less sure about still waits for you in the queue.</p>
+        {/*
+          Which documents are ready comes before whether Intern renames the
+          ready ones by itself, and is not a part of it: the level decides
+          what Rename all ready renames as well. The checkbox used to say
+          "high-confidence files", which at Balanced is not what a ready
+          document is; it says "ready", and the choice above says what
+          ready means.
+        */}
+        <ReviewLevelChoice level={reviewLevelOf(next)} onChange={(level) => setNext((current) => withReviewLevel(current, level, settings))} />
+        <label className="check-label"><input type="checkbox" checked={Boolean(next.automaticRename)} onChange={(event) => setNext({ ...next, automaticRename: event.target.checked })} />Automatically rename ready documents</label>
+        <p className="check-hint">Anything that is not ready still waits for you in the queue.</p>
       </details>
       {/* A question is not left open in a section closed over it: closing the section takes it back. */}
       <details className="settings-group settings-advanced" onToggle={(event) => { if (!event.currentTarget.open) setCheckingRule(undefined); }}>

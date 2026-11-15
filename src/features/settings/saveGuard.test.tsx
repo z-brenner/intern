@@ -35,13 +35,13 @@ describe('settings that could not be read', () => {
     const props = { bridge: createInMemoryBridge(), onSave, onClose: vi.fn(), onCheckForUpdate: async () => ({ state: 'unsupported' as const }), onInstallUpdate: async () => undefined };
     const view = render(<SettingsDialog settings={placeholders} {...props} />);
     const dialog = await screen.findByRole('dialog', { name: 'Settings' });
-    fireEvent.click(within(dialog).getByLabelText('Automatically rename high-confidence files'));
+    fireEvent.click(within(dialog).getByLabelText('Automatically rename ready documents'));
 
     view.rerender(<SettingsDialog settings={loaded} {...props} />);
 
     // The read's values replace the placeholders it was not shown; the choice stays.
     expect(within(within(dialog).getByRole('group', { name: 'Folders' })).getByText('D:\\Filed')).toBeVisible();
-    expect(within(dialog).getByLabelText('Automatically rename high-confidence files')).toBeChecked();
+    expect(within(dialog).getByLabelText('Automatically rename ready documents')).toBeChecked();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({ ...loaded, automaticRename: true }));
   });

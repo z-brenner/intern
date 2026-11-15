@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { describeActionError } from './actionErrors';
-import { describeQueueStop, humanizeReason, shortReason } from './reasons';
+import { describeNotes, describeQueueStop, humanizeReason, noteCodes, shortReason } from './reasons';
 
 describe('humanizeReason', () => {
   it('translates a single code into its sentence', () => {
@@ -222,5 +222,73 @@ describe('describeQueueStop', () => {
 describe('a quick-model reading', () => {
   it('says who read it and what the person can do', () => {
     expect(humanizeReason('FAST_MODEL_READING')).toBe('Read by the quick model — check it, or wait for the accurate model to read it again.');
+  });
+});
+
+/*
+  At the Balanced review level a ready document can carry review codes, and
+  one Intern then renames by itself is filed with them. There they are notes.
+  A review's sentence that tells the person to check something, or that the
+  document waits, would be false of a document nothing holds.
+*/
+describe('a note on a document that is not waiting', () => {
+  // The codes the Balanced level lets a ready document carry (the level's rule is the engine's).
+  const carried = ['TYPE_MISSING', 'TYPE_UNSUPPORTED', 'TYPE_INFERRED', 'DESCRIPTION_UNSUPPORTED', 'LOW_CONFIDENCE'];
+
+  it('says what Intern found, tells nobody to check, and says of nothing that it waits', () => {
+    for (const code of carried) {
+      const note = describeNotes([code]);
+      expect(note, code).not.toBe(code);
+      expect(note, code).toMatch(/[.]$/);
+      // No instruction, and nothing about waiting or approving: the document is ready.
+      expect(note, code).not.toMatch(/(^|\. )Check\b|\bwaits?\b|\bapprove\b/i);
+    }
+    expect(describeNotes(['TYPE_UNSUPPORTED'])).toBe('The document does not confirm the type in this name as its own. The type does not appear verbatim in the document, or appears only where the document says what it is about, such as a subject line or the text of a letter.');
+    expect(describeNotes(['TYPE_INFERRED'])).toBe('Intern supplied the type in this name: the document\'s own title, or the kind its layout shows, such as “Letter” or “Email”.');
+    // Where to look is still said, for someone who does look.
+    expect(describeNotes(['LOW_CONFIDENCE'])).toBe('The model was unsure of its reading. If you look at this name, start with the date and the parties.');
+    // These two already say what was found and ask for nothing.
+    expect(describeNotes(['TYPE_MISSING'])).toBe(humanizeReason('TYPE_MISSING'));
+    expect(describeNotes(['DESCRIPTION_UNSUPPORTED'])).toBe(humanizeReason('DESCRIPTION_UNSUPPORTED'));
+  });
+
+  it('differs from the review sentence exactly where that one ends on an instruction', () => {
+    for (const code of ['TYPE_UNSUPPORTED', 'TYPE_INFERRED', 'LOW_CONFIDENCE']) {
+      expect(humanizeReason(code), code).toMatch(/\. Check [^.]+\.$/);
+      expect(describeNotes([code]), code).not.toBe(humanizeReason(code));
+    }
+    // The note keeps what the review sentence says was found.
+    expect(humanizeReason('TYPE_UNSUPPORTED')).toContain(describeNotes(['TYPE_UNSUPPORTED']).replace('the type in this name', 'the proposed type'));
+    expect(humanizeReason('TYPE_INFERRED').startsWith(describeNotes(['TYPE_INFERRED']))).toBe(true);
+    expect(humanizeReason('LOW_CONFIDENCE').startsWith('The model was unsure of its reading.')).toBe(true);
+  });
+
+  it('says several notes in the order they came', () => {
+    expect(describeNotes(['TYPE_INFERRED', 'LOW_CONFIDENCE'])).toBe(`${describeNotes(['TYPE_INFERRED'])} ${describeNotes(['LOW_CONFIDENCE'])}`);
+    expect(describeNotes(['type_inferred', ' LOW_CONFIDENCE '])).toBe(describeNotes(['TYPE_INFERRED', 'LOW_CONFIDENCE']));
+    expect(describeNotes([])).toBe('');
+  });
+
+  it('keeps the sentence of a code with no note of its own, and an unknown code as it came', () => {
+    expect(describeNotes(['DATE_AMBIGUOUS'])).toBe(humanizeReason('DATE_AMBIGUOUS'));
+    expect(describeNotes(['PARTY_UNSUPPORTED', 'PARTY_MISSING'])).toBe(humanizeReason('PARTY_UNSUPPORTED, PARTY_MISSING'));
+    expect(describeNotes(['SOMETHING_NEW'])).toBe('SOMETHING_NEW');
+    expect(describeNotes(['TYPE_INFERRED', 'SOMETHING_NEW'])).toBe(`${describeNotes(['TYPE_INFERRED'])} SOMETHING_NEW`);
+  });
+
+  it('does not count what became of the file as a note about its reading', () => {
+    expect(noteCodes(['TYPE_INFERRED', 'ALREADY_NAMED', 'LOW_CONFIDENCE', 'EXACT_COPY'])).toEqual(['TYPE_INFERRED', 'LOW_CONFIDENCE']);
+    expect(noteCodes(['ALREADY_NAMED'])).toEqual([]);
+    expect(noteCodes(['EXACT_COPY'])).toEqual([]);
+    // Anything else is a note, a code nobody has heard of included: it is shown, not dropped.
+    expect(noteCodes(['SOMETHING_NEW'])).toEqual(['SOMETHING_NEW']);
+  });
+
+  it('leaves every review sentence as it was', () => {
+    expect(humanizeReason('TYPE_UNSUPPORTED, TYPE_INFERRED, LOW_CONFIDENCE')).toBe(
+      'The document does not confirm the proposed type as its own. The type does not appear verbatim in the document, or appears only where the document says what it is about, such as a subject line or the text of a letter. Check the type. '
+      + 'Intern supplied the type in this name: the document\'s own title, or the kind its layout shows, such as “Letter” or “Email”. Check that it names the document. '
+      + 'The model was unsure of its reading. Check the name against the document, starting with the date and the parties.',
+    );
   });
 });

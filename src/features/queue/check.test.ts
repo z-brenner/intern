@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { checkCell, checkText, itemFlaggedFields, itemReasonCodes, nameParts, partyGiven, withParty } from './check';
-import { reasonCodes, shortReason } from '../../lib/reasons';
+import { checkCell, checkText, itemFlaggedFields, itemNote, itemReasonCodes, nameParts, partyGiven, withParty } from './check';
+import { describeNotes, humanizeReason, reasonCodes, shortReason } from '../../lib/reasons';
 import type { QueueItem } from '../../types';
 
 const review = (extra: Partial<QueueItem>): QueueItem => ({ id: 'r', originalFilename: 'Scan.pdf', status: 'review', proposedFilename: '2024-02-09 Invoice INV-3301 from Fabrikam Inc.pdf', ...extra });
@@ -54,6 +54,79 @@ describe('the Check column', () => {
   it('flags only the parts of a name in review', () => {
     expect(itemFlaggedFields(review({ reasonCodes: ['DATE_AMBIGUOUS', 'PARTY_UNSUPPORTED', 'LOW_CONFIDENCE'] }))).toEqual(['date', 'parties']);
     expect(itemFlaggedFields({ ...review({ reasonCodes: ['DATE_AMBIGUOUS'] }), status: 'ready' })).toEqual([]);
+  });
+});
+
+/*
+  At the Balanced review level a reading can be ready while it carries review
+  codes, and a document Intern then renames by itself is filed with them. On
+  such a row they are notes: it reads as ready, or completed, with a note -
+  never as a review, and never as having passed every check.
+*/
+describe('a note on a row that is not waiting', () => {
+  const ready = (extra: Partial<QueueItem>): QueueItem => ({ ...review({}), status: 'ready', ...extra });
+  const renamed = (extra: Partial<QueueItem>): QueueItem => ({ ...review({}), status: 'completed', filedName: '2024-02-09 Invoice INV-3301 from Fabrikam Inc.pdf', undoable: true, keptOriginal: false, ...extra });
+  const codes = ['TYPE_INFERRED', 'LOW_CONFIDENCE'];
+  const sent = { reasonCodes: codes, reason: humanizeReason(codes.join(', ')) };
+
+  it('is what a ready row with codes says in place of "All checks passed"', () => {
+    const item = ready(sent);
+    expect(itemNote(item)).toEqual({ codes, text: describeNotes(codes) });
+    expect(checkCell(item)).toEqual({ text: 'Note: Type supplied by Intern', more: 1, tone: 'noted', title: describeNotes(codes) });
+    // Copied, the cell still says the row was not waiting.
+    expect(checkText(item)).toBe('Note: Type supplied by Intern (+1 more)');
+    // The tooltip is the note, not the review's instructions, and not the claim that every check passed.
+    expect(checkCell(item)?.title).not.toMatch(/Check |each found in the document/);
+    // Nothing of its name is marked for checking: that is a review's.
+    expect(itemFlaggedFields(item)).toEqual([]);
+  });
+
+  it('leaves a ready row with no reason exactly as it was', () => {
+    expect(itemNote(ready({}))).toBeUndefined();
+    expect(checkCell(ready({}))).toEqual({ text: 'All checks passed', more: 0, tone: 'ready', title: 'The date, type and parties in this name were each found in the document.' });
+  });
+
+  it('is not said of an approved name, of a copy, or of a row in review', () => {
+    // An approved name is the person's own.
+    expect(itemNote(ready({ ...sent, approved: true }))).toBeUndefined();
+    expect(checkCell(ready({ ...sent, approved: true }))).toMatchObject({ text: 'Approved', tone: 'ready' });
+    // A staged copy says what it is.
+    const copy = ready({ copyOf: '2024-02-09 Invoice.pdf', approved: true, reason: humanizeReason('EXACT_COPY'), reasonCodes: ['EXACT_COPY'] });
+    expect(itemNote(copy)).toBeUndefined();
+    expect(itemNote({ ...copy, approved: false })).toBeUndefined();
+    expect(checkCell({ ...copy, approved: false })).toMatchObject({ text: 'Exact copy', tone: 'quiet' });
+    // In review, the same codes are what to check.
+    expect(itemNote(review(sent))).toBeUndefined();
+    expect(checkCell(review(sent))).toMatchObject({ text: 'Type supplied by Intern', more: 1, tone: 'review' });
+    for (const status of ['waiting', 'processing', 'failed'] as const) expect(itemNote({ ...review(sent), status }), status).toBeUndefined();
+  });
+
+  it('is said in the words that came when a ready row gives a reason this build has no codes for', () => {
+    const item = ready({ reason: 'TYPE_INFERRED, SOMETHING_NEW' });
+    expect(itemNote(item)).toEqual({ codes: [], text: 'TYPE_INFERRED, SOMETHING_NEW' });
+    expect(checkCell(item)).toEqual({ text: 'Note: TYPE_INFERRED, SOMETHING_NEW', more: 0, tone: 'noted', title: 'TYPE_INFERRED, SOMETHING_NEW' });
+  });
+
+  it('marks a document renamed while it carried codes, and not one that kept its name or was a copy', () => {
+    const item = renamed(sent);
+    expect(itemNote(item)).toEqual({ codes, text: describeNotes(codes) });
+    expect(checkCell(item)).toEqual({ text: 'Note: Type supplied by Intern', more: 1, tone: 'noted', title: describeNotes(codes) });
+    // Renamed with no codes: nothing to say, as before.
+    expect(itemNote(renamed({}))).toBeUndefined();
+    expect(checkCell(renamed({}))).toBeUndefined();
+    // Kept its original name with a review's codes still on it: not renamed by them, and shown as it always was.
+    const kept = renamed({ ...sent, keptOriginal: true, filedName: undefined, undoable: false });
+    expect(itemNote(kept)).toBeUndefined();
+    expect(checkCell(kept)).toEqual({ text: 'Type supplied by Intern', more: 1, tone: 'quiet', title: sent.reason });
+    // What became of the file is no note about its reading.
+    const named = renamed({ keptOriginal: true, filedName: undefined, undoable: false, reasonCodes: ['ALREADY_NAMED'], reason: humanizeReason('ALREADY_NAMED') });
+    expect(itemNote(named)).toBeUndefined();
+    expect(checkCell(named)).toMatchObject({ text: 'Already had this name', tone: 'quiet' });
+    const copy = renamed({ copyOf: '2024-02-09 Invoice.pdf', reasonCodes: ['EXACT_COPY'], reason: humanizeReason('EXACT_COPY') });
+    expect(itemNote(copy)).toBeUndefined();
+    expect(checkCell(copy)).toMatchObject({ text: 'Exact copy', tone: 'quiet' });
+    // A filed row gives its reason in codes or not at all: words alone mark nothing.
+    expect(itemNote(renamed({ reason: 'Something in words.' }))).toBeUndefined();
   });
 });
 

@@ -241,12 +241,64 @@ export function humanizeReason(reason: string): string {
   if (parts.length === 0 || !parts.every((part) => SENTENCES[part.toUpperCase()] !== undefined)) {
     return reason;
   }
-  const codes = parts.map((part) => part.toUpperCase());
+  return sentences(parts.map((part) => part.toUpperCase()), {});
+}
+
+/**
+ * The sentences for a list of codes, each with its closing sentence unless
+ * a later code says the same one. `instead` has the sentence to say for a
+ * code in place of its own, which then stands alone, with no closing. A
+ * code with no sentence is said as it came.
+ */
+function sentences(codes: readonly string[], instead: Record<string, string>): string {
+  const closingOf = (code: string) => instead[code] === undefined ? CLOSINGS[code] : undefined;
   return codes.map((code, index) => {
-    const closing = CLOSINGS[code];
-    const saidLater = closing !== undefined && codes.slice(index + 1).some((later) => CLOSINGS[later] === closing);
-    return closing === undefined || saidLater ? SENTENCES[code] : `${SENTENCES[code]} ${closing}`;
+    const closing = closingOf(code);
+    const saidLater = closing !== undefined && codes.slice(index + 1).some((later) => closingOf(later) === closing);
+    const sentence = instead[code] ?? SENTENCES[code] ?? code;
+    return closing === undefined || saidLater ? sentence : `${sentence} ${closing}`;
   }).join(' ');
+}
+
+/**
+ * The same codes on a document that is not waiting. At the Balanced review
+ * level a reading can be ready while it carries some of them, and a document
+ * Intern then renames by itself is filed with them still on its record. There
+ * they are notes: nothing holds the document, and it can be renamed with
+ * nobody looking at it. A sentence above that ends on an instruction -
+ * "Check the type." - reads on such a document as if it were still waiting
+ * for that check, so each of those has its note here: what Intern found,
+ * and for the model's doubt where to look if the person does look.
+ *
+ * Only the codes the level lets a ready document carry need one (the level's
+ * rule is the engine's). A code with no entry keeps its sentence above, as
+ * the type that was never identified and the description do: they say what
+ * was found and ask for nothing.
+ */
+const NOTE_SENTENCES: Record<string, string> = {
+  TYPE_UNSUPPORTED: 'The document does not confirm the type in this name as its own. The type does not appear verbatim in the document, or appears only where the document says what it is about, such as a subject line or the text of a letter.',
+  TYPE_INFERRED: 'Intern supplied the type in this name: the document\'s own title, or the kind its layout shows, such as “Letter” or “Email”.',
+  LOW_CONFIDENCE: 'The model was unsure of its reading. If you look at this name, start with the date and the parties.',
+};
+
+/**
+ * Codes that say what became of a document's file, not anything about how
+ * it was read: an exact copy filed as one, a name the file already had. On
+ * a ready or a filed document they are not notes about its reading.
+ */
+const OUTCOME_CODES = new Set(['EXACT_COPY', 'ALREADY_NAMED']);
+
+/** The codes of a list that are notes about a reading: all but those that say what became of the file. */
+export function noteCodes(codes: readonly string[]): string[] {
+  return codes.filter((code) => !OUTCOME_CODES.has(code));
+}
+
+/**
+ * What Intern noted, for a list of codes on a document that is not waiting:
+ * each code's note, or its sentence where that already reads as one.
+ */
+export function describeNotes(codes: readonly string[]): string {
+  return sentences(codes.map((code) => code.trim().toUpperCase()), NOTE_SENTENCES);
 }
 
 /**

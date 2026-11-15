@@ -1,4 +1,4 @@
-import { Ban, CalendarPlus, CircleAlert, ChevronRight, ClipboardCopy, Ellipsis, ExternalLink, FileCheck2, FileText, FolderOpen, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
+import { Ban, CalendarPlus, CircleAlert, ChevronRight, ClipboardCopy, Ellipsis, ExternalLink, FileCheck2, FileText, FolderOpen, Info, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
 import { useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import type { FocusEvent, KeyboardEvent, MouseEvent, Ref } from 'react';
 import { ConfidenceMeter } from './ConfidenceMeter';
@@ -9,7 +9,7 @@ import { TypedKept } from './TypedKept';
 import { isUnreadable, itemActions, keptOriginal, withoutReviewPrefix } from '../features/review/actions';
 import { proposalOf } from '../features/review/drafts';
 import type { KeptText, ReviewDraft, ReviewDrafts } from '../features/review/drafts';
-import { itemFlaggedFields, itemReasonCodes, nameParts, partyGiven, withParty } from '../features/queue/check';
+import { itemFlaggedFields, itemNote, itemReasonCodes, nameParts, partyGiven, withParty } from '../features/queue/check';
 import type { ReasonField } from '../lib/reasons';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
@@ -467,10 +467,16 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     the document's own lines get them.
   */
   const verbatim = item.readBy !== undefined;
+  // What Intern noted about a document that is not waiting: ready with a
+  // note at the Balanced review level, or renamed with one. It is said
+  // first, as what to check is, and as a note: the document is not in
+  // review, so nothing below is marked "check this" for it.
+  const note = itemNote(item);
   // In review because the model was unsure (LOW_CONFIDENCE) while the model's
-  // own figure, shown under Analysis details, says it was sure.
-  const sureByItsOwnFigure = item.status === 'review' && item.confidence !== undefined && item.confidence >= SELF_RATED_UNSURE
-    && itemReasonCodes(item).includes('LOW_CONFIDENCE');
+  // own figure, shown under Analysis details, says it was sure. The same
+  // two can stand side by side on a document with that as its note.
+  const unsureCodes = item.status === 'review' ? itemReasonCodes(item) : note?.codes ?? [];
+  const sureByItsOwnFigure = item.confidence !== undefined && item.confidence >= SELF_RATED_UNSURE && unsureCodes.includes('LOW_CONFIDENCE');
   /*
     The Parties row is another matter whoever read it: what the backend
     sends there is the names the proposal settled on, not the lines that
@@ -505,6 +511,18 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         Intern's word for it.
       */}
       {item.nearDuplicateOf && <p className="near-duplicate" aria-label="Filed already as">Filed already as <q>{item.nearDuplicateOf}</q>.</p>}
+    </section>}
+    {/*
+      Ready, or renamed, with a note. In the place of "What to check" and
+      drawn calmer, because it is not one: the first line says the document
+      is not waiting, before the note can be read as a reason it does. The
+      note is there to be seen all the same - at this level a document can
+      be renamed with nobody having looked at it.
+    */}
+    {note && <section className="check-first noted" aria-label="Intern's note">
+      <h3><Icon icon={Info} />{completed ? 'Renamed with a note' : 'Ready with a note'}</h3>
+      <p>{completed ? RENAMED_NOTE_LEAD : READY_NOTE_LEAD}</p>
+      <p>{note.text}</p>
     </section>}
     <div className="source-file">
       <p className="field-label">{completed ? 'Original name' : 'Current name'}</p>
@@ -675,7 +693,8 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
     </details>}
     {/* Settled, a reason is no longer why the item waits - "already had this name" is a note about what happened. */}
     {/* A waiting document is not in review: its reason says why it waits (a document in doubt, to be read again once Intern has shown it can read). */}
-    {item.reason && !reviewNote && <section className="note"><h3>{completed ? 'Note' : item.status === 'waiting' ? 'Why it is waiting' : 'Note'}</h3><p>{item.reason}</p>
+    {/* Not a second time for a document whose note is said first, above. */}
+    {item.reason && !reviewNote && !note && <section className="note"><h3>{completed ? 'Note' : item.status === 'waiting' ? 'Why it is waiting' : 'Note'}</h3><p>{item.reason}</p>
       {/*
         The sentence says "a document that was filed already"; this says
         which one, so the person can open it and compare rather than take
@@ -724,6 +743,15 @@ export function readByLine(reading: ModelReading, pending: boolean): string {
   if (reading.provisional && pending) return `${read}. Provisional — will be re-read by the accurate model.`;
   return read;
 }
+
+/**
+ * What the panel says before a note. A ready document's says that nothing
+ * holds it, which is what tells a note from a review. A renamed one's says
+ * only that the note was there when it was renamed, not who renamed it:
+ * the row does not say.
+ */
+const READY_NOTE_LEAD = 'This document is ready: nothing holds it. Intern noted this about its reading.';
+const RENAMED_NOTE_LEAD = 'Intern had this noted about its reading when the document was renamed.';
 
 const FIELD_WORDS: Record<ReasonField, string> = { date: 'date', type: 'document type', parties: 'parties', description: 'description' };
 
