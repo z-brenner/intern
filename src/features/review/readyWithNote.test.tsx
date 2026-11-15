@@ -22,7 +22,6 @@ const noted: QueueItem = {
   description: 'Letter to Fabrikam Inc. about renewing its service agreement.',
   evidence: { date: 'March 8, 2024', type: 'Dear Ms. Okafor', parties: 'Fabrikam Inc.' },
   reason: humanizeReason(codes.join(', ')), reasonCodes: codes,
-  readBy: { tier: 'accurate', modelId: 'qwen', displayName: 'Qwen3.5 9B' },
 };
 const plain: QueueItem = { id: 'plain', originalFilename: 'Scan 0302.pdf', status: 'ready', proposedFilename: '2024-03-09 Invoice INV-7 from Litware Inc.pdf', confidence: 0.97, description: 'Invoice INV-7 from Litware Inc.' };
 const inReview: QueueItem = { id: 'review', originalFilename: 'Scan 0303.pdf', status: 'review', proposedFilename: '2024-03-10 Notice to Contoso Ltd.pdf', confidence: 0.9, description: 'Notice to Contoso Ltd.', reason: humanizeReason('DATE_AMBIGUOUS'), reasonCodes: ['DATE_AMBIGUOUS'] };

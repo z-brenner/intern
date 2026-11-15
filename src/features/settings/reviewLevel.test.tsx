@@ -24,7 +24,7 @@ const strict = (dialog: HTMLElement) => within(level(dialog)).getByRole('radio',
 const balanced = (dialog: HTMLElement) => within(level(dialog)).getByRole('radio', { name: /^Balanced/ });
 
 /** Settings as an older backend sends them: no review level at all. */
-const older: AppSettings = { destination: 'D:\\Filed', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: 'D:\\In', intakeEnabled: true, intakeLocalOnly: true, processOthersUploads: false, machineLabel: 'Front desk', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '' };
+const older: AppSettings = { destination: 'D:\\Filed', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: 'D:\\In', intakeEnabled: true, intakeLocalOnly: true, processOthersUploads: false, machineLabel: 'Front desk', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'openai_compatible', hostedBaseUrl: '', hostedModel: '' };
 
 function renderDialog(settings: AppSettings) {
   const onSave = vi.fn(async (_settings: AppSettings) => undefined);

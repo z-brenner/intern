@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { reviewLevelOf, withKnownReviewLevel, withReviewLevel } from './reviewLevel';
 import type { AppSettings } from '../types';
 
-const settings: AppSettings = { destination: 'D:\\Filed', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: 'D:\\In', intakeEnabled: true, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '' };
+const settings: AppSettings = { destination: 'D:\\Filed', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: 'D:\\In', intakeEnabled: true, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'openai_compatible', hostedBaseUrl: '', hostedModel: '' };
 /** Settings as a file holds them, which can say anything. */
 const stored = (reviewLevel: unknown) => ({ ...settings, reviewLevel } as AppSettings);
 

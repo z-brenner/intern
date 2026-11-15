@@ -65,7 +65,7 @@ describe('TauriBridge', () => {
   // both directions: it adds no level to settings that have none, and takes
   // none away.
   it('passes the review level to and from the backend as it is, under reviewLevel', async () => {
-    const stored = { destination: 'C:\\Output', destinationLayout: 'flat', startMinimized: false, automaticRename: true, reviewLevel: 'balanced', intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '' } as const;
+    const stored = { destination: 'C:\\Output', destinationLayout: 'flat', startMinimized: false, automaticRename: true, reviewLevel: 'balanced', intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'openai_compatible', hostedBaseUrl: '', hostedModel: '' } as const;
     const fake = fakeTransport({ settings_get: stored });
     const bridge = new TauriBridge(fake.transport);
 
