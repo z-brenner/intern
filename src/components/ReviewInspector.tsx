@@ -15,6 +15,7 @@ import type { ReviewInspectorHandle } from '../features/review/useReviewShortcut
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
 import type { ModelReading, QueueItem } from '../types';
 import { afterAPress } from '../lib/lastInput';
+import { firstPress } from '../lib/aimedPress';
 
 /**
  * Below this the model's own figure already says it was unsure, and is by
@@ -71,10 +72,12 @@ function quotations(value?: string): string[] {
  * soon as the backend answers, which is quicker than a double-click, and the
  * next item's button is enabled in the same place in the commit that shows
  * it. The second click of a double-click therefore landed on a document
- * nobody had looked at and decided that too. Only a click's first press
- * decides; one from the keyboard has no count (detail 0) and is a press.
+ * nobody had looked at and decided that too. Only a first press decides
+ * (`firstPress`): the first click of a run of quick ones - or a later one,
+ * when every press before it in the run was refused as not aimed and so did
+ * nothing - and one from the keyboard, which has no count.
  */
-const decides = (run: () => void) => (event: MouseEvent<HTMLButtonElement>) => { if (event.detail <= 1) run(); };
+const decides = (run: () => void) => (event: MouseEvent<HTMLButtonElement>) => { if (firstPress(event)) run(); };
 
 /** A key's name beside the button it presses; read out through aria-keyshortcuts instead. */
 const Shortcut = ({ keys }: { keys: string }) => <kbd className="shortcut" aria-hidden="true">{keys}</kbd>;
@@ -230,7 +233,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // after a party or a date is chosen.
   const [resets, setResets] = useState(0);
   const backToProposal = (event: MouseEvent<HTMLButtonElement>) => {
-    if (event.detail > 1) return;
+    if (!firstPress(event)) return;
     event.currentTarget.focus();
     setDraft({ item: item.id, for: draftFor, stem: proposedStem, description: item.description ?? '', edited: false });
     setError('');
@@ -693,9 +696,9 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       </div> : <>
         {/* A parked item leads with checking its files; approving, which checks them first too, comes after it. */}
         {actions.retry?.primary && <button type="button" data-acts className="primary" disabled={busy} onClick={onRetry}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
-        {actions.approve && <button type="button" data-acts="approve" className={actions.retry?.primary ? undefined : 'primary'} disabled={busy} onClick={decides(approve)} aria-keyshortcuts="Control+Enter"><Icon icon={FileCheck2} />{item.status === 'ready' ? 'Apply rename' : 'Approve & rename'}<Shortcut keys="Ctrl+Enter" /></button>}
+        {actions.approve && <button type="button" data-acts="approve" data-acts-for={item.id} className={actions.retry?.primary ? undefined : 'primary'} disabled={busy} onClick={decides(approve)} aria-keyshortcuts="Control+Enter"><Icon icon={FileCheck2} />{item.status === 'ready' ? 'Apply rename' : 'Approve & rename'}<Shortcut keys="Ctrl+Enter" /></button>}
         {actions.keep && <>
-          <button type="button" data-acts="keep" className="secondary-action" disabled={busy} onClick={decides(onKeep)} aria-keyshortcuts="Alt+K"><Icon icon={FileText} />Keep original<Shortcut keys="Alt+K" /></button>
+          <button type="button" data-acts="keep" data-acts-for={item.id} className="secondary-action" disabled={busy} onClick={decides(onKeep)} aria-keyshortcuts="Alt+K"><Icon icon={FileText} />Keep original<Shortcut keys="Alt+K" /></button>
           <button ref={moreButtonRef} type="button" className="icon-button more-actions" disabled={busy} aria-label="More review actions" aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>
           {moreOpen && <div ref={moreMenuRef} className="review-menu" role="group" aria-label="More review actions">
             {actions.retry && <button type="button" data-acts disabled={busy} onClick={() => { setMoreOpen(false); onRetry(); }}><Icon icon={RotateCcw} />{actions.retry.label}</button>}

@@ -2,6 +2,7 @@ import { useId, useRef } from 'react';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { nameThenDescription } from '../features/review/drafts';
 import type { KeptText } from '../features/review/drafts';
+import { firstPress } from '../lib/aimedPress';
 
 /**
  * A name and a description as a person had them, kept on screen where
@@ -48,9 +49,9 @@ export function TypedKept({ kept, label, className, dismiss, onDismiss, children
     event.stopPropagation();
     button.current?.focus();
   };
-  // Only a press of its own takes it away: the second click of a
+  // Only a first press takes it away (`firstPress`): the second click of a
   // double-click lands on whatever has moved under the pointer by then.
-  const press = (event: MouseEvent<HTMLButtonElement>) => { if (event.detail <= 1) onDismiss(); };
+  const press = (event: MouseEvent<HTMLButtonElement>) => { if (firstPress(event)) onDismiss(); };
   return <div className={`typed-kept${className ? ` ${className}` : ''}`} role="group" aria-label={label}>
     <p id={noteId}>{children} Typing here changes nothing, and Tab stays here: press Escape, or click, to leave it.</p>
     <textarea readOnly data-typed-kept={kept.key} aria-label="What you had typed" aria-describedby={noteId} spellCheck={false} rows={3} value={kept.text} onKeyDown={held} />

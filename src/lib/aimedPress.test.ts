@@ -1,6 +1,6 @@
 import { fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { REACH_PX, SETTLE_MS, createAim, takeOnlyAimedPresses } from './aimedPress';
+import { REACH_PX, SETTLE_MS, createAim, firstPress, takeOnlyAimedPresses } from './aimedPress';
 import type { Box } from './aimedPress';
 
 /*
@@ -144,11 +144,55 @@ describe('a press on a control that acts', () => {
       expect(aim.refuses(approve, ...HERE, at)).toBe(false);
       // The decision is carried out: the button is disabled, goes while the
       // document just decided is shown as filed, and is back for the next one.
-      aim.seen([[approve, box(500, 400), true]], at + 1, true);
+      aim.seen([[approve, box(500, 400), true, `document ${press}`]], at + 1, true);
       aim.seen([[{}, box(500, 440)]], at + 90);
-      aim.seen([[approve, box(500, 400)]], at + 150);
+      aim.seen([[approve, box(500, 400), false, `document ${press + 1}`]], at + 150);
     }
     expect(aim.refuses(approve, ...HERE, 11_000)).toBe(false);
+  });
+
+  it('is refused on a button that went while it was disabled and came back for the same document: read again by itself while something else was carried out', () => {
+    const aim = createAim();
+    const approve = {};
+    aim.seen([[approve, box(500, 400), false, 'lease']], 0);
+    aim.pointerAt(...HERE);
+    // Another action of the person's has the buttons disabled; the open
+    // document is read again by itself and is back with another name.
+    aim.seen([[approve, box(500, 400), true, 'lease']], 10_000, true);
+    aim.seen([], 10_120);
+    aim.seen([[approve, box(500, 400), true, 'lease']], 10_330);
+    aim.seen([[approve, box(500, 400), false, 'lease']], 10_400);
+
+    expect(aim.refuses(approve, ...HERE, 10_443)).toBe(true);
+    expect(aim.refuses(approve, ...HERE, 10_330 + SETTLE_MS)).toBe(false);
+
+    // Back for another document, the same going is passed over: the person decided, and this is the next.
+    const next = createAim();
+    next.seen([[approve, box(500, 400), false, 'lease']], 0);
+    next.pointerAt(...HERE);
+    next.seen([[approve, box(500, 400), true, 'lease']], 10_000, true);
+    next.seen([], 10_120);
+    next.seen([[approve, box(500, 400), false, 'employment']], 10_330);
+    expect(next.refuses(approve, ...HERE, 10_443)).toBe(false);
+
+    // A button that says no document is never passed over: it cannot be told to be another's.
+    const unsaid = createAim();
+    unsaid.seen([[approve, box(500, 400)]], 0);
+    unsaid.pointerAt(...HERE);
+    unsaid.seen([[approve, box(500, 400), true]], 10_000, true);
+    unsaid.seen([], 10_120);
+    unsaid.seen([[approve, box(500, 400)]], 10_330);
+    expect(unsaid.refuses(approve, ...HERE, 10_443)).toBe(true);
+    // Nor one that said a document as it went and says none as it comes back, or the other way about.
+    for (const [went, back] of [['lease', undefined], [undefined, 'lease']] as const) {
+      const half = createAim();
+      half.seen([[approve, box(500, 400), false, went]], 0);
+      half.pointerAt(...HERE);
+      half.seen([[approve, box(500, 400), true, went]], 10_000, true);
+      half.seen([], 10_120);
+      half.seen([[approve, box(500, 400), false, back]], 10_330);
+      expect(half.refuses(approve, ...HERE, 10_443), `${went} then ${back}`).toBe(true);
+    }
   });
 
   it('is refused on a button that went and came back by itself, or came back late, or somewhere else', () => {
@@ -162,23 +206,23 @@ describe('a press on a control that acts', () => {
     expect(byItself.refuses(approve, ...HERE, 10_160)).toBe(true);
     expect(byItself.refuses(approve, ...HERE, 10_150 + SETTLE_MS)).toBe(false);
 
-    // In the middle of a decision, and back only after the settle time: it has appeared.
+    // In the middle of a decision, and back for the next document only after the settle time: it has appeared.
     const late = createAim();
-    late.seen([[approve, box(500, 400)]], 0);
+    late.seen([[approve, box(500, 400), false, 'lease']], 0);
     late.pointerAt(...HERE);
-    late.seen([[approve, box(500, 400), true]], 10_000, true);
+    late.seen([[approve, box(500, 400), true, 'lease']], 10_000, true);
     late.seen([], 10_050);
-    late.seen([[approve, box(500, 400)]], 10_050 + SETTLE_MS);
+    late.seen([[approve, box(500, 400), false, 'employment']], 10_050 + SETTLE_MS);
     expect(late.refuses(approve, ...HERE, 10_060 + SETTLE_MS)).toBe(true);
     expect(late.refuses(approve, ...HERE, 10_050 + 2 * SETTLE_MS)).toBe(false);
 
-    // In the middle of a decision, and back at once in another place: under a pointer that was not on it before.
+    // In the middle of a decision, and back at once for the next document in another place: under a pointer that was not on it before.
     const elsewhere = createAim();
-    elsewhere.seen([[approve, box(500, 300)]], 0);
+    elsewhere.seen([[approve, box(500, 300), false, 'lease']], 0);
     elsewhere.pointerAt(...HERE);
-    elsewhere.seen([[approve, box(500, 300), true]], 10_000, true);
+    elsewhere.seen([[approve, box(500, 300), true, 'lease']], 10_000, true);
     elsewhere.seen([], 10_050);
-    elsewhere.seen([[approve, box(500, 400)]], 10_150);
+    elsewhere.seen([[approve, box(500, 400), false, 'employment']], 10_150);
     expect(elsewhere.refuses(approve, ...HERE, 10_160)).toBe(true);
     expect(elsewhere.refuses(approve, ...HERE, 10_150 + SETTLE_MS)).toBe(false);
   });
@@ -191,21 +235,21 @@ describe('a press on a control that acts', () => {
     // Two hundred decisions, each a going of 80ms, a second apart.
     let at = 10_000;
     for (let decided = 0; decided < 200; decided += 1, at += 1000) {
-      aim.seen([[approve, box(500, 400), true]], at, true);
+      aim.seen([[approve, box(500, 400), true, `document ${decided}`]], at, true);
       aim.seen([], at + 20);
-      aim.seen([[approve, box(500, 400)]], at + 100);
+      aim.seen([[approve, box(500, 400), false, `document ${decided + 1}`]], at + 100);
       expect(aim.refuses(approve, ...HERE, at + 110)).toBe(false);
     }
     // One that took 400ms, and the page looked at again before the press: still where the person left it.
-    aim.seen([[approve, box(500, 400), true]], at, true);
+    aim.seen([[approve, box(500, 400), true, 'document 200']], at, true);
     aim.seen([], at + 20);
-    aim.seen([[approve, box(500, 400)]], at + 420);
-    aim.seen([[approve, box(500, 400)], [{}, box(100, 100)]], at + 530);
+    aim.seen([[approve, box(500, 400), false, 'document 201']], at + 420);
+    aim.seen([[approve, box(500, 400), false, 'document 201'], [{}, box(100, 100)]], at + 530);
     expect(aim.refuses(approve, ...HERE, at + 540)).toBe(false);
     at += 5000;
     // Then the document is read again by itself: gone for a moment while it could be pressed.
     aim.seen([], at);
-    aim.seen([[approve, box(500, 400)]], at + 100);
+    aim.seen([[approve, box(500, 400), false, 'document 201']], at + 100);
     expect(aim.refuses(approve, ...HERE, at + 110)).toBe(true);
   });
 
@@ -527,6 +571,32 @@ describe('a press in a window that takes only aimed presses', () => {
     expect(events).toEqual([]);
   });
 
+  it('does not take for the person\'s own a change the page draws after a key of theirs that was stopped on its way', async () => {
+    start();
+    const cancel = button('Cancel processing', box(100, 300));
+    const field = document.createElement('textarea');
+    document.body.append(field);
+    await changed();
+    const events = heard();
+    now = 10_000;
+    fireEvent.pointerMove(document.body, { clientX: 900, clientY: 50, pointerId: 1, isPrimary: true });
+    // A key the page stops - Tab in what was kept of a name - so the window does not see it leave.
+    field.addEventListener('keydown', (event) => event.stopPropagation());
+    fireEvent.keyDown(field, { key: 'Tab' });
+    // The document is read again by itself, and the page draws it once the key has been handled: the button comes where the name was.
+    put(cancel, box(500, 400));
+    cancel.setAttribute('data-moved', '');
+    await changed();
+
+    // The pointer goes there and presses, a quarter of a second later.
+    now = 10_250;
+    fireEvent.pointerMove(cancel, { clientX: 550, clientY: 415, pointerId: 1, isPrimary: true });
+    expect(press(550, 415)).toBe(false);
+    expect(events).toEqual([]);
+    now = 10_000 + SETTLE_MS;
+    expect(press(550, 415)).toBe(true);
+  });
+
   it('lets the right button take no focus on a control that has just come under the pointer', async () => {
     start();
     const approve = button('Approve & rename', box(500, 300));
@@ -580,10 +650,11 @@ describe('a press in a window that takes only aimed presses', () => {
   it('knows Approve & rename as one button through the new one the panel draws for each document, and no other button so', async () => {
     start();
     const events = heard();
-    const drawn = (name: string, mark: string) => { const control = button(name, box(500, 400)); control.setAttribute('data-acts', mark); return control; };
-    for (const [mark, taken] of [['approve', true], ['true', false]] as const) {
+    const drawn = (name: string, mark: string, of: string) => { const control = button(name, box(500, 400)); control.setAttribute('data-acts', mark); control.setAttribute('data-acts-for', of); return control; };
+    // The button drawn again is for the next document, or - the last - for the same one, read again by itself while something else had it disabled.
+    for (const [mark, next, taken] of [['approve', 'employment', true], ['true', 'employment', false], ['approve', 'lease', false]] as const) {
       events.length = 0;
-      let approve = drawn('Approve & rename', mark);
+      let approve = drawn('Approve & rename', mark, 'lease');
       await changed();
       now += 10_000;
       expect(press(550, 415)).toBe(true);
@@ -596,16 +667,147 @@ describe('a press in a window that takes only aimed presses', () => {
       put(approve, undefined);
       await changed();
       now += 60;
-      approve = drawn('Apply rename', mark);
+      approve = drawn('Apply rename', mark, next);
       await changed();
 
       now += 20;
-      expect(press(550, 415)).toBe(taken);
+      expect(press(550, 415), `${mark} for ${next}`).toBe(taken);
       expect(events.filter((event) => event.startsWith('click'))).toEqual(taken ? ['click:Approve & rename', 'click:Apply rename'] : ['click:Approve & rename']);
       approve.remove();
       put(approve, undefined);
       await changed();
     }
+  });
+
+  /** Each click the page gets, and whether a button that acts once takes it for a first press. */
+  const clicks = () => {
+    const got: string[] = [];
+    document.addEventListener('click', (event) => got.push(`click ${event.detail} on ${(event.target as Element).textContent}: ${firstPress({ detail: event.detail, nativeEvent: event }) ? 'a first press' : 'not a first press'}`), { signal: hearing.signal });
+    return got;
+  };
+
+  it('takes for a first press the one made again at once after a refused one, which the browser counts second, and no press after that', async () => {
+    start();
+    const approve = button('Approve & rename', box(500, 300));
+    await changed();
+    const got = clicks();
+    now = 10_000;
+    put(approve, box(500, 400));
+    approve.setAttribute('data-moved', '');
+    await changed();
+
+    // Refused; made again within the double-click time, once the button has been there for the settle time; and a third time.
+    now = 10_300;
+    expect(press(550, 415, { detail: 1 })).toBe(false);
+    now = 10_700;
+    expect(press(550, 415, { detail: 2 })).toBe(true);
+    now = 10_900;
+    expect(press(550, 415, { detail: 3 })).toBe(true);
+    expect(got).toEqual(['click 2 on Approve & rename: a first press', 'click 3 on Approve & rename: not a first press']);
+
+    // Two refused, and the third taken: still nothing was done before it.
+    got.length = 0;
+    now = 20_000;
+    put(approve, box(500, 300));
+    approve.setAttribute('data-moved', 'back');
+    await changed();
+    now = 20_150;
+    expect(press(550, 315, { detail: 1 })).toBe(false);
+    now = 20_350;
+    expect(press(550, 315, { detail: 2 })).toBe(false);
+    now = 20_600;
+    expect(press(550, 315, { detail: 3 })).toBe(true);
+    expect(got).toEqual(['click 3 on Approve & rename: a first press']);
+  });
+
+  it('does not take the second click of a double-click for a first press, on the button the first was on or on what the first opened', async () => {
+    start();
+    const approve = button('Approve & rename', box(500, 400));
+    const more = button('More', box(700, 400, 30), false);
+    more.addEventListener('click', () => { button('Remove from queue', box(690, 395, 60, 40)); }, { once: true });
+    await changed();
+    const got = clicks();
+
+    now = 10_000;
+    expect(press(550, 415, { detail: 1 })).toBe(true);
+    now = 10_120;
+    expect(press(550, 415, { detail: 2 })).toBe(true);
+    expect(got).toEqual(['click 1 on Approve & rename: a first press', 'click 2 on Approve & rename: not a first press']);
+
+    // More opens Remove under the pointer. A person whose double-click time
+    // is longer than the settle time makes the second click after it: the
+    // rule takes the press, and it is still the second click of a double-click.
+    got.length = 0;
+    now = 20_000;
+    expect(press(715, 415, { detail: 1 })).toBe(true);
+    await changed();
+    now = 20_000 + SETTLE_MS;
+    expect(press(715, 415, { detail: 2 })).toBe(true);
+    expect(got).toEqual(['click 1 on More: a first press', 'click 2 on Remove from queue: not a first press']);
+  });
+
+  it('does not take for a first press a click counted second after a press that reached the page with no click of its own, or after a click from the keyboard', async () => {
+    start();
+    const approve = button('Approve & rename', box(500, 300));
+    const row = button('A row', box(100, 100), false);
+    await changed();
+    const got = clicks();
+    const at = { clientX: 550, clientY: 415, button: 0, buttons: 1, pointerId: 1, isPrimary: true };
+
+    // The button goes down on the page and comes up with no click: a drag.
+    now = 10_000;
+    fireEvent.pointerDown(row, { ...at, clientX: 150, clientY: 115 });
+    fireEvent.pointerUp(document.body, { ...at, buttons: 0 });
+    now = 10_200;
+    expect(press(550, 315, { detail: 2 })).toBe(true);
+    expect(got).toEqual(['click 2 on Approve & rename: not a first press']);
+
+    // A press is refused; Enter on a button does something; the press made again is counted second.
+    got.length = 0;
+    now = 20_000;
+    put(approve, box(500, 400));
+    approve.setAttribute('data-moved', '');
+    await changed();
+    now = 20_300;
+    expect(press(550, 415, { detail: 1 })).toBe(false);
+    fireEvent.click(row, { detail: 0 });
+    now = 20_700;
+    expect(press(550, 415, { detail: 2 })).toBe(true);
+    expect(got).toEqual(['click 0 on A row: a first press', 'click 2 on Approve & rename: not a first press']);
+  });
+
+  it('does not take for a first press a click counted second after the main button was pressed, while another was held, on something that took it', async () => {
+    start();
+    button('Approve & rename', box(500, 400));
+    const row = button('A row', box(100, 100), false);
+    await changed();
+    const got = clicks();
+    const at = { clientX: 150, clientY: 115, pointerId: 1, isPrimary: true };
+
+    // The right button is held on the page; the main one goes down on a row and comes up with no click, then is pressed on the button.
+    now = 10_000;
+    fireEvent.pointerDown(row, { ...at, button: 2, buttons: 2 });
+    fireEvent.mouseDown(row, { ...at, button: 2, buttons: 2 });
+    now = 10_100;
+    fireEvent.mouseDown(row, { ...at, button: 0, buttons: 3 });
+    now = 10_200;
+    const approve = document.elementFromPoint(550, 415)!;
+    fireEvent.mouseDown(approve, { ...at, clientX: 550, clientY: 415, button: 0, buttons: 3 });
+    fireEvent.click(approve, { ...at, clientX: 550, clientY: 415, button: 0, buttons: 2, detail: 2 });
+    expect(got).toEqual(['click 2 on Approve & rename: not a first press']);
+
+    // Nor after a click whose press the window did not see begin: a second finger's.
+    got.length = 0;
+    fireEvent.pointerUp(row, { ...at, button: 2, buttons: 0 });
+    now = 20_000;
+    fireEvent.click(approve, { clientX: 550, clientY: 415, detail: 1 });
+    fireEvent.click(approve, { clientX: 550, clientY: 415, detail: 2 });
+    expect(got).toEqual(['click 1 on Approve & rename: a first press', 'click 2 on Approve & rename: not a first press']);
+  });
+
+  it('asks only the count of a click where no window applies the rule: the first, or one from the keyboard', () => {
+    const click = (detail: number) => firstPress({ detail, nativeEvent: new MouseEvent('click', { detail }) });
+    expect([click(0), click(1), click(2), click(3)]).toEqual([true, true, false, false]);
   });
 
   it('stops looking when it is told to', async () => {

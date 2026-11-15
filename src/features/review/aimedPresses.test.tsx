@@ -1,10 +1,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import { ReviewInspector } from '../../components/ReviewInspector';
 import { Toast } from '../../components/Toast';
 import { TypedKept } from '../../components/TypedKept';
-import { createInMemoryBridge } from '../../lib/inMemoryBridge';
+import { SETTLE_MS, takeOnlyAimedPresses } from '../../lib/aimedPress';
+import { createInMemoryBridge, createReviewBatchBridge } from '../../lib/inMemoryBridge';
 import { openDetails } from '../queue/gridTesting';
 import type { QueueItem } from '../../types';
 
@@ -125,5 +126,116 @@ describe('the controls that act', () => {
 
     const named = screen.getAllByRole('button').filter((button) => button.hasAttribute('data-acts') && button.getAttribute('data-acts') !== 'true');
     expect(named.map((button) => `${nameOf(button)}: ${button.getAttribute('data-acts')}`)).toEqual(['Approve & rename: approve', 'Keep original: keep']);
+    // Each says which document it is drawn for: back after a moment for the same one, it has arrived (aimedPress).
+    expect(named.map((button) => button.getAttribute('data-acts-for'))).toEqual(['review', 'review']);
+    expect(screen.getAllByRole('button').filter((button) => button.hasAttribute('data-acts-for'))).toEqual(named);
+  });
+});
+
+/*
+  Approve, keep, remove, discard and "Back to Intern's proposal" act on a
+  first press only: the second click of a double-click lands on whatever the
+  first brought under the pointer. A press that was refused as not aimed did
+  nothing, and the browser counts the press made again at once as the second
+  click of a run. That one is a first press (`firstPress`). The rule is
+  applied to the window here as the app applies it, with a clock the test
+  sets; a page that lays nothing out (jsdom) has every control arrive when
+  it is first drawn.
+*/
+describe('a button that acts on a first press only', () => {
+  let now = 0;
+  let stop = () => {};
+  beforeEach(() => { now = 0; stop = takeOnlyAimedPresses(window, () => now); });
+  afterEach(() => { stop(); cleanup(); });
+
+  /** A whole press of the mouse on a control, as a browser sends it, counted `count` in its run of clicks. Whether the press went down. */
+  const press = (control: Element, count: number) => {
+    const at = { clientX: 10, clientY: 10, button: 0, buttons: 1, pointerId: 1, isPrimary: true, pointerType: 'mouse' };
+    // A pointerdown that is refused sends no mouse events after it.
+    const down = fireEvent.pointerDown(control, at);
+    if (down) fireEvent.mouseDown(control, { ...at, detail: count });
+    fireEvent.pointerUp(control, { ...at, buttons: 0 });
+    if (down) fireEvent.mouseUp(control, { ...at, buttons: 0, detail: count });
+    fireEvent.click(control, { ...at, buttons: 0, detail: count });
+    return down;
+  };
+  /** The window is told of what was drawn, as a browser tells it. */
+  const drawn = async () => { await Promise.resolve(); };
+
+  it('approves once when the press is refused and made again at once: the press the browser counts second acts, and the third does not', async () => {
+    const on = handlers();
+    now = 10_000;
+    render(<ReviewInspector item={review} drawer={false} {...on} />);
+    await drawn();
+    const approve = screen.getByRole('button', { name: /Approve & rename/ });
+    const keep = screen.getByRole('button', { name: /Keep original/ });
+
+    // The button has only just come there: refused.
+    now = 10_300;
+    expect(press(approve, 1)).toBe(false);
+    expect(on.onApprove).not.toHaveBeenCalled();
+    // Made again within the double-click time, and once more: on Keep original, as if that had come under the pointer.
+    now = 10_700;
+    expect(press(approve, 2)).toBe(true);
+    expect(on.onApprove).toHaveBeenCalledTimes(1);
+    now = 10_900;
+    expect(press(approve, 3)).toBe(true);
+    expect(press(keep, 3)).toBe(true);
+    expect(on.onApprove).toHaveBeenCalledTimes(1);
+    expect(on.onKeep).not.toHaveBeenCalled();
+  });
+
+  it('approves one document at a double-click, however slow the second click', async () => {
+    const base = createReviewBatchBridge();
+    const bridge = { ...base, approve: vi.fn(base.approve), keepOriginal: vi.fn(base.keepOriginal) };
+    render(<App bridge={bridge} />);
+    await openDetails();
+    const panel = () => screen.getByRole('complementary', { name: 'Review item' });
+    await waitFor(() => expect(panel()).toHaveTextContent('Scan 0101.pdf'));
+    const approve = () => screen.getByRole('button', { name: /Approve & rename/ });
+
+    now = 10_000;
+    expect(press(approve(), 1)).toBe(true);
+    await waitFor(() => expect(panel()).toHaveTextContent('Scan 0102.pdf'));
+    await waitFor(() => expect(approve()).toBeEnabled());
+    // The second click, after the settle time (a person whose double-click time is longer): the rule takes the press.
+    now = 10_000 + SETTLE_MS + 100;
+    expect(press(approve(), 2)).toBe(true);
+    expect(press(screen.getByRole('button', { name: /Keep original/ }), 2)).toBe(true);
+    expect(bridge.approve).toHaveBeenCalledTimes(1);
+    expect(bridge.keepOriginal).not.toHaveBeenCalled();
+    expect(panel()).toHaveTextContent('Scan 0102.pdf');
+  });
+
+  it('discards what was kept, and puts a name back as proposed, at the press made again after a refused one', async () => {
+    const dismissed = vi.fn();
+    now = 10_000;
+    render(<TypedKept kept={{ key: 1, text: 'A name\n\nA description', edited: true }} label="Kept from before this document changed" dismiss="Discard what I had" onDismiss={dismissed}>Kept.</TypedKept>);
+    await drawn();
+    const discard = screen.getByRole('button', { name: 'Discard what I had' });
+    now = 10_300;
+    expect(press(discard, 1)).toBe(false);
+    expect(dismissed).not.toHaveBeenCalled();
+    now = 10_700;
+    expect(press(discard, 2)).toBe(true);
+    expect(dismissed).toHaveBeenCalledTimes(1);
+    now = 10_900;
+    expect(press(discard, 3)).toBe(true);
+    expect(dismissed).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    now = 20_000;
+    const { container } = render(<ReviewInspector item={review} drawer={false} {...handlers()} />);
+    const name = () => container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Filename"]')!;
+    const proposed = name().value;
+    fireEvent.change(name(), { target: { value: `${proposed} signed` } });
+    await drawn();
+    const back = screen.getByRole('button', { name: "Back to Intern's proposal" });
+    now = 20_300;
+    expect(press(back, 1)).toBe(false);
+    expect(name()).toHaveValue(`${proposed} signed`);
+    now = 20_700;
+    expect(press(back, 2)).toBe(true);
+    expect(name()).toHaveValue(proposed);
   });
 });
