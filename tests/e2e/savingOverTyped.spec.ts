@@ -282,7 +282,7 @@ const justInView = async (automatic: Locator) => {
   expect(room).toBeGreaterThanOrEqual(3);
   expect(room).toBeLessThan(6);
 };
-/** How far down each control is, by its name, to tell a scroll of the sections from anything else moving. */
+/** Where each control is, and whether it is one of the sections', to tell a scroll of the sections from anything else moving. */
 const tops = (dialog: Locator) => dialog.locator('button, summary, input, select, textarea').evaluateAll((all) => all.filter((control) => control.checkVisibility()).map((control) => ({
   inSections: control.closest('.dialog-body') !== null, top: control.getBoundingClientRect().top, left: control.getBoundingClientRect().left,
 })));
@@ -383,7 +383,6 @@ test('the choice that brings the warning stays in view: the sections scroll for 
   await page.keyboard.press('Space');
   await expect(settings.automatic).toBeChecked();
   await expect(settings.warning).toHaveCount(0);
-  const guide = settings.dialog.getByRole('button', { name: 'Open the guide' });
   await settings.save.hover();
   before = await tops(settings.dialog);
   await byItself(page, 'back with a reading');
@@ -392,5 +391,5 @@ test('the choice that brings the warning stays in view: the sections scroll for 
   // to be scrolled to, which is the price of nothing moving under a pointer at rest.
   expect(await tops(settings.dialog)).toEqual(before);
   expect(await clear(settings.automatic)).toBeLessThan(0);
-  await expect(guide).toBeAttached();
+  await expect(settings.automatic).toBeFocused();
 });
