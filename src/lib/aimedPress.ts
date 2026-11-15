@@ -57,10 +57,11 @@
   else - a tall window, where the panel's buttons follow its text (at
   1400x900 the demo's next document has them 122 px higher) - is a press:
   made under the settle time after they show, it is not taken. With the
-  demo's queue made to answer later (150 and 600 ms), the review of this
-  rule counted 4 of 17 such presses not taken at 1400x900, and none at
-  1280x720 or 800x600, where the buttons stay put. Nobody has run the
-  desktop window, whose backend answers in its own time.
+  demo's queue made to answer later (150 and 600 ms) and a document
+  approved every second, every half second or as soon as the next showed,
+  10 of 35 presses were not taken at 1400x900, and none of 60 at 1280x720
+  and 800x600, where the buttons stay put. Nobody has run the desktop
+  window, whose backend answers in its own time.
 
   Keys are not looked at here. A click that comes from the keyboard (Enter
   or the space bar on a button) carries no press of the pointer and passes;

@@ -1003,12 +1003,14 @@ changes - the next document's buttons, a result's Undo - counts as asked for
 there. The desktop backend was not run with this, and nobody has run the
 desktop window; where its answers come
 later, what they change counts as having come by itself and waits the half
-second. With the demo made to answer 150 and 600 ms later, the check of
-this rule found Approve & rename never leaving the page at 1280x720 and
-800x600, where it was taken at once; at 1400x900, where the panel's buttons
-follow its text and the next document's were 122 to 178 px away, a press
-under half a second after they showed was not taken - 4 of 17 presses at
-one and two a second. Approving several documents in a tall window is
+second. With the demo made to answer 150 and 600 ms later, and a document
+approved every second, every half second or as soon as the next showed,
+none of 60 presses went untaken at 1280x720 and 800x600, where the check of
+this rule found Approve & rename never leaving the page; at 1400x900, where
+the panel's buttons follow its text and the next document's were 122 to 178
+px away, 10 of 35 did - a press under half a second after the buttons
+showed (none of the 5 made a second apart with the 150 ms answer).
+Approving several documents in a tall window is
 what to try first, for this rule, on Windows. What the rule does not see is a change that moves nothing: where the
 panel's decision sticks to the bottom (a window 800 by 600), a document
 given another proposal with no kept text above its fields leaves Approve &
