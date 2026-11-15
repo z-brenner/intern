@@ -5805,6 +5805,16 @@ pub(crate) trait SettingsRuntime {
     /// earlier save never reached is finished by the next; one already
     /// named by `names` is left as it is.
     fn own_names_changed(&self, names: &[String]) -> Result<(), CommandError>;
+    /// The review level as just saved, where the save changed it from
+    /// `from` to `to`: documents still waiting are judged again at once,
+    /// from their stored readings, with no model asked. Some become ready
+    /// toward a looser level, and ready ones no person approved go back to
+    /// review toward a stricter one.
+    fn review_level_changed(
+        &self,
+        from: intern_engine::ReviewLevel,
+        to: intern_engine::ReviewLevel,
+    ) -> Result<(), CommandError>;
     /// The paths a completed SharePoint activation owns, if one is active.
     fn managed_sharepoint(
         &self,
@@ -5882,6 +5892,16 @@ impl SettingsRuntime for AppState {
     fn own_names_changed(&self, names: &[String]) -> Result<(), CommandError> {
         self.pipeline
             .refresh_own_names(names)
+            .map_err(CommandError::from)
+    }
+
+    fn review_level_changed(
+        &self,
+        from: intern_engine::ReviewLevel,
+        to: intern_engine::ReviewLevel,
+    ) -> Result<(), CommandError> {
+        self.pipeline
+            .review_level_changed(from, to)
             .map_err(CommandError::from)
     }
 
@@ -6034,9 +6054,22 @@ fn save_settings_with_microsoft_protection(
     // was edited again. Documents already named by this list are not
     // touched, so a save that changes nothing renames nothing.
     let renamed = state.own_names_changed(&settings.our_names);
-    // Like the model's answer, the rename's is reported only once every
-    // other part of the save has been applied.
-    source_changed.and(renamed)
+    // And judged again where this save changed the review level, whatever
+    // came of the rename: the two do not depend on each other. Only on a
+    // change, unlike the names: judging again moves documents between ready
+    // and review, and a save that leaves the level alone must leave them
+    // where they are. What a judging that failed did not reach is still
+    // never filed at a level that holds it (`Pipeline::review_level_changed`).
+    // Settings that could not be read before this save were strict to the
+    // queue too, which is what `previous` says of them.
+    let judged = if previous.review_level == settings.review_level {
+        Ok(())
+    } else {
+        state.review_level_changed(previous.review_level, settings.review_level)
+    };
+    // Like the model's answer, the rename's and the judging's are reported
+    // only once every other part of the save has been applied.
+    source_changed.and(renamed).and(judged)
 }
 
 fn sharepoint_activation_in_progress() -> CommandError {
@@ -6168,6 +6201,19 @@ fn restore_settings_unlocked(
     // what was stored when the failure struck, and documents already named
     // by the restored list are left as they are.
     if let Err(error) = runtime.own_names_changed(&previous.own_names()) {
+        failures.push(error);
+    }
+    // The review level goes back with the rest: what the activated
+    // settings' level made ready or sent to review is judged again at the
+    // restored one. Settings that cannot be read now were strict to the
+    // queue.
+    let level_now = current
+        .as_ref()
+        .map(|current| current.review_level)
+        .unwrap_or_default();
+    if level_now != previous.review_level
+        && let Err(error) = runtime.review_level_changed(level_now, previous.review_level)
+    {
         failures.push(error);
     }
     let Some(first) = failures.first() else {
@@ -6857,8 +6903,8 @@ pub fn queue_discard_waiting(state: State<'_, AppState>) -> Result<usize, Comman
 fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
     let waiting = waiting_in_doubt(&item);
     let proposal = item.proposal.as_ref();
-    // Offered only where a person is deciding the name: a ready name
-    // passed every check, and a settled one is no longer anyone's to change.
+    // Offered only where a person is deciding the name: a ready name waits
+    // on nobody, and a settled one is no longer anyone's to change.
     let party_choices = proposal
         .filter(|_| item.status == QueueStatus::NeedsReview)
         .map(ProposalRecord::party_choices)
@@ -15008,6 +15054,149 @@ mod own_names_tests {
     }
 }
 
+#[cfg(test)]
+mod review_level_tests {
+    use std::sync::atomic::Ordering;
+
+    use intern_engine::ReviewLevel;
+    use intern_queue::AppSettings;
+
+    use super::test_runtime::RecordingRuntime;
+    use super::{restore_sharepoint_settings, save_settings};
+
+    const STRICT: ReviewLevel = ReviewLevel::Strict;
+    const BALANCED: ReviewLevel = ReviewLevel::Balanced;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("intern-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn at(level: ReviewLevel) -> AppSettings {
+        AppSettings {
+            review_level: level,
+            ..AppSettings::default()
+        }
+    }
+
+    /// The level goes to the settings file and comes back as the window
+    /// sends and reads it, and the queue judges its waiting documents
+    /// again only when a save changes it: a save that leaves the level
+    /// alone must leave them where they are.
+    #[test]
+    fn a_save_that_changes_the_review_level_tells_the_queue_and_no_other_save_does() {
+        let dir = scratch("review-level");
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime.store.save(&AppSettings::default()).unwrap();
+        let heard = || runtime.review_levels.lock().unwrap().clone();
+
+        save_settings(
+            &runtime,
+            AppSettings {
+                machine_label: "Front desk".into(),
+                ..AppSettings::default()
+            },
+        )
+        .unwrap();
+        assert!(heard().is_empty(), "strict before and after");
+
+        // As the window sends it: the field by its camelCase name.
+        let chosen: AppSettings = serde_json::from_value(serde_json::json!({
+            "destination": "",
+            "machineLabel": "Front desk",
+            "reviewLevel": "balanced",
+        }))
+        .unwrap();
+        assert_eq!(chosen.review_level, BALANCED);
+        save_settings(&runtime, chosen).unwrap();
+        assert_eq!(heard(), [(STRICT, BALANCED)]);
+        let stored = runtime.store.load().unwrap();
+        assert_eq!(stored.review_level, BALANCED);
+        assert_eq!(
+            serde_json::to_value(&stored).unwrap()["reviewLevel"],
+            "balanced",
+            "as the window reads it"
+        );
+
+        save_settings(
+            &runtime,
+            AppSettings {
+                machine_label: "Back office".into(),
+                ..at(BALANCED)
+            },
+        )
+        .unwrap();
+        assert_eq!(heard(), [(STRICT, BALANCED)], "balanced before and after");
+
+        // A payload that does not name the level is strict, as a settings
+        // file that does not name it is.
+        let silent: AppSettings =
+            serde_json::from_value(serde_json::json!({ "destination": "" })).unwrap();
+        save_settings(&runtime, silent).unwrap();
+        assert_eq!(heard(), [(STRICT, BALANCED), (BALANCED, STRICT)]);
+        assert_eq!(runtime.store.load().unwrap().review_level, STRICT);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The level is stored before the queue judges again, and a judging
+    /// that fails is reported once the rest of the save has been applied,
+    /// the organization's names included. Settings that could not be read
+    /// before the save were strict to the queue, and count as strict here.
+    #[test]
+    fn a_judging_that_fails_is_reported_after_the_level_is_stored() {
+        let dir = scratch("review-level-failure");
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        std::fs::write(dir.join("settings.json"), b"{ this is not json").unwrap();
+        runtime.fail_review_level.store(true, Ordering::SeqCst);
+
+        let refused = save_settings(
+            &runtime,
+            AppSettings {
+                our_names: vec!["Contoso".into()],
+                ..at(BALANCED)
+            },
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, "DATABASE_UNAVAILABLE");
+        assert_eq!(
+            *runtime.review_levels.lock().unwrap(),
+            [(STRICT, BALANCED)],
+            "unreadable settings were strict"
+        );
+        assert_eq!(runtime.store.load().unwrap().review_level, BALANCED);
+        assert_eq!(
+            *runtime.own_names.lock().unwrap(),
+            vec![vec!["Contoso".to_owned()]],
+            "the rest of the save was applied"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Putting back the settings stored before a failed SharePoint
+    /// activation puts their review level back, and the queue judges again
+    /// when that is another level than the one being replaced.
+    #[test]
+    fn restoring_settings_puts_the_review_level_back() {
+        let dir = scratch("review-level-restore");
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime.store.save(&at(BALANCED)).unwrap();
+
+        restore_sharepoint_settings(&runtime, &at(STRICT)).unwrap();
+        assert_eq!(runtime.store.load().unwrap().review_level, STRICT);
+        assert_eq!(*runtime.review_levels.lock().unwrap(), [(BALANCED, STRICT)]);
+
+        restore_sharepoint_settings(&runtime, &at(STRICT)).unwrap();
+        assert_eq!(
+            *runtime.review_levels.lock().unwrap(),
+            [(BALANCED, STRICT)],
+            "already strict"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// A `SettingsRuntime` over a real settings file whose live effects are
 /// recorded instead of reaching Tauri. Shared by the settings and SharePoint
 /// activation tests so both drive the production application code.
@@ -15054,6 +15243,12 @@ pub(crate) mod test_runtime {
         /// Renaming the waiting documents fails, as a queue database that
         /// is briefly unavailable does. The names are still recorded.
         pub fail_own_names: AtomicBool,
+        /// Every change of review level the queue was told about, in
+        /// order: the level before and the level after.
+        pub review_levels: Mutex<Vec<(intern_engine::ReviewLevel, intern_engine::ReviewLevel)>>,
+        /// Judging the waiting documents again fails the same way. The
+        /// change is still recorded.
+        pub fail_review_level: AtomicBool,
         /// Every watcher restart, by whether it asked for a first look.
         pub intake_restarts: Mutex<Vec<bool>>,
         /// Every change of model the runtime was told about, in order.
@@ -15078,6 +15273,8 @@ pub(crate) mod test_runtime {
                 after_persist: Mutex::new(None),
                 own_names: Mutex::new(Vec::new()),
                 fail_own_names: AtomicBool::new(false),
+                review_levels: Mutex::new(Vec::new()),
+                fail_review_level: AtomicBool::new(false),
                 intake_restarts: Mutex::new(Vec::new()),
                 source_changes: Mutex::new(Vec::new()),
                 setup_busy: AtomicBool::new(false),
@@ -15222,6 +15419,21 @@ pub(crate) mod test_runtime {
                 return Err(Self::injected(
                     "DATABASE_UNAVAILABLE",
                     "injected queue rename failure",
+                ));
+            }
+            Ok(())
+        }
+
+        fn review_level_changed(
+            &self,
+            from: intern_engine::ReviewLevel,
+            to: intern_engine::ReviewLevel,
+        ) -> Result<(), CommandError> {
+            self.review_levels.lock().unwrap().push((from, to));
+            if self.fail_review_level.load(Ordering::SeqCst) {
+                return Err(Self::injected(
+                    "DATABASE_UNAVAILABLE",
+                    "injected queue judging failure",
                 ));
             }
             Ok(())
