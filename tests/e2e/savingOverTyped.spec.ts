@@ -8,8 +8,12 @@ import { openDetails, queueCell } from './grid';
   file. So Settings says, above Save, when a save would let it rename such a
   document: automatic renaming switched on over a ready one, or Strict
   changed to Balanced, with automatic renaming on, over one waiting in
-  review. The warning is words only, it goes when the choice is taken back,
-  and its coming and going moves nothing a person could be about to press.
+  review. The warning is words only, and it goes when the choice is taken
+  back. Its coming and going moves nothing a person could be about to press:
+  the footer grows upward over the sections' last lines once, and keeps
+  that room, blank, when the warning has gone. The journey further down
+  holds what that leaves: nothing that acts comes under a pointer at rest
+  where the warning was.
 
   The demo does not act out automatic renaming: nothing in it is renamed by
   itself. So this journey ends at the save. What becomes of the document and
@@ -114,10 +118,10 @@ test('Settings warns before a save that lets Intern rename a document with a nam
   await expect(settings.warning).toHaveText(TWO);
   await expect(settings.warning).toBeInViewport({ ratio: 1 });
   await expect(settings.save).toBeInViewport({ ratio: 1 });
-  // The hard case for a warning that comes and goes by itself. The sections are scrolled to their end while it
-  // shows, which is further than they go without it; the pointer is left on the last button there; and the
-  // warning goes, here by the space bar on the checkbox, which keeps the focus and scrolls nothing. The sections
-  // stay where they are, and the button stays under the pointer.
+  // The sections are scrolled to their end while the warning shows, which is further than they went before it
+  // took its room; the pointer is left on the last button there; and the warning goes, here by the space bar on
+  // the checkbox, which keeps the focus and scrolls nothing. The room stays the footer's, so the sections stay
+  // where they are, and the button stays under the pointer.
   await settings.automatic.focus();
   await settings.sections.hover();
   await page.mouse.wheel(0, 10_000);
@@ -159,3 +163,96 @@ test('Settings warns before a save that lets Intern rename a document with a nam
   await expect(settings.automatic).toBeChecked();
   await expect(settings.warning).toHaveCount(0);
 });
+
+/*
+  The warning comes and goes by itself too: a document with a name typed for
+  it is read again, or filed from another computer, while Settings is open.
+  It is words, and a pointer can be at rest on them. When it went, the footer
+  used to give its room back to the sections, and whatever was scrolled
+  behind it came under that pointer: with a real press 0.1 s later, Check for
+  updates checked, and Forget forgot a learned spelling. Nothing in Settings
+  is marked as a control that acts, so no press there is refused for being
+  too soon. Now the room it took stays where it was, blank, until Settings
+  is closed: nothing is uncovered, and nothing moves.
+
+  `?queue=changes` is the demo's queue with `window.internQueue` to change it
+  as the backend does. The press is a real one, at a place, not at a control.
+*/
+type QueueByItself = { change(id: string, change: Record<string, unknown>): void };
+/** The lease is read again, or comes back from being read, with nobody asking. */
+const byItself = (page: Page, how: 'read again' | 'back with a reading') => page.evaluate((how) => {
+  const queue = (window as unknown as { internQueue: QueueByItself }).internQueue;
+  if (how === 'read again') queue.change('lease', { status: 'processing', stage: 'reading', proposedFilename: undefined, description: undefined, reason: undefined });
+  else queue.change('lease', { status: 'review', stage: undefined, proposedFilename: '2023-09-15 Lease between ABC Properties and TenantCo.pdf', description: 'A lease of 123 Main St.', reason: 'Two dates were found.' });
+}, how);
+/** What is on top at a place: a control by its tag and name, or the class of whatever else is there. */
+const at = (page: Page, place: { x: number; y: number }) => page.evaluate(({ x, y }) => {
+  const top = document.elementFromPoint(x, y);
+  const control = top?.closest('button, summary, input, select, textarea, label, a');
+  if (control) return `${control.tagName} ${(control.getAttribute('aria-label') ?? control.textContent ?? '').trim().slice(0, 40)}`;
+  return top ? `no control: ${top.tagName}.${top.className}` : 'nothing';
+}, place);
+const edges = async (locator: Locator) => { const box = (await locator.boundingBox())!; return `${Math.round(box.y)}..${Math.round(box.y + box.height)}`; };
+
+for (const [width, height] of [[1280, 800], [800, 600]] as const) {
+  test(`a warning that goes by itself leaves nothing that acts where it was, at ${width} by ${height}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto('/?queue=changes');
+    await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+    const panel = await openDetails(page, LEASE);
+    await panel.getByLabel('Filename').fill('2023-09-15 Lease of 123 Main St');
+    await page.setViewportSize({ width, height });
+    const settings = await openSettings(page);
+    const footer = settings.dialog.locator('.dialog-actions');
+    await settings.balanced.check();
+    await settings.automatic.check();
+    await expect(settings.warning).toHaveText(ONE);
+
+    // A button that acts, scrolled to where the warning is: behind it, out of sight. The pointer comes to rest on
+    // the warning's words, over that button.
+    const check = settings.dialog.getByRole('button', { name: 'Check for updates' });
+    const words = (await settings.warning.boundingBox())!;
+    await check.evaluate((button, y) => {
+      const box = button.getBoundingClientRect();
+      button.closest('.dialog-body')!.scrollTop += box.top + box.height / 2 - y;
+    }, words.y + words.height / 2);
+    const behind = (await check.boundingBox())!;
+    const place = { x: behind.x + behind.width / 2, y: behind.y + behind.height / 2 };
+    expect(Math.abs(place.y - (words.y + words.height / 2))).toBeLessThanOrEqual(1);
+    expect(place.x).toBeGreaterThan(words.x + 13);
+    expect(place.x).toBeLessThan(words.x + words.width - 10);
+    await page.mouse.move(place.x, place.y);
+    expect(await at(page, place)).toBe('no control: P.save-warning');
+    const shown = await controls(settings.dialog);
+    const room = { footer: await edges(footer), sections: await edges(settings.sections), save: await edges(settings.save) };
+
+    // The lease is read again: it is not waiting for a name, and the warning goes, by itself.
+    await byItself(page, 'read again');
+    await expect(settings.warning).toHaveCount(0);
+    // Its room is still there, with nothing in it: no button has come under the pointer, and nothing moved.
+    expect(await at(page, place)).toMatch(/^no control: /);
+    expect({ footer: await edges(footer), sections: await edges(settings.sections), save: await edges(settings.save) }).toEqual(room);
+    expect(await controls(settings.dialog)).toEqual(shown);
+    // A press there, with the pointer not moved, does nothing: no update was checked for.
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+    await expect(settings.dialog.getByRole('status', { name: 'Update status' })).toHaveCount(0);
+    await expect(check).toHaveText('Check for updates');
+    // The choices stand, and Save is where it was.
+    await expect(settings.balanced).toBeChecked();
+    await expect(settings.automatic).toBeChecked();
+
+    // It comes back by itself, in the room it had, and again nothing moves.
+    await byItself(page, 'back with a reading');
+    await expect(settings.warning).toHaveText(ONE);
+    expect(await at(page, place)).toBe('no control: P.save-warning');
+    expect({ footer: await edges(footer), sections: await edges(settings.sections), save: await edges(settings.save) }).toEqual(room);
+    expect(await controls(settings.dialog)).toEqual(shown);
+
+    // The button is still there to be pressed on purpose, once scrolled into view.
+    await check.scrollIntoViewIfNeeded();
+    await check.click();
+    await expect(settings.dialog.getByRole('status', { name: 'Update status' })).toBeVisible();
+  });
+}

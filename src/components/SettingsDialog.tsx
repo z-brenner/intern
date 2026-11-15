@@ -254,18 +254,15 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   // draft and the queue: the count changes, and the warning comes and goes,
   // as documents are read or filed elsewhere while the dialog is open.
   const overTyped = typedWarning(renamedOverTyped(settings, next, typed));
-  // The room the warning takes above Save: its own height, and how far it
-  // pushes the row under it. Measured where it is drawn, since its lines
-  // break by the font. Once taken, the room is not given back while the
-  // dialog is open (see the footer, and the end of the sections).
+  // The room the warning takes above Save: the tallest its box has been.
+  // Measured where it is drawn, since its lines break by the font. Once
+  // taken, the room is not given back while the dialog is open (see the
+  // footer).
   const overTypedBox = useRef<HTMLParagraphElement>(null);
-  const [overTypedRoom, setOverTypedRoom] = useState({ box: 0, row: 0 });
+  const [overTypedRoom, setOverTypedRoom] = useState(0);
   useLayoutEffect(() => {
     const box = overTypedBox.current?.getBoundingClientRect();
-    const below = overTypedBox.current?.nextElementSibling?.getBoundingClientRect();
-    if (!box || !below) return;
-    const now = { box: box.height, row: below.top - box.top };
-    setOverTypedRoom((room) => room.box === now.box && room.row === now.row ? room : now);
+    if (box) setOverTypedRoom((room) => Math.max(room, box.height));
   }, [overTyped]);
   const [status, setStatus] = useState<UpdateStatus>();
   const [checking, setChecking] = useState(false);
@@ -780,14 +777,6 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           <button type="button" className="link-out" onClick={() => void runGuide()}>Open the guide<Icon icon={ExternalLink} /></button>
         </div>
         <p className="check-hint">Opens in your browser.</p>
-        {/*
-          The room the warning above Save took, kept here once it has gone.
-          While it shows, the sections are that much shorter and scroll that
-          much further. Without this they would lose that at the moment it
-          goes, and a person who had scrolled to their end would have every
-          one of them move down under the pointer, by itself.
-        */}
-        {!overTyped && overTypedRoom.row > 0 && <div aria-hidden="true" style={{ height: overTypedRoom.row }} />}
       </section>
     </div>
     <div className="dialog-actions">
@@ -801,22 +790,38 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         either choice is made; the line under the checkbox is below the fold
         at 800 by 600 when Balanced is chosen. And it comes and goes by
         itself: under the checkbox, every section after it would move each
-        time, buttons and all, under a pointer at rest. Here nothing moves.
-        The dialog is as tall as the window lets it be, so the footer grows
-        upward: Save and the sections stay where they are, and the sections
-        lose their last lines from view. It never grows smaller again while
-        the dialog is open, which would move the sections of a person who had
-        scrolled to their end: a count that takes fewer lines is shown in the
-        room the longer one took, and when the warning goes the sections keep
-        its room at their end.
+        time, buttons and all, under a pointer at rest.
 
-        One case is not looked after. In a window over about 1070px high,
-        with every section closed, the dialog is shorter than the window
-        lets it be. A warning that first appears then, by itself, makes it
-        taller about its middle: the sections go up and Save down, by up to
-        half the warning's height. After that it has its room.
+        Here, where the dialog is as tall as the window lets it be (it is at
+        1280 by 800 and at 800 by 600), nothing moves when it comes: the
+        footer grows upward, Save and the sections stay where they are, and
+        the sections lose their last lines from view, to be scrolled to.
+
+        And the footer never grows smaller again while the dialog is open. A
+        count that takes fewer lines is shown in the room the longer one
+        took. When the warning goes, its room stays above Save with nothing
+        in it. Given back to the sections, it uncovered whatever was scrolled
+        behind the warning, under a pointer at rest on its words: nothing in
+        Settings is marked as a control that acts, so a press there a tenth
+        of a second later checked for updates, or forgot a learned spelling.
+        Kept, nothing is uncovered and nothing moves, whether it goes by a
+        choice taken back or by itself. It costs a blank band above Save,
+        and the shorter view of the sections, until Settings is closed.
+
+        One case is not looked after. Where the dialog is shorter than the
+        window lets it be, the first time the warning shows makes it taller
+        about its middle: the sections go up and Save goes down, by up to
+        half the warning's height. That is so in a tall window: in the demo,
+        one over about 1070px high with every section closed, and over about
+        1750px with Naming and filing open. It happens once for each time
+        Settings is opened, as the person ticks the checkbox or chooses
+        Balanced, or by itself when a document with something typed for it
+        comes back to wait while the choice is already made. After that the
+        warning has its room.
       */}
-      {overTyped && <p ref={overTypedBox} className="save-warning" role="alert" style={overTypedRoom.box ? { minHeight: overTypedRoom.box } : undefined}>{overTyped}</p>}
+      {overTyped
+        ? <p ref={overTypedBox} className="save-warning" role="alert" style={overTypedRoom ? { minHeight: overTypedRoom } : undefined}>{overTyped}</p>
+        : overTypedRoom > 0 && <div aria-hidden="true" className="save-warning-room" style={{ height: overTypedRoom }} />}
       {saveError && <p className="form-error save-error" role="alert">{saveError}</p>}
       <button type="button" className="primary" disabled={saving} onClick={() => void runSave()}>{saving ? 'Saving…' : 'Save settings'}</button>
     </div>

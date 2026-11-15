@@ -317,22 +317,26 @@ describe('the warning in Settings', () => {
   });
 
   // The page has no layout here, so the heights are given: one document's
-  // warning takes four lines, several documents' five, and the row under it
-  // starts 12px below it. What is checked is what Settings does with them.
-  it('never gives back the room it took while Settings is open: a shorter count keeps the taller box, and the sections keep its room once it has gone', async () => {
-    const rect = (top: number, height: number) => ({ top, bottom: top + height, left: 0, right: 0, x: 0, y: top, width: 0, height, toJSON: () => ({}) }) as DOMRect;
+  // warning takes four lines, several documents' five. What is checked is
+  // what Settings does with them. That nothing moves, and that nothing comes
+  // under a pointer at rest where the warning was, is run in a browser
+  // (tests/e2e/savingOverTyped.spec.ts).
+  it('never gives back the room it took while Settings is open: a shorter count keeps the taller box, and its room stays above Save, blank, once it has gone', async () => {
+    const rect = (height: number) => ({ top: 400, bottom: 400 + height, left: 0, right: 0, x: 0, y: 400, width: 0, height, toJSON: () => ({}) }) as DOMRect;
     const drawn = (box: HTMLElement) => Math.max(box.textContent?.startsWith('1 document') ? 88 : 106, parseFloat(box.style.minHeight) || 0);
     const layout = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-      if (this.classList.contains('save-warning')) return rect(400, drawn(this));
-      const above = this.previousElementSibling;
-      if (above instanceof HTMLElement && above.classList.contains('save-warning')) return rect(400 + drawn(above) + 12, 42);
-      return rect(0, 0);
+      return rect(this.classList.contains('save-warning') ? drawn(this) : 0);
     });
     try {
       const { rerender } = renderDialog(older, { ready: 1, review: 0 });
       const dialog = await screen.findByRole('dialog', { name: 'Settings' });
       const sections = dialog.querySelector<HTMLElement>('.dialog-body')!;
-      const room = () => sections.querySelector<HTMLElement>('.settings-group:last-child > div[aria-hidden="true"]:last-child');
+      const footer = dialog.querySelector<HTMLElement>('.dialog-actions')!;
+      const room = () => footer.querySelector<HTMLElement>(':scope > div[aria-hidden="true"]');
+      // The sections are never given anything of it: they end as they did before it was first shown.
+      const sectionsEnd = () => `${sections.lastElementChild?.lastElementChild?.textContent}, ${sections.querySelectorAll('[aria-hidden="true"]:empty').length} blank`;
+      const ended = sectionsEnd();
+      expect(ended).toBe('Opens in your browser., 0 blank');
       expect(room()).toBeNull();
       fireEvent.click(automatic(dialog));
       expect(warning(dialog)).toHaveTextContent(ONE);
@@ -346,18 +350,35 @@ describe('the warning in Settings', () => {
       expect(warning(dialog)).toHaveTextContent(ONE);
       expect(warning(dialog)).toHaveStyle({ minHeight: '106px' });
       expect(room()).toBeNull();
-      // Gone: the sections end with the room it took, the box and the gap to the row under it, and nothing in it.
+      expect(footer.children).toHaveLength(2);
+
+      // Gone by itself: its room is still straight above Save, as tall as its box was, with nothing in it,
+      // and nothing of it is read out. So nothing that was scrolled behind the warning is uncovered.
       rerender(older, NOTHING_TYPED);
       expect(warning(dialog)).toBeNull();
-      expect(room()).toHaveStyle({ height: '118px' });
+      expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+      expect(room()).toHaveStyle({ height: '106px' });
       expect(room()).toBeEmptyDOMElement();
-      // The last section is still the last, so its own spacing is as it was.
-      expect(room()!.parentElement).toBe(sections.lastElementChild);
-      expect(room()!.parentElement).toHaveTextContent('Help & support');
-      // Back: in the room it had, which the sections give up in the same moment.
+      expect(room()).toHaveClass('save-warning-room');
+      expect(room()!.nextElementSibling).toBe(saveButton(dialog));
+      expect(footer.children).toHaveLength(2);
+      expect(sectionsEnd()).toBe(ended);
+
+      // Back by itself: in the room it had, which is the warning's again.
       rerender(older, { ready: 1, review: 0 });
       expect(warning(dialog)).toHaveStyle({ minHeight: '106px' });
+      expect(warning(dialog)!.nextElementSibling).toBe(saveButton(dialog));
       expect(room()).toBeNull();
+      expect(footer.children).toHaveLength(2);
+
+      // Gone by the choice taken back: the same room is kept, and kept when the other choice is changed too.
+      fireEvent.click(automatic(dialog));
+      expect(warning(dialog)).toBeNull();
+      expect(room()).toHaveStyle({ height: '106px' });
+      fireEvent.click(balanced(dialog));
+      expect(room()).toHaveStyle({ height: '106px' });
+      expect(footer.children).toHaveLength(2);
+      expect(sectionsEnd()).toBe(ended);
     } finally {
       layout.mockRestore();
     }
@@ -367,6 +388,10 @@ describe('the warning in Settings', () => {
     renderDialog(older, { ready: 1, review: 0 });
     const dialog = await screen.findByRole('dialog', { name: 'Settings' });
     expect(dialog.querySelector('.dialog-body div[aria-hidden="true"]')).toBeNull();
+    expect(dialog.querySelector('.dialog-actions')!.children).toHaveLength(1);
+    expect(dialog.querySelector('.save-warning-room')).toBeNull();
+    // Nor for a choice that warns of nothing: Balanced alone, with a document typed for.
+    fireEvent.click(balanced(dialog));
     expect(dialog.querySelector('.dialog-actions')!.children).toHaveLength(1);
   });
 
