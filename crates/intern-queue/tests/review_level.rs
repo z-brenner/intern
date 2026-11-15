@@ -842,6 +842,34 @@ fn two_scans_the_level_makes_ready_are_not_both_filed() {
     assert_eq!(rig.record(second), held);
 }
 
+/// A document whose text nearly repeats a filing made since it was read is
+/// not made ready by a looser level, with automatic renaming off too: no
+/// filing would look at it then. It stays in review, its record says which
+/// filing it repeats, and it is not one click from "Rename all ready".
+#[test]
+fn a_scan_whose_twin_was_filed_since_it_was_read_is_not_made_ready() {
+    let rig = Rig::new(STRICT, false);
+    let first = rig.read("scan-1.pdf", noted(APRIL));
+    let second = rig.read("scan-2.pdf", noted(APRIL));
+    let as_read = rig.record(second);
+    assert_eq!(as_read.near_duplicate_of, None);
+    let name = rig.record(first).filename;
+    rig.pipeline
+        .approve(first, &name, "A sentence about the agreement.")
+        .unwrap();
+    assert_eq!(rig.status(first), QueueStatus::Completed);
+
+    rig.set_level(BALANCED);
+
+    assert_eq!(rig.status(second), QueueStatus::NeedsReview);
+    let held = rig.record(second);
+    assert_eq!(held.status, ProposalStatus::NeedsReview);
+    assert_eq!(held.reasons, ["TYPE_INFERRED", NEAR_DUPLICATE]);
+    assert_eq!(held.near_duplicate_of.as_deref(), Some(name.as_str()));
+    assert_eq!(held.revision, as_read.revision, "it never left review");
+    assert_eq!(rig.filed_names(), [name]);
+}
+
 /// What the second of two scans is once the first has been filed: in
 /// review as a near duplicate of that filing, with only the first in the
 /// output folder.
