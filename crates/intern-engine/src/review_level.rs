@@ -587,6 +587,15 @@ mod tests {
                 "{word:?}"
             );
         }
+        // The file's own extension is dropped whatever its length, also
+        // where it is too long to be taken for an ending that looks like
+        // one.
+        let mut long = reading(&[ReviewReason::TypeUnsupported]);
+        long.proposal.document_type = Some("Document.markdown".into());
+        long.filename = compose_filename(&long.proposal, "markdown", &[]).value;
+        assert_eq!(long.filename, format!("{DATE} Document.markdown"));
+        assert_eq!(balanced(&long), waits(&[ReviewReason::TypeUnsupported]));
+
         // A type that says more than "Document" is a type with the
         // extension dropped too.
         let mut analysis = reading(&[ReviewReason::TypeUnsupported]);
@@ -659,6 +668,13 @@ mod tests {
         ] {
             assert_eq!(balanced(&typed(word)), Readiness::ready(), "{word:?}");
         }
+        // A file with no extension is named with none, and words after a
+        // period in its name are no extension to take off the type.
+        let mut bare = reading(&[ReviewReason::TypeUnsupported]);
+        bare.proposal.document_type = Some("Document. Annex".into());
+        bare.filename = compose_filename(&bare.proposal, "", &[]).value;
+        assert_eq!(bare.filename, format!("{DATE} Document. Annex"));
+        assert_eq!(balanced(&bare), Readiness::ready());
     }
 
     /// Clause 5: a title that stood in for a type the document did not
