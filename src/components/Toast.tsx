@@ -47,7 +47,7 @@ export function Toast({ tone, label, children, action, onDismiss }: Props) {
     onPointerEnter={() => setHeld(true)} onPointerLeave={() => setHeld(false)}
     onFocus={() => setHeld(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHeld(false); }}>
     <p>{children}</p>
-    {action && <button type="button" className="toast-action" disabled={action.disabled} aria-label={action.name} onClick={action.onClick}>{action.label}</button>}
+    {action && <button type="button" data-acts className="toast-action" disabled={action.disabled} aria-label={action.name} onClick={action.onClick}>{action.label}</button>}
     {onDismiss && <button type="button" className="icon-button" aria-label="Dismiss" onClick={onDismiss}><Icon icon={X} /></button>}
   </div>;
 }

@@ -39,8 +39,9 @@ import { useQueue } from './features/queue/useQueue';
 import { useBatchProgress } from './features/queue/batch';
 import { requestAttentionIfUnfocused, setTaskbarProgress } from './lib/windowSignals';
 import { isParked, isUnreadable, itemActions, keptOriginal, nextUndecided, undecidedOrder } from './features/review/actions';
-import { keptText, setAsideOutdatedDrafts, typedAndNotFiled, watchedDrafts } from './features/review/drafts';
-import type { EarlierDrafts, KeptText, ReviewDrafts } from './features/review/drafts';
+import { keptText, setAsideOutdatedDrafts, typedAndNotFiled } from './features/review/drafts';
+import type { KeptText } from './features/review/drafts';
+import { keepTypedBetweenLaunches, windowStorage } from './features/review/typedStore';
 import { useReviewShortcuts } from './features/review/useReviewShortcuts';
 import type { ReviewInspectorHandle } from './features/review/useReviewShortcuts';
 import { modelReady, useModelSetup } from './features/setup/useModelSetup';
@@ -128,7 +129,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const historyTrigger = useRef<HTMLElement | null>(null);
   const reviewTrigger = useRef<{ element: HTMLElement; itemId: string } | null>(null);
   const focusRestoreVersion = useRef(0);
-  const { items, paused, setPaused, refresh, error: queueError, pipelineError, reconnect } = useQueue(bridge);
+  const { items, read: queueRead, paused, setPaused, refresh, error: queueError, pipelineError, reconnect } = useQueue(bridge);
   const inspectorHandle = useRef<ReviewInspectorHandle>(null);
   // Where focus goes once the item it is meant for is on screen: its row, or
   // its name or heading in the review panel.
@@ -162,10 +163,40 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // now is, and into what the panel shows beside them (EarlierDrafts) - and
   // only the person drops it: by filing it, by deciding the document some
   // other way, by having it read again, or by discarding it.
+  //
+  // Not by closing Intern either: both are stored as they change, in the
+  // window's own storage, and put back when the queue is first read at the
+  // next launch (keepTypedBetweenLaunches) - in the fields over the reading
+  // they were typed over when the window before closed in the ordinary way,
+  // set aside beside any other reading and after any other end, dropped
+  // with a document that is no longer in the queue. They are put back here, as the
+  // window is about to show that queue, so the panel never shows a document
+  // before what was typed for it is back; and nothing is given the focus
+  // for it.
   const [, redrawForTyped] = useState(0);
-  const [reviewDrafts] = useState<ReviewDrafts>(() => watchedDrafts(() => redrawForTyped((count) => count + 1)));
-  const [earlierDrafts] = useState<EarlierDrafts>(() => new Map());
+  const [typedKept] = useState(() => keepTypedBetweenLaunches(windowStorage, () => redrawForTyped((count) => count + 1)));
+  const { drafts: reviewDrafts, earlier: earlierDrafts } = typedKept;
+  typedKept.queueIs(items, queueRead);
   const forgetTyped = (id: string) => { const typed = reviewDrafts.delete(id); if (earlierDrafts.delete(id) || typed) redrawForTyped((count) => count + 1); };
+  // Discard waiting and Clear history take documents out of the queue at the
+  // person's word, and what was typed for them goes with them: from the
+  // window and from storage now, not at the next start. The documents are
+  // those the queue listed as the command was given (`before`) and a queue
+  // read after it no longer lists; a reread that failed says nothing of what
+  // is gone, and what was typed stays until the next start drops it.
+  const forgetTypedForGone = (before: readonly QueueItem[], read?: QueueItem[]) => {
+    if (!read) return;
+    const listed = new Set(read.map((item) => item.id));
+    for (const { id } of before) if (!listed.has(id)) forgetTyped(id);
+  };
+  // The window going in the ordinary way marks what is stored of what was
+  // typed as left by an ordinary close; found without the mark at the next
+  // start, it is set aside (keepTypedBetweenLaunches).
+  useEffect(() => {
+    const closing = () => typedKept.closing();
+    window.addEventListener('pagehide', closing);
+    return () => window.removeEventListener('pagehide', closing);
+  }, [typedKept]);
   const typedOver = (id: string) => typedAndNotFiled(reviewDrafts, earlierDrafts, id);
   // What a person had in a name and a description when the panel they were
   // typing in went by itself, kept above the queue with the caret in it
@@ -1021,7 +1052,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       <p>Intern {updateStatus.version} is available. You have {updateStatus.currentVersion}.</p>
       {updateError && <p role="alert">{updateError}</p>}
       <div className="update-actions">
-        <button type="button" className="primary" disabled={updateInstalling || renameApplying} onClick={() => void installUpdate()}>{updateInstalling ? installingLabel(updateProgress) : `Install ${updateStatus.version} and restart`}</button>
+        <button type="button" data-acts className="primary" disabled={updateInstalling || renameApplying} onClick={() => void installUpdate()}>{updateInstalling ? installingLabel(updateProgress) : `Install ${updateStatus.version} and restart`}</button>
         <button type="button" disabled={updateInstalling} onClick={() => setUpdateDismissed(updateStatus.version)}>Not now</button>
       </div>
       {renameApplying && (!updateInstalling || updateProgress?.fraction === 1) && <p className="check-hint">Waiting for a rename to finish</p>}
@@ -1118,15 +1149,15 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
           {view === 'queue' && waitingItems.length > 0 && <div className="more-menu" onKeyDown={(event) => { if (event.key === 'Escape' && moreOpen) { event.stopPropagation(); setMoreOpen(false); event.currentTarget.querySelector<HTMLButtonElement>('button')?.focus(); } }}>
             <button type="button" className="icon-button" aria-label="More queue actions" aria-haspopup="menu" aria-expanded={moreOpen} title="More queue actions" onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>
             {moreOpen && <div role="menu" aria-label="More queue actions">
-              <button type="button" role="menuitem" aria-label="Discard waiting items" disabled={actionPending} onClick={() => void (async () => { setMoreOpen(false); const dropped = waitingItems.length; await runQueueAction(() => bridge.discardWaiting(), `Discarded ${dropped} waiting ${dropped === 1 ? 'item' : 'items'}.`); })()}><Icon icon={Trash2} />Discard waiting <span>{waitingItems.length}</span></button>
+              <button type="button" data-acts role="menuitem" aria-label="Discard waiting items" disabled={actionPending} onClick={() => void (async () => { setMoreOpen(false); const before = items; const dropped = waitingItems.length; const done = await runQueueAction(() => bridge.discardWaiting(), `Discarded ${dropped} waiting ${dropped === 1 ? 'item' : 'items'}.`); if (done) forgetTypedForGone(before, done.read); })()}><Icon icon={Trash2} />Discard waiting <span>{waitingItems.length}</span></button>
             </div>}
           </div>}
-          {view === 'queue' && readyItems.length > 0 && <button type="button" className="primary" aria-label="Rename all ready" disabled={actionPending}
+          {view === 'queue' && readyItems.length > 0 && <button type="button" data-acts className="primary" aria-label="Rename all ready" disabled={actionPending}
             title={readyUntyped.length < readyItems.length ? `Renames the ${readyUntyped.length} ready ${readyUntyped.length === 1 ? 'document' : 'documents'} as Intern proposed. ${readyItems.length - readyUntyped.length} with a name or a description you typed ${readyItems.length - readyUntyped.length === 1 ? 'is' : 'are'} left for you to file.` : undefined}
             onClick={() => void applyAllReady()}>Rename all ready <span>{readyUntyped.length}</span></button>}
           {view === 'completed' && filtered.length > 0 && <>
             <button type="button" disabled={actionPending} onClick={(event) => openHistory(event.currentTarget)}>History</button>
-            <button type="button" disabled={actionPending} onClick={() => void (async () => { if (await runQueueAction(() => bridge.clearHistory(), 'History cleared.')) queueMicrotask(() => document.querySelector<HTMLButtonElement>('.view-switch button[data-view="completed"]')?.focus()); })()}>Clear history</button>
+            <button type="button" data-acts disabled={actionPending} onClick={() => void (async () => { const before = items; const done = await runQueueAction(() => bridge.clearHistory(), 'History cleared.'); if (!done) return; forgetTypedForGone(before, done.read); queueMicrotask(() => document.querySelector<HTMLButtonElement>('.view-switch button[data-view="completed"]')?.focus()); })()}>Clear history</button>
           </>}
         </div>
       </div>

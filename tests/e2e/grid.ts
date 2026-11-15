@@ -1,5 +1,6 @@
 import { expect } from '@playwright/test';
 import type { Locator, Page } from '@playwright/test';
+import { SETTLE_MS } from '../../src/lib/aimedPress';
 
 /*
   The queue table is a grid of cells, and selecting a row no longer opens the
@@ -30,3 +31,14 @@ export async function openDetails(page: Page, originalFilename?: string): Promis
   if (originalFilename) await expect(panel).toContainText(originalFilename);
   return panel;
 }
+
+/**
+ * Waits before a press on a control that acts and has only just come where
+ * it is by itself: a note's button, an update's, the window's own as it
+ * opens. Such a press is taken once the control has been there for the
+ * settle time (src/lib/aimedPress.ts); sooner, it is refused as a press
+ * that was on its way to whatever was there before, a journey's as much as
+ * a person's. So a journey waits here, a little longer than that, where a
+ * person would still be reading.
+ */
+export const untilSettled = (page: Page) => page.waitForTimeout(SETTLE_MS + 100);
