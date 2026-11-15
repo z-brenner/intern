@@ -6022,6 +6022,40 @@ fn save_settings_with_microsoft_protection(
         |enabled| state.set_autostart(enabled),
     )?;
     state.refresh_hosted_active(&settings);
+    let applied = apply_saved_settings(state, &previous, &settings);
+    // The waiting documents are judged again where this save changed the
+    // review level, whatever came of the steps above: none of them decides
+    // which readings are ready. Only on a change, unlike the names: judging
+    // again moves documents between ready and review, and a save that
+    // leaves the level alone must leave them where they are. So no later
+    // save makes up for this one, and a step above that failed must not
+    // keep the queue from being judged: the level is stored by now, and the
+    // documents would wait in review at a level that calls them ready.
+    // Settings that could not be read before this save were strict to the
+    // queue too, which is what `previous` says of them.
+    //
+    // A judging that itself fails is reported and not tried again by a
+    // later save. Nothing is then filed at a level that holds it
+    // (`Pipeline::review_level_changed`), and choosing the level again
+    // after choosing the other one judges the queue once more.
+    let judged = if previous.review_level == settings.review_level {
+        Ok(())
+    } else {
+        state.review_level_changed(previous.review_level, settings.review_level)
+    };
+    // Like the model's answer, the judging's is reported only once every
+    // other part of the save has been applied.
+    applied.and(judged)
+}
+
+/// What a save does to the running app once the settings are stored, the
+/// review level apart: the model, the tray, the watcher and the names of
+/// the documents still waiting.
+fn apply_saved_settings(
+    state: &impl SettingsRuntime,
+    previous: &AppSettings,
+    settings: &AppSettings,
+) -> Result<(), CommandError> {
     // The settings are saved whatever the local model makes of the change,
     // so its answer - SETUP_BUSY, say - is reported once the rest of the
     // save has been applied rather than in place of it.
@@ -6042,7 +6076,7 @@ fn save_settings_with_microsoft_protection(
         || previous.process_others_uploads != settings.process_others_uploads
         || previous.machine_label != settings.machine_label
     {
-        state.restart_intake(&settings, starts_a_new_watch(&previous, &settings))?;
+        state.restart_intake(settings, starts_a_new_watch(previous, settings))?;
         state.emit_intake_changed()?;
     }
     // Last, because it renames only what is still waiting: a queue that
@@ -6054,22 +6088,9 @@ fn save_settings_with_microsoft_protection(
     // was edited again. Documents already named by this list are not
     // touched, so a save that changes nothing renames nothing.
     let renamed = state.own_names_changed(&settings.our_names);
-    // And judged again where this save changed the review level, whatever
-    // came of the rename: the two do not depend on each other. Only on a
-    // change, unlike the names: judging again moves documents between ready
-    // and review, and a save that leaves the level alone must leave them
-    // where they are. What a judging that failed did not reach is still
-    // never filed at a level that holds it (`Pipeline::review_level_changed`).
-    // Settings that could not be read before this save were strict to the
-    // queue too, which is what `previous` says of them.
-    let judged = if previous.review_level == settings.review_level {
-        Ok(())
-    } else {
-        state.review_level_changed(previous.review_level, settings.review_level)
-    };
-    // Like the model's answer, the rename's and the judging's are reported
-    // only once every other part of the save has been applied.
-    source_changed.and(renamed).and(judged)
+    // Like the model's answer, the rename's is reported only once every
+    // other part of the save has been applied.
+    source_changed.and(renamed)
 }
 
 fn sharepoint_activation_in_progress() -> CommandError {
@@ -15059,7 +15080,7 @@ mod review_level_tests {
     use std::sync::atomic::Ordering;
 
     use intern_engine::ReviewLevel;
-    use intern_queue::AppSettings;
+    use intern_queue::{AppSettings, ModelSource};
 
     use super::test_runtime::RecordingRuntime;
     use super::{restore_sharepoint_settings, save_settings};
@@ -15174,6 +15195,53 @@ mod review_level_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A save that changes the review level judges the queue at it whatever
+    /// came of the save's other steps. The level is stored by then, so the
+    /// next save finds it unchanged and does not judge: a model that could
+    /// not be scheduled, or a watcher that could not be restarted or
+    /// announced, left the waiting documents in review at a level that
+    /// calls them ready, until the level was changed twice more. The other
+    /// step's failure is still the one reported.
+    #[test]
+    fn a_save_whose_other_steps_fail_still_judges_at_the_new_level() {
+        for (step, failure) in [
+            ("schedule", "injected scheduler failure"),
+            ("restart", "injected watcher restart failure"),
+            ("announce", "injected intake event failure"),
+        ] {
+            let dir = scratch(&format!("review-level-{step}"));
+            let runtime = RecordingRuntime::new(dir.join("settings.json"));
+            runtime.store.save(&AppSettings::default()).unwrap();
+            let mut chosen = AppSettings {
+                machine_label: "Front desk".into(),
+                ..at(BALANCED)
+            };
+            match step {
+                "schedule" => {
+                    runtime.fail_schedule.store(true, Ordering::SeqCst);
+                    chosen.model_source = ModelSource::Hosted;
+                }
+                "restart" => {
+                    *runtime.fail_intake_restart.lock().unwrap() = Some(Box::new(|_| true));
+                }
+                _ => runtime.fail_intake_events.store(true, Ordering::SeqCst),
+            }
+            // The judging failing too does not hide the step that failed
+            // first.
+            runtime.fail_review_level.store(true, Ordering::SeqCst);
+
+            let refused = save_settings(&runtime, chosen).unwrap_err();
+            assert_eq!(refused.message, failure, "{step}");
+            assert_eq!(runtime.store.load().unwrap().review_level, BALANCED);
+            assert_eq!(
+                *runtime.review_levels.lock().unwrap(),
+                [(STRICT, BALANCED)],
+                "{step}: the queue was judged all the same"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
     /// Putting back the settings stored before a failed SharePoint
     /// activation puts their review level back, and the queue judges again
     /// when that is another level than the one being replaced.
@@ -15256,6 +15324,8 @@ pub(crate) mod test_runtime {
         /// The local model answers a change of model the way it does while
         /// another setup operation runs.
         pub setup_busy: AtomicBool,
+        /// The scheduler cannot be woken, as when its thread has stopped.
+        pub fail_schedule: AtomicBool,
         gate: Mutex<()>,
         activation: AtomicBool,
     }
@@ -15278,6 +15348,7 @@ pub(crate) mod test_runtime {
                 intake_restarts: Mutex::new(Vec::new()),
                 source_changes: Mutex::new(Vec::new()),
                 setup_busy: AtomicBool::new(false),
+                fail_schedule: AtomicBool::new(false),
                 gate: Mutex::new(()),
                 activation: AtomicBool::new(false),
             }
@@ -15371,6 +15442,12 @@ pub(crate) mod test_runtime {
         }
 
         fn schedule(&self) -> Result<(), CommandError> {
+            if self.fail_schedule.load(Ordering::SeqCst) {
+                return Err(Self::injected(
+                    "STATE_CONFLICT",
+                    "injected scheduler failure",
+                ));
+            }
             Ok(())
         }
 
