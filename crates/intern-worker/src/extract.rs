@@ -564,6 +564,15 @@ pub struct ExtractedPage {
     /// reader's pages carry one by the time the protocol sends them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<PageLayout>,
+    /// The stretches of `text`, as byte ranges, that show what a
+    /// spreadsheet formula calling TODAY or NOW last worked out: a value
+    /// that follows the day the workbook is opened, not one a person
+    /// typed. They say something about the text and change none of it.
+    /// Only a sheet of an Excel workbook has any, in either of Excel's
+    /// formats (see [`crate::sheet`]); a page with none is written
+    /// without the field, exactly as it was before the field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volatile_spans: Vec<(usize, usize)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1204,6 +1213,7 @@ fn native_page(
             ocr_confidence: None,
             vision_escalated: false,
             layout,
+            volatile_spans: Vec::new(),
         },
         fast,
     }
@@ -1530,6 +1540,7 @@ impl ExtractedPage {
             ocr_confidence: None,
             vision_escalated: false,
             layout,
+            volatile_spans: Vec::new(),
         }
     }
 }

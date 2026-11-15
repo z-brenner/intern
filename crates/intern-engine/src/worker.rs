@@ -160,6 +160,13 @@ pub enum WorkerEvent {
 /// protocol version 1. The version was deliberately not raised: the worker
 /// and the host ship together in one installer and are never paired across
 /// builds, and the field changes nothing the host decides.
+///
+/// A page's `volatile_spans` is optional the same way, and the version
+/// stays where it is for the first of those reasons: the two ship
+/// together. Unlike `timings` it is something the host decides by
+/// (`DATE_IS_FORMULA`), and the worker writes it only on a sheet with a
+/// TODAY or NOW formula in its window, so every other document goes over
+/// the pipe byte for byte as it did.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerDocument {
@@ -229,6 +236,11 @@ struct WorkerPage {
     /// Absent from a worker that predates layouts.
     #[serde(default)]
     layout: Option<PageLayout>,
+    /// Where the page's text shows what a TODAY or NOW formula worked out
+    /// ([`SourcePage::volatile_spans`]). Absent from a page with no such
+    /// cell, and from a worker that predates the field.
+    #[serde(default)]
+    volatile_spans: Vec<(usize, usize)>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -347,6 +359,7 @@ pub fn adapt_document(document: WorkerDocument) -> Result<DocumentSource, Extrac
                     .ocr_confidence
                     .map(|confidence| confidence.round().clamp(0.0, 100.0) as u32),
                 layout: page.layout,
+                volatile_spans: page.volatile_spans,
             })
             .collect(),
         parser_warnings,

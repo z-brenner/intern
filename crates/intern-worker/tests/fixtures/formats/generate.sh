@@ -26,8 +26,14 @@ convert 'xlsm:Calc MS Excel 2007 VBA XML' "$here/source/ledger.fods"
 convert 'ods:calc8' "$here/source/ledger.fods"
 # Field separator 44 (comma), text delimiter 34 (double quote), UTF-8 (76).
 convert 'csv:Text - txt - csv (StarCalc):44,34,76' "$here/source/ledger.fods"
+# A quotation dated by =TODAY(): LibreOffice works the formulas out as it
+# converts, so each of these holds the day it was generated.
+convert 'xls:MS Excel 97' "$here/source/dated.fods"
+convert 'xlsm:Calc MS Excel 2007 VBA XML' "$here/source/dated.fods"
+convert 'ods:calc8' "$here/source/dated.fods"
 for file in letter.doc letter.rtf letter.odt letter.docm deck.ppt deck.odp \
-    ledger.xls ledger.xlsm ledger.ods ledger.csv; do
+    ledger.xls ledger.xlsm ledger.ods ledger.csv \
+    dated.xls dated.xlsm dated.ods; do
     cp "$work/out/$file" "$here/$file"
 done
 

@@ -621,6 +621,7 @@ pub fn ocr_page(
         ocr_confidence: (!reading.blank).then_some(reading.mean_confidence),
         vision_escalated: false,
         layout: (!dense).then_some(layout),
+        volatile_spans: Vec::new(),
     }
 }
 
@@ -833,6 +834,7 @@ pub fn regions_page(
         ocr_confidence: least_confidence,
         vision_escalated: false,
         layout: Some(layout),
+        volatile_spans: Vec::new(),
     })
 }
 

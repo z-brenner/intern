@@ -251,6 +251,10 @@ impl<W: Write> EventSink for JsonLineSink<'_, W> {
 /// cut loses its layout, which no longer describes it, and a page whose
 /// layout would take the document's layouts past [`layout_budget`] goes
 /// without one. The host builds those pages' blocks from their text.
+///
+/// The stretches of a sheet's text that a TODAY or NOW formula worked out
+/// ([`crate::extract::ExtractedPage::volatile_spans`]) are kept where the
+/// text they name is: one that ran past a cut is dropped.
 fn bound_page_text(document: &mut ExtractedDocument) {
     let mut truncated = false;
     let mut remaining = MAX_DOCUMENT_CHARS;
@@ -261,6 +265,9 @@ fn bound_page_text(document: &mut ExtractedDocument) {
                 page.text.truncate(end);
                 truncated = true;
                 page.layout = None;
+                // A stretch that ran past the cut no longer names a
+                // stretch of this text.
+                page.volatile_spans.retain(|&(_, span_end)| span_end <= end);
                 allowed
             }
             None => page.text.chars().count(),
