@@ -16,12 +16,12 @@ use intern_core::{
 };
 use intern_engine::{
     DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
-    RuleKind, Support, ValidatedProposal, approved_party, compose_styled_filename,
+    ReviewLevel, RuleKind, Support, ValidatedProposal, approved_party, compose_styled_filename,
     counterparty_view,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
     is_a_spelling, is_own_name, lesson_from_edit, named_parties, party_and_more, party_as_named,
-    proposed_party, respelled_party, same_stem, sanitize_folder_name,
+    proposed_party, readiness, respelled_party, same_stem, sanitize_folder_name,
     setup::{semantic_probes, validate_semantic_probe},
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -662,9 +662,16 @@ impl DuplicateOracle for NoDuplicateOracle {
 #[serde(rename_all = "camelCase")]
 pub struct ProposalRecord {
     pub analysis: DocumentAnalysis,
+    /// Whether the document waits for a person. For a reading nobody has
+    /// acted on: what the review level made of it
+    /// ([`intern_engine::readiness`]), then the queue's own holds. Not
+    /// always `analysis.status`, which stays the engine's own word.
     pub status: ProposalStatus,
     pub filename: String,
     pub description: String,
+    /// The reading's review reasons, by code, and the queue's own. On a
+    /// ready record they hold nothing: at the balanced level a ready
+    /// reading keeps the reasons that are only notes there.
     pub reasons: Vec<String>,
     pub revision: u64,
     /// The reviewer's spellings applied when `filename` was composed. The
@@ -2225,6 +2232,7 @@ impl Pipeline {
         );
         pipeline.restyle_waiting_as_opened();
         pipeline.hold_ready_under_unchecked_spellings();
+        pipeline.hold_ready_the_review_level_holds();
         Ok(pipeline)
     }
 
@@ -2277,6 +2285,7 @@ impl Pipeline {
         );
         pipeline.restyle_waiting_as_opened();
         pipeline.hold_ready_under_unchecked_spellings();
+        pipeline.hold_ready_the_review_level_holds();
         Ok(pipeline)
     }
 
@@ -2317,6 +2326,40 @@ impl Pipeline {
                 let _ = self.held_for_unchecked_spelling(item, &record);
             }
         }
+    }
+
+    /// Puts in review every ready document no person approved whose reading
+    /// waits at the review level Settings names now (see
+    /// [`Self::held_for_review_level`]): when the queue opens, and on every
+    /// recovery pass, for the reasons the hold above runs then. Such a row
+    /// is one a looser level made ready that the change back to a stricter
+    /// one never reached: Intern closed, or the queue could not be written,
+    /// between the Settings save and the judging again that follows it
+    /// ([`Self::review_level_changed`]). At strict, where a reading is ready
+    /// only by the engine's own word, there is none. Settings that cannot be
+    /// read mean strict.
+    fn hold_ready_the_review_level_holds(&self) {
+        let level = self.review_level();
+        let Ok(items) = self.store.list() else {
+            return;
+        };
+        for item in items
+            .iter()
+            .filter(|item| item.status == QueueStatus::Ready)
+        {
+            if let Ok(Some(record)) = self.repository.load_proposal(item.id) {
+                let _ = self.held_for_review_level(item, &record, level);
+            }
+        }
+    }
+
+    /// The review level Settings names. Settings that cannot be read mean
+    /// strict, which files the least with no person looking.
+    fn review_level(&self) -> ReviewLevel {
+        self.settings
+            .load()
+            .map(|settings| settings.review_level)
+            .unwrap_or_default()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3425,7 +3468,8 @@ impl Pipeline {
             return Ok(true);
         }
         self.ensure_lease(&lease)?;
-        let record = self.record_for(&item, analysis, &extension, &existing)?;
+        let level = self.review_level();
+        let record = self.record_for(&item, analysis, &extension, &existing, level)?;
         let next = queue_status_for(record.status);
         lease.stop_and_check()?;
         self.repository.save_initial_and_transition(
@@ -3438,23 +3482,29 @@ impl Pipeline {
         self.admission
             .processed(&item.source_path, &item.source_hash);
         self.active_item.store(0, Ordering::SeqCst);
-        self.settle_new_record(&item, &record, next)?;
+        self.settle_new_record(&item, &record, next, level)?;
         Ok(true)
     }
 
     /// The record a reading of `item` is stored as: the name composed from
     /// the validated facts the way the reviewer has taught Intern to spell
     /// them and by the other side where the person's own organization is
-    /// named, collision-free where the document is going, and held for a
-    /// person when its text nearly repeats a filing's, or when a learned
-    /// spelling no person has checked yet changed its name. Nobody has
-    /// acted on it yet.
+    /// named, collision-free where the document is going, ready or not as
+    /// the review level `level` judges the reading
+    /// ([`intern_engine::readiness`]), and held for a person at every level
+    /// when its text nearly repeats a filing's, or when a learned spelling
+    /// no person has checked yet changed its name. Nobody has acted on it
+    /// yet.
+    ///
+    /// The record keeps every reason the reading has, whatever the level
+    /// makes of them: on a ready record they are notes, not holds.
     fn record_for(
         &self,
         item: &QueueItem,
         analysis: DocumentAnalysis,
         extension: &str,
         existing: &[String],
+        level: ReviewLevel,
     ) -> PipelineResult<ProposalRecord> {
         // The document's words, respelled the way review has taught Intern
         // to. Applied here, after validation, so the evidence stayed the
@@ -3485,7 +3535,9 @@ impl Pipeline {
             .iter()
             .map(|reason| reason.as_str().to_owned())
             .collect::<Vec<_>>();
-        let mut status = analysis.status;
+        // The level's answer, not the engine's own status: at strict the
+        // two are the same. The queue's own holds follow, as at any level.
+        let mut status = readiness(&analysis, level).status();
         if near_duplicate_of.is_some() {
             reasons.push(NEAR_DUPLICATE.to_owned());
             status = ProposalStatus::NeedsReview;
@@ -3510,14 +3562,16 @@ impl Pipeline {
         Ok(record)
     }
 
-    /// What follows storing a new reading's `record`, now that the row is
-    /// `next`: the window hears of it, and a ready one is filed when
-    /// automatic renaming is on, exactly as for any reading.
+    /// What follows storing a new reading's `record`, judged at the review
+    /// level `level`, now that the row is `next`: the window hears of it,
+    /// and a ready one is filed when automatic renaming is on, exactly as
+    /// for any reading.
     fn settle_new_record(
         &self,
         item: &QueueItem,
         record: &ProposalRecord,
         next: QueueStatus,
+        level: ReviewLevel,
     ) -> PipelineResult<()> {
         // The organization's names were read before the name was composed,
         // and a Settings save since then renamed everything that was waiting
@@ -3526,10 +3580,22 @@ impl Pipeline {
         // every other waiting document, and a save after this point finds it
         // waiting.
         let settings = self.settings.load();
+        let mut made_ready = false;
         if let Ok(current) = &settings {
             let names = current.own_names();
             if names != record.own_names {
                 self.recompose(&self.repository.spellings()?, item, Some(&names))?;
+            }
+            // The same for the review level: it was read before the reading
+            // was judged, and a save since then judged again everything
+            // that was waiting, which this document was not, yet.
+            if current.review_level != level
+                && let Some(waiting) = self.store.get(item.id)?
+            {
+                made_ready = matches!(
+                    self.judge_again(&waiting, level, current.review_level)?,
+                    JudgedAgain::Ready(_)
+                );
             }
         }
         let ready_item = self.store.get(item.id)?.ok_or_else(|| {
@@ -3540,8 +3606,9 @@ impl Pipeline {
         })?;
         self.events.queue_changed();
         // Named again just now, a learned spelling no person has checked
-        // can have sent it to review.
-        if next == QueueStatus::Ready && ready_item.status == QueueStatus::Ready {
+        // can have sent it to review; judged again just now, a stricter
+        // level can have.
+        if (next == QueueStatus::Ready || made_ready) && ready_item.status == QueueStatus::Ready {
             let settings = match settings {
                 Ok(settings) => settings,
                 Err(error) => {
@@ -3612,6 +3679,12 @@ impl Pipeline {
             // person has checked changed is not left one click from filing:
             // one an earlier release left ready, before such names waited.
             if self.held_for_unchecked_spelling(&item, &proposal)? {
+                continue;
+            }
+            // Nor is a reading that waits at the review level in force: one
+            // a looser level made ready before Settings went back to a
+            // stricter one.
+            if self.held_for_review_level(&item, &proposal, settings.review_level)? {
                 continue;
             }
             if !automatic && !proposal.approved {
@@ -3926,6 +3999,152 @@ impl Pipeline {
             .replace_proposal_if(item.id, read, &record, held)
     }
 
+    /// Judges again every document still waiting, now that Settings names
+    /// the review level `to` where it named `from`: from the stored reading
+    /// and the queue's own holds, with no model asked and nothing read
+    /// again.
+    ///
+    /// Toward a looser level, a document in review becomes ready where the
+    /// level is what changes its reading's answer - it waited at `from` and
+    /// is ready at `to` - and it waits for nothing but what that reading
+    /// said (see [`Self::waits_on_its_reading`]): nobody has approved,
+    /// edited, filed or taken back its name, no file error and no reason a
+    /// filing attempt added stands on it, and no rename of it ever began.
+    /// The queue's own holds are decided as for a new reading: a text that
+    /// nearly repeats a filing's, looked for again among the filings there
+    /// are now, and a learned spelling nobody has checked. Then it follows
+    /// automatic renaming exactly as a newly ready reading does
+    /// ([`Self::settle_new_record`]), paused or not as that does. One
+    /// document at a time, so the second of two scans of one document meets
+    /// the first one's filing.
+    ///
+    /// Toward a stricter level, a ready document no person approved whose
+    /// reading waits at `to` goes back to review
+    /// ([`Self::held_for_review_level`]).
+    ///
+    /// Nothing else is touched: not a filed document, not a name a person
+    /// approved or edited, not a document being read, and not a document
+    /// both levels judge alike. So one left in review for something else
+    /// stays there: a document once held for a learned spelling that was
+    /// checked or forgotten since, whose reading both levels call ready.
+    ///
+    /// The app calls this when a Settings save changed the level. What it
+    /// could not reach is still never filed at a level that holds it: every
+    /// filing without a person's approval asks the level in force
+    /// ([`Self::apply_if_unchanged`]), and the scheduler and the recovery
+    /// pass put such rows back in review.
+    pub fn review_level_changed(&self, from: ReviewLevel, to: ReviewLevel) -> PipelineResult<()> {
+        if from == to {
+            return Ok(());
+        }
+        let mut changed = false;
+        for item in self.store.list()? {
+            if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready) {
+                continue;
+            }
+            match self.judge_again(&item, from, to)? {
+                JudgedAgain::Unchanged => {}
+                JudgedAgain::Held => changed = true,
+                JudgedAgain::Ready(record) => {
+                    self.settle_new_record(&item, &record, QueueStatus::Ready, to)?;
+                }
+            }
+        }
+        if changed {
+            self.events.queue_changed();
+        }
+        Ok(())
+    }
+
+    /// Judges one waiting document again for
+    /// [`Self::review_level_changed`], and says what came of it. `item` is
+    /// its row as it is now.
+    fn judge_again(
+        &self,
+        item: &QueueItem,
+        from: ReviewLevel,
+        to: ReviewLevel,
+    ) -> PipelineResult<JudgedAgain> {
+        let Some(read) = self.repository.load_proposal_json(item.id)? else {
+            return Ok(JudgedAgain::Unchanged);
+        };
+        // A record this build cannot read is left as it is, as validating
+        // again leaves it: one bad row must not stop the rest being judged.
+        let Ok(record) = serde_json::from_str::<ProposalRecord>(&read) else {
+            return Ok(JudgedAgain::Unchanged);
+        };
+        match item.status {
+            QueueStatus::Ready => Ok(if self.held_for_review_level(item, &record, to)? {
+                JudgedAgain::Held
+            } else {
+                JudgedAgain::Unchanged
+            }),
+            QueueStatus::NeedsReview => self.make_ready_at(item, &read, &record, from, to),
+            _ => Ok(JudgedAgain::Unchanged),
+        }
+    }
+
+    /// Makes the document in review `item`, whose record `record` was read
+    /// a moment ago as `read`, ready where the change of review level from
+    /// `from` to `to` is what makes its reading ready (see
+    /// [`Self::review_level_changed`]), the queue's own holds allowing.
+    fn make_ready_at(
+        &self,
+        item: &QueueItem,
+        read: &str,
+        record: &ProposalRecord,
+        from: ReviewLevel,
+        to: ReviewLevel,
+    ) -> PipelineResult<JudgedAgain> {
+        if readiness(&record.analysis, from).ready
+            || !readiness(&record.analysis, to).ready
+            // Held as a near duplicate when it was read: no level lifts that.
+            || record.near_duplicate_of.is_some()
+            || !self.waits_on_its_reading(item, record)?
+        {
+            return Ok(JudgedAgain::Unchanged);
+        }
+        let mut again = record.clone();
+        again.status = ProposalStatus::Ready;
+        // The queue's own holds, as `record_for` decides them for a reading
+        // made now. A filing made since this document was read can be the
+        // one its text nearly repeats: the document then stays in review,
+        // and its record says why.
+        if let Some(filing) = self.near_duplicate_of(item.id, &record.analysis) {
+            again.near_duplicate_of = Some(filing);
+            if !again.reasons.iter().any(|reason| reason == NEAR_DUPLICATE) {
+                again.reasons.push(NEAR_DUPLICATE.to_owned());
+            }
+            again.status = ProposalStatus::NeedsReview;
+        }
+        let extension = item
+            .source_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        hold_unchecked_spelling(&mut again, extension, &self.repository.spellings()?);
+        if again == *record {
+            return Ok(JudgedAgain::Unchanged);
+        }
+        // The name and the sentence are as they were, so the revision is
+        // too, and the window keeps whatever the reviewer has typed.
+        let next = queue_status_for(again.status);
+        match self
+            .repository
+            .store_judged(item.id, item.status, read, &again, next, None)
+        {
+            Ok(()) => {}
+            // Someone acted on it meanwhile: what they made of it stands.
+            Err(error) if error.code == "STATE_CONFLICT" => return Ok(JudgedAgain::Unchanged),
+            Err(error) => return Err(error),
+        }
+        Ok(if next == QueueStatus::Ready {
+            JudgedAgain::Ready(Box::new(again))
+        } else {
+            JudgedAgain::Held
+        })
+    }
+
     /// What an approved edit teaches, if anything: a respelled party or
     /// type, remembered, and applied on its own once the same change has
     /// been made twice. A spelling Intern itself applied that the reviewer
@@ -4158,7 +4377,39 @@ impl Pipeline {
         }
         let _ = self
             .repository
-            .hold_ready_if(item.id, LEARNED_SPELLING_UNCONFIRMED, held);
+            .hold_ready_if(item.id, Some(LEARNED_SPELLING_UNCONFIRMED), held);
+        self.events.queue_changed();
+        Ok(true)
+    }
+
+    /// Puts the ready `item` in review where `record`, which no person has
+    /// approved, is a reading that waits at the review level `level` (see
+    /// [`waits_at`]), and says whether it did. Such a reading is never
+    /// filed without a person, however its row came to be ready: a looser
+    /// level made it ready, and Settings names a stricter one now. Nothing
+    /// is added to its reasons: the reading's own are on the record
+    /// already, and at this level they hold it. A row that could not be put
+    /// in review - no longer ready, or the database refused - is not filed
+    /// either.
+    ///
+    /// At strict no row is held that an earlier release would have filed:
+    /// there a reading is ready only by the engine's own word, and so is
+    /// every ready record no person approved.
+    ///
+    /// As in [`Self::held_for_unchecked_spelling`], whether it is held is
+    /// decided again on the record as stored, in the transaction that puts
+    /// it in review, so an approval made meanwhile is never taken back.
+    fn held_for_review_level(
+        &self,
+        item: &QueueItem,
+        record: &ProposalRecord,
+        level: ReviewLevel,
+    ) -> PipelineResult<bool> {
+        let held = |record: &ProposalRecord| waits_at(record, level);
+        if !held(record) {
+            return Ok(false);
+        }
+        let _ = self.repository.hold_ready_if(item.id, None, held);
         self.events.queue_changed();
         Ok(true)
     }
@@ -4222,6 +4473,13 @@ impl Pipeline {
         // checked that spelling's work once.
         if let Some(record) = proposal.as_ref()
             && self.held_for_unchecked_spelling(item, record)?
+        {
+            return Ok(());
+        }
+        // And none files a reading that waits at the review level these
+        // settings name, however its row came to be ready.
+        if let Some(record) = proposal.as_ref()
+            && self.held_for_review_level(item, record, settings.review_level)?
         {
             return Ok(());
         }
@@ -5315,7 +5573,8 @@ impl Pipeline {
             self.admission
                 .processed(&item.source_path, &item.source_hash);
         };
-        let mut again = self.record_for(&item, analysis, &extension, &existing)?;
+        let level = self.review_level();
+        let mut again = self.record_for(&item, analysis, &extension, &existing, level)?;
         if same_reading(&record, &again) {
             read_through();
             return left();
@@ -5345,7 +5604,7 @@ impl Pipeline {
             Err(error) => return Err(error),
         }
         read_through();
-        self.settle_new_record(&item, &again, next)?;
+        self.settle_new_record(&item, &again, next, level)?;
         Ok(Some(true))
     }
 
@@ -5356,11 +5615,22 @@ impl Pipeline {
     /// reading's, a near duplicate's and an unchecked learned spelling's;
     /// and no rename of it ever begun.
     fn waits_as_read(&self, item: &QueueItem, record: &ProposalRecord) -> PipelineResult<bool> {
-        let as_read = matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready)
+        Ok(record.analysis.telemetry.request_sha256.is_some()
+            && self.waits_on_its_reading(item, record)?)
+    }
+
+    /// [`Self::waits_as_read`] without asking that the record holds the
+    /// request its reply answered: what judging a reading again at another
+    /// review level needs, which asks no model and reads nothing.
+    fn waits_on_its_reading(
+        &self,
+        item: &QueueItem,
+        record: &ProposalRecord,
+    ) -> PipelineResult<bool> {
+        let on_its_reading = matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready)
             && queue_status_for(record.status) == item.status
             && item.error_code.is_none()
             && untouched(record)
-            && record.analysis.telemetry.request_sha256.is_some()
             && record.reasons.iter().all(|reason| {
                 reason == NEAR_DUPLICATE
                     || reason == LEARNED_SPELLING_UNCONFIRMED
@@ -5370,7 +5640,7 @@ impl Pipeline {
                         .iter()
                         .any(|read| read.as_str() == reason)
             });
-        Ok(as_read && self.store.listed_receipts(item.id)?.newest.is_none())
+        Ok(on_its_reading && self.store.listed_receipts(item.id)?.newest.is_none())
     }
 
     /// Stops the reading of item `id`'s document for validating it again,
@@ -5789,6 +6059,7 @@ impl Pipeline {
 
     pub fn recover(&self) -> PipelineResult<()> {
         self.hold_ready_under_unchecked_spellings();
+        self.hold_ready_the_review_level_holds();
         {
             // Renames in place for documents that could not be read: one a
             // crash left between the rename and its record, and one that
@@ -6179,6 +6450,21 @@ impl PipelineRepository {
         next: QueueStatus,
         release: &str,
     ) -> PipelineResult<()> {
+        self.store_judged(id, expected, expected_json, record, next, Some(release))
+    }
+
+    /// [`Self::store_revalidation`], recording that `release` considered
+    /// the item only when one is given: judging a reading again at another
+    /// review level is no release's validation of it.
+    fn store_judged(
+        &self,
+        id: i64,
+        expected: QueueStatus,
+        expected_json: &str,
+        record: &ProposalRecord,
+        next: QueueStatus,
+        release: Option<&str>,
+    ) -> PipelineResult<()> {
         let json = serde_json::to_string(record)
             .map_err(|_| PipelineError::new("INVALID_DATA", "proposal could not be stored"))?;
         let mut connection = self.lock()?;
@@ -6223,7 +6509,9 @@ impl PipelineRepository {
                 params![json, id],
             )
             .map_err(database_error)?;
-        mark_release(&transaction, id, release)?;
+        if let Some(release) = release {
+            mark_release(&transaction, id, release)?;
+        }
         transaction.commit().map_err(database_error)
     }
 
@@ -6796,15 +7084,15 @@ impl PipelineRepository {
         transaction.commit().map_err(database_error)
     }
 
-    /// Puts item `id` in review from ready with `reason` among its record's
-    /// reasons - where its record, read in the same transaction, is one
-    /// `held` says waits for a person - and says whether it did. A record
-    /// that changed since the caller looked, approved by a person most of
-    /// all, is decided on as it is now.
+    /// Puts item `id` in review from ready with `reason`, when one is
+    /// given, among its record's reasons - where its record, read in the
+    /// same transaction, is one `held` says waits for a person - and says
+    /// whether it did. A record that changed since the caller looked,
+    /// approved by a person most of all, is decided on as it is now.
     fn hold_ready_if(
         &self,
         id: i64,
-        reason: &str,
+        reason: Option<&str>,
         held: impl Fn(&ProposalRecord) -> bool,
     ) -> PipelineResult<bool> {
         let mut connection = self.lock()?;
@@ -6831,7 +7119,9 @@ impl PipelineRepository {
         if !held(&record) {
             return Ok(false);
         }
-        if !record.reasons.iter().any(|entry| entry == reason) {
+        if let Some(reason) = reason
+            && !record.reasons.iter().any(|entry| entry == reason)
+        {
             record.reasons.push(reason.to_owned());
         }
         record.revision += 1;
@@ -7101,6 +7391,28 @@ fn hold_unchecked_spelling(
             .retain(|reason| reason != LEARNED_SPELLING_UNCONFIRMED);
     }
     held
+}
+
+/// Whether `record` is a reading no person has approved that waits at the
+/// review level `level` ([`intern_engine::readiness`]): what no filing
+/// without a person's approval files, and what is not left ready. A name a
+/// person approved is theirs at every level, and a name with no reading
+/// behind it - a copy's, or one typed for a document that could not be
+/// read - is judged by no level.
+fn waits_at(record: &ProposalRecord, level: ReviewLevel) -> bool {
+    !record.approved && !record.is_synthetic() && !readiness(&record.analysis, level).ready
+}
+
+/// What judging a waiting document again at another review level did (see
+/// [`Pipeline::review_level_changed`]).
+enum JudgedAgain {
+    /// Its row and its record are as they were.
+    Unchanged,
+    /// It waits for a person: sent back to review from ready, or kept in
+    /// review with a hold of the queue's own newly on its record.
+    Held,
+    /// It became ready, under this record.
+    Ready(Box<ProposalRecord>),
 }
 
 /// Whether a stored reading is provisional and nobody has acted on it
