@@ -936,7 +936,23 @@ pressed for all of that half second, whatever else moved: a button that
 shifts a little and stays under the pointer is the same button. Otherwise
 the press does nothing - the page hears of no button going down and of no
 click, the focus and any selection stay where they were, and nothing is
-shown - and is to be made again. The click is judged where it lands as well
+shown - and is to be made again. Made again within the half second it is
+refused again. Made again after it, at the same place, it acts on whatever
+has come there: Rename all ready, where the press was on its way to Close
+review, renames the ready documents at that second press. Nothing said the
+first press was refused, so what is under the pointer is to be looked at
+before pressing again. A browser counts a press made again within the
+double-click time as the second click of a double-click whatever became of
+the first, and the buttons that act on a first click only - approve, keep,
+remove, Use date & rename, Back to Intern's proposal, Discard what I had
+and Done - did nothing on it for as long as the person went on pressing. A
+click counted second or later is now a first press (`firstPress`) when
+nothing of its run of clicks reached the page before it, every press before
+it having been refused; a press that did reach the page, on anything, and a
+click from the keyboard in between leave the clicks after them what they
+were, so a double-click on Approve & rename still approves one document.
+The count a real mouse gives was not checked: tests and journeys give it.
+The click is judged where it lands as well
 as where the press went down, since a finger's click goes to what is under
 it as it lifts; any button of the mouse is judged, since the right one takes
 the focus; and a click from the keyboard, which has no press of the pointer
@@ -949,25 +965,51 @@ opened, the buttons of a panel just asked for - is taken once the press
 lands 24 pixels or more (`REACH_PX`) from where the pointer was then: they
 went to it. Pressed where the pointer already was, it is not, so the second
 click of a double-click acts on nothing the first brought under it. A
-control that came by itself is never taken sooner, wherever the pointer has
-been since: a hand already on its way moves too. And Approve & rename and
+control that came by itself is not taken sooner, wherever the pointer has
+been since: a hand already on its way moves too. What counts as the
+person's own is what the page changed while the browser was handing their
+press or key to it (`window.event` is that event), and nothing after: a key
+the page stops on its way (Tab or Escape in a kept text, Escape on a menu
+or a question) used to leave the next change, drawn a moment later by
+itself, counted as theirs, and in the check of this rule a press 250 ms
+later, the pointer having moved, was taken on Cancel processing. A change
+by itself that the page
+draws in the very course of handling a press or key would still count as
+theirs; none was seen to. And Approve & rename and
 Keep original are known by name (`data-acts="approve"`, `"keep"`), not by
-the button that stands for them: while a decision is carried out they are
-disabled, and the panel shows the document just decided as filed, without
-them, before it shows the next. One that went while disabled and is back in
-the same place within the half second is where the person left it, so one
-document after another is approved with the pointer at rest; one that went
-while it could be pressed, its document read again by itself, has arrived
-when it comes back.
+the button that stands for them, and each says which document it is drawn
+for (`data-acts-for`): while something is carried out they are
+disabled, and after a decision the demo's queue shows the document just
+decided as filed, without them, before it shows the next (gone for 35 to 54
+ms in eight approvals). One that went while disabled and is back in
+the same place within the half second for another document is where the
+person left it, so one
+document after another is approved with the pointer at rest. One that is
+back for the same document has arrived: that document was read again by
+itself, while it could be pressed or while something else being carried out
+had it disabled - with Discard waiting under way, in the check of this
+rule, a press 113 ms after the button came back filed a reading nobody had
+seen.
 
 What it costs is a press that has to be made again: on a control within half
-a second of its coming under the pointer after the wheel or a resize, and on
-a note's button pressed as soon as it appears. The demo answers a command
+a second of its coming under the pointer after the wheel or a resize; on
+a note's button pressed as soon as it appears; on Approve & rename or Keep
+original within half a second of its coming back for the same document;
+and, where a command is answered later than the press that sent it, on the
+next document's buttons when they are drawn in another place. The
+demo answers a command
 while the press that sent it is still being handled, so what the answer
 changes - the next document's buttons, a result's Undo - counts as asked for
-there. The desktop backend was not run with this; where its answers come
+there. The desktop backend was not run with this, and nobody has run the
+desktop window; where its answers come
 later, what they change counts as having come by itself and waits the half
-second. What the rule does not see is a change that moves nothing: where the
+second. With the demo made to answer 150 and 600 ms later, the check of
+this rule found Approve & rename never leaving the page at 1280x720 and
+800x600, where it was taken at once; at 1400x900, where the panel's buttons
+follow its text and the next document's were 122 to 178 px away, a press
+under half a second after they showed was not taken - 4 of 17 presses at
+one and two a second. Approving several documents in a tall window is
+what to try first, for this rule, on Windows. What the rule does not see is a change that moves nothing: where the
 panel's decision sticks to the bottom (a window 800 by 600), a document
 given another proposal with no kept text above its fields leaves Approve &
 rename where it was, and a press on its way to it files the new proposal.
@@ -1142,7 +1184,10 @@ aside, and each way a draft is dropped - the document filed, its name kept,
 the document removed or read again at the person's word, Back to Intern's
 proposal, a set-aside text discarded - are in the stored value before the
 change returns, and when nothing typed is left the key is removed. Removing
-a document removes what was stored for it at once. What was typed for a
+a document from its panel removes what was stored for it at once, and so do
+Discard waiting and Clear history for the documents they take out of the
+queue, once a queue read after the command no longer lists them (where that
+read fails, it stays until the next start drops it). What was typed for a
 document that stops being listed while Intern is open, without the person
 having decided it, is left as the window leaves it, and stays stored until
 the next start drops it. Only what a person typed is stored: a text kept
@@ -1157,14 +1202,17 @@ written before then either, so a start whose queue cannot be read leaves
 the stored value for the next. It is put back while the window renders that
 queue, so the first frame that shows a document has what was typed for it,
 and Rename all ready never counts the document in. Each document's typing
-goes where the window would have it now. Into the fields, when the document
+goes where the window would have it now. Into the fields, when the window
+before this one closed in the ordinary way (below) and the document
 is in the queue under the number and the file name it had, with the reading
 it was typed over, and can be filed. Set aside, read-only beside the
 document as it now is, with any other reading - read again while Intern was
 closed, even to the same words by another model - or when the document
-cannot be filed as it stands; and set aside is how it stays, at a later
+cannot be filed as it stands, or when the window before did not close in
+the ordinary way; and set aside is how it stays, at a later
 start under the first reading too. Dropped, and removed from storage, when
-the document is not in the queue or its number is another file's. Nothing
+the document is not in the queue or its number and own file name are
+another document's. Nothing
 is given the focus for any of it. What else a listing says of a reading -
 its status, the reasons it waits for, the model's confidence - is not part
 of which reading it is: a reading validated again after an update that
@@ -1172,7 +1220,10 @@ keeps its name and sentence keeps what was typed over it. The identity is
 stricter than the one a session goes by (`proposalOf`), because a session
 watches a document change and a start does not: the reading is noted when
 a draft is first seen over it, and one made again since that says the same
-is another. What a start cannot tell apart is a reading made again by the
+is another - until the draft is taken back or dropped, which forgets the
+reading noted for it: what is typed for the document after that is typed
+over the reading it has then. What a start cannot tell apart is a reading
+made again by the
 same model to the same revision, name and sentence in a change no window
 saw: what was typed goes back into its fields.
 
@@ -1180,7 +1231,26 @@ The numbers are `queue_items.id`, which SQLite never gives twice
 (`AUTOINCREMENT`), sent to the window as the item's `id`: within one queue
 database the number alone says which document. The file name is for a
 database replaced while the window's storage stayed, where the number is
-another document's.
+another document's. It tells the two apart only when the names differ: a
+document of the other database with the same number and the same own file
+name (two scans both called `scan.pdf`) is taken for the same document, and
+what was typed for the first is set aside read-only beside the second - or
+put in its fields, where the proposal's revision, name and sentence and the
+model are the same too.
+
+An ordinary close. What reaches the disk of the window's storage lags what
+the window wrote (below), so a value found at a start can be older than the
+window that wrote it knew: a name taken back, or filed, can be there again.
+Into the fields it would be one Ctrl+Enter from being filed, so it goes
+there only when the window before is known to have closed in the ordinary
+way. That window says so: on `pagehide` it stores once more what storage
+would not take earlier, and where something is stored it sets a second key,
+`intern.typedInReview.closed` (`closing`). The next window takes that key
+out before it reads or writes anything else, and where it found none it
+sets aside all it puts back. A window that goes before its queue was read
+has written nothing and leaves the key as it found it, there or not. A
+window that stores again after `pagehide` - a page the browser kept and
+shows again - takes its key out first.
 
 Limits. A name longer than 1,000 characters or a description longer than
 5,000 is not stored, and no older copy of it stays: that document's typing
@@ -1204,17 +1274,44 @@ or 2 s after it, none of it, 4 of 4, and 8 s after, all of it, 2 of 2; a
 letter every half second for 40 s and then killed, the disk had the first
 10 of 80 letters.
 A name typed, left for 8 s, taken back with Back to Intern's proposal and
-followed at once by such a kill was in its field again at the next start, 2
+followed at once by such a kill was in storage again at the next start, 2
 of 2. So after a kill or a power cut what comes back can be half a minute
-old or more - its last letters missing, something dropped since then back -
-and it comes back with nothing on screen that says so, beyond the name
-being in its field under Back to Intern's proposal. The desktop window's
+old or more - its last letters missing, something dropped since then back.
+Before the ordinary-close key that name was in its field again with nothing
+on screen to say so; with it, in one run each on a profile on disk: the
+window closed straight after the last letter, the name was in its field at
+the next start; typed, left 8 s, taken back and killed, it was set aside
+and the field was Intern's proposal; typed, left 8 s, filed and killed, the
+same; typed, left 8 s and killed, the same. The whole browser closed by the
+test driver, rather than the window by itself, left no key - nothing a page
+stored on `pagehide`, `unload` or `visibilitychange` was there at the next
+start, 2 of 2, where a closed tab, `window.close()`, a navigation and a
+reload each left all three - and the name came back set aside.
+
+One case still puts an older copy in the fields. A window started after an
+ordinary close takes the key out as its first change to the storage; killed
+before that change has reached the disk, it leaves the disk as the window
+before it did, key and all, whatever was taken back or filed in those
+seconds. Measured: a name taken back 1.7, 3.1 and 5.0 s after such a start,
+the browser killed at once, was in its field at the start after, 3 of 3;
+taken back 9.0 and 21 s after the start, it was set aside, 2 of 2.
+
+The desktop window's
 engine (WebView2) has not been run for any of this. Two of Intern's own
 ways out end the process without closing the window first - Quit Intern in
 the notification area (`shutdown_and_exit`) and the updater's install step,
-both through `std::process::exit` - and whether WebView2 writes the
-window's storage out then has not been observed: until it has, count what
-was typed in the last minute before either as possibly missing. Storing at
+both through `std::process::exit` - so they leave no key, and what was
+typed comes back set aside after them; whether WebView2 writes the
+window's storage out then has not been observed either: until it has, count
+what was typed in the last minute before either as possibly missing. Where
+Intern stays in the background, closing the window only hides it
+(`hide_window_on_close`), and Quit is the one way out: there, nothing typed
+comes back in its fields. Whether the desktop window sends `pagehide` when
+it does close has not been observed; if it does not, the same holds for
+every start, and what was typed is always to be copied from beside the
+document into its field by hand. For what was typed, that is what to look
+at first on Windows: type a name, close the window, open Intern, and see
+whether the name is in its field or beside it. Storing at
 each letter cost, in Chromium, a mean of 0.02 ms a change with one
 document's typing stored and 0.12 ms with the value near its limit.
 
