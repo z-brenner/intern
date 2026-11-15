@@ -3,6 +3,16 @@ export interface ReleaseNotes { version: string; changes: readonly string[] }
 
 export const releaseNotes: readonly ReleaseNotes[] = [
   {
+    version: '0.1.0-alpha.19',
+    // Shown whole in a dialog that must not scroll at the app's smallest
+    // window, 800 by 600 (tests/e2e/updates.spec.ts), also when it is shown
+    // after alpha.18's eight lines to someone who skipped that release: short
+    // lines, the rest in docs/releases/v0.1.0-alpha.19.md.
+    changes: [
+      'A spreadsheet date worked out by a TODAY or NOW formula waits for your check.',
+    ],
+  },
+  {
     version: '0.1.0-alpha.18',
     // Shown whole in a dialog that must not scroll at the app's smallest
     // window, 800 by 600 (tests/e2e/updates.spec.ts): eight lines of two
