@@ -48,7 +48,10 @@ describe('which documents are ready, in Settings', () => {
     const words = balanced(dialog).closest('label')!;
     expect(words).toHaveTextContent('A document can also be ready when the only doubts are about its type or its description, or when the model was unsure of its reading.');
     expect(words).toHaveTextContent('It still waits for you when Intern could not confirm its date or a party from the document, when its name would have no document type, or when Intern could not read it.');
-    expect(words).toHaveTextContent('So more documents are renamed without you looking at them, and more of those names will be wrong.');
+    // What it costs is said on a line of its own, not lost at the end of the paragraph.
+    const cost = within(words).getByText('So more documents can be renamed without you looking at them, and more of those names will be wrong.');
+    expect(cost).toHaveClass('review-level-cost');
+    expect(balanced(dialog)).toHaveAccessibleName(expect.stringMatching(/more of those names will be wrong\.$/));
     // At either level, the quick model's readings wait.
     expect(group).toHaveTextContent('At either level, a document the quick model read always waits for you.');
     // No figure anywhere in it: how many more are wrong depends on the documents.

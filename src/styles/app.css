@@ -557,6 +557,7 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .review-level .check-label input { margin-top: 2px; }
 .review-level .check-label > span { display: flex; flex-direction: column; gap: 2px; }
 .review-level .check-label .check-hint { margin: 0; }
+.review-level .check-label .review-level-cost { color: var(--text); }
 .settings-advanced > summary { cursor: pointer; font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--text); padding: 2px 0; }
 .settings-advanced[open] > summary { margin-bottom: 10px; }
 .intake-status { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); padding: 12px; margin: 14px 0 4px; font-size: 13px; }

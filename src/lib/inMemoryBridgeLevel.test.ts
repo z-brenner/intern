@@ -211,6 +211,23 @@ describe('a document ready with a note in the demo bridge', () => {
     expect(await byId(bridge, 'lease')).toEqual(filed);
   });
 
+  // An undone rename waits for a decision rather than being renamed again
+  // by the next pass. The lease's seeded reading must not make it ready
+  // again behind that.
+  it('waits at either level once its rename is undone', async () => {
+    const bridge = createInMemoryBridge();
+    await setLevel(bridge, 'balanced');
+    const lease = await byId(bridge, 'lease');
+    await bridge.approve('lease', lease.proposedFilename!, lease.description ?? '');
+    await bridge.undo('lease');
+    const undone = await byId(bridge, 'lease');
+    expect(undone).toMatchObject({ status: 'review', reason: humanizeReason('UNDONE') });
+    await setLevel(bridge, 'strict');
+    expect(await byId(bridge, 'lease')).toEqual(undone);
+    await setLevel(bridge, 'balanced');
+    expect(await byId(bridge, 'lease')).toEqual(undone);
+  });
+
   it('is kept under its own name, or removed, like any ready document', async () => {
     const bridge = createReviewBatchBridge();
     await setLevel(bridge, 'balanced');

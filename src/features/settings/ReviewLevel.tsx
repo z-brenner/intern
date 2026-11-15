@@ -14,7 +14,7 @@ import type { ReviewLevel } from '../../types';
  * words of the date and the parties, which is why it is named apart. No
  * figures: how many more names are wrong depends on the documents.
  */
-const CHOICES: { value: ReviewLevel; label: string; hint: string }[] = [
+const CHOICES: { value: ReviewLevel; label: string; hint: string; cost?: string }[] = [
   {
     value: 'strict',
     label: 'Strict (default)',
@@ -23,7 +23,10 @@ const CHOICES: { value: ReviewLevel; label: string; hint: string }[] = [
   {
     value: 'balanced',
     label: 'Balanced',
-    hint: 'A document can also be ready when the only doubts are about its type or its description, or when the model was unsure of its reading. It still waits for you when Intern could not confirm its date or a party from the document, when its name would have no document type, or when Intern could not read it. So more documents are renamed without you looking at them, and more of those names will be wrong.',
+    hint: 'A document can also be ready when the only doubts are about its type or its description, or when the model was unsure of its reading. It still waits for you when Intern could not confirm its date or a party from the document, when its name would have no document type, or when Intern could not read it.',
+    // On a line of its own, in the body's color: it is what the choice
+    // costs, and at the end of the paragraph above it was easy to miss.
+    cost: 'So more documents can be renamed without you looking at them, and more of those names will be wrong.',
   },
 ];
 
@@ -45,7 +48,7 @@ export function ReviewLevelChoice({ level, onChange }: Props) {
     <p className="check-hint" id={`${id}-lead`}>Ready documents are the ones Rename all ready renames. With automatic renaming on, below, Intern renames them by itself.</p>
     {CHOICES.map((choice) => <label key={choice.value} className="check-label">
       <input type="radio" name="review-level" value={choice.value} checked={level === choice.value} onChange={() => onChange(choice.value)} />
-      <span>{choice.label}<span className="check-hint">{choice.hint}</span></span>
+      <span>{choice.label}<span className="check-hint">{choice.hint}</span>{choice.cost && <span className="check-hint review-level-cost">{choice.cost}</span>}</span>
     </label>)}
     <p className="check-hint" id={`${id}-quick`}>At either level, a document the quick model read always waits for you.</p>
   </fieldset>;

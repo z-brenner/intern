@@ -829,8 +829,10 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       if (validateFilename(name, filenameExtension(item.originalFilename)) !== undefined) throw { code: 'NAME_INVALID', message: 'approved filename must preserve the source extension' };
       if (item.status !== 'review' && item.status !== 'ready') throw { code: 'INVALID_TRANSITION', message: 'proposal is not reviewable' };
       // A name a person approved is theirs: Settings' organization names no
-      // longer recompose it.
+      // longer recompose it. Nor is it judged by the seeded reading again:
+      // undone, it waits for the undo, at either level.
       composedNames.delete(id);
+      readings.delete(id);
       // Pipeline::complete_already_named: filed in its own folder (no
       // destination, flat), a name that is already the document's has
       // nowhere to go. It completes as kept, with nothing to undo, and says
