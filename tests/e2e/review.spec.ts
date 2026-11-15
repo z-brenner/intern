@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { Locator, Page } from '@playwright/test';
-import { detailsToggle, openDetails, queueCell } from './grid';
+import { detailsToggle, openDetails, queueCell, untilSettled } from './grid';
 
 /*
   The review panel scrolls under its decision - Approve & rename, Keep
@@ -481,6 +481,8 @@ for (const [label, first, second] of [['a wide panel closed by a narrower window
     expect(await statuses()).toEqual(before);
 
     // Done takes it away; the focus goes to the view's own button, where Enter files nothing.
+    // Its note came by itself, so the press is not made at once (untilSettled).
+    await untilSettled(page);
     await page.getByRole('button', { name: 'Done', exact: true }).click();
     await expect(kept).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^Queue, \d+$/ })).toBeFocused();
@@ -656,6 +658,8 @@ for (const size of [WIDE, NARROW]) for (const how of ['read again', 'filed elsew
       await expect(page.locator('#review-panel')).toHaveCount(0);
       await expect(page.getByRole('group', { name: `Kept from ${LEASE}` })).toContainText('left the queue while you were in its name or description');
       await expect(page.locator('.queue-grid tr[aria-current="true"]')).toHaveCount(0);
+      // The note came by itself, so the press on its button is not made at once (untilSettled).
+      await untilSettled(page);
       await page.getByRole('button', { name: 'Done', exact: true }).click();
       await expect(kept).toHaveCount(0);
       await expect(page.getByRole('button', { name: /^Queue, \d+$/ })).toBeFocused();

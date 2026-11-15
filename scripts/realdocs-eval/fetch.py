@@ -19,7 +19,11 @@ bodies, public bodies of five other countries, universities and archives, gather
 written so far, with gold second-read by an independent reader; or sample-heldout6.json, the seventh,
 55 letters, notices, invoices, forms, memoranda, minutes, statements, contracts and receipts from
 42 hosts in ten countries, none used by an earlier sample, gathered after the rules of alpha.17
-and the review gate's choice, with gold second-read by three readers and adjudicated. A live
+and the review gate's choice, with gold second-read by three readers and adjudicated; or
+sample-heldout7.json, the eighth, 55 letters, notices, invoices, forms, memoranda, contracts,
+minutes, statements, a purchase order and a report from 45 hosts in seven countries and bodies of
+the European Union, none used by an earlier sample, gathered after the rules of alpha.18, with
+gold second-read blind and adjudicated. A live
 run then records and scores it like any corpus, with InternBench's own filename score:
 
     CORPUS=OUT_DIR/corpus GOLD=OUT_DIR/gold.json MANIFEST= MODEL=... LLAMA_SERVER=... \\

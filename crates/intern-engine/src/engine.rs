@@ -41,7 +41,7 @@ use crate::naming::compose_filename;
 use crate::profile::PromptProfile;
 use crate::prompt::build_evidence_request;
 use crate::retrieve::{EvidenceContext, RetrievalConfig, retrieve};
-use crate::validate::validate;
+use crate::validate::{stated_only_by_volatile_formulas, validate};
 
 /// Below this much extracted text, a document is treated as unreadable rather
 /// than analyzed on the strength of a few stray characters.
@@ -385,7 +385,8 @@ impl Engine {
         })
     }
 
-    /// The checks that follow validation in both pipelines: a page that
+    /// The checks that follow validation in both pipelines: a date that
+    /// only a spreadsheet's TODAY or NOW formula shows, a page that
     /// yielded almost no text, and the model's own token probabilities
     /// when a threshold is set.
     fn apply_gates(
@@ -394,6 +395,20 @@ impl Engine {
         source: &DocumentSource,
         token_confidence: Option<TokenConfidence>,
     ) {
+        // Validation found the date in the text, and the text is all it
+        // reads. What the worker says beside the text is read here: where
+        // every statement of the validated date is a cell whose formula
+        // calls TODAY or NOW, the date is one the workbook worked out from
+        // the day it was open, not one the document was given. The name
+        // keeps it, and a person says what the date is.
+        if let Some(date) = outcome.proposal.document_date.as_deref()
+            && stated_only_by_volatile_formulas(source, date)
+        {
+            if !outcome.reasons.contains(&ReviewReason::DateIsFormula) {
+                outcome.reasons.push(ReviewReason::DateIsFormula);
+            }
+            outcome.status = ProposalStatus::NeedsReview;
+        }
         if barely_readable(source) {
             // A page that yielded almost no text cannot support a
             // confident name, whatever the model returned about it.
@@ -1675,6 +1690,216 @@ mod tests {
         let digest =
             Engine::with_proposer(Box::new(NoModel::local())).with_pipeline(Pipeline::Digest);
         assert_eq!(digest.revalidate(&source, "pdf", &[], &stored), None);
+    }
+
+    /// An invoice kept as a workbook, as the worker renders its one sheet.
+    /// With `marked`, the worker has said beside the text that the cell
+    /// holding the date is a `=TODAY()` formula's; the text is the same
+    /// either way.
+    fn invoice_workbook(text: &str, marked: bool) -> DocumentSource {
+        let mut page = SourcePage::new(1, text, PageOrigin::Office);
+        if marked {
+            let at = text.find("2026-03-03").expect("the sheet shows the date");
+            page.volatile_spans = vec![(at, at + "2026-03-03".len())];
+        }
+        DocumentSource::from_pages(vec![page])
+    }
+
+    const INVOICE_SHEET: &str = "## Invoice\n\n\
+        | Halvorsen Fixture Works LLC |  |  |\n\
+        | --- | --- | --- |\n\
+        | INVOICE |  |  |\n\
+        | Invoice Date | 2026-03-03 |  |\n\
+        | Invoice No. | HF-2207 |  |\n\
+        | Bill To | Brackenridge Public Schools |  |\n\
+        | Shelving, 12 units | 2 | 1,480.00 |\n\
+        | Total Due | 2,960.00 |  |\n";
+
+    fn invoice_reply(lines: &[(String, String)]) -> String {
+        format!(
+            r#"{{"type_ids":["{}"],"type":"Invoice","date_ids":["{}"],"date":"2026-03-03","date_role":"invoice","parties":[{{"ids":["{}"],"name":"Halvorsen Fixture Works LLC","role":"issuer"}}],"subject_ids":["{}"],"subject":"shelving","confidence":0.9,"needs_review":false}}"#,
+            handle_of(lines, "INVOICE"),
+            handle_of(lines, "Invoice Date"),
+            handle_of(lines, "Halvorsen"),
+            handle_of(lines, "Shelving"),
+        )
+    }
+
+    /// The reasons of an analysis without the one the formula rule adds.
+    fn without_formula_reason(analysis: &DocumentAnalysis) -> Vec<ReviewReason> {
+        analysis
+            .review_reasons
+            .iter()
+            .copied()
+            .filter(|reason| *reason != ReviewReason::DateIsFormula)
+            .collect()
+    }
+
+    /// A workbook whose date cell holds `=TODAY()` shows the day it was
+    /// last saved, and every check of the text passes on it. Where the
+    /// worker has marked that cell and the validated date is stated
+    /// nowhere else, the name is the name it was and a person is asked,
+    /// with a reason of its own. The request is the same request - the
+    /// text is the same text - and a date the sheet also carries in a
+    /// typed cell is held for nothing.
+    #[test]
+    fn a_date_only_a_today_formula_shows_keeps_its_name_and_waits_for_a_person() {
+        let read = |source: &DocumentSource| {
+            Engine::with_proposer(Box::new(Reader(invoice_reply)))
+                .analyze(source, "xlsx", &[])
+                .unwrap()
+        };
+        let typed = read(&invoice_workbook(INVOICE_SHEET, false));
+        let computed = read(&invoice_workbook(INVOICE_SHEET, true));
+
+        assert_eq!(typed.status, ProposalStatus::Ready, "{typed:#?}");
+        assert_eq!(typed.review_reasons, []);
+        assert!(
+            typed.filename.starts_with("2026-03-03 "),
+            "{}",
+            typed.filename
+        );
+
+        assert_eq!(computed.status, ProposalStatus::NeedsReview);
+        assert_eq!(computed.review_reasons, [ReviewReason::DateIsFormula]);
+        // The code the review panel and the Check column look their
+        // sentences up by, and the word a stored analysis keeps.
+        assert_eq!(ReviewReason::DateIsFormula.as_str(), "DATE_IS_FORMULA");
+        assert_eq!(
+            serde_json::to_value(&computed.review_reasons).unwrap(),
+            serde_json::json!(["date_is_formula"])
+        );
+        assert_eq!(computed.filename, typed.filename);
+        assert_eq!(computed.proposal, typed.proposal);
+        assert_eq!(computed.model_proposal, typed.model_proposal);
+        assert_eq!(computed.stated_dates, typed.stated_dates);
+        assert_eq!(
+            computed.telemetry.request_sha256, typed.telemetry.request_sha256,
+            "what the worker says beside the text is no part of the request"
+        );
+
+        // The same date typed into another cell is the invoice's own.
+        let also_typed = format!("{INVOICE_SHEET}| Shipped | March 3, 2026 |  |\n");
+        let supported = read(&invoice_workbook(&also_typed, true));
+        assert_eq!(supported.status, ProposalStatus::Ready, "{supported:#?}");
+        assert_eq!(supported.review_reasons, []);
+
+        // A formula's cell that shows another date than the one chosen:
+        // the invoice date is typed, and a `=TODAY()` beside it is not it.
+        let printed = format!("{INVOICE_SHEET}| Printed | 2026-11-14 |  |\n");
+        let mut other = invoice_workbook(&printed, false);
+        let at = printed.find("2026-11-14").unwrap();
+        other.pages[0].volatile_spans = vec![(at, at + 10)];
+        let untouched = read(&other);
+        assert_eq!(untouched.status, ProposalStatus::Ready, "{untouched:#?}");
+        assert_eq!(untouched.review_reasons, []);
+    }
+
+    /// The reason is one more, never one instead: a reading that already
+    /// waits for something else keeps what it waited for, and gains this.
+    #[test]
+    fn the_formula_reason_joins_the_reasons_a_reading_already_has() {
+        fn doubtful_reply(lines: &[(String, String)]) -> String {
+            invoice_reply(lines).replace(r#""needs_review":false"#, r#""needs_review":true"#)
+        }
+        let read = |marked: bool| {
+            Engine::with_proposer(Box::new(Reader(doubtful_reply)))
+                .analyze(&invoice_workbook(INVOICE_SHEET, marked), "xlsx", &[])
+                .unwrap()
+        };
+        let (typed, computed) = (read(false), read(true));
+        assert_eq!(typed.status, ProposalStatus::NeedsReview);
+        assert!(!typed.review_reasons.is_empty());
+        assert!(!typed.review_reasons.contains(&ReviewReason::DateIsFormula));
+        assert_eq!(without_formula_reason(&computed), typed.review_reasons);
+        assert!(
+            computed
+                .review_reasons
+                .contains(&ReviewReason::DateIsFormula)
+        );
+        assert_eq!(computed.filename, typed.filename);
+    }
+
+    /// A reading stored before the worker marked such cells was made of
+    /// the same text, so the reply it kept answers the request a fresh
+    /// extraction builds: validated again against that extraction, with no
+    /// model asked, it now waits for a person under the same name.
+    #[test]
+    fn a_stored_reading_of_a_today_formulas_date_is_held_when_validated_again() {
+        let stored = Engine::with_proposer(Box::new(LocalReader {
+            answer: invoice_reply,
+            confidence: None,
+        }))
+        .analyze(&invoice_workbook(INVOICE_SHEET, false), "xlsx", &[])
+        .unwrap();
+        assert_eq!(stored.status, ProposalStatus::Ready, "{stored:#?}");
+
+        let unasked = Engine::with_proposer(Box::new(NoModel::local()));
+        let again = unasked
+            .revalidate(&invoice_workbook(INVOICE_SHEET, true), "xlsx", &[], &stored)
+            .expect("the same text, so the same request");
+        assert_eq!(again.status, ProposalStatus::NeedsReview);
+        assert_eq!(again.review_reasons, [ReviewReason::DateIsFormula]);
+        assert_eq!(again.filename, stored.filename);
+        assert_eq!(again.model_proposal, stored.model_proposal);
+
+        // Against the extraction it was read from, it is what it was.
+        let same = unasked
+            .revalidate(
+                &invoice_workbook(INVOICE_SHEET, false),
+                "xlsx",
+                &[],
+                &stored,
+            )
+            .expect("the same request");
+        assert_eq!(same.status, ProposalStatus::Ready);
+        assert_eq!(same.review_reasons, []);
+    }
+
+    /// The digest pipeline a hosted model is read through validates dates
+    /// its own way, and the same check follows it.
+    #[test]
+    fn the_digest_pipeline_holds_a_date_only_a_today_formula_shows() {
+        struct Invoiced;
+        impl Proposer for Invoiced {
+            fn propose(
+                &self,
+                _request: &ModelRequest,
+            ) -> EngineResult<crate::domain::ModelProposal> {
+                Ok(crate::domain::ModelProposal {
+                    document_type: Some("Invoice".into()),
+                    document_date: Some("2026-03-03".into()),
+                    date_role: Some(crate::domain::DateRole::Invoice),
+                    parties: vec!["Halvorsen Fixture Works LLC".into()],
+                    party_relation: crate::domain::PartyRelation::From,
+                    description: "Invoice HF-2207 from Halvorsen Fixture Works LLC for shelving."
+                        .into(),
+                    confidence: 0.9,
+                    needs_review: false,
+                    evidence: crate::domain::Evidence {
+                        date: Some("| Invoice Date | 2026-03-03 |  |".into()),
+                        document_type: Some("| INVOICE |  |  |".into()),
+                        parties: vec!["Halvorsen Fixture Works LLC".into()],
+                    },
+                    facts: None,
+                })
+            }
+        }
+        let read = |marked: bool| {
+            Engine::with_proposer(Box::new(Invoiced))
+                .with_pipeline(Pipeline::Digest)
+                .analyze(&invoice_workbook(INVOICE_SHEET, marked), "xlsx", &[])
+                .unwrap()
+        };
+        let (typed, computed) = (read(false), read(true));
+        assert_eq!(typed.status, ProposalStatus::Ready, "{typed:#?}");
+        assert_eq!(computed.status, ProposalStatus::NeedsReview);
+        assert_eq!(computed.review_reasons, [ReviewReason::DateIsFormula]);
+        assert_eq!(computed.filename, typed.filename);
+        assert_eq!(
+            computed.telemetry.request_sha256,
+            typed.telemetry.request_sha256
+        );
     }
 
     /// The digest pipeline, asked for, sends the digest prompt under the

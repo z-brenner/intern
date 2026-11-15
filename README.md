@@ -65,7 +65,7 @@ extraction nor OCR can read goes to review rather than being guessed at.
 
 ## Install and first run
 
-Windows 10 or 11, x86-64. Download `Intern_0.1.0-alpha.18_x64-setup.exe` from the
+Windows 10 or 11, x86-64. Download `Intern_0.1.0-alpha.19_x64-setup.exe` from the
 [latest release](https://github.com/z-brenner/intern/releases/latest) and run it;
 earlier versions are on the [releases page](https://github.com/z-brenner/intern/releases).
 It installs per-user, so it does not ask for administrator rights, and
@@ -86,7 +86,7 @@ carries a keyless Sigstore build-provenance attestation naming the repository,
 workflow, and commit that produced those exact bytes:
 
 ```sh
-gh attestation verify Intern_0.1.0-alpha.18_x64-setup.exe --repo z-brenner/intern \
+gh attestation verify Intern_0.1.0-alpha.19_x64-setup.exe --repo z-brenner/intern \
   --signer-workflow z-brenner/intern/.github/workflows/release.yml
 ```
 
@@ -177,18 +177,57 @@ Clicking a row selects it; the **Details** button above the table opens the
 review panel for the selected row, and it stays open, following the selection,
 until it is closed. A name or a description typed there and not filed stays
 with its document - through closing the panel, making the window narrower or
-wider, and going on to other documents - until you file the document, decide
-it some other way, have it read again, or close Intern. If the document
-changes by itself meanwhile - Intern reads it again, or another computer
-files it - the panel
+wider, going on to other documents, and closing Intern - until you file the
+document, decide it some other way, have it read again, or take it back. If
+the document changes by itself meanwhile - Intern reads it again, or another
+computer files it - the panel
 shows it as it now is, and what you had typed is kept beside it, read-only,
 until you discard it. If that happens while you are typing, or the panel
 closes under the cursor, the cursor stays in what you had typed: nothing typed
 after that is taken as a command, Tab included, until you press Escape or
-click (two rare cases aside, which the alpha.18 release notes give).
+click (two rare cases aside, which the alpha.18 release notes give). A click
+or a tap does nothing on a button that acts - Approve & rename, Keep
+original, Rename all ready, a Discard, an Undo - when that button came under
+the pointer less than half a second before, as it can when the window
+changes by itself while your hand is on its way. Nothing on screen says the
+click was not taken: look at what is under the pointer now, then click
+again. Once the half second has passed, a click there acts on whatever is
+there, whether or not it is what you first meant to press; sooner, it does
+nothing again, and so does a click made within about a third of a second of
+one that was not taken, so clicking fast gets nothing until you stop for a
+moment. In a tall window the next document's buttons can be drawn in
+another place than the last one's, and a click on them less than half a
+second after they show is not taken either. This was tried in the browser
+build of the window; nobody has yet run the Windows app's own window with it.
 **Back to Intern's proposal**, above the name while it differs, drops what
 you typed for a document. **Rename all ready** leaves alone a ready
 document whose name or description you typed and did not file, and says so.
+What you typed and did not file is stored as you type it, on this computer
+only, in the window's own storage, and is there when Intern is opened again.
+It is back in the fields only when Intern can tell that its window was
+closed in the ordinary way - the window notes that in the same storage as
+it closes - and the document still has the reading you typed over.
+Otherwise it is beside the document, read-only, for you to copy from or
+discard: when the document was read again while Intern was closed, and
+whenever that note is missing. It is missing after Intern was killed, or
+the computer lost power or was shut down with Intern open; and after
+**Quit Intern** in the notification area or the restart an update makes,
+which end Intern without closing its window (where Intern keeps running in
+the background, closing the window only hides it, and Quit is the one way
+out). Whether the Windows app leaves the note when its window is closed in
+the ordinary way has not been observed yet: until it has, expect what you
+typed beside the document rather than in its fields. After an end that was
+not ordinary, what you typed in the last half minute or more can be
+missing, and a name you had taken back or filed can be there again, beside
+the document. One case can still put an older name back in its field:
+Intern closed in the ordinary way, opened again, a name taken back in the
+first seconds after opening (5 seconds, measured in the browser build; no
+longer at 9), and Intern killed at once. Look at a name that came back
+before you file it. The cursor is put in no field for what comes back. What
+was typed for a document that is no longer in the queue is dropped, and
+**Discard waiting** and **Clear history** drop it at once for the documents
+they remove. A name longer than 1,000 characters or a description longer
+than 5,000 is not stored, and lasts only while Intern is open.
 In a window narrower than 1100 pixels the panel is a drawer over the queue,
 and it opens only when you ask for it there. Everything still in progress is
 in **Queue**, with a count of what needs review in its toolbar. The table selects cells like a
@@ -256,7 +295,7 @@ themselves. Install a package from a CI run's `intern-linux-…` artifact, or
 build one, with apt:
 
 ```sh
-sudo apt install ./Intern_0.1.0-alpha.18_amd64.deb
+sudo apt install ./Intern_0.1.0-alpha.19_amd64.deb
 ```
 
 apt brings what it depends on (WebKitGTK, AppIndicator, `tesseract-ocr`,
@@ -622,7 +661,7 @@ from a release that put a build there deletes it (the installer hooks,
 Tauri produces a per-user NSIS installer. To smoke-test a clean installer:
 
 ```powershell
-./scripts/smoke-installer.ps1 -InstallerPath target/release/bundle/nsis/Intern_0.1.0-alpha.18_x64-setup.exe
+./scripts/smoke-installer.ps1 -InstallerPath target/release/bundle/nsis/Intern_0.1.0-alpha.19_x64-setup.exe
 ```
 
 The smoke test also starts the installed server with `--version` from its own

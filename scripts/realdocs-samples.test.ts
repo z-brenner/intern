@@ -46,6 +46,7 @@ async function samples(): Promise<[string, Document[]][]> {
   expect(names).toContain('sample-heldout4.json');
   expect(names).toContain('sample-heldout5.json');
   expect(names).toContain('sample-heldout6.json');
+  expect(names).toContain('sample-heldout7.json');
   return Promise.all(
     names.map(async (name): Promise<[string, Document[]]> => {
       const sample = JSON.parse(await readFile(`${SAMPLES}/${name}`, 'utf8'));

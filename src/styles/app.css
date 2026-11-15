@@ -630,6 +630,13 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .setup-screen button:disabled { opacity: .65; cursor: wait; }
 .setup-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
 .setup-screen .setup-error { padding: 11px 13px; border: 1px solid var(--failed-edge); border-radius: var(--radius-sm); color: var(--failed-text); background: var(--failed-surface); }
+/* A press that is refused shows nothing (src/lib/aimedPress.ts). The browser
+   draws a button with no border of its own pressed in, an inset border, for
+   as long as a mouse button is held on it, taken or not: of the controls
+   that act, the kept text's button and the two under a suggested date. They
+   keep the border they have at rest. `:where` gives this no weight, so a
+   button that has a border of its own keeps that one. */
+:where([data-acts]:active) { border-style: outset; }
 .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 
 @keyframes spin { to { transform: rotate(360deg); } }

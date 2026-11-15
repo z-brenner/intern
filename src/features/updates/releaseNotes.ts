@@ -3,6 +3,20 @@ export interface ReleaseNotes { version: string; changes: readonly string[] }
 
 export const releaseNotes: readonly ReleaseNotes[] = [
   {
+    version: '0.1.0-alpha.19',
+    // Shown whole in a dialog that must not scroll at the app's smallest
+    // window, 800 by 600 (tests/e2e/updates.spec.ts): short lines, the rest
+    // in docs/releases/v0.1.0-alpha.19.md. That holds for these lines alone.
+    // Shown after alpha.18's eight to someone who skipped that release, the
+    // dialog scrolls there (165 pixels over, measured), as it did for anyone
+    // who skipped a release before this one.
+    changes: [
+      'A spreadsheet date worked out by a TODAY or NOW formula waits for your check.',
+      'A click on a button that came under the pointer less than half a second ago does nothing: look, then click again.',
+      'What you typed in review and did not file is kept when Intern closes. It can come back beside the document, read-only.',
+    ],
+  },
+  {
     version: '0.1.0-alpha.18',
     // Shown whole in a dialog that must not scroll at the app's smallest
     // window, 800 by 600 (tests/e2e/updates.spec.ts): eight lines of two

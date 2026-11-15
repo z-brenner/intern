@@ -134,6 +134,7 @@ fn document() -> ExtractedDocument {
                     signals: signals(),
                     blocks,
                 }),
+                volatile_spans: Vec::new(),
             }
         })
         .collect();
@@ -178,6 +179,60 @@ fn every_layout_the_worker_writes_reaches_the_engine_whole() {
     assert!(structured.block("p4.b5").is_some());
 }
 
+/// The stretches of a sheet's text that a TODAY or NOW formula worked out
+/// reach the engine as the worker wrote them, on the page they belong to.
+/// A page with none is written without the field, so the line for every
+/// document without such a cell is the line it always was, and an engine
+/// reading a line without the field has none.
+#[test]
+fn the_marked_stretches_of_a_sheet_reach_the_engine_on_their_page() {
+    let page = |page_number: usize, text: &str, volatile_spans: Vec<(usize, usize)>| {
+        let mut page = ExtractedPage::of_text(page_number, text.to_owned(), PageSource::AnyDoc);
+        page.volatile_spans = volatile_spans;
+        page
+    };
+    let sent = ExtractedDocument {
+        pages: vec![
+            page(1, "| DATE | 2026-03-03 |\n| --- | --- |\n", vec![(9, 19)]),
+            page(2, "| Terms | Net 30 |\n| --- | --- |\n", Vec::new()),
+        ],
+        warnings: Vec::new(),
+        truncated: false,
+        optional_image: None,
+        timings: None,
+    };
+    let line = serde_json::to_string(&Response::new(
+        "contract",
+        Event::Parsed {
+            document: sent.clone(),
+        },
+    ))
+    .unwrap();
+    assert_eq!(line.matches("volatile_spans").count(), 1, "{line}");
+    assert!(line.contains(r#""volatile_spans":[[9,19]]"#), "{line}");
+
+    let response = intern_engine::worker::decode_worker_response(&line).unwrap();
+    let intern_engine::worker::WorkerEvent::Parsed { document } = response.event else {
+        panic!("not a parsed event: {line}");
+    };
+    let source = intern_engine::worker::adapt_document(document).unwrap();
+    assert_eq!(source.pages[0].volatile_spans, [(9, 19)]);
+    assert_eq!(
+        &source.pages[0].text[9..19],
+        "2026-03-03",
+        "the range is of the text the engine holds"
+    );
+    assert!(source.pages[1].volatile_spans.is_empty());
+
+    // What the engine stores of the two pages - in a recording, say -
+    // carries the field on the one and nothing on the other, and reads
+    // back the same.
+    let stored = serde_json::to_string(&source).unwrap();
+    assert_eq!(stored.matches("volatile_spans").count(), 1, "{stored}");
+    let read_back: intern_engine::DocumentSource = serde_json::from_str(&stored).unwrap();
+    assert_eq!(read_back, source);
+}
+
 /// A page the worker found blank goes out with no confidence, and the host
 /// raises no doubt for it. A page OCR read nothing on that is not blank
 /// goes out at 0, and the host raises `LOW_OCR_CONFIDENCE` for it, from the
@@ -192,6 +247,7 @@ fn the_host_doubts_a_page_read_as_nothing_only_if_it_is_not_blank() {
             ocr_confidence,
             vision_escalated: false,
             layout: None,
+            volatile_spans: Vec::new(),
         };
         let sent = ExtractedDocument {
             pages: vec![

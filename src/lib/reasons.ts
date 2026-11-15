@@ -84,6 +84,12 @@ const SENTENCES: Record<string, string> = {
   // not the day it was issued (ReviewReason::DateIsPeriod). The name keeps
   // the date.
   DATE_IS_PERIOD: 'The date is written only as the start or end of a period, such as a billing or service period. Check which date the document itself carries.',
+  // A workbook whose chosen date stands only in cells whose formula calls
+  // TODAY or NOW: an invoice template's "DATE" over =TODAY(), a quote's
+  // =TODAY()+30. The cell shows what the formula worked out when the file
+  // was last saved, and the text Intern read is that value, so every other
+  // check passes (ReviewReason::DateIsFormula). The name keeps the date.
+  DATE_IS_FORMULA: 'The date comes from a spreadsheet formula that uses today\'s date, so it can change each time the file is opened. Check which date the document should carry.',
   // The quick model read it. Its readings are never filed on their own; the
   // accurate model reads the document again when it can, unless a person has
   // acted on it first.
@@ -263,6 +269,7 @@ const SHORT: Record<string, string> = {
   DATE_AMBIGUOUS: 'Date could be day- or month-first',
   DATE_IS_DEADLINE: 'Date is a deadline',
   DATE_IS_PERIOD: 'Date is a period\'s start or end',
+  DATE_IS_FORMULA: 'Date comes from a formula',
   DATE_IMPLAUSIBLE: 'Year looks wrong',
   TYPE_MISSING: 'No document type',
   TYPE_UNSUPPORTED: 'Type uncertain',
