@@ -11678,6 +11678,113 @@ fn approving_a_parked_document_the_check_finishes_says_what_it_is_filed_as() {
     assert!(!paths[2].exists());
 }
 
+/// A rename automatic renaming started, left with its original undeleted.
+/// A person who then approves exactly the name and sentence it was filing
+/// has approved what is filed, and the record says so, as every other
+/// approval's does: the window reads an unapproved record on a filed
+/// document as a rename nobody approved, and offered to undo the person's
+/// own approval. Its notes go with the approval, so a Balanced filing is no
+/// longer "Completed with a note". One the person approved with changes was
+/// refused (ALREADY_FILED), and one finished by Check again had no approval:
+/// both are still nobody's.
+#[test]
+fn approving_exactly_what_a_parked_rename_by_itself_was_filing_is_an_approval() {
+    let temp = tempdir().unwrap();
+    let folders = ["a", "b", "c"].map(|folder| {
+        let folder = temp.path().join(folder);
+        fs::create_dir_all(&folder).unwrap();
+        folder
+    });
+    let paths = [
+        source(&folders[0], "scan.pdf"),
+        source(&folders[1], "letter.pdf"),
+        source(&folders[2], "note.pdf"),
+    ];
+    let filesystem = Arc::new(UndeletableOriginalFileSystem::default());
+    let pipeline = reviewed_queue(temp.path(), filesystem.clone(), 3);
+    SettingsStore::new(temp.path().join("settings.json"))
+        .save(&AppSettings {
+            automatic_rename: true,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    filesystem.refuse.store(true, Ordering::SeqCst);
+    let ids = pipeline
+        .enqueue_files(&paths)
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    for &id in &ids {
+        let parked = item_of(&pipeline, id);
+        assert_eq!(parked.status, QueueStatus::NeedsReview, "{id}");
+        assert_eq!(
+            parked.error_code,
+            Some(ErrorCode::SourceDeleteFailed),
+            "{id}"
+        );
+        assert!(!parked.proposal.unwrap().approved, "{id}");
+    }
+    filesystem.refuse.store(false, Ordering::SeqCst);
+    let approved = |id: i64| {
+        let item = item_of(&pipeline, id);
+        assert_eq!(item.status, QueueStatus::Completed, "{id}");
+        assert!(item.filed_receipt.is_some(), "{id}");
+        item.proposal.unwrap().approved
+    };
+
+    // A note on the reading, as Balanced files one by itself with it.
+    let database = Connection::open(temp.path().join("queue.sqlite3")).unwrap();
+    let stored: String = database
+        .query_row(
+            "SELECT proposal_json FROM proposals WHERE queue_item_id = ?1",
+            [ids[0]],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut noted: Value = serde_json::from_str(&stored).unwrap();
+    noted["reasons"] = json!(["TYPE_INFERRED"]);
+    database
+        .execute(
+            "UPDATE proposals SET proposal_json = ?1 WHERE queue_item_id = ?2",
+            rusqlite::params![noted.to_string(), ids[0]],
+        )
+        .unwrap();
+
+    // The name and sentence the window showed, approved as they were.
+    let shown = item_of(&pipeline, ids[0]).proposal.unwrap();
+    assert_eq!(shown.reasons, ["TYPE_INFERRED"]);
+    pipeline
+        .approve(ids[0], &shown.filename, &shown.description)
+        .unwrap();
+    assert!(
+        approved(ids[0]),
+        "the person's approval is not on the record"
+    );
+    assert_eq!(
+        item_of(&pipeline, ids[0]).proposal.unwrap().reasons,
+        Vec::<String>::new(),
+        "approving clears the notes, as every approval does"
+    );
+    assert!(folders[0].join(&shown.filename).exists());
+
+    // Approved with a name of the person's own: refused, not applied.
+    let refused = pipeline
+        .approve(
+            ids[1],
+            "2024-04-12 Employment Agreement with Acme.pdf",
+            "An employment agreement.",
+        )
+        .unwrap_err();
+    assert_eq!(refused.code, "ALREADY_FILED");
+    assert!(!approved(ids[1]));
+
+    // Finished by Check again: no approval at all.
+    pipeline.retry(ids[2]).unwrap();
+    assert!(!approved(ids[2]));
+}
+
 /// A rename an older build left planned, beside a document read again since
 /// and sent to review - the model asked for a person. Checking it again
 /// rolls the rename back, and used to leave the document ready: with

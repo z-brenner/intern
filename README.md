@@ -510,7 +510,11 @@ would let it rename such a document - turning on automatic renaming while
 one is ready, or choosing Balanced with automatic renaming on while one
 waits - Settings says how many above **Save**. Save anyway, and Intern can
 rename them under its own names; what you typed stays beside each document,
-read-only, and is not filed. Nothing else on screen says it happened.
+read-only, and is not filed. When Intern renames such a document while the
+window is open, with nobody approving it, a message says so and offers
+**Undo** for that rename. After a save that changes the level, a message
+says how many documents waiting in the queue became ready, or went back to
+review.
 
 An earlier release does not know the levels and treats a ready document with
 a note as ready. Choose Strict before going back to one.

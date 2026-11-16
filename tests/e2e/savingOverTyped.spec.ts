@@ -169,7 +169,9 @@ test('Settings warns before a save that lets Intern rename a document with a nam
   await expect(settings.dialog).toBeHidden();
   await expect(queueCell(page, LEASE, 'status')).toHaveText('Ready with a note');
   await expect(page.getByRole('button', { name: 'Completed, 1' })).toBeVisible();
-  await expect(page.locator('.toasts')).toHaveCount(0);
+  // What the save did is said, and nothing says a document was renamed.
+  await expect(page.locator('.toasts')).toHaveText('The review level is now Balanced. 1 document that needed review became ready. With automatic renaming on, Intern renames it by itself.');
+  await expect(page.getByRole('group', { name: 'Renamed without you' })).toHaveCount(0);
   const leaseAgain = await openDetails(page, LEASE);
   await expect(leaseAgain.getByLabel('Filename')).toHaveValue('2023-09-15 Lease of 123 Main St');
   const employmentAgain = await openDetails(page, EMPLOYMENT);

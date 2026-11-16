@@ -88,6 +88,9 @@ interface QueueItemDto {
   filedPath?: string | null;
   filedName?: string | null;
   keptOriginal?: boolean;
+  // Filed here by Intern with nobody's approval. An older backend omits it,
+  // and the window then says of no rename that it was made without anyone.
+  renamedWithoutApproval?: boolean;
   parked?: boolean;
   omittedParties?: string[];
   // In review: the other parties the document names, and the words of the
@@ -636,6 +639,7 @@ function normalizeItem(item: QueueItemDto): QueueItem {
     ...(typeof item.filedName === 'string' && item.filedName ? { filedName: item.filedName } : {}),
     ...(typeof item.filedPath === 'string' && item.filedPath ? { filedPath: item.filedPath } : {}),
     ...(item.keptOriginal === undefined ? {} : { keptOriginal: item.keptOriginal }),
+    ...(status === 'completed' && item.renamedWithoutApproval === true ? { renamedWithoutApproval: true } : {}),
     ...(item.parked === undefined ? {} : { parked: item.parked }),
     ...(item.progress === undefined ? {} : { progress: item.progress }),
     ...(status === 'processing' ? { cancelable: item.status !== 'applying' } : {}),

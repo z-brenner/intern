@@ -34,6 +34,17 @@ export interface QueueItem {
   /** Completed without a rename: the document kept the name it arrived with. */
   keptOriginal?: boolean;
   /**
+   * Completed, renamed by Intern on this computer under its own proposal,
+   * with nobody's approval: automatic renaming. The backend says it; a name
+   * a person approved is not marked once the backend has carried out their
+   * approval, however its filing was finished. A read made while an
+   * approval of exactly what Intern was filing by itself is carried out can
+   * find it marked, so the window judges no document while a decision of
+   * the person's on it is carried out (watchRenames). Absent on any other
+   * row, and from an older backend.
+   */
+  renamedWithoutApproval?: boolean;
+  /**
    * A rename stopped part-way and its files need checking: "Check again" is
    * what moves it on. Keep, cancel and Analyze again are refused until then,
    * and removing it needs the person to say they sorted the files out

@@ -80,9 +80,9 @@ test('choosing Balanced in Settings makes the lease ready with a note, the choic
   await expect(panel.getByRole('button', { name: 'Keep original' })).toBeVisible();
   // The note is in sight without scrolling for it, above the name.
   await expect(note).toBeInViewport({ ratio: 1 });
-  // Nothing was renamed by any of this.
+  // Nothing was renamed by any of this, and nothing is on screen but what the save did, while it stays (saidAfterwards.spec).
   await expect(page.getByRole('button', { name: 'Completed, 1' })).toBeVisible();
-  await expect(page.locator('.toasts')).toHaveCount(0);
+  await expect(page.locator('.toasts > *').filter({ hasNotText: 'The review level is now Balanced. 1 document that needed review became ready. Rename all ready renames it.' })).toHaveCount(0);
 
   // The choice is kept.
   settings = await levelInSettings(page);

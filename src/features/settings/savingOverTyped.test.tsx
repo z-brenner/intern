@@ -763,7 +763,8 @@ describe('the count over rows as the desktop backend sends them', () => {
   sends them (`sentRow`: every key it always sends, null where it has
   nothing), read through TauriBridge, with the backend's part played out by
   hand: judged again as ready, renamed under Intern's name with its reasons
-  kept, and an undo that puts it back in review. No backend ran.
+  kept and marked as renamed with nobody's approval (renamedWithoutApproval),
+  and an undo that puts it back in review. No backend ran.
 */
 describe('a document Intern renamed by itself while it had something typed', () => {
   const TYPED_NAME = '2025-05-01 Letter to Halvorsen about the fixtures';
@@ -796,14 +797,14 @@ describe('a document Intern renamed by itself while it had something typed', () 
       // As an undone rename is left: back under its own name, waiting, with UNDONE beside what it carried.
       undo: vi.fn(async (id: string) => {
         const row = sent.find((each) => each.id === id)!;
-        change(Number(row.id), { status: 'needs_review', reason: [row.reason, 'UNDONE'].filter(Boolean).join(', '), filedName: null, filedPath: null, undoable: false });
+        change(Number(row.id), { status: 'needs_review', reason: [row.reason, 'UNDONE'].filter(Boolean).join(', '), filedName: null, filedPath: null, undoable: false, renamedWithoutApproval: false });
       }),
       subscribeQueue: (listener: Parameters<QueueEventSource['subscribeQueue']>[0]) => { queueChanged = () => listener({ type: 'changed' }); return base.subscribeQueue(listener); },
     };
     /** The backend does something with nobody asking, and says the queue changed. */
     const byItself = async (run: () => void) => { run(); await act(async () => { queueChanged(); await new Promise((resolve) => setTimeout(resolve, 0)); }); };
     const renaming = (id: number) => change(id, { status: 'applying' });
-    const renamed = (id: number) => { const row = sent.find((each) => each.id === String(id))!; change(id, { status: 'completed', filedName: row.proposedFilename, filedPath: `C:\\Filed\\${String(row.proposedFilename)}`, keptOriginal: false, undoable: true }); };
+    const renamed = (id: number) => { const row = sent.find((each) => each.id === String(id))!; change(id, { status: 'completed', filedName: row.proposedFilename, filedPath: `C:\\Filed\\${String(row.proposedFilename)}`, keptOriginal: false, undoable: true, renamedWithoutApproval: true }); };
     render(<App bridge={bridge} />);
     await screen.findByRole('grid', { name: 'Queue' });
     return { bridge, byItself, renaming, renamed };
@@ -849,8 +850,8 @@ describe('a document Intern renamed by itself while it had something typed', () 
     expect(kept()[0]).toHaveValue(`${TYPED_NAME}\n\n${TYPED_SENTENCE}`);
     expect(panel).toContainElement(kept()[0]);
     expect(within(panel).getByRole('group', { name: 'Kept from before this document changed' })).toHaveTextContent('They are kept here as you had them, name first, and nothing here is filed.');
-    // Nothing else on screen says it happened: no result, and nothing above the queue.
-    expect(document.querySelector('.toasts')).toBeNull();
+    // The window says it happened, where it says what an action did, and keeps nothing above the queue.
+    expect(screen.getByRole('group', { name: 'Renamed without you' })).toHaveTextContent("Scan 0601.pdf was renamed under Intern's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.");
     expect(screen.queryByRole('group', { name: /^Kept from Scan/ })).not.toBeInTheDocument();
 
     // It is with the document wherever that is listed: in Completed, opened again.
@@ -861,7 +862,7 @@ describe('a document Intern renamed by itself while it had something typed', () 
     expect(within(filed).getByRole('button', { name: 'Undo' })).toBeEnabled();
   });
 
-  it('says nothing when the document is not on screen, keeps what was typed all the same, and still has it after Undo: a ready one, by way of automatic renaming', async () => {
+  it('says so when the document is not on screen, keeps what was typed all the same, and still has it after Undo: a ready one, by way of automatic renaming', async () => {
     const { bridge, byItself, renamed } = await start();
     const panel = await openDetails('Scan 0602.pdf');
     fireEvent.change(within(panel).getByLabelText('Filename'), { target: { value: '2025-05-02 Invoice 4471 from Brightwater' } });
@@ -871,8 +872,9 @@ describe('a document Intern renamed by itself while it had something typed', () 
     expect(await saveWith((dialog) => { fireEvent.click(automatic(dialog)); })).toBe(ONE);
     await byItself(() => renamed(32));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Completed, 1' })).toBeInTheDocument());
-    // No word of it anywhere: the document has only left the queue for Completed.
-    expect(document.querySelector('.toasts')).toBeNull();
+    // Said where the outcome of an action is; nothing else: the document has only left the queue for Completed.
+    expect(screen.getByRole('group', { name: 'Renamed without you' })).toHaveTextContent("Scan 0602.pdf was renamed under Intern's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.");
+    expect([...document.querySelector('.toasts')!.children].map((each) => each.getAttribute('aria-label'))).toEqual(['Renamed without you']);
     expect(kept()).toHaveLength(0);
     expect(screen.queryByRole('group', { name: /^Kept from/ })).not.toBeInTheDocument();
 
@@ -885,6 +887,8 @@ describe('a document Intern renamed by itself while it had something typed', () 
     fireEvent.click(within(filed).getByRole('button', { name: 'Undo' }));
     await waitFor(() => expect(bridge.undo).toHaveBeenCalledWith('32'));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Completed, 0' })).toBeInTheDocument());
+    // No longer renamed, so no longer said to be.
+    expect(screen.queryByRole('group', { name: 'Renamed without you' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^Queue, / }));
     const again = await openDetails('Scan 0602.pdf');
     expect(queueCell('Scan 0602.pdf', 'status')).toHaveTextContent('Needs review');

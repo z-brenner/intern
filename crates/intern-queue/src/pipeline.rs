@@ -5957,6 +5957,12 @@ impl Pipeline {
     /// document still filed under the old name, with the new name and
     /// sentence dropped and nothing learned from them. Renaming a filed
     /// document is an undo and a new approval, and the refusal says so.
+    ///
+    /// An approval taken as done is the person's approval of what is filed,
+    /// and the record says so, as every approval's does. The earlier rename
+    /// can be one automatic renaming started: its record, never approved,
+    /// told the window the document was renamed with nobody's approval, and
+    /// the window offered to undo the person's own.
     fn already_filed(
         &self,
         item: &QueueItem,
@@ -5981,7 +5987,7 @@ impl Pipeline {
                     && record.description == description.trim()
             });
         if unchanged {
-            return Ok(());
+            return self.repository.approve_filed(item.id);
         }
         let filed_as = filed_name.unwrap_or_else(|| {
             item.source_path
@@ -7422,6 +7428,50 @@ impl PipelineRepository {
         if updated != 1 {
             return Err(PipelineError::new("INVALID_DATA", "proposal is missing"));
         }
+        transaction.commit().map_err(database_error)
+    }
+
+    /// Marks the record of item `id`, filed already, approved by a person:
+    /// they approved exactly the name and sentence it is filed under
+    /// ([`Pipeline::already_filed`]). Its notes go, as every approval's do
+    /// ([`Self::approve_user_edit`]); the name, the sentence and the
+    /// revision stay as they are. Only while the row is completed, read in
+    /// the same transaction: an undo since stands, and a document with no
+    /// record has nothing to mark.
+    fn approve_filed(&self, id: i64) -> PipelineResult<()> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(database_error)?;
+        let json = transaction
+            .query_row(
+                "SELECT proposal_json FROM proposals
+                 JOIN queue_items ON queue_items.id = proposals.queue_item_id
+                 WHERE queue_item_id = ?1 AND queue_items.status = 'completed'",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(database_error)?;
+        let Some(json) = json else {
+            return Ok(());
+        };
+        let mut record = serde_json::from_str::<ProposalRecord>(&json)
+            .map_err(|_| PipelineError::new("INVALID_DATA", "stored proposal is invalid"))?;
+        if record.approved && record.reviewed && record.reasons.is_empty() {
+            return Ok(());
+        }
+        record.approved = true;
+        record.reviewed = true;
+        record.reasons.clear();
+        let json = serde_json::to_string(&record)
+            .map_err(|_| PipelineError::new("INVALID_DATA", "proposal could not be stored"))?;
+        transaction
+            .execute(
+                "UPDATE proposals SET proposal_json = ?1 WHERE queue_item_id = ?2",
+                params![json, id],
+            )
+            .map_err(database_error)?;
         transaction.commit().map_err(database_error)
     }
 
