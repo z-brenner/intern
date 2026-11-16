@@ -142,12 +142,18 @@ pub struct QueueItemDto {
     /// A completed item that was never renamed: the person kept its name.
     kept_original: bool,
     /// A completed item this machine renamed with no person's approval:
-    /// filed here, and its record not approved when it was filed. Every
-    /// approval marks the record approved (`approve_user_edit`, and a
-    /// staged copy's), and filing never changes the record, so a name a
-    /// person approved - finished later by Check again, by the queue once
-    /// it was free, or by a reconciliation after an error - reads false.
-    /// The window says a rename was made without the person only on this.
+    /// filed here, and its record not approved. Every approval of a
+    /// person's that is carried out marks the record approved:
+    /// `approve_user_edit`, and `already_filed` for one approving exactly
+    /// what an earlier rename, finished by the check the approval makes
+    /// first, had filed. The queue approves a staged copy's record itself.
+    /// Filing never changes the record, so a name a person approved -
+    /// finished later by Check again, by the queue once it was free, or by
+    /// a reconciliation after an error - reads false. A queue read made
+    /// while such an approval is carried out can find it true: the earlier
+    /// rename is finished and the approval not yet recorded. The window
+    /// says a rename was made without the person only on this, and judges
+    /// no document while a decision of the person's on it is carried out.
     renamed_without_approval: bool,
     /// Review is waiting on the files, not on a decision about the name: an
     /// operation never finished, and Check again - or a confirmed remove -
@@ -14960,8 +14966,10 @@ mod filed_dto_tests {
         .unwrap();
         assert_eq!(json["renamedWithoutApproval"], serde_json::json!(true));
 
-        // Approved by a person: at once, by the queue once it was free, or
-        // finished by Check again or a reconciliation after an error.
+        // Approved by a person: at once, by the queue once it was free,
+        // finished by Check again or a reconciliation after an error, or
+        // approving exactly what an earlier rename, finished as it was
+        // approved, had filed (`Pipeline::already_filed`).
         assert!(!says(row(QueueStatus::Completed, true, filed())));
 
         // Kept under its own name, or already named so: nothing renamed.
