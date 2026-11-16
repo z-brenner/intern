@@ -15,8 +15,10 @@ import { openDetails, queueCell } from './grid';
   moves nothing a person could be about to press: the footer grows upward
   over the sections' last lines, and keeps that room, blank, when the
   warning has gone. That is so at every size these journeys run: 1280 by
-  800, 800 by 600, 1280 by 740 and 1280 by 860. The journeys further down
-  hold what that leaves: nothing that acts comes under a pointer at rest
+  800 and 800 by 600, and in the keyboard journey 1280 by heights it
+  measures for itself (heightWithViewEnd), which follow the machine's fonts:
+  about 740 and 860 on the machine it was written on. The journeys further
+  down hold what that leaves: nothing that acts comes under a pointer at rest
   where the warning was, and the one thing that does move, by the person's
   own choice only, is the sections scrolling to show the line of the control
   they chose with.
