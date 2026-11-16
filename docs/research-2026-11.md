@@ -350,6 +350,16 @@ benchmark: the bench has no reference to it.
 7. **Affiliates.** Own names match by prefix, so a contract signed by a subsidiary loses
    which entity signed.
 8. **Drafts, signature pages, stand-alone exhibits.** Nothing in a name says the file is one.
+9. **Same-day documents from one template** (read from the code; one probe on synthetic
+   text). The queue holds a document as a near duplicate of a filing when their text
+   fingerprints are within 6 bits and their dates are equal (`same_document` in
+   `pipeline.rs`); it is how a second scan of one paper is caught. Option grants, offer
+   letters, consents or NDAs signed on one day from one template differ in a name and a few
+   figures, which a fingerprint barely sees. A probe written while the review level was
+   verified put an agreement of the same day for another employee at distance 5 and a
+   certificate that differs in one digit at 0. With automatic renaming on, the first of such
+   a batch is renamed and each of the others waits as a near duplicate of it. Nobody has
+   measured this on real documents; the corporate-records set should hold such a batch.
    A draft filed looking like the signed agreement is the really wrong case worth holding.
 
 ### A corporate-records development set
@@ -395,7 +405,7 @@ the inventory faster than anything here.
   as diffs; GitHub pages were not reachable for the checkers.
 - The rules prototype is one draft and one revision, not the engine. The engine's own readers
   were not measured on their own.
-- Engine gaps 1 to 8 are read from the code and a static copy of three rules. None was
-  observed in the app.
+- Engine gaps 1 to 9 are read from the code, a static copy of three rules and, for gap 9,
+  one probe on synthetic text. None was observed in the app.
 - Licences were read from model cards and README files, not from licence texts.
 - The corporate inventory is general practice for an in-house team, not the owner's folders.
