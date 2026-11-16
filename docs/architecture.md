@@ -668,7 +668,9 @@ also while it is parked with its original held open, whatever Settings or
 the learned spellings say meanwhile. So the name Details shows for it is
 the one being filed. A name composed while a filing still waits, behind
 another file operation or the look for a near duplicate, is not filed over:
-that filing files nothing, and the next pass files the new name. An approval
+that filing files nothing, and the next pass files the new name if the
+document is still ready then; one a spelling nobody has checked changed
+waits for a person. An approval
 that lands in that last moment is refused, as one is once the rename has
 begun. When a rename so marked lands on a
 document with typed text while the window is open, the window says so when

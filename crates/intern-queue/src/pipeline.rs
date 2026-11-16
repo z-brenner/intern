@@ -4703,7 +4703,8 @@ impl Pipeline {
             // duplicate: a Settings save, a change of spellings or a
             // person's approval may have given the record another since.
             // Then nothing is filed here, and the name the record has now
-            // is filed by the approval that gave it or by the next pass.
+            // is filed by the approval that gave it or by the next pass, if
+            // the document is still ready then.
             // Filed, the name read went to the file while the record named
             // the other, and Details showed a name the file was not getting.
             let Some(_filing) = self.begin_filing(item.id, proposal.as_ref())? else {
