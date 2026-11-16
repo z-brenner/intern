@@ -3,7 +3,9 @@
 //! balanced also makes ready a reading whose only doubts are notes
 //! (`intern_engine::readiness`). The queue's own holds stand at both, and
 //! changing the level judges the waiting documents again from their stored
-//! readings. Everything here runs the real journaled file operations on
+//! readings. That judging files nothing: a test runs the queue after it, as
+//! the scheduler does once the app has woken it, wherever it expects a
+//! filing. Everything here runs the real journaled file operations on
 //! real files; the readings are the engine's own validation of a scripted
 //! reply, with the review reasons a test names added to them.
 
@@ -29,9 +31,9 @@ use intern_engine::{
 use intern_queue::{
     AdmissionEvidence, AdmissionGuard, AdmissionStage,
     pipeline::{
-        AnalyzerBoundary, LEARNED_SPELLING_UNCONFIRMED, ModelFailure, NEAR_DUPLICATE, Pipeline,
-        PipelineError, PipelineEventSink, PipelineItem, PipelineProgress, ProposalRecord,
-        WorkerBoundary, WorkerFailure,
+        AnalyzerBoundary, DuplicateOracle, KnownFiling, LEARNED_SPELLING_UNCONFIRMED, ModelFailure,
+        NEAR_DUPLICATE, Pipeline, PipelineError, PipelineEventSink, PipelineItem, PipelineProgress,
+        ProposalRecord, SimilarFiling, WorkerBoundary, WorkerFailure,
     },
     settings::{AppSettings, SettingsStore},
 };
@@ -228,6 +230,34 @@ impl AdmissionGuard for Admissions {
     }
 }
 
+/// What a test does once, inside the next question the queue puts to the
+/// duplicate oracle: it holds a scheduler pass there, between its look for
+/// a near duplicate and its filing.
+type WhileLooking = Box<dyn FnOnce() + Send>;
+
+/// A duplicate oracle that knows of no filing made anywhere else, and runs
+/// [`WhileLooking`] when it is asked for a near duplicate. The queue asks
+/// it only once its own filings hold none, so by then the look has found
+/// nothing and the filing has not begun.
+#[derive(Default)]
+struct Elsewhere {
+    while_looking: Mutex<Option<WhileLooking>>,
+}
+
+impl DuplicateOracle for Elsewhere {
+    fn filed_elsewhere(&self, _source_hash: &str, _source_path: &Path) -> Option<KnownFiling> {
+        None
+    }
+
+    fn similar_elsewhere(&self, _fingerprint: u64) -> Option<SimilarFiling> {
+        let held = self.while_looking.lock().unwrap().take();
+        if let Some(hold) = held {
+            hold();
+        }
+        None
+    }
+}
+
 /// An input folder, an output folder, and a queue over them at a review
 /// level, with the real file operations.
 struct Rig {
@@ -236,6 +266,7 @@ struct Rig {
     filed: PathBuf,
     office: Arc<Office>,
     admissions: Arc<Admissions>,
+    elsewhere: Arc<Elsewhere>,
     pipeline: Pipeline,
 }
 
@@ -259,13 +290,15 @@ impl Rig {
                 ..AppSettings::default()
             })
             .unwrap();
-        let pipeline = open(temp.path(), &office, &admissions);
+        let elsewhere = Arc::new(Elsewhere::default());
+        let pipeline = open(temp.path(), &office, &admissions, &elsewhere);
         Rig {
             temp,
             inbox,
             filed,
             office,
             admissions,
+            elsewhere,
             pipeline,
         }
     }
@@ -276,7 +309,12 @@ impl Rig {
 
     /// The queue opened again over the same data, as after Intern closed.
     fn reopened(&self) -> Pipeline {
-        open(self.temp.path(), &self.office, &self.admissions)
+        open(
+            self.temp.path(),
+            &self.office,
+            &self.admissions,
+            &self.elsewhere,
+        )
     }
 
     /// Puts `doc` in the input folder as `name` and adds it.
@@ -321,12 +359,14 @@ impl Rig {
     }
 
     /// The level changed in Settings, as the app saves it: stored first,
-    /// then the queue is told what it changed from and to.
-    fn set_level(&self, level: ReviewLevel) {
+    /// then the queue is told what it changed from and to. Says whether
+    /// the queue made any document ready, which is when the app wakes the
+    /// scheduler.
+    fn set_level(&self, level: ReviewLevel) -> bool {
         let previous = self.save(|settings| settings.review_level = level);
         self.pipeline
             .review_level_changed(previous.review_level, level)
-            .unwrap();
+            .unwrap()
     }
 
     fn filed_names(&self) -> Vec<String> {
@@ -360,7 +400,12 @@ impl Rig {
     }
 }
 
-fn open(data: &Path, office: &Arc<Office>, admissions: &Arc<Admissions>) -> Pipeline {
+fn open(
+    data: &Path,
+    office: &Arc<Office>,
+    admissions: &Arc<Admissions>,
+    elsewhere: &Arc<Elsewhere>,
+) -> Pipeline {
     Pipeline::with_local_files(
         data.join("queue.sqlite3"),
         office.clone(),
@@ -370,6 +415,7 @@ fn open(data: &Path, office: &Arc<Office>, admissions: &Arc<Admissions>) -> Pipe
     )
     .unwrap()
     .with_admission_guard(admissions.clone())
+    .with_duplicate_oracle(elsewhere.clone())
 }
 
 fn item(pipeline: &Pipeline, id: i64) -> PipelineItem {
@@ -553,7 +599,7 @@ fn changing_the_level_judges_the_waiting_documents_again_both_ways() {
     );
     let as_read = rig.record(noted_id);
 
-    rig.set_level(BALANCED);
+    assert!(rig.set_level(BALANCED), "one document became ready");
     assert_eq!(
         statuses(),
         [
@@ -575,7 +621,7 @@ fn changing_the_level_judges_the_waiting_documents_again_both_ways() {
     );
     assert!(rig.filed_names().is_empty(), "automatic renaming is off");
 
-    rig.set_level(STRICT);
+    assert!(!rig.set_level(STRICT), "sent back, and none made ready");
     assert_eq!(
         statuses(),
         [
@@ -589,10 +635,10 @@ fn changing_the_level_judges_the_waiting_documents_again_both_ways() {
     assert_eq!(sent_back.reasons, ["TYPE_INFERRED"]);
     assert_eq!(sent_back.filename, as_read.filename);
 
-    rig.set_level(BALANCED);
+    assert!(rig.set_level(BALANCED));
     assert_eq!(rig.status(noted_id), QueueStatus::Ready);
     // Saving the same level again changes nothing.
-    rig.set_level(BALANCED);
+    assert!(!rig.set_level(BALANCED));
     assert_eq!(
         statuses(),
         [
@@ -610,15 +656,17 @@ fn changing_the_level_judges_the_waiting_documents_again_both_ways() {
     );
 }
 
-/// A document the level makes ready follows automatic renaming exactly as a
-/// newly ready reading does: filed at once when it is on, and when the
-/// queue is paused, left ready until the queue runs again.
+/// A document the level makes ready follows automatic renaming as any
+/// ready document does: the scheduler's next pass files it when it is on,
+/// and when the queue is paused it is left ready until the queue runs
+/// again. The level change itself files nothing.
 #[test]
 fn a_document_the_level_makes_ready_follows_automatic_renaming_and_the_pause() {
     let rig = Rig::new(STRICT, true);
     let id = rig.read("noted.pdf", noted(APRIL));
     assert_eq!(rig.status(id), QueueStatus::NeedsReview);
     rig.set_level(BALANCED);
+    rig.pipeline.run_until_idle().unwrap();
     assert_eq!(rig.status(id), QueueStatus::Completed);
     assert_eq!(rig.filed_names(), [name_for(APRIL.0)]);
     assert_eq!(rig.record(id).reasons, ["TYPE_INFERRED"]);
@@ -627,6 +675,7 @@ fn a_document_the_level_makes_ready_follows_automatic_renaming_and_the_pause() {
     let id = paused.read("noted.pdf", noted(APRIL));
     paused.pipeline.pause();
     paused.set_level(BALANCED);
+    paused.pipeline.run_until_idle().unwrap();
     assert_eq!(
         paused.status(id),
         QueueStatus::Ready,
@@ -811,9 +860,10 @@ fn settings_that_cannot_be_read_mean_strict() {
 }
 
 /// Two scans of one document waiting at strict are not both filed when
-/// the level makes their readings ready. Here the queue is free, so the
-/// first is filed as it becomes ready: they are judged one at a time, and
-/// the second meets the first one's filing as any later reading would.
+/// the level makes their readings ready. Here the queue is free and
+/// automatic renaming is on. Both become ready, since neither repeats a
+/// filing yet, and the scheduler files the first and holds the second at
+/// its own filing, which looks for a near duplicate once more.
 #[test]
 fn two_scans_the_level_makes_ready_are_not_both_filed() {
     let rig = Rig::new(STRICT, true);
@@ -824,6 +874,7 @@ fn two_scans_the_level_makes_ready_are_not_both_filed() {
     assert_eq!(rig.record(second).near_duplicate_of, None);
 
     rig.set_level(BALANCED);
+    rig.pipeline.run_until_idle().unwrap();
 
     assert_eq!(rig.status(first), QueueStatus::Completed);
     assert_eq!(rig.status(second), QueueStatus::NeedsReview);
@@ -887,12 +938,12 @@ fn assert_only_the_first_scan_is_filed(rig: &Rig, first: i64, second: i64) {
     assert_eq!(rig.filed_names(), [name_for(APRIL.0)], "not filed twice");
 }
 
-/// The same two scans when the first is not filed as the level makes it
-/// ready, because the queue is paused, or because automatic renaming is
-/// off and is turned on later. Both become ready: neither repeats a filing
-/// yet. When the queue files them the first is filed, and the second,
-/// which repeats a filing by then, waits for a person as a near duplicate.
-/// Both used to be filed, the second as "... (2).pdf".
+/// The same two scans when the queue is paused as the level makes them
+/// ready, or when automatic renaming is off and is turned on later. Both
+/// become ready: neither repeats a filing yet. When the queue files them
+/// the first is filed, and the second, which repeats a filing by then,
+/// waits for a person as a near duplicate. Both used to be filed, the
+/// second as "... (2).pdf".
 #[test]
 fn two_scans_made_ready_before_either_is_filed_are_not_both_filed() {
     let both_ready = |rig: &Rig, first: i64, second: i64| {
@@ -947,9 +998,9 @@ fn two_scans_made_ready_before_either_is_filed_are_not_both_filed() {
 const PATIENCE: Duration = Duration::from_secs(30);
 
 /// And when the Settings save lands while the queue is reading another
-/// document: a rename asked for then is put off until the queue is between
-/// documents, so both scans are left ready, and the scheduler's next pass
-/// files the first and holds the second.
+/// document: the save files nothing, so both scans are left ready, and the
+/// scheduler files the first and holds the second once it is between
+/// documents.
 #[test]
 fn two_scans_made_ready_while_another_document_is_read_are_not_both_filed() {
     let rig = Rig::new(STRICT, true);
@@ -1191,10 +1242,10 @@ fn balanced_then_automatic_renaming_file_a_pair_read_good_scan_first_once() {
 
 /// And when one Settings save turns automatic renaming on and chooses
 /// balanced, as the app saves it: stored, then the queue is told the level
-/// changed, then the scheduler runs. The weak scan is made ready and filed
-/// inside the save. The good scan, ready all along, is the scheduler's to
-/// file, and it repeats a filing by then: it waits as a near duplicate,
-/// whichever was read first.
+/// changed, then the scheduler runs. The save makes the weak scan ready
+/// and files nothing. Both scans are the scheduler's to file, and it files
+/// the one read first and holds the other, as when balanced and automatic
+/// renaming come in two saves.
 fn a_pair_is_filed_once_when_one_save_brings_both(weak_first: bool) {
     let rig = Rig::new(STRICT, false);
     let pair = MixedPair::read(&rig, weak_first);
@@ -1204,13 +1255,21 @@ fn a_pair_is_filed_once_when_one_save_brings_both(weak_first: bool) {
         settings.automatic_rename = true;
         settings.review_level = BALANCED;
     });
-    rig.pipeline
+    let made_ready = rig
+        .pipeline
         .review_level_changed(previous.review_level, BALANCED)
         .unwrap();
-    assert_eq!(rig.status(pair.weak), QueueStatus::Completed);
+    assert!(made_ready);
+    assert_eq!(rig.status(pair.weak), QueueStatus::Ready);
     assert_eq!(rig.status(pair.good), QueueStatus::Ready);
+    assert!(rig.filed_names().is_empty(), "the save files nothing");
     rig.pipeline.run_until_idle().unwrap();
-    assert_one_scan_is_filed_and_the_other_held(&rig, pair.weak, pair.good, &[]);
+    assert_one_scan_is_filed_and_the_other_held(
+        &rig,
+        pair.first,
+        pair.second,
+        pair.notes(pair.second),
+    );
 }
 
 #[test]
@@ -1221,6 +1280,143 @@ fn balanced_and_automatic_renaming_in_one_save_file_a_pair_read_weak_scan_first_
 #[test]
 fn balanced_and_automatic_renaming_in_one_save_file_a_pair_read_good_scan_first_once() {
     a_pair_is_filed_once_when_one_save_brings_both(false);
+}
+
+/// A Settings save that changes the level files nothing itself. What it
+/// makes ready is stored as ready, and the scheduler files it: the app
+/// wakes the scheduler when the judging made something ready. So every
+/// name no person approved is looked up and filed on one thread, in order.
+#[test]
+fn a_level_change_files_nothing_itself_and_the_scheduler_files_what_it_made_ready() {
+    let rig = Rig::new(STRICT, true);
+    let april = rig.read("april.pdf", noted(APRIL));
+    let may = rig.read("may.pdf", noted(MAY));
+    let doubted = rig.read(
+        "party.pdf",
+        doc(JUNE.0, JUNE.1, &[ReviewReason::PartyUnsupported]),
+    );
+    let as_read = rig.record(april);
+
+    assert!(rig.set_level(BALANCED), "it says it made documents ready");
+    assert_eq!(
+        [april, may, doubted].map(|id| rig.status(id)),
+        [
+            QueueStatus::Ready,
+            QueueStatus::Ready,
+            QueueStatus::NeedsReview
+        ],
+        "made ready, and not filed by the save"
+    );
+    assert!(rig.filed_names().is_empty(), "the save files nothing");
+    let made_ready = rig.record(april);
+    assert_eq!(made_ready.revision, as_read.revision);
+    assert!(!made_ready.approved);
+
+    // The wake: the scheduler's pass files what the save made ready.
+    rig.pipeline.run_until_idle().unwrap();
+    assert_eq!(rig.status(april), QueueStatus::Completed);
+    assert_eq!(rig.status(may), QueueStatus::Completed);
+    assert_eq!(rig.status(doubted), QueueStatus::NeedsReview);
+    assert_eq!(rig.filed_names(), [name_for(APRIL.0), name_for(MAY.0)]);
+    assert!(!rig.record(april).approved, "filed by itself");
+
+    // Nothing left that a level makes ready: nothing to wake anyone for.
+    assert!(!rig.set_level(STRICT));
+    assert!(!rig.set_level(BALANCED));
+}
+
+/// What the level change says is what it left ready, not what it judged
+/// ready on the way. With settings that cannot be read as the document
+/// settles, nobody can say whether it may be filed: it goes back to review
+/// with the reason, as a new reading does then, and the level change says
+/// it made nothing ready.
+#[test]
+fn a_level_change_that_leaves_nothing_ready_says_so() {
+    let rig = Rig::new(STRICT, true);
+    let id = rig.read("noted.pdf", noted(APRIL));
+    fs::write(rig.settings().path(), b"{ this is not json").unwrap();
+    let unreadable = rig.settings().load().unwrap_err().code;
+
+    let made_ready = rig.pipeline.review_level_changed(STRICT, BALANCED).unwrap();
+
+    assert!(!made_ready);
+    assert_eq!(rig.status(id), QueueStatus::NeedsReview);
+    assert_eq!(
+        rig.record(id).reasons,
+        ["TYPE_INFERRED", unreadable.as_str()]
+    );
+    assert!(rig.filed_names().is_empty());
+}
+
+/// A scheduler pass and a Settings save's judging at the same time. The
+/// pair is read at strict with automatic renaming off: the good scan is
+/// ready and the weak scan waits. One save brings balanced and automatic
+/// renaming. A pass of the scheduler comes to file the good scan, looks for
+/// a near duplicate and finds none. Before it files, the save judges the
+/// queue on its own thread and makes the weak scan ready, which repeats no
+/// filing yet either. Then the pass goes on and files the good scan.
+///
+/// The save files nothing, so the weak scan is the scheduler's to file, and
+/// it repeats a filing by then: it waits as a near duplicate. Were the save
+/// to file the weak scan on its own thread, both would be filed, the second
+/// as "... (2).pdf": the pass stands between its look and its filing.
+/// Nothing here depends on timing. The pass waits for the judging inside
+/// the duplicate oracle's answer.
+fn a_pass_and_a_judging_at_once_file_a_pair_once(weak_first: bool) {
+    let rig = Rig::new(STRICT, false);
+    let pair = MixedPair::read(&rig, weak_first);
+    assert_eq!(rig.status(pair.weak), QueueStatus::NeedsReview);
+    assert_eq!(rig.status(pair.good), QueueStatus::Ready);
+    let previous = rig.save(|settings| {
+        settings.automatic_rename = true;
+        settings.review_level = BALANCED;
+    });
+
+    let (looking, is_looking) = mpsc::channel();
+    let (judged, is_judged) = mpsc::channel();
+    *rig.elsewhere.while_looking.lock().unwrap() = Some(Box::new(move || {
+        looking.send(()).unwrap();
+        is_judged.recv_timeout(PATIENCE).expect("the judging");
+    }));
+    let during = thread::scope(|scope| {
+        let pass = scope.spawn(|| rig.pipeline.run_until_idle().unwrap());
+        is_looking.recv_timeout(PATIENCE).expect("the look");
+        // The save's judging, on this thread as on the app's.
+        let made_ready = rig
+            .pipeline
+            .review_level_changed(previous.review_level, BALANCED)
+            .unwrap();
+        let during = (
+            made_ready,
+            rig.status(pair.weak),
+            rig.status(pair.good),
+            rig.filed_names(),
+        );
+        judged.send(()).unwrap();
+        pass.join().unwrap();
+        during
+    });
+    assert_eq!(
+        during,
+        (true, QueueStatus::Ready, QueueStatus::Ready, Vec::new()),
+        "the judging made the weak scan ready and filed nothing"
+    );
+    assert_eq!(rig.status(pair.good), QueueStatus::Completed);
+    assert_eq!(rig.status(pair.weak), QueueStatus::Ready);
+
+    // The scheduler's next pass, which the save's wake starts.
+    rig.pipeline.run_until_idle().unwrap();
+    assert_one_scan_is_filed_and_the_other_held(&rig, pair.good, pair.weak, &["TYPE_INFERRED"]);
+}
+
+#[test]
+fn a_pass_and_a_judging_at_once_file_a_pair_read_weak_scan_first_once() {
+    a_pass_and_a_judging_at_once_file_a_pair_once(true);
+}
+
+#[test]
+fn a_pass_and_a_judging_at_once_file_a_pair_read_good_scan_first_once() {
+    a_pass_and_a_judging_at_once_file_a_pair_once(false);
 }
 
 /// Nor does the look at filing second-guess a person. Two scans ready at

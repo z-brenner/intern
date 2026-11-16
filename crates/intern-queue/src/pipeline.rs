@@ -3566,6 +3566,11 @@ impl Pipeline {
     /// level `level`, now that the row is `next`: the window hears of it,
     /// and a ready one is filed when automatic renaming is on, exactly as
     /// for any reading.
+    ///
+    /// Only for a caller that holds the run lock, which is the scheduler's
+    /// pass: a reading just made, or one just validated again. Whoever does
+    /// not hold it settles without filing
+    /// ([`Self::settle_without_filing`]).
     fn settle_new_record(
         &self,
         item: &QueueItem,
@@ -3573,6 +3578,37 @@ impl Pipeline {
         next: QueueStatus,
         level: ReviewLevel,
     ) -> PipelineResult<()> {
+        if let Some((ready_item, settings)) =
+            self.settle_without_filing(item, record, next, level)?
+            && settings.automatic_rename
+            && !self.paused.load(Ordering::SeqCst)
+        {
+            let _ = self.apply_if_unchanged(&ready_item, &record.filename, &settings);
+        }
+        Ok(())
+    }
+
+    /// [`Self::settle_new_record`] up to the filing, and no further: the
+    /// record is named and judged by the settings as they are now, and the
+    /// window hears of it. Gives the row and those settings where the row
+    /// is left ready, for whoever may file it.
+    ///
+    /// Filing is a step of its own because only the holder of the run lock
+    /// may take it. At a level looser than strict a filing with no approval
+    /// first looks for a near duplicate among the filings there are
+    /// ([`Self::held_as_near_duplicate`]), and that look sees no filing
+    /// another thread has in flight. So every such look and the filing that
+    /// follows it are made under the run lock, one document at a time. A
+    /// Settings save runs on its own thread without that lock: it makes
+    /// documents ready through here and files none of them
+    /// ([`Self::review_level_changed`]).
+    fn settle_without_filing(
+        &self,
+        item: &QueueItem,
+        record: &ProposalRecord,
+        next: QueueStatus,
+        level: ReviewLevel,
+    ) -> PipelineResult<Option<(QueueItem, AppSettings)>> {
         // The organization's names were read before the name was composed,
         // and a Settings save since then renamed everything that was waiting
         // - which this document was not, yet. Read once more now that it
@@ -3609,19 +3645,16 @@ impl Pipeline {
         // can have sent it to review; judged again just now, a stricter
         // level can have.
         if (next == QueueStatus::Ready || made_ready) && ready_item.status == QueueStatus::Ready {
-            let settings = match settings {
-                Ok(settings) => settings,
+            return match settings {
+                Ok(settings) => Ok(Some((ready_item, settings))),
                 Err(error) => {
                     self.repository.mark_needs_review(item.id, &error.code)?;
                     self.events.queue_changed();
-                    return Ok(());
+                    Ok(None)
                 }
             };
-            if settings.automatic_rename && !self.paused.load(Ordering::SeqCst) {
-                let _ = self.apply_if_unchanged(&ready_item, &record.filename, &settings);
-            }
         }
-        Ok(())
+        Ok(None)
     }
 
     /// The next document to read, if there is one the store will hand out.
@@ -4012,18 +4045,30 @@ impl Pipeline {
     /// filing attempt added stands on it, and no rename of it ever began.
     /// The queue's own holds are decided as for a new reading: a text that
     /// nearly repeats a filing's, looked for again among the filings there
-    /// are now, and a learned spelling nobody has checked. Then it follows
-    /// automatic renaming exactly as a newly ready reading does
-    /// ([`Self::settle_new_record`]), paused or not as that does.
+    /// are now, and a learned spelling nobody has checked.
     ///
-    /// One document at a time. Where the first of two scans of one
-    /// document is filed as it becomes ready, the second meets that filing
-    /// here and stays in review. Where it is not - the queue is paused, or
-    /// reading another document, or automatic renaming is off - both become
-    /// ready, and the second is held when the queue files them
-    /// ([`Self::held_as_near_duplicate`]). So is a scan of the same
-    /// document that both levels call ready, which is not judged here: the
-    /// queue comes to file it after the one this made ready, and holds it.
+    /// Nothing is filed here, whatever automatic renaming says. The app
+    /// calls this on the thread of the Settings save that changed the
+    /// level, which does not hold the run lock, and a filing with no
+    /// approval belongs to whoever holds it
+    /// ([`Self::settle_without_filing`]). A document made ready is stored
+    /// as ready and left for the scheduler, which files it as it files any
+    /// ready document when automatic renaming is on and the queue is not
+    /// paused. `Ok(true)` says that at least one document was left ready
+    /// that was not before, so there is something for the scheduler to
+    /// file: the app wakes it then. Were this to file on the save's thread,
+    /// a scheduler pass that has looked for a near duplicate of one scan
+    /// and not yet filed it would not see the other scan filed here
+    /// meanwhile, and both would be filed.
+    ///
+    /// So two scans of one document that the level makes ready are both
+    /// ready when this returns: neither repeats a filing yet. So is a scan
+    /// of the same document that both levels call ready, which is not
+    /// judged here. The scheduler files whichever it comes to first, which
+    /// is the one added to the queue first when they are ready as its pass
+    /// begins, and holds each other one at its own filing
+    /// ([`Self::held_as_near_duplicate`]). Only a scan whose twin is filed
+    /// already meets that filing here, and stays in review.
     ///
     /// Toward a stricter level, a ready document no person approved whose
     /// reading waits at `to` goes back to review
@@ -4035,32 +4080,34 @@ impl Pipeline {
     /// stays there: a document once held for a learned spelling that was
     /// checked or forgotten since, whose reading both levels call ready.
     ///
-    /// The app calls this when a Settings save changed the level. What it
-    /// could not reach is still never filed at a level that holds it: every
-    /// filing without a person's approval asks the level in force
+    /// What this could not reach is still never filed at a level that holds
+    /// it: every filing without a person's approval asks the level in force
     /// ([`Self::apply_if_unchanged`]), and the scheduler and the recovery
     /// pass put such rows back in review.
-    pub fn review_level_changed(&self, from: ReviewLevel, to: ReviewLevel) -> PipelineResult<()> {
+    pub fn review_level_changed(&self, from: ReviewLevel, to: ReviewLevel) -> PipelineResult<bool> {
         if from == to {
-            return Ok(());
+            return Ok(false);
         }
-        let mut changed = false;
+        let mut made_ready = false;
+        let mut held = false;
         for item in self.store.list()? {
             if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready) {
                 continue;
             }
             match self.judge_again(&item, from, to)? {
                 JudgedAgain::Unchanged => {}
-                JudgedAgain::Held => changed = true,
+                JudgedAgain::Held => held = true,
                 JudgedAgain::Ready(record) => {
-                    self.settle_new_record(&item, &record, QueueStatus::Ready, to)?;
+                    made_ready |= self
+                        .settle_without_filing(&item, &record, QueueStatus::Ready, to)?
+                        .is_some();
                 }
             }
         }
-        if changed {
+        if held {
             self.events.queue_changed();
         }
-        Ok(())
+        Ok(made_ready)
     }
 
     /// Judges one waiting document again for
@@ -4432,9 +4479,23 @@ impl Pipeline {
     /// ([`Self::record_for`]) and when a level makes it ready
     /// ([`Self::make_ready_at`]), and a filing can be made after both. Two
     /// scans of one document that are ready together, neither filed,
-    /// repeat no filing yet. The queue files them one after the other, and
-    /// the second repeats the first once the first is filed. So the filing
-    /// itself looks once more.
+    /// repeat no filing yet. So the filing itself looks once more.
+    ///
+    /// The queue files them one after the other, and the second repeats
+    /// the first once the first is filed. That holds because a name no
+    /// person approved is filed only by a caller that holds the run lock,
+    /// the scheduler's pass: a reading as it settles
+    /// ([`Self::settle_new_record`]) and the ready documents a pass comes
+    /// to ([`Self::apply_pending_ready`]). Each such filing has left its
+    /// text among the filings before the next look is made. A Settings
+    /// save that changes the level runs on another thread, and it makes
+    /// documents ready and files none ([`Self::review_level_changed`]).
+    /// Were it to file them, its filing and the scheduler's would each
+    /// pass the other's look, and both scans would be filed.
+    ///
+    /// A name a person approved is filed on the thread of the approval,
+    /// whatever it repeats. A look made while that filing is in flight
+    /// does not see it.
     ///
     /// At a looser level it looks for every reading no person approved,
     /// whatever strict would say of that reading. A looser level files a
