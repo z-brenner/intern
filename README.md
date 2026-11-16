@@ -491,9 +491,10 @@ report is [`bench/reports/review-levels-2026-11`](bench/reports/review-levels-20
 A ready document with a doubt says so: its status is **Ready with a note**,
 and Details shows the note first. Once Intern has renamed it by itself it is
 **Completed with a note**, and Completed has a **with a note** filter that
-lists exactly those, so the names nobody approved can be found and checked
-later. Approving a name, one at a time or with Rename all ready, clears its
-notes.
+lists those: names nobody approved, which Intern gave by itself while its
+reading had a note, so they can be found and checked later. A name Intern
+gave by itself with no note, every one at Strict among them, is not listed.
+Approving a name, one at a time or with Rename all ready, clears its notes.
 
 Changing the level judges the documents waiting in the queue again from what
 Intern has already read; nothing is read again. To Balanced: a document only
@@ -511,10 +512,10 @@ one is ready, or choosing Balanced with automatic renaming on while one
 waits - Settings says how many above **Save**. Save anyway, and Intern can
 rename them under its own names; what you typed stays beside each document,
 read-only, and is not filed. When Intern renames such a document while the
-window is open, with nobody approving it, a message says so and offers
-**Undo** for that rename. After a save that changes the level, a message
-says how many documents waiting in the queue became ready, or went back to
-review.
+window is open, with nobody approving it, a message says so when the window
+sees the rename happen, and offers **Undo** for that rename. After a save
+that changes the level, a message says how many documents waiting in the
+queue became ready, or went back to review.
 
 An earlier release does not know the levels and treats a ready document with
 a note as ready. Choose Strict before going back to one.

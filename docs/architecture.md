@@ -577,8 +577,10 @@ benchmark for every reading it scores (`intern-bench run --review-level`).
 A level takes no reason off a reading. At balanced a ready record carries its
 reasons, and the window shows them as notes: "Ready with a note", and
 "Completed with a note" once Intern has renamed the document by itself. A
-person's approval clears the reasons, as it always has, so "Completed with a
-note" marks exactly the names nobody looked at.
+person's approval clears the reasons, so "Completed with a note" marks only
+names nobody approved: those Intern renamed by itself while their reading
+had a note. A name Intern gave by itself to a reading with no note, every
+one at strict among them, is not marked.
 
 What a level does not decide:
 
@@ -655,9 +657,16 @@ What the window says afterwards. Each queue row says whether this machine
 renamed the document with nobody's approval (`renamedWithoutApproval`: the
 row is completed, filed here, and its record is not approved). Every approval
 a person makes sets `approved` on the record and clears its notes, also one
-that finds the name already filed and takes the approval as done
-(`Pipeline::already_filed`). When a rename so marked lands on a document with typed text while the
-window is open, the window says so once and offers Undo for that rename
+that finds the earlier rename finished by the check it makes first and takes
+the approval as done (`Pipeline::already_filed`). That is so only for an
+approval of what the rename filed: the name the file took, or the name on
+the record where the file took it numbered ` (2)` because it was taken. Any
+other name is refused, and the rename stays marked. A rename parked with its
+original held open keeps the name it is filing on its record while it is
+parked, whatever Settings or the learned spellings say meanwhile, so the
+name Details shows for it is that one. When a rename so marked lands on a
+document with typed text while the window is open, the window says so when
+it sees the rename happen and offers Undo for that rename
 (`src/features/review/renamedByItself.ts`). It reads only the mark, never
 whose decision it saw go by. A rename made while the window was closed is
 not said. After a save that changes the level, the window says how
@@ -873,11 +882,17 @@ every document but one whose name a person gave: the one just approved, one
 approved earlier that is waiting only for a busy queue, one whose filing
 failed and one whose rename they took back alike. That name is the
 reviewer's own text and would lose whatever the validated facts do not
-carry, the date they typed with it most of all. A recomposed record is
+carry, the date they typed with it most of all. Nor is a document whose
+rename began and has not finished, parked with its original held open:
+that rename is filing the name on its record, which is the name Details
+shows and a person approves. When Check again rolls such a rename back, it
+composes the name again then. A recomposed record is
 written only over the record it was composed from, in the one transaction
 that checks the stored record is unchanged (`replace_proposal_if`), so an
 approval that lands between the read and the write stands and the
-recomposition leaves that document alone.
+recomposition leaves that document alone. The same transaction leaves alone
+a document whose rename began between the read and the write and has not
+finished.
 Respelling a spelling Intern applied maps back to the document's word - the
 person changed their mind about the word, not about Intern - and restoring
 the document's own spelling retracts the rule. The whole memory is the list
@@ -1295,7 +1310,8 @@ party was left out and why. The names in force are recorded with each
 proposal, so the name, the layout folder, a lesson from an edit, and the
 filing report all read the same view. Changing them in Settings recomposes
 every document still waiting, as a learned spelling does; an approved name
-keeps what the person typed. Every save asks, not only one that changed the
+keeps what the person typed, and a parked rename the name it is filing.
+Every save asks, not only one that changed the
 list, so a rename an earlier save never reached is finished by the next, and
 a document being read while the list changed reads it again as it starts to
 wait. A proposal's revision moves only when its name does: the review panel
