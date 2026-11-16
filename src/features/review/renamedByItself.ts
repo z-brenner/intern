@@ -60,10 +60,14 @@ function whose(was: Waiting, is: QueueItem): Whose {
  * being renamed that came back without being renamed (`back`): sent back to
  * review, failed, or gone from the queue.
  *
- * A document the window is deciding for is not watched: whatever becomes of
- * it is the decision's to say. Nor is one with nothing typed for it at the
- * moment it is renamed. A completion that renamed nothing (the name was
- * already the document's own) is not a rename.
+ * Nothing is seen of a document the window is deciding for: whatever
+ * becomes of it is the decision's to say. It stays watched as it was while
+ * the decision is carried out, since the backend can refuse it because the
+ * document is being renamed by itself at that moment; once the backend
+ * accepts it, the window stops watching it (App). Nothing is seen either of
+ * one with nothing typed for it at the moment it is renamed. A completion
+ * that renamed nothing (the name was already the document's own) is not a
+ * rename.
  *
  * One waiting to be read again, or being read, is still watched, with the
  * proposal the window last showed for it: the new one is not known until a
@@ -80,6 +84,7 @@ export function watchRenames(watched: ReadonlyMap<string, Waiting>, rows: readon
     const was = watched.get(row.id);
     if (watch.decidedHere(row.id)) {
       if (was?.renaming) back.push(row.id);
+      if (was) next.set(row.id, { ...was, renaming: false });
       continue;
     }
     if (row.status === 'review' || row.status === 'ready') {

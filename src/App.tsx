@@ -223,21 +223,30 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const byThePerson = () => setOwn((now) => ({ ...now, seq: now.seq + 1 }));
   // The documents the window decided since a Settings save began, for
   // saying what a level change did (levelChanged): a decision of the
-  // person's is not the level's doing. And a document being decided is no
-  // longer watched for a rename by itself (watchRenames): whatever becomes
-  // of it is the decision's.
+  // person's is not the level's doing. Nothing is said of a rename by
+  // itself (watchRenames) of a document while a decision of the person's
+  // is carried out for it, but it stays watched until the backend answers:
+  // the backend can refuse the decision because the document is being
+  // renamed by itself at that moment, and that rename is then said. Once
+  // the backend accepted it, whatever becomes of the document is the
+  // decision's, and it is no longer watched (unlessRefused). Rename all
+  // ready and Undo stop watching at once (decidedHere): the one decides
+  // only documents with nothing typed for them, the other only renamed
+  // ones, which are not watched.
   const decidedSinceSave = useRef(new Set<string>());
   const renameWatch = useRef(new Map<string, Waiting>());
   const decidedHere = (id: string) => { decidedSinceSave.current.add(id); renameWatch.current.delete(id); };
-  const deciding = (id: string) => { decidedHere(id); setOwn((now) => ({ ...now, deciding: id })); };
+  const deciding = (id: string) => { decidedSinceSave.current.add(id); setOwn((now) => ({ ...now, deciding: id })); };
   const decided = (id: string) => setOwn((now) => now.deciding === id ? { seq: now.seq + 1 } : now);
   // A decision the backend refused is not what takes a field. The document
   // can be read again by itself just as Enter files its name: the approval
   // is refused, the queue read for the refusal shows the fields gone, and
   // that is the document changing by itself. So `deciding` ends with the
   // refusal, before that read, and `decided` then has nothing to mark.
+  // A decision the backend accepted is what becomes of the document from
+  // then on, so it is no longer watched for a rename by itself.
   const unlessRefused = (id: string, run: () => Promise<void>) => async () => {
-    try { await run(); }
+    try { await run(); renameWatch.current.delete(id); }
     catch (error) { setOwn((now) => now.deciding === id ? { ...now, deciding: undefined } : now); throw error; }
   };
   // The queue table's active cell and selected cells, in a store beside the
@@ -296,8 +305,10 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     // Announced through the app's Action status as well, as every outcome
     // is, each time a rename is seen: being renamed, and again once renamed.
     if (seen.length) setActionMessage(renamedByItselfText(stillSo(withRenames(renamedHere.renames, seen, back), items, typedOver)));
-    // Looked at again when a decision ends, as well: one the backend refused
-    // leaves the queue as it was, and its document is watched again.
+    // Looked at again when a decision ends, as well: the document of one the
+    // backend refused is still watched, and what became of it meanwhile is
+    // seen then. It may still wait, or it may have been renamed by itself,
+    // which can be why the decision was refused.
   }, [items, own.deciding]);
   // Only while what it says is so, with what was typed still kept in the
   // document's details (stillSo), and Undo only for the renames the window

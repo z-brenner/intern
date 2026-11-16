@@ -30,14 +30,19 @@ const NOTICE = sentProposal('2025-05-03 Notice to Contoso Ltd.pdf', 'Notice to C
 /** Filed as the backend reports a filing: completed, with the receipt's name and path, and undoable. */
 const filed = (name: unknown) => ({ status: 'completed', filedName: name, filedPath: `C:\\Filed\\${String(name)}`, keptOriginal: false, undoable: true });
 
-/** One look at the queue, as the window takes one each time it is read. */
+/**
+ * One look at the queue, as the window takes one each time it is read.
+ * `accepted`: the backend accepted the window's decision for a document,
+ * and the window stops watching it, as App does once the decision resolves.
+ */
 function looker(typed: (id: string) => boolean) {
   let watched: ReadonlyMap<string, Waiting> = new Map();
-  return async (rows: Sent[], deciding?: string) => {
-    const look = watchRenames(watched, await asTheWindowReads(rows), { typed, decidedHere: (id) => id === deciding });
-    watched = look.watched;
-    return { seen: look.seen, back: look.back };
+  const look = async (rows: Sent[], deciding?: string) => {
+    const seen = watchRenames(watched, await asTheWindowReads(rows), { typed, decidedHere: (id) => id === deciding });
+    watched = seen.watched;
+    return { seen: seen.seen, back: seen.back };
   };
+  return Object.assign(look, { accepted: (id: string) => { const next = new Map(watched); next.delete(id); watched = next; } });
 }
 const nothing = { seen: [], back: [] };
 
@@ -88,19 +93,30 @@ describe('a rename over what was typed, seen in the queue as it is read', () => 
     expect(await look([{ ...ready, ...filed(INVOICE.proposedFilename) }])).toEqual(nothing);
   });
 
-  it('is not seen for the document the window is deciding for, and is again once a decision the backend refused leaves it waiting', async () => {
-    const look = looker(typedFor('31', '33'));
+  it('is not seen for the document the window is deciding for while the decision is carried out; is seen once the backend refused it, for a document renamed by itself meanwhile or later; and is not once the backend accepted it', async () => {
+    const look = looker(typedFor('31', '32', '33'));
     const letter = sentRow(31, 'Scan 0601.pdf', 'needs_review', { ...LETTER, reason: 'DATE_AMBIGUOUS' });
+    const invoice = sentRow(32, 'Scan 0602.pdf', 'ready', INVOICE);
     const notice = sentRow(33, 'Scan 0603.pdf', 'needs_review', { ...NOTICE, reason: 'DATE_AMBIGUOUS' });
-    await look([letter, notice]);
-    // The person approves the letter here, with what they typed: being renamed, renamed. The window's own.
-    expect(await look([{ ...letter, status: 'applying' }, notice], '31')).toEqual(nothing);
-    expect(await look([{ ...letter, ...filed('2025-05-01 Letter to Halvorsen about the fixtures.pdf') }, notice], '31')).toEqual(nothing);
-    expect(await look([{ ...letter, ...filed('2025-05-01 Letter to Halvorsen about the fixtures.pdf') }, notice])).toEqual(nothing);
+    await look([letter, invoice, notice]);
+    // The person approves the letter here, with what they typed: being renamed, renamed, while the decision is carried out. The window's own.
+    const mine = '2025-05-01 Letter to Halvorsen about the fixtures.pdf';
+    expect(await look([{ ...letter, status: 'applying' }, invoice, notice], '31')).toEqual(nothing);
+    expect(await look([{ ...letter, proposedFilename: mine, ...filed(mine) }, invoice, notice], '31')).toEqual(nothing);
+    // The backend accepted it: no longer watched, and nothing is said once the decision has ended.
+    look.accepted('31');
+    const letterFiled = { ...letter, proposedFilename: mine, ...filed(mine) };
+    expect(await look([letterFiled, invoice, notice])).toEqual(nothing);
+    // The person approves the invoice just as the backend renames it by itself under Intern's proposal: nothing
+    // while the decision is carried out; the backend refuses it, and the rename by itself is seen.
+    const invoiceFiled = { ...invoice, ...filed(INVOICE.proposedFilename) };
+    expect(await look([letterFiled, { ...invoice, status: 'applying' }, notice], '32')).toEqual(nothing);
+    expect(await look([letterFiled, invoiceFiled, notice], '32')).toEqual(nothing);
+    expect(await look([letterFiled, invoiceFiled, notice])).toEqual({ seen: [{ id: '32', name: 'Scan 0602.pdf', whose: 'proposal', done: true }], back: [] });
     // An approval of the notice that the backend refused: it waits again, and is renamed later by something else.
-    expect(await look([notice], '33')).toEqual(nothing);
-    expect(await look([notice])).toEqual(nothing);
-    expect((await look([{ ...notice, ...filed(NOTICE.proposedFilename) }])).seen).toEqual([{ id: '33', name: 'Scan 0603.pdf', whose: 'proposal', done: true }]);
+    expect(await look([letterFiled, invoiceFiled, notice], '33')).toEqual(nothing);
+    expect(await look([letterFiled, invoiceFiled, notice])).toEqual(nothing);
+    expect((await look([letterFiled, invoiceFiled, { ...notice, ...filed(NOTICE.proposedFilename) }])).seen).toEqual([{ id: '33', name: 'Scan 0603.pdf', whose: 'proposal', done: true }]);
   });
 
   it('says "from somewhere else" when the window cannot tell whose name it was', async () => {
@@ -338,6 +354,31 @@ describe('the window, when a document typed for is renamed by something other th
     expect(within(panel).getByLabelText('Filename')).toHaveValue(TYPED);
     await byItself(() => renamed(31));
     await waitFor(() => expect(toast()).toHaveTextContent("Scan 0601.pdf was renamed under Intern's proposal."));
+  });
+
+  // The person decides a ready document just as automatic renaming renames
+  // it: the backend refuses the decision, since the document no longer
+  // waits for one, and what was typed was not filed.
+  const decidedAsRenamedByItself = async (decision: 'approve' | 'keepOriginal', button: string | RegExp) => {
+    const { bridge, change } = await start(true);
+    const panel = await typeName('Scan 0602.pdf', '2025-05-02 Invoice 4471 from Brightwater');
+    bridge[decision].mockImplementationOnce(async () => {
+      change(32, filed(INVOICE.proposedFilename));
+      throw { code: 'INVALID_TRANSITION', message: 'proposal is not reviewable' };
+    });
+    fireEvent.click(within(panel).getByRole('button', { name: button }));
+    await waitFor(() => expect(screen.getByRole('alert', { name: 'Action error' })).toBeInTheDocument());
+    await waitFor(() => expect(toast()).toHaveTextContent("Scan 0602.pdf was renamed under Intern's proposal. What you typed for it was not filed, and is kept in its details."));
+    expect(within(toast()!).getByRole('button', { name: 'Undo the rename of Scan 0602.pdf' })).toBeEnabled();
+    expect(screen.getByLabelText('What you had typed')).toHaveValue('2025-05-02 Invoice 4471 from Brightwater\n\nInvoice from Brightwater Supply Co.');
+  };
+
+  it('says so of a document renamed by itself as the person approves it, the backend refusing the approval', async () => {
+    await decidedAsRenamedByItself('approve', /^Apply rename/);
+  });
+
+  it('says so of a document renamed by itself as the person keeps it under its own name, the backend refusing that', async () => {
+    await decidedAsRenamedByItself('keepOriginal', 'Keep original');
   });
 
   it('says nothing of a document with nothing typed for it, renamed by itself as before', async () => {
