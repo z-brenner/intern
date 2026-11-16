@@ -11785,6 +11785,310 @@ fn approving_exactly_what_a_parked_rename_by_itself_was_filing_is_an_approval() 
     assert!(!approved(ids[2]));
 }
 
+/// One agreement that automatic renaming filed by itself and that parked
+/// with its original held open: its copy published as `AGREEMENT_NAME` in
+/// the document's folder, the original still there, the record nobody's.
+/// `notes` go on the record, as Balanced files a reading with a note.
+/// Returns the queue, the item and the folder; the original can be deleted
+/// from here on.
+fn parked_by_itself(root: &Path, notes: &[&str]) -> (Pipeline, i64, PathBuf) {
+    let folder = root.join("a");
+    fs::create_dir_all(&folder).unwrap();
+    let path = source(&folder, "scan.pdf");
+    let filesystem = Arc::new(UndeletableOriginalFileSystem::default());
+    let pipeline = reviewed_queue(root, filesystem.clone(), 1);
+    SettingsStore::new(root.join("settings.json"))
+        .save(&AppSettings {
+            automatic_rename: true,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    filesystem.refuse.store(true, Ordering::SeqCst);
+    let id = pipeline.enqueue_files(&[path]).unwrap().remove(0).id;
+    pipeline.run_until_idle().unwrap();
+    filesystem.refuse.store(false, Ordering::SeqCst);
+    let parked = item_of(&pipeline, id);
+    assert_eq!(parked.status, QueueStatus::NeedsReview);
+    assert_eq!(parked.error_code, Some(ErrorCode::SourceDeleteFailed));
+    assert!(parked.unsettled_receipt.is_some());
+    let record = parked.proposal.unwrap();
+    assert_eq!(record.filename, AGREEMENT_NAME);
+    assert!(!record.approved);
+    if !notes.is_empty() {
+        rewrite_record(root, id, |record| record["reasons"] = json!(notes));
+    }
+    (pipeline, id, folder.canonicalize().unwrap())
+}
+
+/// Changes item `id`'s stored record by hand.
+fn rewrite_record(root: &Path, id: i64, change: impl FnOnce(&mut Value)) {
+    let database = Connection::open(root.join("queue.sqlite3")).unwrap();
+    let stored: String = database
+        .query_row(
+            "SELECT proposal_json FROM proposals WHERE queue_item_id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut record: Value = serde_json::from_str(&stored).unwrap();
+    change(&mut record);
+    database
+        .execute(
+            "UPDATE proposals SET proposal_json = ?1 WHERE queue_item_id = ?2",
+            rusqlite::params![record.to_string(), id],
+        )
+        .unwrap();
+}
+
+/// After an approval of item `id`'s parked rename: filed as
+/// `AGREEMENT_NAME` in `folder`, and the person's approval on the record,
+/// its notes cleared.
+fn assert_approved_as_filed(pipeline: &Pipeline, id: i64, folder: &Path, case: &str) {
+    let filed = item_of(pipeline, id);
+    assert_eq!(filed.status, QueueStatus::Completed, "{case}");
+    assert_eq!(
+        filed.filed_receipt.unwrap().destination,
+        folder.join(AGREEMENT_NAME),
+        "{case}"
+    );
+    let record = filed.proposal.unwrap();
+    assert_eq!(record.filename, AGREEMENT_NAME, "{case}");
+    assert!(record.approved, "{case}");
+    assert!(record.reasons.is_empty(), "{case}");
+}
+
+/// The organization's own names saved in Settings while a rename automatic
+/// renaming started is parked, its original held open, with a note on its
+/// reading and without one. The rename is filing the document under the
+/// name on its record, and the record keeps that name: Details shows the
+/// name the file is getting, and a person who approves exactly that has
+/// approved what is filed. The save gave the record a name without the
+/// organization, one the file never had. Approved exactly, it was taken as
+/// done once the check finished the rename: the record said approved under
+/// that name, its note was cleared, and the name Intern gave the file by
+/// itself was left with nothing saying nobody approved it.
+#[test]
+fn own_names_saved_while_a_rename_by_itself_is_parked_leave_the_name_it_is_filing() {
+    for notes in [&[][..], &["TYPE_INFERRED"][..]] {
+        let case = format!("notes {notes:?}");
+        let temp = tempdir().unwrap();
+        let (pipeline, id, folder) = parked_by_itself(temp.path(), notes);
+        let before = record_of(&pipeline, id);
+        SettingsStore::new(temp.path().join("settings.json"))
+            .save(&AppSettings {
+                automatic_rename: true,
+                our_names: vec!["Acme Corporation".into()],
+                ..AppSettings::default()
+            })
+            .unwrap();
+        pipeline
+            .refresh_own_names(&["Acme Corporation".to_owned()])
+            .unwrap();
+
+        let shown = record_of(&pipeline, id);
+        assert_eq!(shown.filename, AGREEMENT_NAME, "{case}");
+        assert_eq!(shown.revision, before.revision, "{case}");
+        assert_eq!(shown.reasons, notes, "{case}");
+
+        pipeline
+            .approve(id, &shown.filename, &shown.description)
+            .unwrap();
+        assert_approved_as_filed(&pipeline, id, &folder, &case);
+    }
+}
+
+/// "Use now" on a learned spelling while a rename automatic renaming
+/// started is parked. The spelling would change the name, but the rename is
+/// filing the name on the record, and the record keeps it, with no hold for
+/// the spelling. Approved exactly, it is an approval of what is filed. The
+/// spelling rebuilt the record's name, one the file was not getting, and
+/// held it for the unchecked spelling; the approval of that name was taken
+/// as done.
+#[test]
+fn a_spelling_used_while_a_rename_by_itself_is_parked_leaves_the_name_it_is_filing() {
+    let temp = tempdir().unwrap();
+    let (pipeline, id, folder) = parked_by_itself(temp.path(), &[]);
+    let before = record_of(&pipeline, id);
+    Connection::open(temp.path().join("queue.sqlite3"))
+        .unwrap()
+        .execute(
+            "INSERT INTO house_rules(kind, from_key, from_value, to_value, seen, created_at, updated_at)
+             VALUES ('party', 'acme corporation', 'Acme Corporation', 'Acme', 1, 1, 1)",
+            [],
+        )
+        .unwrap();
+    let rule = pipeline.learned_rules().unwrap()[0].id;
+    pipeline.use_rule(rule).unwrap();
+    assert!(pipeline.learned_rules().unwrap()[0].active);
+
+    let shown = record_of(&pipeline, id);
+    assert_eq!(shown.filename, AGREEMENT_NAME);
+    assert_eq!(shown.revision, before.revision);
+    assert!(shown.house_rules.is_empty());
+    assert!(shown.reasons.is_empty());
+
+    pipeline
+        .approve(id, &shown.filename, &shown.description)
+        .unwrap();
+    assert_approved_as_filed(&pipeline, id, &folder, "used now");
+}
+
+/// A parked rename by itself whose record an earlier build composed again
+/// while it was parked, so it names what the file never had, with a note
+/// on its reading. An approval of exactly that name, once the check it
+/// makes first has finished the rename, is refused and says what the
+/// document is filed as; the record stays nobody's, and its note stays. It
+/// was taken as done: the record said approved under a name the file never
+/// had, and the note was cleared.
+#[test]
+fn approving_a_name_a_parked_rename_was_not_filing_is_refused_once_it_is_filed() {
+    let temp = tempdir().unwrap();
+    let (pipeline, id, folder) = parked_by_itself(temp.path(), &["TYPE_INFERRED"]);
+    let recomposed = "2024-04-12 Employment Agreement with John Smith.pdf";
+    rewrite_record(temp.path(), id, |record| {
+        record["filename"] = json!(recomposed);
+        record["own_names"] = json!(["Acme Corporation"]);
+        record["revision"] = json!(record["revision"].as_u64().unwrap() + 1);
+    });
+    let shown = record_of(&pipeline, id);
+    assert_eq!(shown.filename, recomposed);
+
+    let refused = pipeline
+        .approve(id, &shown.filename, &shown.description)
+        .unwrap_err();
+    assert_eq!(refused.code, "ALREADY_FILED");
+    assert!(
+        refused.message.contains(AGREEMENT_NAME),
+        "{}",
+        refused.message
+    );
+    let filed = item_of(&pipeline, id);
+    assert_eq!(filed.status, QueueStatus::Completed);
+    assert_eq!(
+        filed.filed_receipt.unwrap().destination,
+        folder.join(AGREEMENT_NAME)
+    );
+    let record = filed.proposal.unwrap();
+    assert!(!record.approved, "the filing is still nobody's");
+    assert_eq!(record.reasons, ["TYPE_INFERRED"], "and keeps its note");
+    assert_eq!(record.filename, recomposed);
+}
+
+/// A rename automatic renaming started that found its name taken in the
+/// folder by the time it filed, so it filed the document as that name
+/// numbered ` (2)`, and parked with its original held open. Details shows
+/// the name on the record, which never hears of the number: approved
+/// exactly, once the check has finished the rename, it is an approval of
+/// what is filed. So is the numbered name the file took. Any other name is
+/// refused.
+#[test]
+fn approving_the_name_a_parked_rename_numbered_is_an_approval_of_what_is_filed() {
+    let numbered =
+        "2024-04-12 Employment Agreement between John Smith and Acme Corporation (2).pdf";
+    for (approved, done) in [
+        (AGREEMENT_NAME, true),
+        (numbered, true),
+        ("2024-04-12 Employment Agreement with Acme.pdf", false),
+    ] {
+        let temp = tempdir().unwrap();
+        let folder = temp.path().join("a");
+        fs::create_dir_all(&folder).unwrap();
+        let path = source(&folder, "scan.pdf");
+        let filesystem = Arc::new(UndeletableOriginalFileSystem::default());
+        let pipeline = reviewed_queue(temp.path(), filesystem.clone(), 1);
+        let id = ready_document(&pipeline, &path);
+        // Someone else's file takes the name before automatic renaming is
+        // turned on and files the ready agreement.
+        fs::write(folder.join(AGREEMENT_NAME), b"someone else's").unwrap();
+        SettingsStore::new(temp.path().join("settings.json"))
+            .save(&AppSettings {
+                automatic_rename: true,
+                ..AppSettings::default()
+            })
+            .unwrap();
+        filesystem.refuse.store(true, Ordering::SeqCst);
+        pipeline.run_until_idle().unwrap();
+        filesystem.refuse.store(false, Ordering::SeqCst);
+        let parked = item_of(&pipeline, id);
+        assert_eq!(parked.status, QueueStatus::NeedsReview, "{approved}");
+        assert_eq!(
+            parked.error_code,
+            Some(ErrorCode::SourceDeleteFailed),
+            "{approved}"
+        );
+        let shown = parked.proposal.unwrap();
+        assert_eq!(shown.filename, AGREEMENT_NAME, "{approved}");
+        assert!(!shown.approved, "{approved}");
+
+        let result = pipeline.approve(id, approved, &shown.description);
+        let filed = item_of(&pipeline, id);
+        assert_eq!(filed.status, QueueStatus::Completed, "{approved}");
+        assert_eq!(
+            filed.filed_receipt.unwrap().destination,
+            folder.canonicalize().unwrap().join(numbered),
+            "{approved}"
+        );
+        let record = filed.proposal.unwrap();
+        if done {
+            result.unwrap();
+            assert!(record.approved, "{approved}");
+        } else {
+            assert_eq!(result.unwrap_err().code, "ALREADY_FILED", "{approved}");
+            assert!(!record.approved, "{approved}");
+        }
+        assert_eq!(
+            fs::read(folder.join(AGREEMENT_NAME)).unwrap(),
+            b"someone else's"
+        );
+    }
+}
+
+/// A rename left unfinished before it moved anything, as a crash or an
+/// earlier build leaves one: planned in the journal, the document in
+/// review. The organization's names saved meanwhile leave its name as it
+/// is, as for any rename not yet settled. Check again rolls the rename
+/// back, and the name is then composed as the save would have composed it.
+/// It kept the names of its day until the next Settings save.
+#[test]
+fn a_rename_check_again_rolls_back_is_named_under_the_names_saved_meanwhile() {
+    let temp = tempdir().unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let path = source(temp.path(), "scan.pdf");
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 1);
+    let id = ready_document(&pipeline, &path);
+    seed_orphaned_planned_receipt(&database, &item_of(&pipeline, id));
+    let before = record_of(&pipeline, id);
+    SettingsStore::new(temp.path().join("settings.json"))
+        .save(&AppSettings {
+            our_names: vec!["Acme Corporation".into()],
+            ..AppSettings::default()
+        })
+        .unwrap();
+    pipeline
+        .refresh_own_names(&["Acme Corporation".to_owned()])
+        .unwrap();
+    assert_eq!(record_of(&pipeline, id).filename, AGREEMENT_NAME);
+
+    pipeline.retry(id).unwrap();
+
+    let checked = item_of(&pipeline, id);
+    assert!(checked.unsettled_receipt.is_none());
+    assert_eq!(checked.receipt.unwrap().stage, OperationStage::RolledBack);
+    assert!(matches!(
+        checked.status,
+        QueueStatus::Ready | QueueStatus::NeedsReview
+    ));
+    let record = checked.proposal.unwrap();
+    assert_eq!(
+        record.filename,
+        "2024-04-12 Employment Agreement with John Smith.pdf"
+    );
+    assert_eq!(record.own_names, ["Acme Corporation"]);
+    assert!(record.revision > before.revision);
+    assert!(!record.approved);
+    assert!(path.exists(), "nothing was filed");
+}
+
 /// A rename an older build left planned, beside a document read again since
 /// and sent to review - the model asked for a person. Checking it again
 /// rolls the rename back, and used to leave the document ready: with
