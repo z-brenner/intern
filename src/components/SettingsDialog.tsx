@@ -1,4 +1,7 @@
 import { LocalModel } from '../features/settings/LocalModel';
+import { ReviewLevelChoice } from '../features/settings/ReviewLevel';
+import { NOTHING_TYPED, renamedOverTyped, typedWarning } from '../features/settings/savingOverTyped';
+import type { TypedWaiting } from '../features/settings/savingOverTyped';
 import { useModelSetup } from '../features/setup/useModelSetup';
 import { IntakeHealthNotice } from '../features/intake/IntakeHealth';
 import { MicrosoftIntakeSettings } from '../features/intake/MicrosoftIntakeSettings';
@@ -10,6 +13,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { AppSettings, CloudLocation, CloudRoot, DestinationLayout, IntakeStatus, LearnedRule } from '../types';
 import { GUIDE_URL } from '../lib/bridge';
 import { tooShortOwnNames } from '../lib/ownNames';
+import { reviewLevelOf, withKnownReviewLevel, withReviewLevel } from '../lib/reviewLevel';
 import type { DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateProgressListener, UpdateStatus } from '../lib/bridge';
 import { installingLabel } from '../lib/format';
 import { useEditsOnlyInside } from '../lib/dialogEdits';
@@ -221,6 +225,13 @@ interface Props {
   hideSharePointConnection?: boolean;
   /** Open guided folder setup in place of this dialog. */
   onChooseFolder?(): void;
+  /**
+   * How many documents in the queue have a name or a description a person
+   * typed and did not file, as the window knows it now (`typedWaiting`). The
+   * backend does not, and a save that lets Intern rename them by itself
+   * says so first. None where there is no queue yet.
+   */
+  typed?: TypedWaiting;
 }
 
 /**
@@ -233,11 +244,76 @@ interface ExistingDocuments {
   process: boolean;
 }
 
-export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, renameApplying = false, hideSharePointConnection = false, onChooseFolder }: Props) {
+export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, renameApplying = false, hideSharePointConnection = false, onChooseFolder, typed = NOTHING_TYPED }: Props) {
   const [next, setNext] = useState(settings);
   // Where each local model is, live while one downloads behind the window.
   const localModel = useModelSetup(bridge, selection);
   const shortOwnNames = tooShortOwnNames(next.ourNames);
+  // What this save can do to documents a person was naming, in words, or
+  // nothing (savingOverTyped). Worked out at each render, so it follows the
+  // draft and the queue: the count changes, and the warning comes and goes,
+  // as documents are read or filed elsewhere while the dialog is open.
+  const overTyped = typedWarning(renamedOverTyped(settings, next, typed));
+  // The room the warning takes above Save: the tallest its box has been.
+  // Measured where it is drawn, since its lines break by the font. Once
+  // taken, the room is not given back while the dialog is open (see the
+  // footer).
+  const overTypedBox = useRef<HTMLParagraphElement>(null);
+  const [overTypedRoom, setOverTypedRoom] = useState(0);
+  const sections = useRef<HTMLDivElement>(null);
+  // The two choices the warning follows from, to tell a warning the
+  // person's own choice brought from one that came by itself.
+  const choices = `${Boolean(next.automaticRename)} ${reviewLevelOf(next)}`;
+  const choicesSeen = useRef(choices);
+  useLayoutEffect(() => {
+    const chosen = choicesSeen.current !== choices;
+    choicesSeen.current = choices;
+    const box = overTypedBox.current?.getBoundingClientRect();
+    if (!box || box.height <= overTypedRoom) return;
+    // How much taller the footer has just become: the box's new lines, and
+    // the first time its distance to the row under it as well.
+    const under = overTypedBox.current?.nextElementSibling?.getBoundingClientRect();
+    const grew = box.height - overTypedRoom + (overTypedRoom === 0 && under ? under.top - box.bottom : 0);
+    setOverTypedRoom(box.height);
+    // The footer has just grown over the last lines the sections show. When
+    // it was the person's own choice that brought the warning, the control
+    // they chose with can be among those lines, with the focus on it: from
+    // the keyboard at 1280 by 800 the checkbox always was, and it stayed
+    // out of sight. So if that control was in view until the footer grew,
+    // the sections scroll to show its line whole, and 4px under it.
+    //
+    // In view is asked of the control itself, not of its line. From the
+    // keyboard the browser has scrolled already. For a control partly in
+    // view when the focus came, it scrolls just enough to show the control:
+    // reached at the end of the view, it ends there and its line is cut off
+    // under it, 5px of the checkbox's and most of Balanced's, whose words
+    // stand under it. (For one wholly out of view it scrolls much further,
+    // and the line is in view already.) Asked of the line,
+    // that control counted as out of view and was left behind the footer.
+    // A pixel is allowed: the browser scrolls by whole pixels, so a control
+    // it has brought into view can end a part of one past the end (0.3px
+    // for Balanced at 1280 by 836).
+    //
+    // The scroll is by all that is cut of the line, so it can be more than
+    // the footer grew. From the keyboard, where the footer grew by 100px,
+    // it was 109px for the checkbox at 1280 by 740 and 219px for Balanced
+    // at 1280 by 860. Under a pointer left where it pressed, the scroll
+    // brings the same line or the gap under it (6px under the checkbox's,
+    // more under a level's), or the pointer is over the footer by then:
+    // nothing else to press.
+    //
+    // A control that was itself cut off by the end of the view before the
+    // footer grew is left where it is, behind the footer, and so is one
+    // outside the sections. And nothing scrolls for a warning that came by
+    // itself: that would move every section under a pointer at rest.
+    const view = sections.current;
+    const own = document.activeElement;
+    const used = own?.closest('label') ?? own;
+    if (!chosen || !view || !own || !used || !view.contains(used)) return;
+    const end = view.getBoundingClientRect().bottom;
+    const cut = used.getBoundingClientRect().bottom - end;
+    if (cut > 0 && own.getBoundingClientRect().bottom - end <= grew + 1) view.scrollTop += Math.ceil(cut) + 4;
+  }, [overTyped, choices]);
   const [status, setStatus] = useState<UpdateStatus>();
   const [checking, setChecking] = useState(false);
   const [installing, setInstalling] = useState(false);
@@ -456,7 +532,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     setSaving(true);
     setSaveError('');
     try {
-      const draft = withOwnNames(next);
+      const draft = withKnownReviewLevel(withOwnNames(next));
       const processExisting = !managed && existingDocuments?.process === true && draft.intakeFolder !== settings.intakeFolder;
       const saved = managed ? withManagedValues(draft, settings) : draft;
       await (processExisting ? onSave(saved, { processExisting: true }) : onSave(saved));
@@ -534,7 +610,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   */
   return <div className="dialog-backdrop" role="presentation"><section ref={dialog} className="settings-dialog settings-panel" role="dialog" aria-modal="true" aria-label="Settings">
     <div className="dialog-head"><h2>Settings</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close settings"><Icon icon={X} /></button></div>
-    <div className="dialog-body">
+    <div className="dialog-body" ref={sections}>
       {/*
         A settings file Intern could not read in full is reported here rather
         than beside the watched folder, because the intake panel is hidden
@@ -602,8 +678,17 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         <label>Your organization's names<textarea rows={3} aria-describedby={shortOwnNames.length > 0 ? 'own-names-hint own-names-short' : 'own-names-hint'} value={(next.ourNames ?? []).join('\n')} onChange={(event) => setNext({ ...next, ourNames: event.target.value.split(/\r?\n/) })} /></label>
         <p className="check-hint" id="own-names-hint">Your own firm's names. When a document names your firm and someone else, the filename and the Party folder use the other side.</p>
         {shortOwnNames.length > 0 && <p className="check-hint" id="own-names-short">{shortOwnNames.map((name) => `“${name}”`).join(', ')} {shortOwnNames.length === 1 ? 'is' : 'are'} too short to match safely and will not be used. Add the name as your documents print it in full.</p>}
-        <label className="check-label"><input type="checkbox" checked={Boolean(next.automaticRename)} onChange={(event) => setNext({ ...next, automaticRename: event.target.checked })} />Automatically rename high-confidence files</label>
-        <p className="check-hint">Anything Intern is less sure about still waits for you in the queue.</p>
+        {/*
+          Which documents are ready comes before whether Intern renames the
+          ready ones by itself, and is not a part of it: the level decides
+          what Rename all ready renames as well. The checkbox used to say
+          "high-confidence files", which at Balanced is not what a ready
+          document is; it says "ready", and the choice above says what
+          ready means.
+        */}
+        <ReviewLevelChoice level={reviewLevelOf(next)} onChange={(level) => setNext((current) => withReviewLevel(current, level, settings))} />
+        <label className="check-label"><input type="checkbox" checked={Boolean(next.automaticRename)} onChange={(event) => setNext({ ...next, automaticRename: event.target.checked })} />Automatically rename ready documents</label>
+        <p className="check-hint">Anything that is not ready still waits for you in the queue.</p>
       </details>
       {/* A question is not left open in a section closed over it: closing the section takes it back. */}
       <details className="settings-group settings-advanced" onToggle={(event) => { if (!event.currentTarget.open) setCheckingRule(undefined); }}>
@@ -745,6 +830,57 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
       </section>
     </div>
     <div className="dialog-actions">
+      {/*
+        What this save can do to documents a person was naming, said before
+        it is pressed. Words only: Save is not held back, and nothing here
+        acts.
+
+        Above Save, not beside the two choices it follows from. The footer
+        stays in view wherever the sections are scrolled to, so it is seen as
+        either choice is made; the line under the checkbox is below the fold
+        at 800 by 600 when Balanced is chosen. And it comes and goes by
+        itself: under the checkbox, every section after it would move each
+        time, buttons and all, under a pointer at rest.
+
+        Here, where the dialog is as tall as the window lets it be (it is at
+        1280 by 800 and at 800 by 600), nothing moves when it comes: the
+        footer grows upward, Save and the sections stay where they are, and
+        the sections lose their last lines from view, to be scrolled to. But
+        for one thing, and only by the person's own choice: when the line of
+        the control they chose with is cut off by the footer, and the
+        control itself was in view until then, the sections scroll to show
+        that line whole (the layout effect above). A warning that comes by
+        itself scrolls nothing, and can leave the control with the focus
+        behind it.
+
+        And the footer never grows smaller again while the dialog is open. A
+        count that takes fewer lines is shown in the room the longer one
+        took. When the warning goes, its room stays above Save with nothing
+        in it. Given back to the sections, it uncovered whatever was scrolled
+        behind the warning, under a pointer at rest on its words: nothing in
+        Settings is marked as a control that acts, so a press there a tenth
+        of a second later checked for updates, or forgot a learned spelling.
+        Kept, nothing is uncovered and nothing moves, whether it goes by a
+        choice taken back or by itself. It costs a blank band above Save,
+        and the shorter view of the sections, until Settings is closed.
+
+        One case is not looked after. Where the dialog is shorter than the
+        window lets it be, the first time the warning shows makes it taller
+        about its middle: the sections go up and Save goes down, by up to
+        half of what the footer grows by, which is the warning's box and
+        its distance to Save: 50px each way where that is 100px. That is so
+        in a tall window: in the demo, one over about 1070px high with every
+        section closed, and over about 1750px with Naming and filing open.
+        It happens the first time the warning shows after Settings is
+        opened, as the person ticks the checkbox or chooses Balanced, or by
+        itself when a document with something typed for it comes back to
+        wait while the choice is already made. And it happens again, by up
+        to half a line each way, whenever a later count takes a line more
+        than any before it. Otherwise the warning has its room.
+      */}
+      {overTyped
+        ? <p ref={overTypedBox} className="save-warning" role="alert" style={overTypedRoom ? { minHeight: overTypedRoom } : undefined}>{overTyped}</p>
+        : overTypedRoom > 0 && <div aria-hidden="true" className="save-warning-room" style={{ height: overTypedRoom }} />}
       {saveError && <p className="form-error save-error" role="alert">{saveError}</p>}
       <button type="button" className="primary" disabled={saving} onClick={() => void runSave()}>{saving ? 'Saving…' : 'Save settings'}</button>
     </div>

@@ -241,12 +241,78 @@ export function humanizeReason(reason: string): string {
   if (parts.length === 0 || !parts.every((part) => SENTENCES[part.toUpperCase()] !== undefined)) {
     return reason;
   }
-  const codes = parts.map((part) => part.toUpperCase());
+  return sentences(parts.map((part) => part.toUpperCase()), {});
+}
+
+/**
+ * The sentences for a list of codes, each with its closing sentence unless
+ * a later code says the same one. `instead` has the sentence to say for a
+ * code in place of its own, which then stands alone, with no closing. A
+ * code with no sentence is said as it came.
+ */
+function sentences(codes: readonly string[], instead: Record<string, string>): string {
+  const closingOf = (code: string) => instead[code] === undefined ? CLOSINGS[code] : undefined;
   return codes.map((code, index) => {
-    const closing = CLOSINGS[code];
-    const saidLater = closing !== undefined && codes.slice(index + 1).some((later) => CLOSINGS[later] === closing);
-    return closing === undefined || saidLater ? SENTENCES[code] : `${SENTENCES[code]} ${closing}`;
+    const closing = closingOf(code);
+    const saidLater = closing !== undefined && codes.slice(index + 1).some((later) => closingOf(later) === closing);
+    const sentence = instead[code] ?? SENTENCES[code] ?? code;
+    return closing === undefined || saidLater ? sentence : `${sentence} ${closing}`;
   }).join(' ');
+}
+
+/**
+ * The same codes on a document that is not waiting. At the Balanced review
+ * level a reading can be ready while it carries some of them, and a document
+ * Intern then renames by itself is filed with them still on its record. There
+ * they are notes: nothing holds the document, and it can be renamed with
+ * nobody looking at it. A sentence above that ends on an instruction -
+ * "Check the type." - reads on such a document as if it were still waiting
+ * for that check, so each of those has its note here: what Intern found,
+ * and for the model's doubt where to look if the person does look.
+ *
+ * Only the codes the level lets a ready document carry need one (the level's
+ * rule is the engine's). A code with no entry keeps its sentence above, as
+ * TYPE_MISSING and DESCRIPTION_UNSUPPORTED do: each says what was found and
+ * asks for nothing. On such a document TYPE_MISSING never means the name
+ * has no type: the level makes a reading ready only when its name has one,
+ * and the engine raises the code for a type that is a general word alone
+ * ("Letter", "Agreement", "Notice") as well. Its sentence, "No specific
+ * document type was identified", holds of that. Its few words, "No
+ * document type", do not, so a note has its own (SHORT_NOTES).
+ */
+const NOTE_SENTENCES: Record<string, string> = {
+  TYPE_UNSUPPORTED: 'The document does not confirm the type in this name as its own. The type does not appear verbatim in the document, or appears only where the document says what it is about, such as a subject line or the text of a letter.',
+  TYPE_INFERRED: 'Intern supplied the type in this name: the document\'s own title, or the kind its layout shows, such as “Letter” or “Email”.',
+  LOW_CONFIDENCE: 'The model was unsure of its reading. If you look at this name, start with the date and the parties.',
+};
+
+/**
+ * Codes that say what became of a document's file, not anything about how
+ * it was read: an exact copy filed as one, a name the file already had. On
+ * a ready or a filed document they are not notes about its reading.
+ */
+const OUTCOME_CODES = new Set(['EXACT_COPY', 'ALREADY_NAMED']);
+
+/** The codes of a list that are notes about a reading: all but those that say what became of the file. */
+export function noteCodes(codes: readonly string[]): string[] {
+  return codes.filter((code) => !OUTCOME_CODES.has(code));
+}
+
+/**
+ * A list of codes with what became of the file first. On a filed document
+ * that is the news - nothing was renamed - and what Intern had noted about
+ * its reading reads after it.
+ */
+export function outcomeFirst(codes: readonly string[]): string[] {
+  return [...codes.filter((code) => OUTCOME_CODES.has(code)), ...noteCodes(codes)];
+}
+
+/**
+ * What Intern noted, for a list of codes on a document that is not waiting:
+ * each code's note, or its sentence where that already reads as one.
+ */
+export function describeNotes(codes: readonly string[]): string {
+  return sentences(codes.map((code) => code.trim().toUpperCase()), NOTE_SENTENCES);
 }
 
 /**
@@ -325,13 +391,56 @@ export function flaggedFields(codes: readonly string[]): ReasonField[] {
 }
 
 /**
+ * The few words for a note, where a review's would be false of a document
+ * that is not waiting. TYPE_MISSING is raised for a name with no type and
+ * for one whose type is a general word alone ("Letter", "Agreement"). Only
+ * the second can be ready (the Balanced level holds a name with no type),
+ * so on a ready or a renamed document "No document type" stood beside a
+ * name that had one. These words hold in both cases.
+ */
+const SHORT_NOTES: Record<string, string> = {
+  TYPE_MISSING: 'No specific type',
+};
+
+/** A code about one part of the name says more than the model's general doubt. */
+const aboutAPart = (code: string) => Number(reasonField(code) !== undefined);
+
+/**
+ * The few words, from `words`, for the code of a list that `rank` puts
+ * first (the higher, the sooner; codes of one rank in the order they came),
+ * with the rest counted rather than listed.
+ */
+function fewWords(codes: readonly string[], words: Record<string, string>, rank: (code: string) => number): { text: string; more: number } | undefined {
+  const known = codes.filter((code) => words[code] !== undefined);
+  if (!known.length) return undefined;
+  const ranked = [...known].sort((left, right) => rank(right) - rank(left));
+  return { text: words[ranked[0]], more: ranked.length - 1 };
+}
+
+/**
  * The few words for a list of codes, most specific first: a code about one
  * part of the name says more than the model's general doubt, so it leads,
  * and the rest are counted rather than listed.
  */
 export function shortReason(codes: readonly string[]): { text: string; more: number } | undefined {
-  const known = codes.filter((code) => SHORT[code] !== undefined);
-  if (!known.length) return undefined;
-  const ranked = [...known].sort((left, right) => Number(reasonField(right) !== undefined) - Number(reasonField(left) !== undefined));
-  return { text: SHORT[ranked[0]], more: ranked.length - 1 };
+  return fewWords(codes, SHORT, aboutAPart);
+}
+
+/**
+ * The same for the notes on a document that is not waiting: a review's few
+ * words, except where those would be false of it (SHORT_NOTES).
+ */
+export function shortNote(codes: readonly string[]): { text: string; more: number } | undefined {
+  return fewWords(codes, { ...SHORT, ...SHORT_NOTES }, aboutAPart);
+}
+
+/**
+ * The same for a filed document that was not renamed with a note: what
+ * became of the file leads ("Already had this name"), and what was noted
+ * about its reading is counted behind it. With nothing said of the file
+ * these are a review's few words, as a document a person kept under its
+ * own name has always shown them.
+ */
+export function shortOutcome(codes: readonly string[]): { text: string; more: number } | undefined {
+  return fewWords(codes, SHORT, (code) => OUTCOME_CODES.has(code) ? 2 : aboutAPart(code));
 }

@@ -542,6 +542,145 @@ Each is deterministic, unit-tested against the corpus's own date lines and
 titles, and never invents a fact: a role, a type, or a relation is inferred
 only from text the validation has already found in the document.
 
+### The review level
+
+Everything above says what the engine doubts about a reading: each doubt is a
+review reason, and the engine's own status is ready only when it raised none.
+A review level is applied on top of that and changes neither. It says which
+readings are shown as ready, which Rename all ready renames, and which are
+renamed with no person when automatic renaming is on.
+`review_level::readiness` in intern-engine is the only place the rule is
+written. The queue asks it for every reading it stores (`record_for`) and the
+benchmark for every reading it scores (`intern-bench run --review-level`).
+
+* **`strict`**, the default: the engine's own status, exactly, as in every
+  release before the levels. Settings with no `reviewLevel`, or with a value
+  this build does not know, are strict; an unknown value is also named in the
+  notice that says which settings could not be read.
+* **`balanced`**: a reading strict holds is ready when all of these are true.
+  1. It has a date and its name starts with it.
+  2. Every reason on it is one of `TYPE_MISSING`, `TYPE_UNSUPPORTED`,
+     `TYPE_INFERRED`, `DESCRIPTION_UNSUPPORTED` and `LOW_CONFIDENCE`. The
+     list names what does not hold a reading, so everything else does: every
+     date reason, every party reason, `DESCRIPTION_INVALID`,
+     `PARSER_WARNING`, the model's own request for review, the quick model's
+     `FAST_MODEL_READING`, and any reason added after this was written.
+  3. A `LOW_CONFIDENCE` on it is there for the token probabilities only. A
+     reading whose model rated itself below `READY_CONFIDENCE`, or that
+     stores no reply to read that from, waits.
+  4. It has a document type. A name that would say "Document" waits, also
+     when the type is that word with a file extension after it.
+  5. A title did not stand in for a type the document did not support:
+     `TYPE_UNSUPPORTED` with `TYPE_INFERRED` and without `TYPE_MISSING`
+     waits.
+
+A level takes no reason off a reading. At balanced a ready record carries its
+reasons, and the window shows them as notes: "Ready with a note", and
+"Completed with a note" once Intern has renamed the document by itself. A
+person's approval clears the reasons, so "Completed with a note" marks only
+names nobody approved: those Intern renamed by itself while their reading
+had a note. A name Intern gave by itself to a reading with no note, every
+one at strict among them, is not marked.
+
+What a level does not decide:
+
+* The queue's own holds stand at both levels: a near duplicate, a learned
+  spelling nobody has checked, a name with no leading date at filing, a
+  changed file, an uploader that could not be verified, a document that could
+  not be read.
+* The quick model's readings wait at both levels.
+* The quick-then-accurate cascade (`tiers::escalation_with`) goes on deciding
+  by the engine's own status, so the level never changes which model reads a
+  document.
+* A recording, a stored reading and the CI replay gates see the same status
+  and the same reasons as before. The bench's default is strict and its
+  report says its level only when it is not.
+
+**Changing the level.** A Settings save that changes the level tells the
+queue (`Pipeline::review_level_changed`), whatever the save's other steps
+did. Nothing is read again: each waiting document is judged from its stored
+reading. The save renames nothing itself. When the judging made a document
+ready, or failed part-way, it wakes the scheduler, which renames what
+automatic renaming would rename after any reading, one document at a time
+under the run lock. So every name nobody approved is looked at and filed on
+one thread, in order, and a Settings save returns once the queue is judged,
+however large the backlog. A pass that is reading a backlog files only
+approvals between documents, so what a save made ready meanwhile is renamed
+by the pass after the backlog; nothing is renamed while the queue is paused
+or no model is ready to read.
+
+* Toward balanced, a waiting document becomes ready only where the level is
+  what changes the answer and its record waits on nothing but its reading. A
+  document in review for another reason stays there. Its revision does not
+  move, so the queue keeps a reviewer's place.
+* Toward strict, a ready document nobody approved whose reading strict holds
+  goes back to review, and its revision moves, as for anything sent to
+  review. This is also a standing guard (`held_for_review_level`): before
+  every filing without approval, on each scheduler pass, when the queue
+  opens and on recovery. Settings that cannot be read count as strict there.
+  A document already renamed stays renamed.
+* At balanced, two scans of one document are not both renamed with no
+  person. A reading is held as a near duplicate when it is stored, against
+  the filings there are then. A level can make two waiting scans ready
+  before either is filed (the queue paused, another document being read,
+  automatic renaming off), so at balanced the same look is made again at
+  filing (`held_as_near_duplicate`) for every record nobody approved: the
+  second scan waits as `NEAR_DUPLICATE`, naming the first. Which scan is
+  kept is the one the queue reaches first. At strict that look is not made
+  and filing is as released: two scans strict calls ready, both waiting
+  while automatic renaming is off, are both filed when it is turned on. A
+  name a person approved is filed whatever it repeats, at both levels.
+
+**Why strict is the default.** Balanced was designed on the development
+documents, fixed, and read once on two held-out sets under a bar written down
+first: no more than one in ten of the names it renames by itself really
+wrong. It renamed 45 of 109 where strict renamed 7, and 7 of the 45 were
+really wrong (5 read by hand). It missed the bar, so it is a choice and not
+the default, and it was not tuned afterwards
+([`bench/reports/review-levels-2026-11`](../bench/reports/review-levels-2026-11/README.md)).
+Both held-out sets have now been read under these levels: a change to a
+level, or a new one, has to be confirmed on a new set.
+
+What it costs and what is left. At balanced every filing nobody approved
+makes one more near-duplicate lookup; with a shared filed index each lookup
+reads the index's markers. A judging that itself fails (the queue's database
+unavailable) is reported and not tried again by the next save; choosing the
+other level and back judges again, and nothing the level holds is filed
+meanwhile. A release before the levels treats a ready document with a note
+as ready: choose Strict before going back to one. The queue does not know
+what a person typed in the review panel and did not file. The window warns
+above Save when a save would let Intern rename such a document
+(`src/features/settings/savingOverTyped.ts`), and after the rename keeps
+what was typed beside the document, read-only.
+
+What the window says afterwards. Each queue row says whether this machine
+renamed the document with nobody's approval (`renamedWithoutApproval`: the
+row is completed, filed here, and its record is not approved). Every approval
+a person makes sets `approved` on the record and clears its notes, also one
+that finds the earlier rename finished by the check it makes first and takes
+the approval as done (`Pipeline::already_filed`). That is so only for an
+approval of what the rename filed: the name the file took, or the name on
+the record where the file took it numbered ` (2)` because it was taken. Any
+other name is refused, and the rename stays marked. A rename keeps the name
+it is filing on its record from the moment the queue reads that name for
+the last time, just before the rename begins, until the rename is settled,
+also while it is parked with its original held open, whatever Settings or
+the learned spellings say meanwhile. So the name Details shows for it is
+the one being filed. A name composed while a filing still waits, behind
+another file operation or the look for a near duplicate, is not filed over:
+that filing files nothing, and the next pass files the new name if the
+document is still ready then; one a spelling nobody has checked changed
+waits for a person. An approval
+that lands in that last moment is refused, as one is once the rename has
+begun. When a rename so marked lands on a
+document with typed text while the window is open, the window says so when
+it sees the rename happen and offers Undo for that rename
+(`src/features/review/renamedByItself.ts`). It reads only the mark, never
+whose decision it saw go by. A rename made while the window was closed is
+not said. After a save that changes the level, the window says how
+many waiting documents became ready or went back to review
+(`src/features/settings/levelChanged.ts`).
+
 ## The filename
 
 ```text
@@ -751,11 +890,23 @@ every document but one whose name a person gave: the one just approved, one
 approved earlier that is waiting only for a busy queue, one whose filing
 failed and one whose rename they took back alike. That name is the
 reviewer's own text and would lose whatever the validated facts do not
-carry, the date they typed with it most of all. A recomposed record is
+carry, the date they typed with it most of all. Nor is a document whose
+rename began and has not finished, at any stage, one parked with its
+original held open among them: that rename is filing the name on its
+record, which is the name Details shows and a person approves. Nor is a
+ready document the queue has read the name of for the last time and is
+about to rename (`filing_now`). A name composed after the queue first read
+the old one and before that moment is the one the filing then finds: it
+files nothing, and leaves the new name to the next pass. When Check again
+rolls an unfinished rename back, it composes the name again then. One
+parked with its original held open is only ever finished, never rolled
+back. A recomposed record is
 written only over the record it was composed from, in the one transaction
 that checks the stored record is unchanged (`replace_proposal_if`), so an
 approval that lands between the read and the write stands and the
-recomposition leaves that document alone.
+recomposition leaves that document alone. The same transaction leaves alone
+a document whose rename began between the read and the write and has not
+finished.
 Respelling a spelling Intern applied maps back to the document's word - the
 person changed their mind about the word, not about Intern - and restoring
 the document's own spelling retracts the rule. The whole memory is the list
@@ -1173,7 +1324,8 @@ party was left out and why. The names in force are recorded with each
 proposal, so the name, the layout folder, a lesson from an edit, and the
 filing report all read the same view. Changing them in Settings recomposes
 every document still waiting, as a learned spelling does; an approved name
-keeps what the person typed. Every save asks, not only one that changed the
+keeps what the person typed, and a parked rename the name it is filing.
+Every save asks, not only one that changed the
 list, so a rename an earlier save never reached is finished by the next, and
 a document being read while the list changed reads it again as it starts to
 wait. A proposal's revision moves only when its name does: the review panel

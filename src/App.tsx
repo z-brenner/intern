@@ -1,4 +1,4 @@
-import { CircleCheck, ClipboardCopy, Ellipsis, PanelRight, Trash2 } from 'lucide-react';
+import { CircleCheck, ClipboardCopy, Ellipsis, Info, PanelRight, Trash2 } from 'lucide-react';
 import { useDeferredValue, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { AppHeader } from './components/AppHeader';
@@ -31,6 +31,7 @@ import { useMediaQuery } from './lib/useMediaQuery';
 import { folderName, foldersChosen } from './features/intake/folderNames';
 import { describeSharePointProblem } from './features/sharepoint/sharePointProblems';
 import type { SharePointProblem } from './features/sharepoint/sharePointProblems';
+import { checkText, itemNote } from './features/queue/check';
 import { useGridClipboard } from './features/queue/clipboard';
 import { describeBlock, selectionBounds } from './features/queue/grid';
 import type { ColumnKey } from './features/queue/grid';
@@ -46,6 +47,11 @@ import { useReviewShortcuts } from './features/review/useReviewShortcuts';
 import type { ReviewInspectorHandle } from './features/review/useReviewShortcuts';
 import { modelReady, useModelSetup } from './features/setup/useModelSetup';
 import { accuracyStatus } from './features/settings/LocalModel';
+import { typedWaiting } from './features/settings/savingOverTyped';
+import { levelChanged, levelChangedText } from './features/settings/levelChanged';
+import { renamedByItselfText, stillSo, undoableRenames, watchRenames, withRenames } from './features/review/renamedByItself';
+import type { RenameSaid } from './features/review/renamedByItself';
+import { reviewLevelOf } from './lib/reviewLevel';
 import type { AddReport, AppSettings, QueueItem, QueueView, SetupState } from './types';
 
 type Gate =
@@ -138,6 +144,9 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const [filter, setFilter] = useState('');
   // "Show only ready": the rows Rename all ready would rename, and no others.
   const [readyOnly, setReadyOnly] = useState(false);
+  // "Show only those with a note", in Completed: the documents renamed while
+  // Intern had something noted about their reading, to look over afterwards.
+  const [notedOnly, setNotedOnly] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [lastUpdateCheck, setLastUpdateCheck] = useState<Date>();
   const [selectedId, setSelectedId] = useState<string>();
@@ -212,7 +221,16 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // until the queue has shown what it did.
   const [own, setOwn] = useState<{ seq: number; deciding?: string }>({ seq: 0 });
   const byThePerson = () => setOwn((now) => ({ ...now, seq: now.seq + 1 }));
-  const deciding = (id: string) => setOwn((now) => ({ ...now, deciding: id }));
+  // The documents the window decided since a Settings save began, for
+  // saying what a level change did (levelChanged): a decision of the
+  // person's is not the level's doing. Every decision is recorded here:
+  // through `deciding` while it is carried out (approve, keep, remove, read
+  // again, retry, cancel, Undo from Details), and through `decidedHere` for
+  // each document Rename all ready approves and each rename a toast's Undo
+  // puts back.
+  const decidedSinceSave = useRef(new Set<string>());
+  const decidedHere = (id: string) => { decidedSinceSave.current.add(id); };
+  const deciding = (id: string) => { decidedSinceSave.current.add(id); setOwn((now) => ({ ...now, deciding: id })); };
   const decided = (id: string) => setOwn((now) => now.deciding === id ? { seq: now.seq + 1 } : now);
   // A decision the backend refused is not what takes a field. The document
   // can be read again by itself just as Enter files its name: the approval
@@ -235,7 +253,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // configuration, and saving them would overwrite a destination, a watched
   // folder, and a machine name with defaults.
   const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [settings, setSettings] = useState<AppSettings>({ destination: '', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '' });
+  const [settings, setSettings] = useState<AppSettings>({ destination: '', destinationLayout: 'flat', startMinimized: false, automaticRename: false, reviewLevel: 'strict', intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '' });
   const model = useModelSetup(bridge, selection, { initial: demo ? DEMO_SETUP : initialSetup });
   const [actionPending, setActionPending] = useState(false);
   const actionInFlight = useRef(false);
@@ -251,6 +269,44 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const [toast, setToast] = useState<{ key: number; kind: 'progress' | 'done'; text: string; undo?: string[] }>();
   const toastKey = useRef(0);
   const showToast = (kind: 'progress' | 'done', text: string, undo?: string[]) => setToast({ key: ++toastKey.current, kind, text, undo });
+  // Documents with a name or a description typed here and not filed that
+  // the backend says Intern renamed with nobody's approval, seen happen
+  // (watchRenames): said in a toast of their own, above the one for the
+  // person's own actions. In that one an action of theirs would have
+  // replaced it, or it theirs, with its Undo, whenever the two came close
+  // together; and it stays until dismissed, since nobody may be looking
+  // when it comes. A new key each time what it says changes: its Undo is
+  // then a new button, which a press made the moment it changed does not
+  // take (aimedPress), so a press meant for one rename does not undo two.
+  // `unfiledSeen`: the documents last seen not yet filed, the only ones a
+  // rename of can be seen happen. The document a decision of the person's
+  // is being carried out for is judged once the decision ends, so the look
+  // is taken again then (watchRenames).
+  const unfiledSeen = useRef(new Set<string>());
+  const [renamedHere, setRenamedHere] = useState<{ key: number; renames: readonly RenameSaid[] }>({ key: 0, renames: [] });
+  useEffect(() => {
+    const look = watchRenames(unfiledSeen.current, items, typedOver, own.deciding);
+    unfiledSeen.current = look.unfiled;
+    const { seen } = look;
+    // A rename said that the queue no longer shows so, by itself, is taken
+    // out for good: undone, cleared from the history, or gone. Only hidden
+    // (stillSo), it would be shown again if the document were renamed by
+    // itself again, without that rename being seen happen. An Undo carried
+    // out passes through being renamed, which keeps it, so one the backend
+    // refuses leaves what was said as it was.
+    const gone = renamedHere.renames.filter((rename) => stillSo([rename], items, () => true).length === 0).map(({ id }) => id);
+    if (!seen.length && !gone.length) return;
+    setRenamedHere((said) => { const renames = withRenames(said.renames, seen, gone); return renames === said.renames ? said : { key: said.key + 1, renames }; });
+    // Announced through the app's Action status as well, as every outcome
+    // is, once: when a rename is seen.
+    if (seen.length) setActionMessage(renamedByItselfText(stillSo(withRenames(renamedHere.renames, seen, gone), items, typedOver)));
+  }, [items, own.deciding]);
+  // Only while what it says is so, with what was typed still kept in the
+  // document's details (stillSo), and Undo only for the renames still
+  // completed.
+  const renamedShown = stillSo(renamedHere.renames, items, typedOver);
+  const renamedUndo = undoableRenames(renamedShown, items);
+  const dismissRenamed = () => setRenamedHere((said) => ({ key: said.key + 1, renames: [] }));
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>();
   // The version dismissed from the banner, so "Not now" does not reappear on
   // every later poll - but a newer release than the one dismissed still does.
@@ -321,7 +377,8 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const deferredFilter = useDeferredValue(filter);
   const query = deferredFilter.trim().toLowerCase();
   const readyFilter = readyOnly && view === 'queue';
-  const shown = (list: QueueItem[]) => list.filter((item) => inCurrentView(item) && (!query || matchesQuery(item, query)) && (!readyFilter || renamesWithAllReady(item)));
+  const notedFilter = notedOnly && view === 'completed';
+  const shown = (list: QueueItem[]) => list.filter((item) => inCurrentView(item) && (!query || matchesQuery(item, query)) && (!readyFilter || renamesWithAllReady(item)) && (!notedFilter || renamedWithANote(item)));
   const visible = shown(items);
   // The box itself goes by what is in it now, not by what the rows have caught up with.
   // And it stays while the caret is in it: a view that shrinks by itself to
@@ -403,11 +460,24 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // filter leaves, the same rows the count's button steps through.
   const needReview = visible.filter((item) => item.status === 'review');
   const readyItems = items.filter(renamesWithAllReady);
+  // Ready with something Intern noted about the reading (the Balanced review
+  // level): renamed with the rest, and counted beside them so the button
+  // does not rename them without a word.
+  const readyWithANote = readyItems.filter((item) => itemNote(item) !== undefined).length;
+  const renamedWithNotes = items.filter(renamedWithANote);
   // Rename all ready files Intern's proposal, so it leaves alone a ready
   // document whose name or description a person typed and has not filed:
   // filed as proposed, what they typed was gone without a word. Its count
   // is of what it will rename.
   const readyUntyped = readyItems.filter((item) => !typedOver(item.id));
+  // Automatic renaming has no such care: the backend renames whatever is
+  // ready and does not know what was typed here. So Settings is told how
+  // many documents that is, and warns before a save that would let Intern
+  // rename them (savingOverTyped). Counted at each render, so the warning
+  // follows the queue and what is typed while Settings is open. Both
+  // Settings dialogs are given it: the queue is read behind the setup
+  // screen too, and until it has been read there is nothing to count.
+  const typedNotFiled = typedWaiting(items, typedOver);
   // Installing an update hands Intern to the installer, which closes it. A
   // rename in its applying stage is the one piece of work that cannot be
   // canceled, and closing underneath it leaves the journal to finish the move
@@ -429,6 +499,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // Nothing left to show under "ready only" turns it off, rather than
   // leaving an empty table behind a filter nobody can see is on.
   useEffect(() => { if (readyOnly && !items.some(renamesWithAllReady)) setReadyOnly(false); }, [readyOnly, items]);
+  useEffect(() => { if (notedOnly && !items.some(renamedWithANote)) setNotedOnly(false); }, [notedOnly, items]);
   // The More menu closes on a click anywhere outside it, as a menu does.
   useEffect(() => {
     if (!moreOpen) return;
@@ -727,6 +798,9 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     const selectionVersion = focusRestoreVersion.current;
     const selectedAtStart = selected;
     const batch = readyUntyped;
+    // Which of them have a note now. An approval clears a document's reasons
+    // in the backend, so once they are renamed nothing says which they were.
+    const noted = new Set(batch.filter((item) => itemNote(item) !== undefined).map((item) => item.id));
     // Left for the person: ready, with a name or a description they typed.
     let leftTyped = readyItems.length - batch.length;
     setActionPending(true);
@@ -741,13 +815,14 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
         showToast('progress', `Applying ${index + 1} of ${batch.length}…`);
         // Typed over since the press: left as well.
         if (typedOver(item.id)) { leftTyped += 1; continue; }
+        decidedHere(item.id);
         try { await bridge.approve(item.id, item.proposedFilename!, item.description ?? ''); applied.push(item.id); }
         catch (error) { failed.set(item.id, error); }
       }
       // Said from the batch's own read. The one on screen can be older: a
       // queue event the renames raised starts a newer read, and the read
       // made for the batch is then never shown.
-      const outcome = batchOutcome(applied, await refresh() ?? await bridge.listItems(), leftTyped);
+      const outcome = batchOutcome(applied, await refresh() ?? await bridge.listItems(), leftTyped, noted);
       if (applied.length || leftTyped) showToast('done', outcome.text, outcome.undoable.length ? outcome.undoable : undefined);
       else setToast(undefined);
       if (failed.size) {
@@ -783,6 +858,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     try {
       for (const [index, id] of ids.entries()) {
         showToast('progress', `Undoing ${index + 1} of ${ids.length}…`);
+        decidedHere(id);
         try { await bridge.undo(id); }
         catch (error) { failed.push(error); }
       }
@@ -831,9 +907,9 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // backend says so with a queue event; reading the queue once more shows it
   // on a bridge that has no events, at the cost of one extra read on one that
   // does. The settings are saved either way, so a failed read is left to the
-  // queue's own connection banner.
-  const refreshAfterSettings = async () => {
-    try { await refresh(); } catch { /* Reported as a queue connection error. */ }
+  // queue's own connection banner. Resolves with the queue as read, if it was.
+  const refreshAfterSettings = async (): Promise<QueueItem[] | undefined> => {
+    try { return await refresh(); } catch { return undefined; /* Reported as a queue connection error. */ }
   };
   // A new input folder chosen in Settings, with "Process them too": queued
   // once the save has made it the input folder. The save already succeeded,
@@ -847,7 +923,33 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     } catch (error) {
       setActionError(`Your settings were saved, but the files already in your Queue folder could not be added to the queue. ${describeActionError(error)}`);
     }
-    await refreshAfterSettings();
+    return refreshAfterSettings();
+  };
+  // A save that changed the review level has the backend judge again the
+  // documents that wait, and the queue changes under the dialog. What it
+  // did is said where the outcome of an action is (levelChanged), from the
+  // rows on screen as the save began and the first read after it; nothing
+  // when that read failed, since then nothing was seen. Rows are counted at
+  // the moment the save is sent, so the ref follows each render.
+  const itemsShown = useRef(items);
+  useLayoutEffect(() => { itemsShown.current = items; });
+  const saveFromSettings = async (next: AppSettings, after?: { processExisting: boolean }) => {
+    const to = reviewLevelOf(next);
+    const before = to !== reviewLevelOf(settings) ? itemsShown.current : undefined;
+    decidedSinceSave.current = new Set(own.deciding ? [own.deciding] : []);
+    await saveSettings(next);
+    closeSettings();
+    // What is said after the save is only of the save.
+    if (before) setActionMessage('');
+    void (async () => {
+      const read = await (after?.processExisting ? queueWhatIsThere() : refreshAfterSettings());
+      if (!before || !read) return;
+      const change = levelChanged(before, read, to, { decidedHere: (id) => decidedSinceSave.current.has(id), typed: typedOver });
+      const text = levelChangedText(change, !next.automaticRename ? 'off' : pausedNow.current ? 'paused' : 'automatic');
+      showToast('done', text);
+      // After what the add said, when the same save added the files already in the folder.
+      setActionMessage((said) => after?.processExisting && said ? `${said} ${text}` : text);
+    })();
   };
   // The click is not the moment Intern closes. The download comes first and
   // can take minutes, and a rename can begin its move meanwhile, which the
@@ -1039,7 +1141,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       onCancel={model.cancel}
       onChooseExisting={model.chooseExisting}
     />
-    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={() => setSettingsOpen(false)} onSave={async (next) => { await saveSettings(next); setSettingsOpen(false); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
+    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={() => setSettingsOpen(false)} onSave={async (next) => { await saveSettings(next); setSettingsOpen(false); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} typed={typedNotFiled} />}
   </>;
   return <main className="app-shell" aria-label="Intern">
     <p className="sr-only" role="status" aria-label="Queue status" aria-live="polite" aria-atomic="true">{queueStatus}</p>
@@ -1124,7 +1226,17 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
             typed and has not filed, which it leaves for them.
           */}
           {view === 'queue' && readyItems.length > 0 && <button type="button" className="ready-filter" aria-pressed={readyFilter} title="Show only the ready documents: what Rename all ready renames, apart from any you typed a name or a description for" onClick={() => { setReadyOnly(!readyOnly); clearCellSelection(); }}>
-            <Icon icon={CircleCheck} />{readyItems.length} ready
+            <Icon icon={CircleCheck} />{readyItems.length} ready{readyWithANote > 0 && `, ${readyWithANote} with a note`}
+          </button>}
+          {/*
+            The documents renamed while Intern had something noted about
+            their reading, to find afterwards: a document Intern renames by
+            itself at the Balanced level is renamed with nobody looking, and
+            its note is the place to start. The same switch as "ready" in
+            the queue, and as there it shows only while there are any.
+          */}
+          {view === 'completed' && renamedWithNotes.length > 0 && <button type="button" className="note-filter" aria-pressed={notedFilter} title="Show only the documents renamed while Intern had a note about their reading" onClick={() => { setNotedOnly(!notedOnly); clearCellSelection(); }}>
+            <Icon icon={Info} />{renamedWithNotes.length} with a note
           </button>}
         </div>
         <div className="queue-actions">
@@ -1176,7 +1288,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
         : query
           ? <p className="queue-filter-empty" role="status">No items match “{deferredFilter.trim()}”.</p>
           : <ViewEmpty view={view} />)}
-      <p className="item-count">{query || readyFilter ? `${visible.length} of ${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}` : `${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}`}</p>
+      <p className="item-count">{query || readyFilter || notedFilter ? `${visible.length} of ${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}` : `${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}`}</p>
       </DropZone>}</section>
       {/*
         At the foot of the queue, beside the panel rather than in it: the
@@ -1184,7 +1296,11 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
         subtree is never announced. The drawer sits above it, so it never
         covers the drawer's actions, as the centered error banner did.
       */}
-      {(toast || actionError) && <div className="toasts">
+      {(toast || actionError || renamedShown.length > 0) && <div className="toasts">
+        {/* First, so that it comes above the outcome of an action and moves nothing of it. */}
+        {renamedShown.length > 0 && <Toast byItself key={`${renamedHere.key} ${renamedShown.map(({ id }) => id).join(' ')} ${renamedUndo.join(' ')}`} tone="success" label="Renamed without you"
+          action={renamedUndo.length ? { label: 'Undo', name: renamedUndo.length === 1 ? `Undo the rename of ${renamedShown.find(({ id }) => id === renamedUndo[0])!.name}` : `Undo the renames of these ${renamedUndo.length} documents`, disabled: actionPending, onClick: () => { const ids = renamedUndo; dismissRenamed(); void undoRenames(ids); } } : undefined}
+          onDismiss={dismissRenamed}>{renamedByItselfText(renamedShown)}</Toast>}
         {toast && <Toast key={toast.key} tone={toast.kind === 'progress' ? 'progress' : 'success'} label={toast.kind === 'progress' ? 'Action progress' : 'Action result'}
           action={toast.undo ? { label: 'Undo', name: toast.undo.length === 1 ? 'Undo this rename' : `Undo these ${toast.undo.length} renames`, disabled: actionPending, onClick: () => void undoRenames(toast.undo!) } : undefined}
           onDismiss={toast.kind === 'progress' ? undefined : () => setToast(undefined)}>{toast.text}</Toast>}
@@ -1196,8 +1312,9 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
         onNext={goToNextUndecided}
         onClose={() => closeDetails()} onApprove={(filename, description) => void decide(selected, 'approve', () => bridge.approve(selected.id, filename, description))} onKeep={() => void decide(selected, 'keep', () => bridge.keepOriginal(selected.id))} onCancel={() => void refreshAndClear(selected.id, () => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void retryItem(selected)} onReanalyze={() => void refreshAndClear(selected.id, () => bridge.reanalyze(selected.id), 'Sent back to be analyzed again.', undefined, true)} onRemove={(confirmed) => void decide(selected, 'remove', () => confirmed ? bridge.remove(selected.id, { confirmed: true }) : bridge.remove(selected.id))} onUndo={() => void refreshAndClear(selected.id, () => bridge.undo(selected.id), 'Operation undone.')} onOpen={() => void openDocument(selected.id, false)} onReveal={() => void openDocument(selected.id, true)} />}
     </div>
-    {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))} onClose={closeHistory} />}
-    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next, after) => { await saveSettings(next); closeSettings(); void (after?.processExisting ? queueWhatIsThere() : refreshAfterSettings()); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
+    {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))}
+      notes={new Map(renamedWithNotes.map((item) => [item.id, { label: checkText(item), text: itemNote(item)?.text ?? '' }]))} onClose={closeHistory} />}
+    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={saveFromSettings} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} typed={typedNotFiled} />}
   </main>;
 }
 
@@ -1260,6 +1377,11 @@ const applyingRename = (item: QueueItem) => item.status === 'processing' && item
  * button's count, the "ready" filter and the filter's reset all use this.
  */
 const renamesWithAllReady = (item: QueueItem) => item.status === 'ready' && Boolean(item.proposedFilename) && item.copyOf === undefined;
+/**
+ * A filed document that was renamed while Intern had something noted about
+ * its reading: what the Completed view's "with a note" filter lists.
+ */
+const renamedWithANote = (item: QueueItem) => item.status === 'completed' && itemNote(item) !== undefined;
 /** How often an install that is waiting on a rename asks the queue again. A move takes moments. */
 const RENAME_SETTLE_POLL_MS = 250;
 
@@ -1281,17 +1403,21 @@ function renamedCount(count: number) {
  * whose name was already its own without renaming it (ALREADY_NAMED). Each
  * is said as it is, and only what was filed is offered to Undo. `leftTyped`
  * is how many ready documents the batch left alone because a person had
- * typed a name or a description for them.
+ * typed a name or a description for them. `noted` is the documents that
+ * were ready with a note when the batch began: how many of those it renamed
+ * is said too, since the renamed rows no longer carry their notes.
  */
-function batchOutcome(ids: string[], queue: QueueItem[], leftTyped = 0) {
+function batchOutcome(ids: string[], queue: QueueItem[], leftTyped = 0, noted: ReadonlySet<string> = new Set()) {
   const now = (id: string) => queue.find((item) => item.id === id);
   const completed = ids.flatMap((id) => { const item = now(id); return item?.status === 'completed' ? [item] : []; });
   const filed = completed.filter((item) => !keptOriginal(item));
   const named = completed.length - filed.length;
   const later = ids.filter((id) => now(id)?.status === 'ready').length;
   const back = ids.filter((id) => now(id)?.status === 'review').length;
+  const withNotes = filed.filter((item) => noted.has(item.id)).length;
   const text = [
     ids.length === 0 && leftTyped ? 'Nothing was renamed.' : filed.length > 0 || (!named && !later && !back) ? renamedCount(filed.length) : '',
+    withNotes ? `${withNotes} had a note from Intern.` : '',
     named ? `${named} already had ${named === 1 ? 'its name' : 'their names'}.` : '',
     later ? `${later} will be renamed when the queue is free.` : '',
     back ? `${back} ${back === 1 ? 'needs' : 'need'} review again.` : '',

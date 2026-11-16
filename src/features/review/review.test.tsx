@@ -720,13 +720,13 @@ describe('review actions', () => {
     expect(screen.getByRole('button', { name: /^Queue, \d+$/ })).not.toHaveFocus();
   });
 
-  it('saves the automatic high-confidence rename setting', async () => {
+  it('saves the automatic rename setting', async () => {
     const base = createInMemoryBridge();
     const saveSettings = vi.fn(base.saveSettings);
     render(<App bridge={{ ...base, saveSettings }} />);
     fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
 
-    fireEvent.click(await screen.findByLabelText('Automatically rename high-confidence files'));
+    fireEvent.click(await screen.findByLabelText('Automatically rename ready documents'));
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
 
     await waitFor(() => expect(saveSettings).toHaveBeenCalledWith(expect.objectContaining({ automaticRename: true })));

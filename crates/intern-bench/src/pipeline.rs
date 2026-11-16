@@ -14,6 +14,8 @@
 //! --min-token-confidence X        send a reading whose least probable date
 //!                                 or party token is below X to review, as
 //!                                 the app does with the accurate model
+//! --review-level strict|balanced  which readings count as ready, as the
+//!                                 app's setting does (strict by default)
 //! ```
 //!
 //! The evidence pipeline's own measurements are here too
@@ -24,7 +26,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use intern_engine::{
-    DocumentAnalysis, Engine, Pipeline, PromptProfile,
+    DocumentAnalysis, Engine, Pipeline, PromptProfile, ReviewLevel,
     engine::min_evidence_context_tokens_with,
     prompt::evidence_prompt_version_with,
     retrieve::{IdStyle, RetrievalConfig},
@@ -42,6 +44,7 @@ pub const KEYS: &[&str] = &[
     "context-tokens",
     "prompt-profile",
     "min-token-confidence",
+    "review-level",
 ];
 
 /// How a run's engine is configured.
@@ -61,6 +64,12 @@ pub struct EngineSettings {
     /// token probabilities when it is set. Scoring alone: it is not in a
     /// recording's header, so it stales nothing.
     pub min_token_confidence: Option<f32>,
+    /// The review level a record's readiness is judged at
+    /// ([`intern_engine::readiness`]), and with it `ready`, `unsafe_ready`
+    /// and `needless_review`. The engine reads and validates the same at
+    /// every level, so, like the threshold above, it is scoring alone: it
+    /// is not in a recording's header and stales nothing.
+    pub review_level: ReviewLevel,
 }
 
 impl Default for EngineSettings {
@@ -71,6 +80,7 @@ impl Default for EngineSettings {
             context_tokens: None,
             profile: None,
             min_token_confidence: None,
+            review_level: ReviewLevel::Strict,
         }
     }
 }
@@ -121,6 +131,13 @@ impl EngineSettings {
                         format!("--min-token-confidence must be between 0 and 1, not {value}")
                     })?,
             );
+        }
+        if let Some(word) = values.get("review-level") {
+            // Refused here, though a stored setting this build does not know
+            // reads as strict: a run asked for a level by a word that names
+            // none would otherwise be scored at another and say nothing.
+            settings.review_level = ReviewLevel::parse(word)
+                .ok_or_else(|| format!("--review-level is strict or balanced, not {word}"))?;
         }
         Ok(settings)
     }
@@ -298,9 +315,16 @@ mod tests {
             ("retrieval-tier", "dense"),
             ("context-tokens", "16384"),
             ("min-token-confidence", "0.5"),
+            ("review-level", "balanced"),
         ]))
         .unwrap();
         assert_eq!(settings.min_token_confidence, Some(0.5));
+        assert_eq!(settings.review_level, ReviewLevel::Balanced);
+        assert_eq!(
+            EngineSettings::parse(&values(&[("review-level", "strict")])).unwrap(),
+            EngineSettings::default()
+        );
+        assert_eq!(EngineSettings::default().review_level, ReviewLevel::Strict);
         assert_eq!(settings.pipeline, Pipeline::Evidence);
         assert_eq!(settings.retrieval.id_style, IdStyle::Ordinal);
         assert_eq!(
@@ -323,6 +347,9 @@ mod tests {
             ("context-tokens", "1024"),
             ("min-token-confidence", "1.5"),
             ("min-token-confidence", "half"),
+            ("review-level", "relaxed"),
+            ("review-level", "Balanced"),
+            ("review-level", ""),
         ] {
             assert!(
                 EngineSettings::parse(&values(&[(key, value)])).is_err(),

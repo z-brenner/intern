@@ -26,6 +26,8 @@ const ACTS: Array<[RegExp, boolean]> = [
   // A date or a party to put in the name.
   [/^(\d{4}-\d{2}-\d{2}( · file date)?|Contoso Ltd|Fabrikam Inc)$/, true],
   [/^(Rename all ready|Discard waiting items|Clear history|Undo this rename|Undo these \d+ renames)$/, true],
+  // A rename by itself over what was typed: its Undo, and its Done above.
+  [/^(Undo the rename of .+|Undo the renames of these \d+ documents)$/, true],
   [/^Install .+ and restart$/, true],
   // These only move the view, open something, or take back a question.
   [/^(Close review|Next undecided|Open|Show in folder|More review actions|Copy description|Cancel|Dismiss|Not now)$/, false],
@@ -105,6 +107,8 @@ describe('the controls that act', () => {
     render(<TypedKept kept={kept} label="Kept from before this document changed" dismiss="Discard what I had" onDismiss={vi.fn()}>Kept.</TypedKept>);
     render(<TypedKept kept={{ ...kept, key: 2 }} label="Kept from scan.pdf" dismiss="Done" onDismiss={vi.fn()}>Kept.</TypedKept>);
     render(<Toast tone="success" label="Action result" action={{ label: 'Undo', name: 'Undo these 3 renames', onClick: vi.fn() }} onDismiss={vi.fn()}>Renamed 3 documents.</Toast>);
+    render(<Toast byItself tone="success" label="Renamed without you" action={{ label: 'Undo', name: 'Undo the rename of scan.pdf', onClick: vi.fn() }} onDismiss={vi.fn()}>scan.pdf was renamed.</Toast>);
+    render(<Toast byItself tone="success" label="Renamed without you" action={{ label: 'Undo', name: 'Undo the renames of these 2 documents', onClick: vi.fn() }} onDismiss={vi.fn()}>2 documents were renamed.</Toast>);
     expect(mismarked()).toEqual([]);
     cleanup();
 

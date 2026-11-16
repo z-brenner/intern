@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use intern_engine::ReviewLevel;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -53,6 +54,13 @@ pub struct Report {
     pub recording: Option<RecordingInfo>,
     #[serde(default)]
     pub corpus: CorpusInfo,
+    /// The review level every record's readiness was judged at
+    /// (`--review-level`), and with it `ready`, `unsafe_ready`,
+    /// `needless_review` and the review rate. Left out at strict, the
+    /// default, so a report made at strict is written as every report
+    /// before the levels was, and reads as strict.
+    #[serde(default, skip_serializing_if = "ReviewLevel::is_strict")]
+    pub review_level: ReviewLevel,
     /// How long the whole run took, warm-up included, in milliseconds; a
     /// replay measures none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -917,6 +925,9 @@ pub fn build(info: RunInfo, records: Vec<DocumentRecord>) -> Report {
         timings_source: info.timings_source,
         recording: info.recording,
         corpus: info.corpus,
+        // The run sets it once the report is built (`run::run`): strict
+        // until then, as every report built without a level is.
+        review_level: ReviewLevel::Strict,
         wall_ms: info.wall_ms,
         summary,
         groups: groups(&records),

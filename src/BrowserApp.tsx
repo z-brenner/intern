@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { App } from './App';
-import { createBrowserSelectionBoundary, createFixtureBatchBridge, createInMemoryBridge, createLearnedSpellingBridge, createReviewBatchBridge } from './lib/inMemoryBridge';
+import { createBalancedLevelBridge, createBrowserSelectionBoundary, createFixtureBatchBridge, createInMemoryBridge, createLearnedSpellingBridge, createReviewBatchBridge } from './lib/inMemoryBridge';
 import { TauriBridge, createTauriSelectionBoundary, isTauriRuntime } from './lib/tauriBridge';
 import { WhatsNew } from './features/updates/WhatsNew';
 import packageInfo from '../package.json';
@@ -31,6 +31,8 @@ function browserBridge() {
   if (import.meta.env.DEV && params.get('reviewBatch') === '1') return createReviewBatchBridge();
   // A document held for learned spellings nobody has checked.
   if (import.meta.env.DEV && params.get('learnedSpellings') === 'held') return createLearnedSpellingBridge();
+  // The review level at Balanced: a ready document with a note, and one renamed with a note.
+  if (import.meta.env.DEV && params.get('reviewLevel') === 'balanced') return createBalancedLevelBridge();
   // The demo's queue, changing with nobody asking: `window.internQueue`
   // reads a document again, files it elsewhere or takes it out of the queue,
   // for the Playwright journeys that go on typing while it does. One bridge

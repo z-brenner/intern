@@ -12,7 +12,7 @@ interface Props {
   inputFolder?: string;
   /** The output folder's own name ("Output"); empty until the settings are read. */
   outputFolder?: string;
-  /** Whether high-confidence documents are renamed without asking. */
+  /** Whether ready documents are renamed without asking. */
   automaticRename?: boolean;
   /** The input folder is the verified team Inbox, which takes a copy only once Microsoft confirms who uploaded it. */
   verifiedInbox?: boolean;
@@ -59,7 +59,7 @@ export function DropZone({ variant = 'panel', inputFolder = '', outputFolder = '
         <h2>Drop documents here</h2>
         <p>Copies go to your Queue folder{inputFolder ? <>, <strong>{inputFolder}</strong></> : ''}. Approved files go to your Completed folder{outputFolder ? <>, <strong>{outputFolder}</strong></> : ''}.</p>
         <p>{automaticRename
-          ? 'Documents Intern is sure about are renamed on their own; the rest wait for you to approve them.'
+          ? 'Ready documents are renamed on their own; the rest wait for you to approve them.'
           : 'Nothing is renamed until you approve it.'} Your originals stay where they are.</p>
         {verifiedInbox && <p>A copy joins the queue once OneDrive has uploaded it and Microsoft confirms it is yours.</p>}
         {(onChooseFiles || onChooseFolder) && <div className="drop-actions">

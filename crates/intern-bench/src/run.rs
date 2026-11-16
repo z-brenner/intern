@@ -110,6 +110,15 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
             ));
         }
     }
+    // The baselines CI holds every push to are written at strict, and a
+    // baseline does not say which level it was written at: one written at
+    // another level would hold later strict runs to its readiness.
+    if options.write_baseline.is_some() && !options.engine.review_level.is_strict() {
+        return Err(format!(
+            "--write-baseline is for runs at the strict review level, not --review-level {}",
+            options.engine.review_level.as_str()
+        ));
+    }
     let (gold, gold_bytes) = GoldFile::load(&options.gold)?;
     let documents = select(&gold, &options.only)?;
     let manifest = match &options.manifest {
@@ -314,6 +323,7 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
     }
 
     let mut report = report::build(info, records);
+    report.review_level = options.engine.review_level;
     if let Some(path) = &options.baseline {
         let bytes = std::fs::read(path)
             .map_err(|error| format!("cannot read baseline {}: {error}", path.display()))?;
