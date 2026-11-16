@@ -15440,6 +15440,16 @@ mod review_level_tests {
             "the restore's own wake and the judging's"
         );
         assert_eq!(runtime.store.load().unwrap().review_level, BALANCED);
+
+        // So is a judging that fails.
+        runtime.store.save(&at(STRICT)).unwrap();
+        runtime.fail_schedule.store(false, Ordering::SeqCst);
+        runtime.fail_review_level.store(true, Ordering::SeqCst);
+        let refused = restore_sharepoint_settings(&runtime, &at(BALANCED)).unwrap_err();
+        assert_eq!(
+            refused.message,
+            "DATABASE_UNAVAILABLE: injected queue judging failure"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

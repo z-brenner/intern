@@ -1346,6 +1346,18 @@ fn a_level_change_that_leaves_nothing_ready_says_so() {
         ["TYPE_INFERRED", unreadable.as_str()]
     );
     assert!(rig.filed_names().is_empty());
+
+    // The same when Settings do not name the level the queue is told of,
+    // as after a save that could not be stored. The document is judged
+    // once more at the level Settings do name, and is back in review.
+    let rig = Rig::new(STRICT, true);
+    let id = rig.read("noted.pdf", noted(APRIL));
+    let made_ready = rig.pipeline.review_level_changed(STRICT, BALANCED).unwrap();
+    assert!(!made_ready);
+    assert_eq!(rig.status(id), QueueStatus::NeedsReview);
+    assert_eq!(rig.record(id).reasons, ["TYPE_INFERRED"]);
+    rig.pipeline.run_until_idle().unwrap();
+    assert!(rig.filed_names().is_empty());
 }
 
 /// A scheduler pass and a Settings save's judging at the same time. The

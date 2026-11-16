@@ -4495,7 +4495,8 @@ impl Pipeline {
     ///
     /// A name a person approved is filed on the thread of the approval,
     /// whatever it repeats. A look made while that filing is in flight
-    /// does not see it.
+    /// does not see it, and both are then filed, one of them by a person:
+    /// what the same approval made a moment later comes to as well.
     ///
     /// At a looser level it looks for every reading no person approved,
     /// whatever strict would say of that reading. A looser level files a
