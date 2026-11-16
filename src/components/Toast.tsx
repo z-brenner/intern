@@ -17,6 +17,13 @@ interface Props {
   action?: { label: string; name?: string; disabled?: boolean; onClick(): void };
   /** Work still running cannot be waved away, so progress has no Dismiss. */
   onDismiss?(): void;
+  /**
+   * It came by itself, not from anything the person did: it stays until
+   * it is dismissed, and the button that dismisses it is a control that
+   * acts (aimedPress), named Done as on the window's other notice that
+   * comes by itself (TypedKept).
+   */
+  byItself?: boolean;
 }
 
 /**
@@ -33,21 +40,30 @@ interface Props {
  * sentence already in it, and a polite region that arrives complete is not
  * reliably spoken. A success or progress is announced once through the app's
  * "Action status" and is not read a second time from here.
+ *
+ * One that came by itself (`byItself`: a document renamed with nobody in
+ * this window deciding it) can come while nobody is looking, so it does not
+ * leave after ten seconds. And it can come under a pointer at rest, on its
+ * way to a row of the queue: so the button that dismisses it is marked as a
+ * control that acts, as Undo always is, and a press that lands on either
+ * before it has been there for the settle time does nothing (aimedPress).
+ * Taken by that button, the press would wave away, unread, the one word
+ * that the rename happened.
  */
-export function Toast({ tone, label, children, action, onDismiss }: Props) {
+export function Toast({ tone, label, children, action, onDismiss, byItself = false }: Props) {
   const [held, setHeld] = useState(false);
   const dismiss = useRef(onDismiss);
   useEffect(() => { dismiss.current = onDismiss; });
   useEffect(() => {
-    if (tone !== 'success' || held) return;
+    if (tone !== 'success' || held || byItself) return;
     const timer = window.setTimeout(() => dismiss.current?.(), TOAST_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
-  }, [tone, held]);
+  }, [tone, held, byItself]);
   return <div className={`toast toast--${tone}`} role={tone === 'error' ? 'alert' : 'group'} aria-label={label}
     onPointerEnter={() => setHeld(true)} onPointerLeave={() => setHeld(false)}
     onFocus={() => setHeld(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHeld(false); }}>
     <p>{children}</p>
     {action && <button type="button" data-acts className="toast-action" disabled={action.disabled} aria-label={action.name} onClick={action.onClick}>{action.label}</button>}
-    {onDismiss && <button type="button" className="icon-button" aria-label="Dismiss" onClick={onDismiss}><Icon icon={X} /></button>}
+    {onDismiss && <button type="button" data-acts={byItself || undefined} className="icon-button" aria-label={byItself ? 'Done' : 'Dismiss'} onClick={onDismiss}><Icon icon={X} /></button>}
   </div>;
 }

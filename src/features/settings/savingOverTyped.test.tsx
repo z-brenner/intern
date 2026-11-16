@@ -849,8 +849,8 @@ describe('a document Intern renamed by itself while it had something typed', () 
     expect(kept()[0]).toHaveValue(`${TYPED_NAME}\n\n${TYPED_SENTENCE}`);
     expect(panel).toContainElement(kept()[0]);
     expect(within(panel).getByRole('group', { name: 'Kept from before this document changed' })).toHaveTextContent('They are kept here as you had them, name first, and nothing here is filed.');
-    // Nothing else on screen says it happened: no result, and nothing above the queue.
-    expect(document.querySelector('.toasts')).toBeNull();
+    // The window says it happened, where it says what an action did, and keeps nothing above the queue.
+    expect(screen.getByRole('group', { name: 'Renamed without you' })).toHaveTextContent("Scan 0601.pdf was renamed under Intern's proposal. What you typed for it was not filed, and is kept in its details.");
     expect(screen.queryByRole('group', { name: /^Kept from Scan/ })).not.toBeInTheDocument();
 
     // It is with the document wherever that is listed: in Completed, opened again.
@@ -861,7 +861,7 @@ describe('a document Intern renamed by itself while it had something typed', () 
     expect(within(filed).getByRole('button', { name: 'Undo' })).toBeEnabled();
   });
 
-  it('says nothing when the document is not on screen, keeps what was typed all the same, and still has it after Undo: a ready one, by way of automatic renaming', async () => {
+  it('says so when the document is not on screen, keeps what was typed all the same, and still has it after Undo: a ready one, by way of automatic renaming', async () => {
     const { bridge, byItself, renamed } = await start();
     const panel = await openDetails('Scan 0602.pdf');
     fireEvent.change(within(panel).getByLabelText('Filename'), { target: { value: '2025-05-02 Invoice 4471 from Brightwater' } });
@@ -871,8 +871,8 @@ describe('a document Intern renamed by itself while it had something typed', () 
     expect(await saveWith((dialog) => { fireEvent.click(automatic(dialog)); })).toBe(ONE);
     await byItself(() => renamed(32));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Completed, 1' })).toBeInTheDocument());
-    // No word of it anywhere: the document has only left the queue for Completed.
-    expect(document.querySelector('.toasts')).toBeNull();
+    // Said where the outcome of an action is; nothing else: the document has only left the queue for Completed.
+    expect(screen.getByRole('group', { name: 'Renamed without you' })).toHaveTextContent("Scan 0602.pdf was renamed under Intern's proposal. What you typed for it was not filed, and is kept in its details.");
     expect(kept()).toHaveLength(0);
     expect(screen.queryByRole('group', { name: /^Kept from/ })).not.toBeInTheDocument();
 
@@ -885,6 +885,8 @@ describe('a document Intern renamed by itself while it had something typed', () 
     fireEvent.click(within(filed).getByRole('button', { name: 'Undo' }));
     await waitFor(() => expect(bridge.undo).toHaveBeenCalledWith('32'));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Completed, 0' })).toBeInTheDocument());
+    // No longer renamed, so no longer said to be.
+    expect(screen.queryByRole('group', { name: 'Renamed without you' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^Queue, / }));
     const again = await openDetails('Scan 0602.pdf');
     expect(queueCell('Scan 0602.pdf', 'status')).toHaveTextContent('Needs review');

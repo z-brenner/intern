@@ -80,9 +80,9 @@ test('choosing Balanced in Settings makes the lease ready with a note, the choic
   await expect(panel.getByRole('button', { name: 'Keep original' })).toBeVisible();
   // The note is in sight without scrolling for it, above the name.
   await expect(note).toBeInViewport({ ratio: 1 });
-  // Nothing was renamed by any of this.
+  // Nothing was renamed by any of this. (What the save did is said at the foot of the queue: saidAfterwards.spec.)
   await expect(page.getByRole('button', { name: 'Completed, 1' })).toBeVisible();
-  await expect(page.locator('.toasts')).toHaveCount(0);
+  await expect(page.locator('.toasts', { hasText: /\brenamed\b|Renamed/ })).toHaveCount(0);
 
   // The choice is kept.
   settings = await levelInSettings(page);

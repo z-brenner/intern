@@ -588,7 +588,11 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // codes still on it as notes. Back at Strict it waits again as it did:
   // what it carried while it waited is kept here meanwhile, so the queue at
   // Strict is the queue as it was. Automatic renaming is not acted out, as
-  // it never has been here: nothing in the demo is renamed by itself.
+  // it never has been here: nothing in the demo is renamed by itself. So the
+  // window says what a level change did here (levelChanged), from the rows
+  // this re-judging leaves; but it has no rename by itself over what was
+  // typed to say (renamedByItself), and none is made up for it. Only
+  // `byItself` files a document as from somewhere else.
   const readings = new Map(Object.entries(options.readings ?? (options.items ? {} : seedReadings)));
   const waitedWith = new Map<string, Pick<QueueItem, 'reason' | 'errorCode' | 'reasonCodes'>>();
   /** A waiting row made ready at Balanced when its codes allow it; otherwise as it is. */
