@@ -277,12 +277,12 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // when it comes. A new key each time what it says changes: its Undo is
   // then a new button, which a press made the moment it changed does not
   // take (aimedPress), so a press meant for one rename does not undo two.
-  const [renamedHere, setRenamedHere] = useState<{ key: number; renames: RenameSeen[] }>({ key: 0, renames: [] });
+  const [renamedHere, setRenamedHere] = useState<{ key: number; renames: readonly RenameSeen[] }>({ key: 0, renames: [] });
   useEffect(() => {
     const { watched, seen, back } = watchRenames(renameWatch.current, items, { typed: typedOver, decidedHere: (id) => id === own.deciding });
     renameWatch.current = watched;
     if (!seen.length && !back.length) return;
-    setRenamedHere((said) => ({ key: said.key + 1, renames: withRenames(said.renames, seen, back) }));
+    setRenamedHere((said) => { const renames = withRenames(said.renames, seen, back); return renames === said.renames ? said : { key: said.key + 1, renames }; });
     // Said once, as every outcome is, through the app's Action status.
     if (seen.length) setActionMessage(renamedByItselfText(stillSo(withRenames(renamedHere.renames, seen, back), items)));
     // Looked at again when a decision ends, as well: one the backend refused

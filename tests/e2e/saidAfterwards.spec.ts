@@ -74,6 +74,7 @@ test('at Strict with automatic renaming off, a save that leaves the level as it 
   const settings = await openSettings(page);
   await expect(settings.strict).toBeChecked();
   await expect(settings.dialog.getByRole('checkbox', { name: 'Automatically rename ready documents' })).not.toBeChecked();
+  await settings.dialog.locator('summary', { hasText: 'Shared folders and troubleshooting' }).click();
   await settings.dialog.getByLabel("This machine's name").fill('Reception');
   await settings.save.click();
   await expect(settings.dialog).toBeHidden();
@@ -107,6 +108,7 @@ const middle = (box: { x: number; y: number; width: number; height: number } | n
 test('a document with a name typed for it, renamed with nobody here deciding it, is said, and Undo is taken only once it has been there to be seen', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const renamed = page.getByRole('group', { name: 'Renamed without you' });
+  const words = renamed.locator('p');
   const undo = renamed.getByRole('button', { name: `Undo the rename of ${LEASE}` });
   const said = `${LEASE} was renamed under Intern's proposal. What you typed for it was not filed, and is kept in its details.`;
   for (let attempt = 1; ; attempt += 1) {
@@ -116,7 +118,7 @@ test('a document with a name typed for it, renamed with nobody here deciding it,
     await panel.getByLabel('Filename').fill('2023-09-15 Lease of 123 Main St');
     await untilSettled(page);
     await filedByItself(page);
-    await expect(renamed).toHaveText(said);
+    await expect(words).toHaveText(said);
     // The press made the moment it came: refused, so nothing happens.
     const at = middle(await undo.boundingBox());
     await page.mouse.click(at.x, at.y);
@@ -124,7 +126,7 @@ test('a document with a name typed for it, renamed with nobody here deciding it,
     if (attempt === 3) throw new Error('Three presses in a row came later than the settle time after the change: this machine is too slow for the journey to say anything.');
   }
   await page.waitForTimeout(300);
-  await expect(renamed).toHaveText(said);
+  await expect(words).toHaveText(said);
   await expect(page.getByRole('status', { name: 'Action status' })).toHaveText(said);
   await expect(page.getByRole('group', { name: 'Action result' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Completed, 2' })).toBeVisible();
@@ -135,7 +137,7 @@ test('a document with a name typed for it, renamed with nobody here deciding it,
 
   // It does not leave by itself: still there well past the ten seconds an outcome stays.
   await page.waitForTimeout(10_500);
-  await expect(renamed).toHaveText(said);
+  await expect(words).toHaveText(said);
 
   // Pressed again once it has been there to be seen: the rename is undone, the same way as from a rename's outcome.
   await undo.click();

@@ -40,8 +40,8 @@ export const beingRenamed = (item: QueueItem) => item.status === 'processing' &&
 /**
  * The name the document is renamed under is the one the window last showed
  * proposed for it, nobody had approved another, and its sentence is the
- * same: renamed under Intern's proposal. Anything else - another name, an
- * approval the window did not make - it cannot place. The name filed can
+ * same: renamed under Intern's proposal. Anything else it cannot place:
+ * another name, or an approval the window did not make. The name filed can
  * still differ from the proposal by a number the folder needed, so the
  * proposal is what is compared, not the filed name.
  */
@@ -92,14 +92,18 @@ export function watchRenames(watched: ReadonlyMap<string, Waiting>, rows: readon
 /**
  * What is said of the renames seen so far, with those just seen: a document
  * seen again replaces what was said of it (being renamed, then renamed), and
- * one that came back without being renamed is taken out.
+ * one that came back without being renamed is taken out. The very list it
+ * was given when that changes nothing.
  */
-export function withRenames(said: readonly RenameSeen[], seen: readonly RenameSeen[], back: readonly string[]): RenameSeen[] {
+export function withRenames(said: readonly RenameSeen[], seen: readonly RenameSeen[], back: readonly string[]): readonly RenameSeen[] {
   const gone = new Set(back);
   const fresh = new Map(seen.map((rename) => [rename.id, rename]));
   const kept = said.filter((rename) => !gone.has(rename.id)).map((rename) => fresh.get(rename.id) ?? rename);
   const known = new Set(kept.map((rename) => rename.id));
-  return [...kept, ...seen.filter((rename) => !known.has(rename.id) && !gone.has(rename.id))];
+  const next = [...kept, ...seen.filter((rename) => !known.has(rename.id) && !gone.has(rename.id))];
+  // Nothing new to say (a document came back that was never said to be renamed): what was said, as it was.
+  const same = (one: RenameSeen, other: RenameSeen) => one.id === other.id && one.name === other.name && one.whose === other.whose && one.done === other.done;
+  return next.length === said.length && next.every((rename, index) => same(rename, said[index])) ? said : next;
 }
 
 /**

@@ -166,6 +166,13 @@ describe('what is said of the renames seen', () => {
     expect(withRenames([seen('a', false), seen('b')], [], ['a'])).toEqual([seen('b')]);
   });
 
+  it('is what was said, the very list, when nothing changes: a document that comes back was never said to be renamed, or one is seen again as it was', () => {
+    const said = [seen('a'), seen('b', false)];
+    expect(withRenames(said, [], ['x'])).toBe(said);
+    expect(withRenames(said, [seen('a')], [])).toBe(said);
+    expect(withRenames(said, [seen('b')], [])).not.toBe(said);
+  });
+
   it('keeps only what is still so, and offers Undo only for a rename seen complete that can still be undone', () => {
     const said = [seen('renamed'), seen('undone'), seen('renaming', false), seen('since-renamed', false), seen('gone'), seen('not-undoable')];
     const rows = [
