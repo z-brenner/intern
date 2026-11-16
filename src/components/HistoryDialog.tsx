@@ -16,6 +16,14 @@ interface Props {
    * record left to say where it is now.
    */
   filedItems?: ReadonlySet<string>;
+  /**
+   * Queue items renamed while Intern had something noted about their
+   * reading, by id: the few words the queue's Check column says for the
+   * note (`label`) and its sentences (`text`). Only for an item still in
+   * the queue: the history's own records carry no reasons, so a document
+   * cleared from the queue is listed here without its note.
+   */
+  notes?: ReadonlyMap<string, { label: string; text: string }>;
   onClose(): void;
 }
 
@@ -45,7 +53,7 @@ function formatWhen(at: number): string {
  * backdrop/focus-trap conventions as SettingsDialog: Escape closes, Tab
  * cycles within the dialog, and no field behind it changes while it is open.
  */
-export function HistoryDialog({ bridge, selection, filedItems, onClose }: Props) {
+export function HistoryDialog({ bridge, selection, filedItems, notes, onClose }: Props) {
   const [entries, setEntries] = useState<HistoryEntry[]>();
   const [loadError, setLoadError] = useState('');
   const [openError, setOpenError] = useState('');
@@ -110,12 +118,17 @@ export function HistoryDialog({ bridge, selection, filedItems, onClose }: Props)
   // says nothing about where the document is - an undo refused because the
   // filed copy was held names the original as its new path, while the
   // document is still filed - so the row under it is the one that does.
+  // A note goes on the same row, and only when that row is the rename the
+  // note was on: an undo is no rename, and the document is back in review.
   const newest = new Set<string>();
   const openable = new Set<string>();
+  const noted = new Map<string, { label: string; text: string }>();
   for (const entry of entries ?? []) {
     if (entry.stage === 'rolled_back' || newest.has(entry.queueItemId)) continue;
     newest.add(entry.queueItemId);
     if (filedItems?.has(entry.queueItemId)) openable.add(entry.receiptId);
+    const note = entry.direction === 'apply' ? notes?.get(entry.queueItemId) : undefined;
+    if (note) noted.set(entry.receiptId, note);
   }
   const openDocument = async (id: string, reveal: boolean) => {
     setOpenError('');
@@ -135,6 +148,7 @@ export function HistoryDialog({ bridge, selection, filedItems, onClose }: Props)
         <td>{actionLabel(entry)}</td>
         <td title={entry.originalPath}>{pathLeaf(entry.originalPath)}</td>
         <td title={entry.newPath}>{pathLeaf(entry.newPath)}{entry.description && <span className="row-description">{entry.description}</span>}
+          {noted.has(entry.receiptId) && <span className="history-note" role="note" aria-label={`Intern's note on ${pathLeaf(entry.newPath)}`} title={noted.get(entry.receiptId)!.text}>{noted.get(entry.receiptId)!.label}</span>}
           {openable.has(entry.receiptId) && <span className="history-document-actions">
             <button type="button" className="link-button" aria-label={`Open ${pathLeaf(entry.newPath)}`} onClick={() => void openDocument(entry.queueItemId, false)}><Icon icon={ExternalLink} />Open</button>
             <button type="button" className="link-button" aria-label={`Show ${pathLeaf(entry.newPath)} in its folder`} onClick={() => void openDocument(entry.queueItemId, true)}><Icon icon={FolderOpen} />Show in folder</button>

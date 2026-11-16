@@ -4,10 +4,12 @@ import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, 
 import type { AddReport, AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, TierSetup, SharePointSetupProblem, SharePointSetupStatus } from '../types';
 import { filenameExtension, leadingDate, validateFilename, validateLeafFilename } from './filenames';
 import { OWN_NAME_MIN_CHARS, nameKey } from './ownNames';
-import { humanizeReason } from './reasons';
+import { humanizeReason, reasonCodes } from './reasons';
+import { reviewLevelOf } from './reviewLevel';
 import type { QueueBridgeEvent } from './tauriBridge';
 import { outputBeside, rootFor } from '../features/intake/folderNames';
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
+import { nameParts } from '../features/queue/check';
 import { isParked, retryAccepted, withoutReviewPrefix } from '../features/review/actions';
 
 /** Review codes raised when a document arrives, before it is read: reading it again does not raise them. */
@@ -104,6 +106,41 @@ function seededName(name: SeedName, own: string[]): Pick<QueueItem, 'proposedFil
 }
 
 /**
+ * The review codes a seeded row's reading carried, where the row itself says
+ * why it waits only in a sentence of its own. The review level is judged by
+ * codes, so this is what makes the demo's lease ready with a note at
+ * Balanced - a type the document does not confirm, a model unsure of its
+ * reading - while the row at Strict stays word for word what it was.
+ */
+const seedReadings: Record<string, string[]> = {
+  lease: ['TYPE_UNSUPPORTED', 'LOW_CONFIDENCE'],
+};
+
+/**
+ * The demo's copy of the Balanced review level, for the rows it seeds. The
+ * rule is the engine's and is written there once; this stands in for it
+ * where there is no engine, and reads only what a demo row has: its codes,
+ * the model's own figure, and its name.
+ */
+const BALANCED_CODES = new Set(['TYPE_MISSING', 'TYPE_UNSUPPORTED', 'TYPE_INFERRED', 'DESCRIPTION_UNSUPPORTED', 'LOW_CONFIDENCE']);
+/** The engine's READY_CONFIDENCE (validate.rs): under it the model's own figure holds a reading at every level. */
+const READY_CONFIDENCE = 0.6;
+
+function readyAtBalanced(item: QueueItem, codes: readonly string[]): boolean {
+  // No codes is a reason given in words, which nobody can judge: it waits.
+  if (!codes.length || !codes.every((code) => BALANCED_CODES.has(code))) return false;
+  // A date, and a type that is more than the word "Document".
+  if (!item.proposedFilename || !leadingDate(item.proposedFilename)) return false;
+  const type = nameParts(item.proposedFilename, []).find((part) => part.field === 'type')?.text.trim() ?? '';
+  if (!type || type.toLowerCase() === 'document') return false;
+  // Unsure by what Intern measured only: a low figure of the model's own waits.
+  if (codes.includes('LOW_CONFIDENCE') && !(item.confidence !== undefined && item.confidence >= READY_CONFIDENCE)) return false;
+  // A title standing in for a type the document did not confirm waits.
+  if (codes.includes('TYPE_UNSUPPORTED') && codes.includes('TYPE_INFERRED') && !codes.includes('TYPE_MISSING')) return false;
+  return true;
+}
+
+/**
  * An item as the backend lists it (queue_item_dto): the other parties a name
  * could give, and the words they replace, go only with an item in review,
  * whose name a person is deciding.
@@ -132,6 +169,14 @@ const seedHistory: HistoryEntry[] = [
 
 export interface InMemoryBridgeOptions {
   items?: QueueItem[];
+  /**
+   * The review codes behind a row that says why it waits only in words, by
+   * id: what the review level judges it by. The demo's own queue has them
+   * for its lease; a queue passed in has none unless it brings them.
+   */
+  readings?: Record<string, string[]>;
+  /** Finished renames and undos for Rename history to list, newest first, in place of the demo's own. */
+  history?: HistoryEntry[];
   /** Settings already saved, such as an earlier release's manual intake folders. */
   settings?: Partial<AppSettings>;
   setup?: Partial<SetupState>;
@@ -280,11 +325,12 @@ export interface QueueByItself { change(id: string, change: Partial<QueueItem>):
 
 function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): DesktopBridge {
   let items = (options.items ?? seedItems).map((item) => ({ ...item }));
-  let history = seedHistory.map((entry) => ({ ...entry }));
+  let history = (options.history ?? seedHistory).map((entry) => ({ ...entry }));
   // skipUpdateChecks is spelled out because the desktop backend always
   // returns it - false for a file that predates it - so a bridge that left it
   // out would differ from the real one in exactly the case worth testing.
-  let settings: AppSettings = { destination: DEMO_OUTPUT_FOLDER, destinationLayout: 'flat', ourNames: [], startMinimized: false, automaticRename: false, intakeFolder: DEMO_INPUT_FOLDER, intakeEnabled: true, intakeLocalOnly: true, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, skipUpdateChecks: false, recordDescriptions: false, modelSource: 'local', modelPreference: 'automatic', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
+  // reviewLevel likewise: strict for a file that predates it.
+  let settings: AppSettings = { destination: DEMO_OUTPUT_FOLDER, destinationLayout: 'flat', ourNames: [], startMinimized: false, automaticRename: false, reviewLevel: 'strict', intakeFolder: DEMO_INPUT_FOLDER, intakeEnabled: true, intakeLocalOnly: true, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, skipUpdateChecks: false, recordDescriptions: false, modelSource: 'local', modelPreference: 'automatic', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
   // The hosted model's key, as the desktop backend keeps it: out of the
   // settings, reported only as stored-or-not with a hint.
   let hostedKey: string | undefined = options.hostedKey;
@@ -495,6 +541,10 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   const analysisDelayMs = options.analysisDelayMs ?? 800;
   /** What review leaves behind, by queue status: no proposal while waiting, no failure once settled. */
   const settledFields = ({ stage: _stage, progress: _progress, reason: _reason, errorCode: _errorCode, parked: _parked, ...rest }: QueueItem): QueueItem => rest;
+  // What an approval leaves: the backend clears the proposal's reasons with
+  // it (approve_user_edit), so the codes behind them go too. A document a
+  // person approved is renamed with no note left on it, whatever it carried.
+  const approvedFields = (item: QueueItem): QueueItem => { const { reasonCodes: _reasonCodes, ...rest } = settledFields(item); return rest; };
   // Pipeline::check_again, for a parked item: here the files are always
   // found in order. A renamed copy whose original could not be deleted was
   // safe all along, so checking finishes the filing; any other rename that
@@ -531,6 +581,51 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     });
   };
   renameWaiting();
+  // Mirrors the backend's re-judging when the review level changes: a
+  // document that waits for a decision, and that no person has approved,
+  // is judged again from the reading it has, with nothing read again. At
+  // Balanced one whose codes the level lets through is ready, with those
+  // codes still on it as notes. Back at Strict it waits again as it did:
+  // what it carried while it waited is kept here meanwhile, so the queue at
+  // Strict is the queue as it was. Automatic renaming is not acted out, as
+  // it never has been here: nothing in the demo is renamed by itself.
+  const readings = new Map(Object.entries(options.readings ?? (options.items ? {} : seedReadings)));
+  const waitedWith = new Map<string, Pick<QueueItem, 'reason' | 'errorCode' | 'reasonCodes'>>();
+  /** A waiting row made ready at Balanced when its codes allow it; otherwise as it is. */
+  const readyWithNotes = (item: QueueItem): QueueItem => {
+    if (item.status !== 'review' || isParked(item)) return item;
+    const codes = readings.get(item.id) ?? (item.reasonCodes?.length ? item.reasonCodes : reasonCodes(item.errorCode ?? ''));
+    if (!readyAtBalanced(item, codes)) return item;
+    waitedWith.set(item.id, { reason: item.reason, errorCode: item.errorCode, reasonCodes: item.reasonCodes });
+    const { errorCode: _errorCode, ...rest } = item;
+    return { ...rest, status: 'ready', reason: humanizeReason(codes.join(', ')), reasonCodes: [...codes] };
+  };
+  /**
+   * A row that is ready with notes, waiting again as Strict has it: one
+   * made ready above as it waited before, and one that came ready with its
+   * codes with those codes as why it waits. Any other row as it is.
+   */
+  const waitingAgain = (item: QueueItem): QueueItem => {
+    if (item.status !== 'ready' || item.approved || item.copyOf !== undefined) return item;
+    const waited = waitedWith.get(item.id);
+    if (!waited) return item.reasonCodes?.length ? { ...item, status: 'review' } : item;
+    waitedWith.delete(item.id);
+    const { reason: _reason, errorCode: _errorCode, reasonCodes: _reasonCodes, ...rest } = item;
+    const back: QueueItem = { ...rest, status: 'review' };
+    if (waited.reason !== undefined) back.reason = waited.reason;
+    if (waited.errorCode !== undefined) back.errorCode = waited.errorCode;
+    if (waited.reasonCodes !== undefined) back.reasonCodes = waited.reasonCodes;
+    return back;
+  };
+  const rejudgeWaiting = () => {
+    const balanced = reviewLevelOf(settings) === 'balanced';
+    items = items.map(balanced ? readyWithNotes : waitingAgain);
+    // A row decided meanwhile - approved, kept, removed - is no longer waiting to be put back.
+    if (!balanced) waitedWith.clear();
+  };
+  // A queue that starts at Balanced starts judged by it. One that starts at
+  // Strict is shown as it was given: nothing changed the level.
+  if (reviewLevelOf(settings) === 'balanced') rejudgeWaiting();
   // As the backend: pressing Download asked for both models, and the
   // accurate one follows once the fast one is in place.
   const finishDownload = () => { if (downloadTimer) clearInterval(downloadTimer); downloadTimer = undefined; setup = { ...setup, state: 'ready', downloadedBytes: setup.totalBytes }; startAccurate(); };
@@ -734,25 +829,27 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       if (validateFilename(name, filenameExtension(item.originalFilename)) !== undefined) throw { code: 'NAME_INVALID', message: 'approved filename must preserve the source extension' };
       if (item.status !== 'review' && item.status !== 'ready') throw { code: 'INVALID_TRANSITION', message: 'proposal is not reviewable' };
       // A name a person approved is theirs: Settings' organization names no
-      // longer recompose it.
+      // longer recompose it. Nor is it judged by the seeded reading again:
+      // undone, it waits for the undo, at either level.
       composedNames.delete(id);
+      readings.delete(id);
       // Pipeline::complete_already_named: filed in its own folder (no
       // destination, flat), a name that is already the document's has
       // nowhere to go. It completes as kept, with nothing to undo, and says
       // why nothing moved - before any wait for a busy queue, as there.
       if (!settings.destination.trim() && settings.destinationLayout === 'flat' && fileNameKey(name) === fileNameKey(item.originalFilename)) {
-        replace({ ...settledFields(item), status: 'completed', proposedFilename: name, description: description.trim(), undoable: false, keptOriginal: true, reason: humanizeReason('ALREADY_NAMED') });
+        replace({ ...approvedFields(item), status: 'completed', proposedFilename: name, description: description.trim(), undoable: false, keptOriginal: true, reason: humanizeReason('ALREADY_NAMED') });
         return;
       }
       // APPLY_DEFERRED: the approval is kept and the command succeeds, but
       // the document is not renamed yet.
       if (options.deferApprovalsWhileBusy && items.some((entry) => entry.id !== id && entry.status === 'processing')) {
-        replace({ ...settledFields(item), status: 'ready', proposedFilename: name, description: description.trim(), approved: true, proposalRevision: `${Number(item.proposalRevision ?? 0) + 1}` });
+        replace({ ...approvedFields(item), status: 'ready', proposedFilename: name, description: description.trim(), approved: true, proposalRevision: `${Number(item.proposalRevision ?? 0) + 1}` });
         return;
       }
       // Approval clears the proposal's review reasons, and the filing is
       // recorded under the name it was given.
-      replace({ ...settledFields(item), status: 'completed', proposedFilename: name, filedName: name, description: description.trim(), undoable: true, keptOriginal: false });
+      replace({ ...approvedFields(item), status: 'completed', proposedFilename: name, filedName: name, description: description.trim(), undoable: true, keptOriginal: false });
       noteRecorded();
     },
     // complete_keep_original changes the status and nothing else: the
@@ -790,12 +887,16 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       // requeue_for_analysis refuses while an operation of the item never
       // finished, with INVALID_TRANSITION rather than unsettled_files' code.
       if (isParked(item)) throw { code: 'INVALID_TRANSITION', message: 'an earlier rename of this document did not finish; check it again first' };
+      // A row the Balanced level made ready is read again as the reading it
+      // is: it comes back as it waited, and is judged by the level again.
+      const reading = waitingAgain(item);
       replace({ id: item.id, originalFilename: item.originalFilename, status: 'waiting' });
       setTimeout(() => {
         const current = items.find((entry) => entry.id === id);
         if (current?.status !== 'waiting') return;
-        const read = PRE_ANALYSIS_CODES.has(item.errorCode ?? '') ? settledFields(item) : item;
-        replace({ ...read, status: 'review', proposalRevision: `${Number(item.proposalRevision ?? 0) + 1}` });
+        const read = PRE_ANALYSIS_CODES.has(reading.errorCode ?? '') ? settledFields(reading) : reading;
+        const back: QueueItem = { ...read, status: 'review', proposalRevision: `${Number(item.proposalRevision ?? 0) + 1}` };
+        replace(reviewLevelOf(settings) === 'balanced' ? readyWithNotes(back) : back);
         queueChanged();
       }, analysisDelayMs);
     },
@@ -823,6 +924,14 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
         replace({ ...rest, status: 'review', undoable: false, errorCode: 'DUPLICATE', reason: humanizeReason('EXACT_COPY, UNDONE') });
         return;
       }
+      // A rename made while the reading carried codes - by Intern itself,
+      // at the Balanced level - is undone with them still on it, and the
+      // undo beside them, as the backend adds it to the record's reasons.
+      if (rest.reasonCodes?.length) {
+        const codes = [...rest.reasonCodes, 'UNDONE'];
+        replace({ ...rest, status: 'review', undoable: false, reasonCodes: codes, reason: humanizeReason(codes.join(', ')) });
+        return;
+      }
       replace({ ...rest, status: 'review', undoable: false, reason: humanizeReason('UNDONE') });
     },
     // There are no files behind the browser preview to hand to a program,
@@ -839,8 +948,10 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       }
       const pairProblem = folderPairProblem(settings, next);
       if (pairProblem) throw pairProblem;
+      const levelBefore = reviewLevelOf(settings);
       settings = next.ourNames === undefined ? { ...next } : { ...next, ourNames: ownNames(next.ourNames) };
       renameWaiting();
+      if (reviewLevelOf(settings) !== levelBefore) rejudgeWaiting();
     },
     getSetup: async () => ({ ...setup, hostedModelReady: settings.modelSource === 'hosted' && hostedConfigured(settings), tiers: tiers() }),
     getOnboarding: async (): Promise<OnboardingStatus> => ({
@@ -1056,6 +1167,35 @@ const heldForSpellingRules: LearnedRule[] = [
 
 export function createLearnedSpellingBridge(): DesktopBridge {
   return createBridge({ items: [heldForSpelling, ...seedItems], learnedRules: heldForSpellingRules }, false);
+}
+
+/**
+ * A scan as an automatic rename at the Balanced review level leaves one:
+ * renamed by Intern itself while its reading carried codes, which are still
+ * on it. No approval made it - an approval clears them - so the demo, which
+ * renames nothing by itself, has to be given one.
+ */
+const renamedWithNote: QueueItem = {
+  id: 'renamed-noted', originalFilename: 'Scan 0098.pdf', status: 'completed', confidence: 0.97,
+  proposedFilename: '2024-03-08 Letter to Fabrikam Inc.pdf', filedName: '2024-03-08 Letter to Fabrikam Inc.pdf', filedPath: `${DEMO_OUTPUT_FOLDER}\\2024-03-08 Letter to Fabrikam Inc.pdf`,
+  description: 'Letter to Fabrikam Inc. about renewing its service agreement.',
+  undoable: true, keptOriginal: false,
+  reasonCodes: ['TYPE_INFERRED', 'TYPE_MISSING'], reason: humanizeReason('TYPE_INFERRED, TYPE_MISSING'),
+};
+
+const renamedWithNoteReceipt: HistoryEntry = {
+  receiptId: '11', queueItemId: 'renamed-noted', at: 1716369300, direction: 'apply', kind: 'rename', stage: 'complete',
+  originalPath: `${DEMO_INPUT_FOLDER}\\Scan 0098.pdf`, newPath: `${DEMO_OUTPUT_FOLDER}\\2024-03-08 Letter to Fabrikam Inc.pdf`,
+  description: 'Letter to Fabrikam Inc. about renewing its service agreement.',
+};
+
+/**
+ * The demo's queue with the review level at Balanced, for looking at what
+ * that leaves on screen: the lease ready with a note, and in Completed a
+ * scan renamed with one. The browser build's `?reviewLevel=balanced`.
+ */
+export function createBalancedLevelBridge(): DesktopBridge {
+  return createBridge({ items: [...seedItems, renamedWithNote], readings: seedReadings, history: [renamedWithNoteReceipt, ...seedHistory], settings: { reviewLevel: 'balanced' } }, false);
 }
 
 type BrowserFile = File & { webkitRelativePath?: string };

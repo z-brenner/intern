@@ -202,6 +202,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .ready-filter svg { width: 15px; height: 15px; }
 .ready-filter:hover { background: var(--surface-subtle); }
 .ready-filter[aria-pressed='true'] { border-color: var(--ready); background: color-mix(in srgb, var(--ready) 12%, var(--surface)); color: var(--ready-strong); }
+/* The same switch in Completed, for the documents renamed with a note. */
+.note-filter { min-height: 30px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong); border-radius: 15px; background: var(--surface); color: var(--text-soft); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.note-filter svg { width: 15px; height: 15px; }
+.note-filter:hover { background: var(--surface-subtle); }
+.note-filter[aria-pressed='true'] { border-color: var(--accent); background: var(--surface-selected); color: var(--text); }
 /* Things done to the queue rarely: behind a More button, away from the
    one primary command, so Discard is never a slip from Rename. */
 .more-menu { position: relative; }
@@ -238,9 +243,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .table-wrap table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 14px; }
 .table-wrap th { text-align: left; padding: 6px 12px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .table-wrap th.col-original { width: 24%; }
-/* Wide enough for the longest label on one line - "Ready to file as a copy" -
-   with room to spare: a label's width moves a few pixels between fonts and
-   machines, and a status that does not fit paints over the next column. */
+/* Wide enough for the longest label on one line - "Ready to file as a copy",
+   and "Completed with a note", which is as long - with room to spare: a
+   label's width moves a few pixels between fonts and machines, and a status
+   that does not fit paints over the next column. */
 .table-wrap th.col-status { width: 204px; }
 .table-wrap th.col-proposed { width: 30%; }
 .table-wrap th.col-description { width: 24%; }
@@ -333,6 +339,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .check-label.failed { color: var(--failed); font-weight: 500; }
 .check-label.ready { color: var(--ready); }
 .check-label.quiet { color: var(--text-muted); }
+/* A note on a ready or a renamed row: neither the green of every check
+   passed nor the amber of a review. */
+.check-label.noted { color: var(--text-soft); }
 .check-label small { font-size: 12px; font-weight: 400; color: var(--text-muted); }
 /* The part of a proposed name to check, marked where it is. */
 mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark); color: inherit; box-shadow: inset 0 -2px 0 var(--review); }
@@ -430,6 +439,10 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .check-first h3 svg { width: 16px; height: 16px; flex: none; }
 .inspector .check-first p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text); }
 .inspector .check-first p + p { margin-top: 6px; }
+/* A note on a document that is not waiting: where "What to check" stands,
+   without its amber. It is something to read, not something to do. */
+.check-first.noted { border-color: var(--border); border-left-color: var(--text-muted); background: var(--surface-subtle); }
+.check-first.noted h3 { color: var(--text); }
 .flag-line { margin: -8px 0 14px; font-size: 12.5px; line-height: 1.5; color: var(--review-strong); }
 
 /* Evidence, as evidence: what the document says, attributed to the part of
@@ -520,6 +533,11 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .check-label + .check-hint { margin-left: 26px; }
 .settings-dialog .primary { border: 0; min-height: 42px; padding: 0 16px; }
 .settings-dialog .save-error { margin: 0 0 4px; }
+/* What this save can do to documents a person was naming. Review's amber and
+   not an error's red: nothing has gone wrong, and Save is not held back. */
+.settings-dialog .save-warning { margin: 0 0 4px; padding: 8px 10px; border-left: 3px solid var(--review); border-radius: var(--radius-sm); background: var(--surface); font-size: 12.5px; line-height: 18px; color: var(--text); }
+/* Its room once it has gone, with nothing in it: as far from Save as it was. */
+.settings-dialog .save-warning-room { margin: 0 0 4px; }
 .link-out svg { width: 16px; height: 16px; }
 
 .folder-row { display: flex; align-items: flex-end; gap: 10px; margin: 0 0 12px; }
@@ -535,6 +553,16 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .folder-setting button:hover { background: var(--surface-subtle); border-color: var(--text-muted); }
 .existing-choice { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .existing-choice legend { padding: 0 4px; font-size: 13px; color: var(--text); }
+/* Which documents are ready: two choices, each with what it does under its
+   name. Boxed, so it reads as one question apart from the checkbox after it. */
+.review-level { margin: 4px 0 14px; padding: 10px 12px 2px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.review-level legend { padding: 0 4px; font-size: 13px; font-weight: 600; color: var(--text); }
+.review-level > .check-hint { margin: 2px 0 8px; }
+.settings-dialog .review-level .check-label { align-items: flex-start; }
+.review-level .check-label input { margin-top: 2px; }
+.review-level .check-label > span { display: flex; flex-direction: column; gap: 2px; }
+.review-level .check-label .check-hint { margin: 0; }
+.review-level .check-label .review-level-cost { color: var(--text); }
 .settings-advanced > summary { cursor: pointer; font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--text); padding: 2px 0; }
 .settings-advanced[open] > summary { margin-bottom: 10px; }
 .intake-status { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); padding: 12px; margin: 14px 0 4px; font-size: 13px; }
@@ -585,6 +613,8 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .history-document-actions { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
 .history-document-actions .link-button { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
 .history-document-actions svg { width: 14px; height: 14px; }
+/* A document renamed with a note from Intern: the few words the queue's Check column has for it. */
+.history-note { display: block; margin-top: 4px; font-size: 12px; line-height: 1.35; color: var(--text-soft); }
 
 /* ---------- feedback and setup ---------- */
 /* Files dragged over the desktop window. It must not take the drop itself:

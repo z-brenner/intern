@@ -22,7 +22,9 @@ export interface QueueItem {
   /**
    * The review codes behind `reason`, when the backend sent a list of them
    * ("DATE_AMBIGUOUS, LOW_CONFIDENCE"): which parts of the proposal are in
-   * doubt, for marking those parts where they are shown.
+   * doubt, for marking those parts where they are shown. A ready item can
+   * carry them too, at the Balanced review level, and so can one Intern then
+   * filed by itself: there they are notes, not what holds the document.
    */
   reasonCodes?: string[];
   /** The name the document was filed under, which can differ from the proposal (a " (2)" suffix, a layout folder). */
@@ -129,6 +131,15 @@ export type ModelTier = 'fast' | 'accurate';
  */
 export type ModelPreference = 'automatic' | 'accurate' | 'fast';
 
+/**
+ * Which finished readings are ready: shown as ready, renamed by Rename all
+ * ready, and renamed with no person when automatic renaming is on. `strict`:
+ * only a reading no check held. `balanced`: also one whose only doubts are
+ * about its type or its description, or that the model was unsure of. The
+ * rule itself is the engine's; the window only stores the choice.
+ */
+export type ReviewLevel = 'strict' | 'balanced';
+
 /** Which local model read a document, as the review panel says it. */
 export interface ModelReading {
   tier: ModelTier;
@@ -157,6 +168,11 @@ export interface AppSettings {
   ourNames?: string[];
   startMinimized: boolean;
   automaticRename: boolean;
+  /**
+   * What counts as ready. Absent from a settings file written before the
+   * choice existed, and from an older backend: strict.
+   */
+  reviewLevel?: ReviewLevel;
   /** Watched intake folder path; "" = none configured. */
   intakeFolder: string;
   intakeEnabled: boolean;

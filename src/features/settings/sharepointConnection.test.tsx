@@ -105,7 +105,7 @@ describe('SharePoint connection in Settings', () => {
     await screen.findByRole('region', { name: 'SharePoint connection' });
     for (const title of ['Naming and filing', 'Learned spellings', 'Local processing', 'SharePoint descriptions']) fireEvent.click(screen.getByText(title, { selector: 'summary' }));
     expect(screen.getByLabelText('Arrange filed documents')).toBeVisible();
-    expect(screen.getByLabelText('Automatically rename high-confidence files')).toBeVisible();
+    expect(screen.getByLabelText('Automatically rename ready documents')).toBeVisible();
     expect(screen.getByText('Learned spellings', { selector: 'summary' })).toBeVisible();
     expect(screen.getByRole('group', { name: 'Local model' })).toBeVisible();
     expect(screen.getByLabelText('Write a description record for each filed document')).toBeVisible();
@@ -366,7 +366,7 @@ describe('SharePoint connection in Settings', () => {
     await screen.findByRole('region', { name: 'SharePoint connection' });
 
     fireEvent.change(screen.getByLabelText('Arrange filed documents'), { target: { value: 'year' } });
-    fireEvent.click(screen.getByLabelText('Automatically rename high-confidence files'));
+    fireEvent.click(screen.getByLabelText('Automatically rename ready documents'));
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
 
     await waitFor(() => expect(onSave).toHaveBeenCalledOnce());

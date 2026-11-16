@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { checkCell, checkText, itemFlaggedFields, itemReasonCodes, nameParts, partyGiven, withParty } from './check';
-import { reasonCodes, shortReason } from '../../lib/reasons';
+import { carriedNotes, checkCell, checkText, itemFlaggedFields, itemNote, itemReasonCodes, nameParts, partyGiven, withParty } from './check';
+import { describeNotes, humanizeReason, reasonCodes, shortReason } from '../../lib/reasons';
 import type { QueueItem } from '../../types';
 
 const review = (extra: Partial<QueueItem>): QueueItem => ({ id: 'r', originalFilename: 'Scan.pdf', status: 'review', proposedFilename: '2024-02-09 Invoice INV-3301 from Fabrikam Inc.pdf', ...extra });
@@ -54,6 +54,161 @@ describe('the Check column', () => {
   it('flags only the parts of a name in review', () => {
     expect(itemFlaggedFields(review({ reasonCodes: ['DATE_AMBIGUOUS', 'PARTY_UNSUPPORTED', 'LOW_CONFIDENCE'] }))).toEqual(['date', 'parties']);
     expect(itemFlaggedFields({ ...review({ reasonCodes: ['DATE_AMBIGUOUS'] }), status: 'ready' })).toEqual([]);
+  });
+});
+
+/*
+  At the Balanced review level a reading can be ready while it carries review
+  codes, and a document Intern then renames by itself is filed with them. On
+  such a row they are notes: it reads as ready, or completed, with a note -
+  never as a review, and never as having passed every check.
+*/
+describe('a note on a row that is not waiting', () => {
+  const ready = (extra: Partial<QueueItem>): QueueItem => ({ ...review({}), status: 'ready', ...extra });
+  const renamed = (extra: Partial<QueueItem>): QueueItem => ({ ...review({}), status: 'completed', filedName: '2024-02-09 Invoice INV-3301 from Fabrikam Inc.pdf', undoable: true, keptOriginal: false, ...extra });
+  const codes = ['TYPE_INFERRED', 'LOW_CONFIDENCE'];
+  const sent = { reasonCodes: codes, reason: humanizeReason(codes.join(', ')) };
+
+  it('is what a ready row with codes says in place of "All checks passed"', () => {
+    const item = ready(sent);
+    expect(itemNote(item)).toEqual({ codes, text: describeNotes(codes) });
+    expect(checkCell(item)).toEqual({ text: 'Note: Type supplied by Intern', more: 1, tone: 'noted', title: describeNotes(codes) });
+    // Copied, the cell still says the row was not waiting.
+    expect(checkText(item)).toBe('Note: Type supplied by Intern (+1 more)');
+    // The tooltip is the note, not the review's instructions, and not the claim that every check passed.
+    expect(checkCell(item)?.title).not.toMatch(/Check |each found in the document/);
+    // Nothing of its name is marked for checking: that is a review's.
+    expect(itemFlaggedFields(item)).toEqual([]);
+  });
+
+  it('leaves a ready row with no reason exactly as it was', () => {
+    expect(itemNote(ready({}))).toBeUndefined();
+    expect(checkCell(ready({}))).toEqual({ text: 'All checks passed', more: 0, tone: 'ready', title: 'The date, type and parties in this name were each found in the document.' });
+  });
+
+  it('is not said of an approved name, of a copy, or of a row in review', () => {
+    // An approved name is the person's own.
+    expect(itemNote(ready({ ...sent, approved: true }))).toBeUndefined();
+    expect(checkCell(ready({ ...sent, approved: true }))).toMatchObject({ text: 'Approved', tone: 'ready' });
+    // A staged copy says what it is.
+    const copy = ready({ copyOf: '2024-02-09 Invoice.pdf', approved: true, reason: humanizeReason('EXACT_COPY'), reasonCodes: ['EXACT_COPY'] });
+    expect(itemNote(copy)).toBeUndefined();
+    expect(itemNote({ ...copy, approved: false })).toBeUndefined();
+    expect(checkCell({ ...copy, approved: false })).toMatchObject({ text: 'Exact copy', tone: 'quiet' });
+    // In review, the same codes are what to check.
+    expect(itemNote(review(sent))).toBeUndefined();
+    expect(checkCell(review(sent))).toMatchObject({ text: 'Type supplied by Intern', more: 1, tone: 'review' });
+    for (const status of ['waiting', 'processing', 'failed'] as const) expect(itemNote({ ...review(sent), status }), status).toBeUndefined();
+  });
+
+  it('is said in the words that came when a ready row gives a reason this build has no codes for', () => {
+    const item = ready({ reason: 'TYPE_INFERRED, SOMETHING_NEW' });
+    expect(itemNote(item)).toEqual({ codes: [], text: 'TYPE_INFERRED, SOMETHING_NEW' });
+    expect(checkCell(item)).toEqual({ text: 'Note: TYPE_INFERRED, SOMETHING_NEW', more: 0, tone: 'noted', title: 'TYPE_INFERRED, SOMETHING_NEW' });
+  });
+
+  it('marks a document renamed while it carried codes, and not one that kept its name or was a copy', () => {
+    const item = renamed(sent);
+    expect(itemNote(item)).toEqual({ codes, text: describeNotes(codes) });
+    expect(checkCell(item)).toEqual({ text: 'Note: Type supplied by Intern', more: 1, tone: 'noted', title: describeNotes(codes) });
+    // Renamed with no codes: nothing to say, as before.
+    expect(itemNote(renamed({}))).toBeUndefined();
+    expect(checkCell(renamed({}))).toBeUndefined();
+    // Kept its original name with a review's codes still on it: not renamed by them, and shown as it always was.
+    const kept = renamed({ ...sent, keptOriginal: true, filedName: undefined, undoable: false });
+    expect(itemNote(kept)).toBeUndefined();
+    expect(checkCell(kept)).toEqual({ text: 'Type supplied by Intern', more: 1, tone: 'quiet', title: sent.reason });
+    // What became of the file is no note about its reading.
+    const named = renamed({ keptOriginal: true, filedName: undefined, undoable: false, reasonCodes: ['ALREADY_NAMED'], reason: humanizeReason('ALREADY_NAMED') });
+    expect(itemNote(named)).toBeUndefined();
+    expect(checkCell(named)).toMatchObject({ text: 'Already had this name', tone: 'quiet' });
+    const copy = renamed({ copyOf: '2024-02-09 Invoice.pdf', reasonCodes: ['EXACT_COPY'], reason: humanizeReason('EXACT_COPY') });
+    expect(itemNote(copy)).toBeUndefined();
+    expect(checkCell(copy)).toMatchObject({ text: 'Exact copy', tone: 'quiet' });
+    // A filed row gives its reason in codes or not at all: words alone mark nothing.
+    expect(itemNote(renamed({ reason: 'Something in words.' }))).toBeUndefined();
+  });
+
+  /*
+    The engine raises TYPE_MISSING for a type that is a general word alone -
+    "Letter", "Agreement", "Notice" - and the Balanced level makes such a
+    reading ready only when its name has a type. "No document type" beside
+    "Letter to Fabrikam Inc" said the name lacked what it had, and that
+    Intern had made ready what Settings says waits.
+  */
+  it('says of a type that is a general word that it is not specific, never that the name has none', () => {
+    const name = '2024-03-08 Letter to Fabrikam Inc.pdf';
+    const general = { proposedFilename: name, reasonCodes: ['TYPE_MISSING'], reason: humanizeReason('TYPE_MISSING') };
+    for (const item of [ready(general), renamed({ ...general, filedName: name })]) {
+      expect(itemNote(item), item.status).toEqual({ codes: ['TYPE_MISSING'], text: 'No specific document type was identified.' });
+      expect(checkCell(item), item.status).toEqual({ text: 'Note: No specific type', more: 0, tone: 'noted', title: 'No specific document type was identified.' });
+      // As it is copied, and as Rename history marks it.
+      expect(checkText(item), item.status).toBe('Note: No specific type');
+    }
+    // Leading a list, and counted behind another note about the type.
+    expect(checkText(ready({ ...general, reasonCodes: ['TYPE_MISSING', 'LOW_CONFIDENCE'] }))).toBe('Note: No specific type (+1 more)');
+    expect(checkText(ready({ ...general, reasonCodes: ['TYPE_INFERRED', 'TYPE_MISSING'] }))).toBe('Note: Type supplied by Intern (+1 more)');
+    // No note says the name has no type, whatever it carries.
+    for (const carried of [['TYPE_MISSING'], ['TYPE_MISSING', 'TYPE_INFERRED'], ['LOW_CONFIDENCE', 'TYPE_MISSING'], ['DESCRIPTION_UNSUPPORTED', 'TYPE_MISSING']]) {
+      expect(checkText(ready({ ...general, reasonCodes: carried })), carried.join()).not.toMatch(/No document type/);
+    }
+    // In review the few words are as they were: there the name may well have none.
+    expect(checkCell(review(general))).toEqual({ text: 'No document type', more: 0, tone: 'review', title: general.reason });
+    // And on a document a person kept under its own name.
+    expect(checkCell(renamed({ ...general, keptOriginal: true, filedName: undefined, undoable: false }))).toEqual({ text: 'No document type', more: 0, tone: 'quiet', title: general.reason });
+  });
+});
+
+/*
+  Two states a document with notes passes through without being ready or
+  renamed. While Intern renames it, it is being renamed. And where it
+  already had exactly the name Intern would give it, Intern completes it
+  under that name: the backend adds ALREADY_NAMED to the reasons it had (an
+  approval clears them first, so ALREADY_NAMED beside other codes is always
+  Intern's own doing). Neither waits for anyone, so neither is told to check
+  anything.
+*/
+describe('the notes a document carries while it is renamed, or completed under the name it had', () => {
+  const codes = ['TYPE_INFERRED', 'LOW_CONFIDENCE'];
+  const name = '2024-03-08 Letter to Fabrikam Inc.pdf';
+  const filing: QueueItem = { id: 'f', originalFilename: 'Scan 3.pdf', status: 'processing', stage: 'filing', cancelable: false, proposedFilename: name, reasonCodes: codes, reason: humanizeReason(codes.join(', ')) };
+  const named: QueueItem = { id: 'n', originalFilename: name, status: 'completed', proposedFilename: name, keptOriginal: true, undoable: false, reasonCodes: [...codes, 'ALREADY_NAMED'], reason: humanizeReason([...codes, 'ALREADY_NAMED'].join(', ')) };
+  const alreadyNamed = 'This document already had this name, so nothing was renamed.';
+
+  it('are said as notes, with no instruction', () => {
+    expect(humanizeReason(codes.join(', '))).toMatch(/Check that it names the document\. .*Check the name against the document/);
+    expect(carriedNotes(filing)).toBe(describeNotes(codes));
+    expect(carriedNotes(filing)).not.toMatch(/(^|\. )Check\b/);
+    // What became of the file first, then what Intern had noted.
+    expect(carriedNotes(named)).toBe(`${alreadyNamed} ${describeNotes(codes)}`);
+    expect(carriedNotes(named)).not.toMatch(/(^|\. )Check\b/);
+  });
+
+  it('leave a document being renamed without a Check cell, and lead a completed one\'s with what became of the file', () => {
+    expect(checkCell(filing)).toBeUndefined();
+    expect(itemNote(filing)).toBeUndefined();
+    // Not renamed, so not among those renamed with a note; the notes are counted behind the outcome.
+    expect(itemNote(named)).toBeUndefined();
+    expect(checkCell(named)).toEqual({ text: 'Already had this name', more: 2, tone: 'quiet', title: `${alreadyNamed} ${describeNotes(codes)}` });
+    expect(checkText(named)).toBe('Already had this name (+2 more)');
+  });
+
+  it('change nothing where the reason stands as it came', () => {
+    // Already named with nothing else, as an approval or the Strict level leaves it.
+    const plain: QueueItem = { ...named, reasonCodes: ['ALREADY_NAMED'], reason: alreadyNamed };
+    expect(carriedNotes(plain)).toBe(alreadyNamed);
+    expect(checkCell(plain)).toEqual({ text: 'Already had this name', more: 0, tone: 'quiet', title: alreadyNamed });
+    // Kept under its own name by a person: the review's codes and words, as before.
+    const kept: QueueItem = { ...named, reasonCodes: codes, reason: humanizeReason(codes.join(', ')) };
+    expect(carriedNotes(kept)).toBeUndefined();
+    expect(checkCell(kept)).toEqual({ text: 'Type supplied by Intern', more: 1, tone: 'quiet', title: kept.reason });
+    // In review, ready, renamed, waiting, or being read again: said elsewhere, or as it came.
+    for (const status of ['review', 'failed', 'ready', 'waiting'] as const) expect(carriedNotes({ ...filing, status, stage: undefined }), status).toBeUndefined();
+    for (const stage of ['reading', 'naming'] as const) expect(carriedNotes({ ...filing, stage }), stage).toBeUndefined();
+    expect(carriedNotes({ ...named, keptOriginal: false, filedName: name, reasonCodes: codes, reason: filing.reason })).toBeUndefined();
+    // Words with no codes behind them are nobody's to reword.
+    expect(carriedNotes({ ...filing, reasonCodes: undefined, reason: 'Something in words.' })).toBeUndefined();
+    expect(carriedNotes({ ...filing, reasonCodes: undefined, reason: undefined })).toBeUndefined();
   });
 });
 
