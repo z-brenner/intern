@@ -385,15 +385,18 @@ describe('the warning in Settings', () => {
   });
 
   // Places given, as above: the warning is 88px tall with Save 12px under it,
-  // so the footer grows by 100px; the sections' view ends at 608 once it has,
-  // and the checkbox's line ends at 628, 20px behind it.
-  it('scrolls the sections to keep the control just used in view when the person\'s own choice brings the warning over it, and never when it comes by itself', async () => {
+  // so the footer grows by 100px; the sections' view ended at 708 before, and
+  // ends at 608 once it has. The checkbox's line is 26px, and the checkbox
+  // itself the 16px that end 5px above the line's end, as it is drawn. At
+  // first the line ends at 628, 20px behind the footer.
+  it('scrolls the sections to show the line of the control just used when the person\'s own choice brings the warning and that control was in view, and never when it comes by itself or the control was out of view already', async () => {
     const rect = (top: number, height: number) => ({ top, bottom: top + height, left: 0, right: 0, x: 0, y: top, width: 0, height, toJSON: () => ({}) }) as DOMRect;
     let lineEnds = 628;
     const layout = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
       if (this.classList.contains('save-warning')) return rect(623, 88);
       if (this.classList.contains('dialog-body')) return rect(91, 517);
       if (this.tagName === 'LABEL' && this.textContent === 'Automatically rename ready documents') return rect(lineEnds - 26, 26);
+      if (this.tagName === 'INPUT' && this.closest('label')?.textContent === 'Automatically rename ready documents') return rect(lineEnds - 21, 16);
       // Save is under the warning, in the footer, 12px below its box.
       if (this.textContent === 'Save settings') return rect(723, 42);
       // Not where it is drawn: given the checkbox's place, to see that a control outside the sections is not
@@ -453,28 +456,37 @@ describe('the warning in Settings', () => {
       expect(settings.sections.scrollTop).toBe(0);
       settings.unmount();
 
-      // Just covered, to the last pixel the footer took: shown again. One pixel further down it was out of view
-      // before the footer grew, not covered by it, and the sections are not sent after it.
-      lineEnds = 708;
-      settings = await open({ ready: 1, review: 0 });
-      automatic(settings.dialog).focus();
-      fireEvent.click(automatic(settings.dialog));
-      expect(settings.sections.scrollTop).toBe(104);
-      settings.unmount();
-      lineEnds = 709;
-      settings = await open({ ready: 1, review: 0 });
-      automatic(settings.dialog).focus();
-      fireEvent.click(automatic(settings.dialog));
-      expect(warning(settings.dialog)).toHaveTextContent(ONE);
-      expect(settings.sections.scrollTop).toBe(0);
-      settings.unmount();
+      // What decides is whether the checkbox itself was in view before the footer grew, when the view ended at
+      // 708. Its line need not have been: the scroll is by all that is cut of the line, and 4px.
+      for (const [ends, scrolled, how] of [
+        [708, 104, 'the line just covered, to the last pixel the footer took'],
+        [709, 105, 'the line cut off by a pixel before, the checkbox itself in view'],
+        // Where the keyboard leaves it: the browser shows the checkbox the focus comes to and no more, so it
+        // ends at the view's end, 708, and 5px of its line are cut off. The scroll is more than the footer grew.
+        [713, 109, 'the checkbox ending at the view\'s end, its line cut off under it'],
+        // One pixel past the end still counts as in view: the browser scrolls by whole pixels, and can leave a
+        // control it has brought into view a part of one past the end.
+        [714, 110, 'the checkbox one pixel past the view\'s end'],
+        // Two pixels past: it was out of view before the footer grew, and the sections are not sent after it.
+        [715, 0, 'the checkbox itself cut off before'],
+      ] as const) {
+        lineEnds = ends;
+        settings = await open({ ready: 1, review: 0 });
+        automatic(settings.dialog).focus();
+        fireEvent.click(automatic(settings.dialog));
+        expect(warning(settings.dialog)).toHaveTextContent(ONE);
+        expect(settings.sections.scrollTop, how).toBe(scrolled);
+        settings.unmount();
+      }
 
-      // The warning grown by a line, by the person's own choice: only what that line covered is scrolled for.
+      // The warning grown by a line, by the person's own choice. Balanced itself is the 16px at the top of its
+      // line, 2px down, and its words stand under it.
       lineEnds = 620;
       const lines = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
         if (this.classList.contains('save-warning')) return this.textContent?.startsWith('1 document') ? rect(623, 88) : rect(605, 106);
         if (this.classList.contains('dialog-body')) return rect(91, this.closest('.settings-dialog')?.querySelector('.save-warning')?.textContent?.startsWith('1 document') ? 517 : 499);
         if (this.tagName === 'LABEL' && this.textContent?.startsWith('Balanced')) return rect(lineEnds - 145, 145);
+        if (this.tagName === 'INPUT' && this.closest('label')?.textContent?.startsWith('Balanced')) return rect(lineEnds - 143, 16);
         if (this.textContent === 'Save settings') return rect(723, 42);
         return rect(0, 0);
       });
@@ -483,14 +495,15 @@ describe('the warning in Settings', () => {
         fireEvent.click(automatic(settings.dialog));
         expect(warning(settings.dialog)).toHaveTextContent(ONE);
         expect(settings.sections.scrollTop).toBe(0);
-        // Balanced adds the two in review: five lines, 18px more of footer. Its own label ends at 620, 30px
-        // behind the footer now, of which the footer took only 18 just now: it was cut off before, and is left.
+        // Balanced adds the two in review: five lines, 18px more of footer, and the view ends at 590. Its line
+        // ends at 620, 30px behind the footer, of which the footer took only 18 just now: 12px were cut off
+        // before. Balanced itself was in view, so its line is shown whole: 34px, more than the footer grew.
         balanced(settings.dialog).focus();
         fireEvent.click(balanced(settings.dialog));
         expect(warning(settings.dialog)).toHaveTextContent(several(3));
-        expect(settings.sections.scrollTop).toBe(0);
+        expect(settings.sections.scrollTop).toBe(34);
         settings.unmount();
-        // Ending at 600, it is 10px behind the footer, all of it just taken: shown again.
+        // Ending at 600, the line is 10px behind the footer, all of it just taken: shown again.
         lineEnds = 600;
         settings = await open({ ready: 1, review: 2 });
         fireEvent.click(automatic(settings.dialog));
@@ -498,6 +511,20 @@ describe('the warning in Settings', () => {
         fireEvent.click(balanced(settings.dialog));
         expect(warning(settings.dialog)).toHaveTextContent(several(3));
         expect(settings.sections.scrollTop).toBe(14);
+        settings.unmount();
+        // Balanced itself out of view before the footer grew, when the view ended at 608: with its line ending
+        // at 737 it ended at 610, 2px past, one more than the pixel allowed, and it is left where it is. One
+        // pixel higher it counts as in view, and its line is shown whole.
+        for (const [ends, scrolled] of [[737, 0], [736, 150]] as const) {
+          lineEnds = ends;
+          settings = await open({ ready: 1, review: 2 });
+          fireEvent.click(automatic(settings.dialog));
+          balanced(settings.dialog).focus();
+          fireEvent.click(balanced(settings.dialog));
+          expect(warning(settings.dialog)).toHaveTextContent(several(3));
+          expect(settings.sections.scrollTop, `Balanced's line ending at ${ends}`).toBe(scrolled);
+          settings.unmount();
+        }
       } finally {
         lines.mockRestore();
       }

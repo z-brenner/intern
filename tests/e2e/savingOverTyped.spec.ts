@@ -27,14 +27,13 @@ const EMPLOYMENT = 'Employment Agreement - John Smith.pdf';
 const ONE = '1 document has a name or a description you typed and did not file. When you save, Intern can rename it under the name it proposed. You can file it first, or take back what you typed. What you typed is kept with the document, but is not filed.';
 const TWO = '2 documents have a name or a description you typed and did not file. When you save, Intern can rename them under the names it proposed. You can file them first, or take back what you typed. What you typed is kept with each document, but is not filed.';
 
-/** Settings, at "Naming and filing", where the two choices are. */
-async function openSettings(page: Page) {
-  await page.getByRole('button', { name: 'Settings' }).click();
+/** What these journeys use in Settings. */
+function inSettings(page: Page) {
   const dialog = page.getByRole('dialog', { name: 'Settings' });
-  await dialog.locator('summary', { hasText: 'Naming and filing' }).click();
   const level = dialog.getByRole('group', { name: 'Which documents are ready' });
   return {
     dialog,
+    naming: dialog.locator('summary', { hasText: 'Naming and filing' }),
     strict: level.getByRole('radio', { name: /^Strict/ }),
     balanced: level.getByRole('radio', { name: /^Balanced/ }),
     automatic: dialog.getByRole('checkbox', { name: 'Automatically rename ready documents' }),
@@ -42,6 +41,14 @@ async function openSettings(page: Page) {
     warning: dialog.getByRole('alert').filter({ hasText: 'you typed and did not file' }),
     sections: dialog.locator('.dialog-body'),
   };
+}
+
+/** Settings, at "Naming and filing", where the two choices are. */
+async function openSettings(page: Page) {
+  await page.getByRole('button', { name: 'Settings' }).click();
+  const settings = inSettings(page);
+  await settings.naming.click();
+  return settings;
 }
 
 /**
@@ -273,12 +280,12 @@ const putCheckbox = (automatic: Locator, above: number) => automatic.evaluate((i
   const view = input.closest('.dialog-body')!;
   view.scrollTop += input.closest('label')!.getBoundingClientRect().bottom - (view.getBoundingClientRect().bottom - above);
 }, above);
-/** How far the checkbox's line ends above the end of the sections' view; negative when it is cut off. */
-const clear = (automatic: Locator) => automatic.evaluate((input) => input.closest('.dialog-body')!.getBoundingClientRect().bottom - input.closest('label')!.getBoundingClientRect().bottom);
-/** A little above the footer: the 4px the sections leave under it, give or take a pixel of rounding. */
-const justInView = async (automatic: Locator) => {
-  await expect(automatic).toBeInViewport({ ratio: 1 });
-  const room = await clear(automatic);
+/** How far a control's line ends above the end of the sections' view; negative when it is cut off. */
+const clear = (control: Locator) => control.evaluate((input) => input.closest('.dialog-body')!.getBoundingClientRect().bottom - input.closest('label')!.getBoundingClientRect().bottom);
+/** A little above the footer: the 4px the sections leave under its line, give or take a pixel of rounding. */
+const justInView = async (control: Locator) => {
+  await expect(control).toBeInViewport({ ratio: 1 });
+  const room = await clear(control);
   expect(room).toBeGreaterThanOrEqual(3);
   expect(room).toBeLessThan(6);
 };
@@ -392,4 +399,108 @@ test('the choice that brings the warning stays in view: the sections scroll for 
   expect(await tops(settings.dialog)).toEqual(before);
   expect(await clear(settings.automatic)).toBeLessThan(0);
   await expect(settings.automatic).toBeFocused();
+});
+
+/*
+  From the keyboard the browser scrolls first, by itself: it shows the
+  control the focus comes to, and no more of its line. A control reached at
+  the end of the sections' view then ends at the view's end, with its line
+  cut off under it: 5px of the checkbox's, and most of Balanced's, whose
+  words stand under it. The sections used to scroll only for a line that
+  had been whole in view, so such a control stayed behind the footer with
+  the focus on it. In the demo that was the checkbox in a window 728 to
+  764px high, or 1048 to 1068px, and Balanced in one 836 to 944px high. Now
+  what must have been in view is the control itself, and the scroll is by
+  all that is cut of its line: here, more than the footer grew.
+
+  Keys only, once the focus is on the Settings button.
+*/
+/** Tab, until the focus is on the control. */
+const tabTo = async (page: Page, control: Locator) => {
+  for (let step = 0; step < 20 && !await control.evaluate((each) => each === document.activeElement); step += 1) await page.keyboard.press('Tab');
+  await expect(control).toBeFocused();
+};
+/** Settings, at "Naming and filing", opened and reached with the keyboard. */
+async function openSettingsByKeys(page: Page) {
+  await page.getByRole('button', { name: 'Settings' }).focus();
+  await page.keyboard.press('Enter');
+  const settings = inSettings(page);
+  await expect(settings.dialog).toBeVisible();
+  await tabTo(page, settings.naming);
+  await page.keyboard.press('Enter');
+  return settings;
+}
+/** Whether a control is itself what is drawn at its middle: nothing lies over it. */
+const onTop = (control: Locator) => control.evaluate((input) => {
+  const box = input.getBoundingClientRect();
+  return document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) === input;
+});
+/** Where the sections' view ends, in the window. */
+const viewEnd = (sections: Locator) => sections.evaluate((view) => view.getBoundingClientRect().bottom);
+/**
+ * After the key that brought the warning: the control chosen with it has
+ * the focus and is whole in view with nothing over it, its line is whole
+ * above the footer, and to show it the sections scrolled, all of a piece,
+ * by more than the footer grew. Nothing outside the sections moved.
+ */
+async function keptInView(settings: ReturnType<typeof inSettings>, control: Locator, before: { tops: Awaited<ReturnType<typeof tops>>; viewEnd: number }) {
+  await expect(control).toBeFocused();
+  await justInView(control);
+  expect(await onTop(control)).toBe(true);
+  const after = await tops(settings.dialog);
+  expect(after.filter((each, index) => !each.inSections && each.top !== before.tops[index].top)).toEqual([]);
+  expect(after.every((each, index) => each.left === before.tops[index].left)).toBe(true);
+  const scrolled = after.flatMap((each, index) => each.inSections ? [before.tops[index].top - each.top] : []);
+  expect(Math.max(...scrolled) - Math.min(...scrolled)).toBeLessThan(0.01);
+  const grew = before.viewEnd - await viewEnd(settings.sections);
+  expect(grew).toBeGreaterThan(40);
+  expect(Math.min(...scrolled)).toBeGreaterThan(grew);
+}
+
+test('a choice made from the keyboard stays in view where its line was cut off before the key: the checkbox at 1280 by 740, Balanced at 1280 by 860', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/');
+  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  const panel = await openDetails(page, LEASE);
+  await panel.getByLabel('Filename').fill('2023-09-15 Lease of 123 Main St');
+
+  // The checkbox. Tab brings it into view at the end of the view: whole itself, its line cut off under it.
+  await page.setViewportSize({ width: 1280, height: 740 });
+  let settings = await openSettingsByKeys(page);
+  await tabTo(page, settings.balanced);
+  await page.keyboard.press('Space');
+  await expect(settings.balanced).toBeChecked();
+  await expect(settings.warning).toHaveCount(0);
+  await tabTo(page, settings.automatic);
+  await expect(settings.automatic).toBeInViewport({ ratio: 1 });
+  expect(await clear(settings.automatic)).toBeLessThan(0);
+  let before = { tops: await tops(settings.dialog), viewEnd: await viewEnd(settings.sections) };
+  await page.keyboard.press('Space');
+  await expect(settings.automatic).toBeChecked();
+  await expect(settings.warning).toHaveText(ONE);
+  await keptInView(settings, settings.automatic, before);
+  await page.keyboard.press('Escape');
+  await expect(settings.dialog).toBeHidden();
+
+  // Balanced. Automatic renaming is saved on at Strict first, which warns of nothing: the lease waits in review.
+  settings = await openSettingsByKeys(page);
+  await tabTo(page, settings.automatic);
+  await page.keyboard.press('Space');
+  await expect(settings.automatic).toBeChecked();
+  await expect(settings.warning).toHaveCount(0);
+  await tabTo(page, settings.save);
+  await page.keyboard.press('Enter');
+  await expect(settings.dialog).toBeHidden();
+  // Tab stops at Strict, the level chosen, and the arrow key chooses Balanced under it. Balanced itself is whole
+  // in view, near the end of the view, and most of its words are cut off below it.
+  await page.setViewportSize({ width: 1280, height: 860 });
+  settings = await openSettingsByKeys(page);
+  await tabTo(page, settings.strict);
+  await expect(settings.balanced).toBeInViewport({ ratio: 1 });
+  expect(await clear(settings.balanced)).toBeLessThan(0);
+  before = { tops: await tops(settings.dialog), viewEnd: await viewEnd(settings.sections) };
+  await page.keyboard.press('ArrowDown');
+  await expect(settings.balanced).toBeChecked();
+  await expect(settings.warning).toHaveText(ONE);
+  await keptInView(settings, settings.balanced, before);
 });

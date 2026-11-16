@@ -279,19 +279,38 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     // it was the person's own choice that brought the warning, the control
     // they chose with can be among those lines, with the focus on it: from
     // the keyboard at 1280 by 800 the checkbox always was, and it stayed
-    // out of sight. So the sections scroll just far enough to show its
-    // line again, and 4px under it. Under a pointer left where it pressed,
-    // that brings the same line or the gap under it (6px under the
-    // checkbox's, more under a level's), or the pointer is over the footer
-    // by then: nothing else to press. Only for a line the footer has just
-    // covered, so never by more than the footer grew: one that was out of
-    // view already is left where it is. And never for a warning that came
-    // by itself: that would move every section under a pointer at rest.
+    // out of sight. So if that control was in view until the footer grew,
+    // the sections scroll to show its line whole, and 4px under it.
+    //
+    // In view is asked of the control itself, not of its line. From the
+    // keyboard the browser has scrolled already, to show the control the
+    // focus came to and no more: reached at the end of the view, it ends
+    // there and its line is cut off under it, 5px of the checkbox's and
+    // most of Balanced's, whose words stand under it. Asked of the line,
+    // that control counted as out of view and was left behind the footer.
+    // A pixel is allowed: the browser scrolls by whole pixels, so a control
+    // it has brought into view can end a part of one past the end (0.3px
+    // for Balanced at 1280 by 836).
+    //
+    // The scroll is by all that is cut of the line, so it can be more than
+    // the footer grew. From the keyboard, where the footer grew by 100px,
+    // it was 109px for the checkbox at 1280 by 740 and 219px for Balanced
+    // at 1280 by 860. Under a pointer left where it pressed, the scroll
+    // brings the same line or the gap under it (6px under the checkbox's,
+    // more under a level's), or the pointer is over the footer by then:
+    // nothing else to press.
+    //
+    // A control that was itself cut off by the end of the view before the
+    // footer grew is left where it is, behind the footer, and so is one
+    // outside the sections. And nothing scrolls for a warning that came by
+    // itself: that would move every section under a pointer at rest.
     const view = sections.current;
-    const used = document.activeElement?.closest('label') ?? document.activeElement;
-    if (!chosen || !view || !used || !view.contains(used)) return;
-    const cut = used.getBoundingClientRect().bottom - view.getBoundingClientRect().bottom;
-    if (cut > 0 && cut <= grew) view.scrollTop += Math.ceil(cut) + 4;
+    const own = document.activeElement;
+    const used = own?.closest('label') ?? own;
+    if (!chosen || !view || !own || !used || !view.contains(used)) return;
+    const end = view.getBoundingClientRect().bottom;
+    const cut = used.getBoundingClientRect().bottom - end;
+    if (cut > 0 && own.getBoundingClientRect().bottom - end <= grew + 1) view.scrollTop += Math.ceil(cut) + 4;
   }, [overTyped, choices]);
   const [status, setStatus] = useState<UpdateStatus>();
   const [checking, setChecking] = useState(false);
