@@ -144,9 +144,10 @@ pub struct QueueItemDto {
     /// A completed item this machine renamed with no person's approval:
     /// filed here, and its record not approved. Every approval of a
     /// person's that is carried out marks the record approved:
-    /// `approve_user_edit`, and `already_filed` for one approving exactly
-    /// what an earlier rename, finished by the check the approval makes
-    /// first, had filed. The queue approves a staged copy's record itself.
+    /// `approve_user_edit`, and `already_filed` for one approving what an
+    /// earlier rename, finished by the check the approval makes first, had
+    /// filed: the name the file took, or the record's name where the file
+    /// took it numbered. The queue approves a staged copy's record itself.
     /// Filing never changes the record, so a name a person approved -
     /// finished later by Check again, by the queue once it was free, or by
     /// a reconciliation after an error - reads false. A queue read made

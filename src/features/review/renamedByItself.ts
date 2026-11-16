@@ -21,7 +21,7 @@ import type { QueueItem } from '../../types';
   the rows going by, and told some of the person's own renames as made
   without them, with an Undo that would have undone them.
 
-  It says a rename it sees happen, once: a document it saw not yet filed
+  It says a rename when it sees it happen: a document it saw not yet filed
   that is then completed and marked. Nothing is said of a document already
   renamed when the window first read the queue.
 */
