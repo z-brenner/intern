@@ -7433,7 +7433,8 @@ impl PipelineRepository {
 
     /// Marks the record of item `id`, filed already, approved by a person:
     /// they approved exactly the name and sentence it is filed under
-    /// ([`Pipeline::already_filed`]). The name, the sentence and the
+    /// ([`Pipeline::already_filed`]). Its notes go, as every approval's do
+    /// ([`Self::approve_user_edit`]); the name, the sentence and the
     /// revision stay as they are. Only while the row is completed, read in
     /// the same transaction: an undo since stands, and a document with no
     /// record has nothing to mark.
@@ -7457,11 +7458,12 @@ impl PipelineRepository {
         };
         let mut record = serde_json::from_str::<ProposalRecord>(&json)
             .map_err(|_| PipelineError::new("INVALID_DATA", "stored proposal is invalid"))?;
-        if record.approved && record.reviewed {
+        if record.approved && record.reviewed && record.reasons.is_empty() {
             return Ok(());
         }
         record.approved = true;
         record.reviewed = true;
+        record.reasons.clear();
         let json = serde_json::to_string(&record)
             .map_err(|_| PipelineError::new("INVALID_DATA", "proposal could not be stored"))?;
         transaction

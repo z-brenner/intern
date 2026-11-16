@@ -11683,9 +11683,10 @@ fn approving_a_parked_document_the_check_finishes_says_what_it_is_filed_as() {
 /// has approved what is filed, and the record says so, as every other
 /// approval's does: the window reads an unapproved record on a filed
 /// document as a rename nobody approved, and offered to undo the person's
-/// own approval. One the person approved with changes was refused
-/// (ALREADY_FILED), and one finished by Check again had no approval: both
-/// are still nobody's.
+/// own approval. Its notes go with the approval, so a Balanced filing is no
+/// longer "Completed with a note". One the person approved with changes was
+/// refused (ALREADY_FILED), and one finished by Check again had no approval:
+/// both are still nobody's.
 #[test]
 fn approving_exactly_what_a_parked_rename_by_itself_was_filing_is_an_approval() {
     let temp = tempdir().unwrap();
@@ -11733,14 +11734,38 @@ fn approving_exactly_what_a_parked_rename_by_itself_was_filing_is_an_approval() 
         item.proposal.unwrap().approved
     };
 
+    // A note on the reading, as Balanced files one by itself with it.
+    let database = Connection::open(temp.path().join("queue.sqlite3")).unwrap();
+    let stored: String = database
+        .query_row(
+            "SELECT proposal_json FROM proposals WHERE queue_item_id = ?1",
+            [ids[0]],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut noted: Value = serde_json::from_str(&stored).unwrap();
+    noted["reasons"] = json!(["TYPE_INFERRED"]);
+    database
+        .execute(
+            "UPDATE proposals SET proposal_json = ?1 WHERE queue_item_id = ?2",
+            rusqlite::params![noted.to_string(), ids[0]],
+        )
+        .unwrap();
+
     // The name and sentence the window showed, approved as they were.
     let shown = item_of(&pipeline, ids[0]).proposal.unwrap();
+    assert_eq!(shown.reasons, ["TYPE_INFERRED"]);
     pipeline
         .approve(ids[0], &shown.filename, &shown.description)
         .unwrap();
     assert!(
         approved(ids[0]),
         "the person's approval is not on the record"
+    );
+    assert_eq!(
+        item_of(&pipeline, ids[0]).proposal.unwrap().reasons,
+        Vec::<String>::new(),
+        "approving clears the notes, as every approval does"
     );
     assert!(folders[0].join(&shown.filename).exists());
 
