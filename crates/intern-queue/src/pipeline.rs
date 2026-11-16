@@ -4061,8 +4061,10 @@ impl Pipeline {
     /// and not yet filed it would not see the other scan filed here
     /// meanwhile, and both would be filed.
     ///
-    /// So two scans of one document that the level makes ready are both
-    /// ready when this returns: neither repeats a filing yet. So is a scan
+    /// So, when no scheduler pass runs meanwhile, two scans of one document
+    /// that the level makes ready are both ready when this returns: neither
+    /// repeats a filing yet. When a pass does run meanwhile it can file one
+    /// of them before this returns, and then holds the other. So is a scan
     /// of the same document that both levels call ready, which is not
     /// judged here. The scheduler files whichever it comes to first, which
     /// is the one added to the queue first when they are ready as its pass
@@ -4482,8 +4484,10 @@ impl Pipeline {
     /// repeat no filing yet. So the filing itself looks once more.
     ///
     /// The queue files them one after the other, and the second repeats
-    /// the first once the first is filed. That holds because a name no
-    /// person approved is filed only by a caller that holds the run lock,
+    /// the first once the first is filed. That holds because a reading's
+    /// name no person approved is filed only by a caller that holds the run
+    /// lock (an exact copy, filed as "COPY - <name>" on the thread that adds
+    /// it, is marked approved and has no text to compare),
     /// the scheduler's pass: a reading as it settles
     /// ([`Self::settle_new_record`]) and the ready documents a pass comes
     /// to ([`Self::apply_pending_ready`]). Each such filing has left its

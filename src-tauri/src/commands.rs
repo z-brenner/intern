@@ -6060,11 +6060,14 @@ fn save_settings_with_microsoft_protection(
 /// no person approved is filed only by the scheduler, which at a level
 /// looser than strict looks for a near duplicate before each such filing
 /// and so must make them one at a time (`Pipeline::review_level_changed`).
-/// Woken now, it files what the judging made ready at once when automatic
-/// renaming is on, where it would otherwise come to them at its next wake
-/// or its 65-second look. It files only while a model is ready to read, as
-/// it does everything else in the queue (`AppState::schedule`): until then
-/// they wait ready.
+/// Woken now, with automatic renaming on, it files what the judging made
+/// ready on its next pass, where it would otherwise come to them at its
+/// next wake or its 65-second look. Not while the queue is paused, and not
+/// in the middle of reading a backlog: between documents it files only
+/// what a person approved, so what the judging made ready waits for the
+/// pass after the backlog. It files only while a model is ready to read,
+/// as it does everything else in the queue (`AppState::schedule`): until
+/// then they wait ready.
 ///
 /// Not when the judging made nothing ready: there is nothing to file that
 /// was not there before. A judging that failed says nothing of what it made
@@ -15271,6 +15274,13 @@ mod review_level_tests {
                 *runtime.review_levels.lock().unwrap(),
                 [(STRICT, BALANCED)],
                 "{step}: the queue was judged all the same"
+            );
+            // A judging that failed says nothing of what it made ready, so
+            // the scheduler is woken after it, whatever the other steps did.
+            assert_eq!(
+                runtime.wakes.lock().unwrap().last(),
+                Some(&1),
+                "{step}: the scheduler was woken after the judging"
             );
             let _ = std::fs::remove_dir_all(&dir);
         }

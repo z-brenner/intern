@@ -998,9 +998,9 @@ fn two_scans_made_ready_before_either_is_filed_are_not_both_filed() {
 const PATIENCE: Duration = Duration::from_secs(30);
 
 /// And when the Settings save lands while the queue is reading another
-/// document: the save files nothing, so both scans are left ready, and the
-/// scheduler files the first and holds the second once it is between
-/// documents.
+/// document: the save files nothing, so both scans are left ready. Between
+/// documents the scheduler files only what a person approved, so it is its
+/// next pass that files the first scan and holds the second.
 #[test]
 fn two_scans_made_ready_while_another_document_is_read_are_not_both_filed() {
     let rig = Rig::new(STRICT, true);
