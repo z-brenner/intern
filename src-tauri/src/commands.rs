@@ -141,6 +141,14 @@ pub struct QueueItemDto {
     filed_name: Option<String>,
     /// A completed item that was never renamed: the person kept its name.
     kept_original: bool,
+    /// A completed item this machine renamed with no person's approval:
+    /// filed here, and its record not approved when it was filed. Every
+    /// approval marks the record approved (`approve_user_edit`, and a
+    /// staged copy's), and filing never changes the record, so a name a
+    /// person approved - finished later by Check again, by the queue once
+    /// it was free, or by a reconciliation after an error - reads false.
+    /// The window says a rename was made without the person only on this.
+    renamed_without_approval: bool,
     /// Review is waiting on the files, not on a decision about the name: an
     /// operation never finished, and Check again - or a confirmed remove -
     /// is what moves the item on.
@@ -7069,6 +7077,11 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
                 .map(|name| name.to_string_lossy().into_owned())
         }),
         kept_original: item.status == QueueStatus::Completed && item.filed_receipt.is_none(),
+        // A row with no record says nothing: no filing without one is made
+        // by the queue, and silence is the safe side of not knowing.
+        renamed_without_approval: item.status == QueueStatus::Completed
+            && item.filed_receipt.is_some()
+            && proposal.is_some_and(|record| !record.approved),
         parked: (item.status == QueueStatus::NeedsReview && item.unsettled_receipt.is_some())
             || matches!(
                 item.error_code,
@@ -14464,7 +14477,7 @@ mod approval_dto_tests {
 
     /// An item whose proposal is stored as the queue stores it - JSON, which
     /// every later field must be able to read with its serde default.
-    fn item(status: QueueStatus, approved: bool) -> PipelineItem {
+    pub(super) fn item(status: QueueStatus, approved: bool) -> PipelineItem {
         let proposal: ProposalRecord = serde_json::from_value(serde_json::json!({
             "analysis": {
                 "filename": "2024-02-09 Invoice from Fabrikam Inc.pdf",
@@ -14915,6 +14928,101 @@ mod filed_dto_tests {
             assert!(json.get(key).is_some(), "{key} missing from {json}");
         }
         assert_eq!(json["keptOriginal"], true);
+    }
+
+    /// Renamed by this machine with nobody's approval: completed, filed here
+    /// by a completed apply, and its record, which filing leaves as it was,
+    /// not approved. The record comes from the queue's own JSON
+    /// (`approval_dto_tests::item`), approved or not.
+    #[test]
+    fn queue_item_dto_says_a_rename_nobody_approved() {
+        let filed = || {
+            Some(receipt(
+                1,
+                OperationDirection::Apply,
+                OperationStage::Complete,
+                "C:/filed/2024-02-09 Invoice from Fabrikam Inc.pdf",
+            ))
+        };
+        let row = |status, approved, filed_receipt: Option<OperationReceipt>| PipelineItem {
+            receipt: filed_receipt.clone(),
+            filed_receipt,
+            ..super::approval_dto_tests::item(status, approved)
+        };
+        let says = |item: PipelineItem| queue_item_dto(item).unwrap().renamed_without_approval;
+
+        // Filed by itself: automatic renaming after a reading, after a level
+        // change, after validating again. Nobody approved the record.
+        assert!(says(row(QueueStatus::Completed, false, filed())));
+        let json = serde_json::to_value(
+            queue_item_dto(row(QueueStatus::Completed, false, filed())).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["renamedWithoutApproval"], serde_json::json!(true));
+
+        // Approved by a person: at once, by the queue once it was free, or
+        // finished by Check again or a reconciliation after an error.
+        assert!(!says(row(QueueStatus::Completed, true, filed())));
+
+        // Kept under its own name, or already named so: nothing renamed.
+        assert!(!says(row(QueueStatus::Completed, false, None)));
+
+        // Not filed here: this machine's rename of it never completed (rolled
+        // back), or it was put back by an undo and completed since by Keep
+        // original. Either way no completed apply files it.
+        for (direction, stage) in [
+            (OperationDirection::Apply, OperationStage::RolledBack),
+            (OperationDirection::Undo, OperationStage::Complete),
+        ] {
+            let item = PipelineItem {
+                receipt: Some(receipt(2, direction, stage, "C:/drop/scan.pdf")),
+                filed_receipt: None,
+                ..super::approval_dto_tests::item(QueueStatus::Completed, false)
+            };
+            assert!(!says(item), "{direction:?} {stage:?}");
+        }
+
+        // A copy of a document already filed, staged and filed by the queue
+        // with the record approved by the queue itself
+        // (`Pipeline::file_duplicate`).
+        let mut copy = row(QueueStatus::Completed, true, filed());
+        let record = copy.proposal.as_mut().unwrap();
+        record.copy_of = Some(intern_queue::pipeline::CopyOf {
+            original: "2024-02-09 Invoice from Fabrikam Inc.pdf".into(),
+            folder: PathBuf::from("C:/filed"),
+        });
+        record.filename = "COPY - 2024-02-09 Invoice from Fabrikam Inc.pdf".into();
+        assert!(!says(copy));
+
+        // Not completed: never, whatever its record and receipts say - an
+        // undo in flight (applying) is still filed, and a document undone is
+        // ready or in review with the apply it took back.
+        for status in [
+            QueueStatus::Queued,
+            QueueStatus::Extracting,
+            QueueStatus::Analyzing,
+            QueueStatus::Ready,
+            QueueStatus::NeedsReview,
+            QueueStatus::Failed,
+            QueueStatus::Canceled,
+            QueueStatus::Applying,
+        ] {
+            assert!(!says(row(status, false, filed())), "{status:?}");
+            let json =
+                serde_json::to_value(queue_item_dto(row(status, false, None)).unwrap()).unwrap();
+            assert_eq!(
+                json["renamedWithoutApproval"],
+                serde_json::json!(false),
+                "{status:?}: sent always, false"
+            );
+        }
+
+        // No record at all: nothing to say it was not approved.
+        let unrecorded = PipelineItem {
+            proposal: None,
+            ..row(QueueStatus::Completed, false, filed())
+        };
+        assert!(!says(unrecorded));
     }
 }
 
