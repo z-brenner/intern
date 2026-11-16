@@ -651,6 +651,19 @@ above Save when a save would let Intern rename such a document
 (`src/features/settings/savingOverTyped.ts`), and after the rename keeps
 what was typed beside the document, read-only.
 
+What the window says afterwards. Each queue row says whether this machine
+renamed the document with nobody's approval (`renamedWithoutApproval`: the
+row is completed, filed here, and its record is not approved). Every approval
+a person makes sets `approved` on the record and clears its notes, also one
+that finds the name already filed and takes the approval as done
+(`Pipeline::already_filed`). When a rename so marked lands on a document with typed text while the
+window is open, the window says so once and offers Undo for that rename
+(`src/features/review/renamedByItself.ts`). It reads only the mark, never
+whose decision it saw go by. A rename made while the window was closed is
+not said. After a save that changes the level, the window says how
+many waiting documents became ready or went back to review
+(`src/features/settings/levelChanged.ts`).
+
 ## The filename
 
 ```text
