@@ -844,10 +844,12 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         1280 by 800 and at 800 by 600), nothing moves when it comes: the
         footer grows upward, Save and the sections stay where they are, and
         the sections lose their last lines from view, to be scrolled to. But
-        for one thing, and only by the person's own choice: when the control
-        they chose with is among those lines, the sections scroll to keep it
-        in view (the layout effect above). A warning that comes by itself
-        scrolls nothing, and can leave the control with the focus behind it.
+        for one thing, and only by the person's own choice: when the line of
+        the control they chose with is cut off by the footer, and the
+        control itself was in view until then, the sections scroll to show
+        that line whole (the layout effect above). A warning that comes by
+        itself scrolls nothing, and can leave the control with the focus
+        behind it.
 
         And the footer never grows smaller again while the dialog is open. A
         count that takes fewer lines is shown in the room the longer one
@@ -863,13 +865,16 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         One case is not looked after. Where the dialog is shorter than the
         window lets it be, the first time the warning shows makes it taller
         about its middle: the sections go up and Save goes down, by up to
-        half the warning's height. That is so in a tall window: in the demo,
-        one over about 1070px high with every section closed, and over about
-        1750px with Naming and filing open. It happens once for each time
-        Settings is opened, as the person ticks the checkbox or chooses
-        Balanced, or by itself when a document with something typed for it
-        comes back to wait while the choice is already made. After that the
-        warning has its room.
+        half of what the footer grows by, which is the warning's box and
+        its distance to Save: 50px each way where that is 100px. That is so
+        in a tall window: in the demo, one over about 1070px high with every
+        section closed, and over about 1750px with Naming and filing open.
+        It happens the first time the warning shows after Settings is
+        opened, as the person ticks the checkbox or chooses Balanced, or by
+        itself when a document with something typed for it comes back to
+        wait while the choice is already made. And it happens again, by up
+        to half a line each way, whenever a later count takes a line more
+        than any before it. Otherwise the warning has its room.
       */}
       {overTyped
         ? <p ref={overTypedBox} className="save-warning" role="alert" style={overTypedRoom ? { minHeight: overTypedRoom } : undefined}>{overTyped}</p>

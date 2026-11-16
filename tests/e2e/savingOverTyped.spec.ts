@@ -9,12 +9,22 @@ import { openDetails, queueCell } from './grid';
   document: automatic renaming switched on over a ready one, or Strict
   changed to Balanced, with automatic renaming on, over one waiting in
   review. The warning is words only, and it goes when the choice is taken
-  back. Its coming and going moves nothing a person could be about to press:
-  the footer grows upward over the sections' last lines once, and keeps
-  that room, blank, when the warning has gone. The journeys further down
+  back.
+
+  Where the dialog is as tall as the window lets it be, its coming and going
+  moves nothing a person could be about to press: the footer grows upward
+  over the sections' last lines, and keeps that room, blank, when the
+  warning has gone. That is so at every size these journeys run: 1280 by
+  800, 800 by 600, 1280 by 740 and 1280 by 860. The journeys further down
   hold what that leaves: nothing that acts comes under a pointer at rest
   where the warning was, and the one thing that does move, by the person's
-  own choice only, is the sections scrolling to keep that choice in view.
+  own choice only, is the sections scrolling to show the line of the control
+  they chose with.
+
+  No journey runs in a window taller than the dialog needs. There the first
+  showing makes the dialog taller about its middle and moves every control
+  in it, by the person's own choice or by itself, and a later count that
+  takes a line more does so again. SettingsDialog says where, at its footer.
 
   The demo does not act out automatic renaming: nothing in it is renamed by
   itself. So this journey ends at the save. What becomes of the document and
@@ -267,13 +277,20 @@ for (const [width, height] of [[1280, 800], [800, 600]] as const) {
 }
 
 /*
-  The footer grows over the last lines the sections show, and the checkbox
-  just ticked can be among them: from the keyboard at 1280 by 800 it always
-  was, and it stayed behind the footer with the focus on it. When the
-  person's own choice makes the footer grow over the control they chose
-  with, the sections now scroll just far enough to keep it in view. That is
-  the one thing that moves, and only by their own press or key: a warning
-  that comes by itself scrolls nothing.
+  The footer grows over the last lines the sections show, and the control
+  just chosen with can be among them: from the keyboard at 1280 by 800 the
+  checkbox always was, and it stayed behind the footer with the focus on
+  it. When the person's own choice brings the warning, and the control they
+  chose with was in view until the footer grew, the sections now scroll to
+  show its line whole, with 4px under it. A control that was itself cut off
+  by the end of the view before that is left where it is. The scroll is the
+  one thing that moves at these sizes, and only by the person's own press
+  or key: a warning that comes by itself scrolls nothing.
+
+  This journey is at 1280 by 800, with the checkbox put where its line is
+  whole in view before it is ticked: 30px above the end of the view, and
+  for one press 10px into the room the warning will take. The journey after
+  it is the keyboard's own case, where the line is cut off before the key.
 */
 /** Scrolls the sections so that the checkbox's line ends `above` px above the end of their view. */
 const putCheckbox = (automatic: Locator, above: number) => automatic.evaluate((input, above) => {
@@ -294,7 +311,7 @@ const tops = (dialog: Locator) => dialog.locator('button, summary, input, select
   inSections: control.closest('.dialog-body') !== null, top: control.getBoundingClientRect().top, left: control.getBoundingClientRect().left,
 })));
 
-test('the choice that brings the warning stays in view: the sections scroll for it by the key or the press that made it, and never by themselves', async ({ page }) => {
+test('a checkbox whose line was in view when it brought the warning stays in view, at 1280 by 800: the sections scroll for it by the key or the press that made it, and never by themselves', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/?queue=changes');
   await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
