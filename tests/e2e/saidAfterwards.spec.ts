@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { SETTLE_MS } from '../../src/lib/aimedPress';
-import { openDetails, queueCell, untilSettled } from './grid';
+import { detailsToggle, openDetails, queueCell, untilSettled } from './grid';
 
 /*
   Two things changed the queue with nothing on screen to say so. A Settings
@@ -147,4 +147,28 @@ test('a document with a name typed for it, renamed with nobody here deciding it,
   await expect(queueCell(page, LEASE, 'status')).toHaveText('Needs review');
   const again = await openDetails(page, LEASE);
   await expect(again.getByLabel('What you had typed')).toHaveValue('2023-09-15 Lease of 123 Main St\n\nCommercial lease agreement between landlord and tenant for 123 Main St.');
+});
+
+/*
+  A document read again by itself is renamed the moment its reading is
+  ready, when automatic renaming is on: on the desktop the backend files it
+  on the same pass, so a read of the queue seldom shows it ready between.
+  Played here with the same harness: the lease is read again, then filed,
+  with no read of it waiting between. The window never saw the name it was
+  filed under proposed, so it says so: from somewhere else.
+*/
+test('a document with a name typed for it, read again by itself and renamed before any read shows it waiting, is said: from somewhere else', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/?queue=changes');
+  const panel = await openDetails(page, LEASE);
+  await panel.getByLabel('Filename').fill('2023-09-15 Lease of 123 Main St');
+  await detailsToggle(page).click();
+  await page.evaluate(() => (window as unknown as { internQueue: QueueByItself }).internQueue.change('lease', { status: 'processing', stage: 'reading', proposedFilename: undefined, description: undefined, reason: undefined }));
+  await expect(queueCell(page, LEASE, 'status')).not.toHaveText('Needs review');
+  await expect(page.locator('.toasts')).toHaveCount(0);
+  await filedByItself(page);
+  const renamed = page.getByRole('group', { name: 'Renamed without you' });
+  await expect(renamed.locator('p')).toHaveText(`${LEASE} was renamed from somewhere else. What you typed for it was not filed, and is kept in its details.`);
+  await expect(renamed.getByRole('button', { name: `Undo the rename of ${LEASE}` })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Action result' })).toHaveCount(0);
 });

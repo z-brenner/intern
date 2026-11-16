@@ -642,8 +642,8 @@ for (const size of [WIDE, NARROW]) for (const how of ['read again', 'filed elsew
       await expect(kept).toBeFocused();
       await expect(kept).toHaveValue(typed);
       await expect(page.getByRole('group', { name: 'Confirm removal' })).toHaveCount(0);
-      // No outcome of an action: nothing was decided. (A document filed elsewhere is said to be, in a toast of its own.)
-      await expect(page.locator('.toasts > :not([aria-label="Renamed without you"])')).toHaveCount(0);
+      // No outcome of an action: nothing was decided. Only a document filed elsewhere is said to be, in a toast of its own.
+      await expect(page.locator(how === 'filed elsewhere' ? '.toasts > :not([aria-label="Renamed without you"])' : '.toasts')).toHaveCount(0);
       expect(await otherRows(page)).toEqual(before);
     };
 

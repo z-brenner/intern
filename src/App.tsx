@@ -269,7 +269,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const toastKey = useRef(0);
   const showToast = (kind: 'progress' | 'done', text: string, undo?: string[]) => setToast({ key: ++toastKey.current, kind, text, undo });
   // Documents with a name or a description typed here and not filed that
-  // were renamed, or are being renamed, with nobody in this window deciding
+  // were seen renamed, or being renamed, while the window was not deciding
   // them (watchRenames): said in a toast of their own, above the one for
   // the person's own actions. In that one an action of theirs would have
   // replaced it, or it theirs, with its Undo, whenever the two came close
@@ -283,14 +283,16 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     renameWatch.current = watched;
     if (!seen.length && !back.length) return;
     setRenamedHere((said) => { const renames = withRenames(said.renames, seen, back); return renames === said.renames ? said : { key: said.key + 1, renames }; });
-    // Said once, as every outcome is, through the app's Action status.
-    if (seen.length) setActionMessage(renamedByItselfText(stillSo(withRenames(renamedHere.renames, seen, back), items)));
+    // Announced through the app's Action status as well, as every outcome
+    // is, each time a rename is seen: being renamed, and again once renamed.
+    if (seen.length) setActionMessage(renamedByItselfText(stillSo(withRenames(renamedHere.renames, seen, back), items, typedOver)));
     // Looked at again when a decision ends, as well: one the backend refused
     // leaves the queue as it was, and its document is watched again.
   }, [items, own.deciding]);
-  // Only while what it says is so, and Undo only for the renames the
-  // window saw complete.
-  const renamedShown = stillSo(renamedHere.renames, items);
+  // Only while what it says is so, with what was typed still kept in the
+  // document's details (stillSo), and Undo only for the renames the window
+  // saw complete.
+  const renamedShown = stillSo(renamedHere.renames, items, typedOver);
   const renamedUndo = undoableRenames(renamedShown, items);
   const dismissRenamed = () => setRenamedHere((said) => ({ key: said.key + 1, renames: [] }));
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>();

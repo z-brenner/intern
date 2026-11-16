@@ -6,10 +6,11 @@ import { keptOriginal } from '../review/actions';
   A Settings save that changes the review level has the backend judge the
   documents that wait again, from what Intern has already read. Toward
   Balanced some of those in review become ready, and with automatic renaming
-  on Intern renames them shortly after the save. Toward Strict, a ready
-  document nobody approved that Strict would hold goes back to review. The
-  queue changed under the dialog, and nothing on screen said what the save
-  had done.
+  on the scheduler can rename them by itself after the save (not while the
+  queue is paused, while it reads a backlog, or while no model is ready to
+  read). Toward Strict, a ready document nobody approved that Strict would
+  hold goes back to review. The queue changed under the dialog, and nothing
+  on screen said what the save had done.
 
   So the window says it, from its own rows: the queue as it was just before
   the save, and as the first read after it shows it. It says what it saw,

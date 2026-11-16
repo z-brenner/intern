@@ -3,18 +3,22 @@ import { keptOriginal } from './actions';
 
 /*
   Intern can rename by itself a document whose name or description a person
-  typed in Details and did not file: automatic renaming after a reading, and
-  at Balanced after a level change. What was typed is then set aside beside
-  the document, read-only (setAsideOutdatedDrafts), and nothing else said it
-  happened. A document filed from somewhere else is the same to the window.
+  typed in Details and did not file: automatic renaming after a reading it
+  started by itself, and at Balanced after a level change. What was typed is
+  then set aside beside the document, read-only (setAsideOutdatedDrafts),
+  and nothing else said it happened. A document filed from somewhere else
+  is the same to the window.
 
   So the window watches the documents that wait for a decision, and says
   so when one with something typed for it leaves review or ready to be
   renamed, or renamed, and the window did not decide it. It knows its own
   decisions (the document it is deciding for); anything else is not its own.
+  A document read again by itself stays watched while it waits and is read:
+  with automatic renaming on, the backend files a reading the moment it is
+  ready, so a read of the queue seldom shows it ready in between.
 */
 
-/** A document as the window last saw it waiting for a decision. `renaming`: since seen being renamed. */
+/** A document as the window last saw it waiting for a decision, kept so while it is read again. `renaming`: since seen being renamed. */
 export interface Waiting { name: string; proposedFilename?: string; description?: string; approved: boolean; renaming: boolean }
 
 /**
@@ -60,6 +64,11 @@ function whose(was: Waiting, is: QueueItem): Whose {
  * it is the decision's to say. Nor is one with nothing typed for it at the
  * moment it is renamed. A completion that renamed nothing (the name was
  * already the document's own) is not a rename.
+ *
+ * One waiting to be read again, or being read, is still watched, with the
+ * proposal the window last showed for it: the new one is not known until a
+ * read shows it in review or ready. Renamed before that, under another name
+ * or sentence, it is renamed under a name the window cannot place.
  */
 export function watchRenames(watched: ReadonlyMap<string, Waiting>, rows: readonly QueueItem[], watch: Watch): { watched: Map<string, Waiting>; seen: RenameSeen[]; back: string[] } {
   const next = new Map<string, Waiting>();
@@ -81,6 +90,13 @@ export function watchRenames(watched: ReadonlyMap<string, Waiting>, rows: readon
       next.set(row.id, { ...was, renaming: true });
     } else if (row.status === 'completed' && !keptOriginal(row) && was) {
       if (watch.typed(row.id)) seen.push({ id: row.id, name: was.name, whose: whose(was, row), done: true });
+    } else if (was && (row.status === 'waiting' || row.status === 'processing')) {
+      // Read again by itself (being renamed is the branch above). A reading
+      // the person asks for here is a decision of the window's, so it is not
+      // watched until a read shows it waiting for a decision again; their
+      // Read again drops what was typed as well.
+      if (was.renaming) back.push(row.id);
+      next.set(row.id, { ...was, renaming: false });
     } else if (was?.renaming) {
       back.push(row.id);
     }
@@ -107,16 +123,21 @@ export function withRenames(said: readonly RenameSeen[], seen: readonly RenameSe
 }
 
 /**
- * What is still so of what was said, by the queue as it is now: a document
- * renamed, and still completed; one being renamed, and still being renamed
- * or since renamed. One undone since, cleared from the history, or gone is
- * no longer said to be renamed.
+ * What is still so of what was said, by the queue as it is now and what is
+ * kept of what was typed (`typed`): a document renamed, and still
+ * completed; one being renamed, and still being renamed or since renamed;
+ * each with what was typed for it still kept in its details. One undone
+ * since, cleared from the history, or gone is no longer said to be renamed.
+ * Nor is one whose typed text is no longer kept: the person discarded it,
+ * or approved or kept the document here, which files what was typed or
+ * gives it up. So a rename the window decided is never said, even of a
+ * document renamed by itself before, undone, and then approved here.
  */
-export function stillSo(said: readonly RenameSeen[], rows: readonly QueueItem[]): RenameSeen[] {
+export function stillSo(said: readonly RenameSeen[], rows: readonly QueueItem[], typed: (id: string) => boolean): RenameSeen[] {
   const now = new Map(rows.map((row) => [row.id, row]));
   return said.filter(({ id, done }) => {
     const row = now.get(id);
-    return row !== undefined && (row.status === 'completed' || (!done && beingRenamed(row)));
+    return row !== undefined && (row.status === 'completed' || (!done && beingRenamed(row))) && typed(id);
   });
 }
 
