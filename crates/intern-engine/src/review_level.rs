@@ -206,9 +206,16 @@ fn dated(analysis: &DocumentAnalysis) -> bool {
 /// ([`without_extension_like_endings`]): "Document.docx" on a PDF is named
 /// "Document.docx.pdf", and so is "Document.docx." with a period after it.
 /// Such a name says no more about the document than "Document" does, so
-/// that type is no type either. A type with words of its own stays one,
-/// whatever periods it has: "Document Retention Policy", "Document.Review
-/// Memo".
+/// that type is no type either.
+///
+/// An ending cannot be told from a short word. A period and one to five
+/// letters or digits is read as an ending whatever it spells, so
+/// "Document.Memo", "Document.Draft" and "Document.2024" are no type and
+/// wait. A type keeps the words it has otherwise: "Document Retention
+/// Policy"; "Document.Review Memo", where what follows the period has a
+/// space in it; and "Document.Policy" on a PDF, six letters. On a file
+/// with no extension that last one waits too: the name's own ending is
+/// read as the file's extension there, at any length ([`extension_of`]).
 fn names_a_type(analysis: &DocumentAnalysis) -> bool {
     let extension = extension_of(&analysis.filename);
     analysis
@@ -621,8 +628,10 @@ mod tests {
     /// like an extension and is not the file's: another kind of file's, or
     /// the file's own with a period after it. The name keeps such an
     /// ending, "Document.docx.pdf", and says no more about the document
-    /// than "Document" does: it waits. A type with words of its own is a
-    /// type, whatever periods it has.
+    /// than "Document" does: it waits. So does "Document" with a short
+    /// word after a period, "Document.Memo": one to five letters or digits
+    /// there are read as an ending whatever they spell. A type with other
+    /// words of its own is a type.
     #[test]
     fn a_type_that_is_document_with_an_ending_like_an_extension_waits_at_balanced() {
         for (word, named) in [
@@ -637,6 +646,10 @@ mod tests {
             ("Document.xhtml", "Document.xhtml"),
             ("Document.12345", "Document.12345"),
             (".docx", ".docx"),
+            // A short word after a period is read as an ending too.
+            ("Document.Memo", "Document.Memo"),
+            ("Document.Draft", "Document.Draft"),
+            ("Document.2024", "Document.2024"),
         ] {
             let analysis = typed(word);
             assert_eq!(analysis.filename, format!("{DATE} {named}.pdf"), "{word:?}");
@@ -668,13 +681,23 @@ mod tests {
         ] {
             assert_eq!(balanced(&typed(word)), Readiness::ready(), "{word:?}");
         }
-        // A file with no extension is named with none, and words after a
-        // period in its name are no extension to take off the type.
-        let mut bare = reading(&[ReviewReason::TypeUnsupported]);
-        bare.proposal.document_type = Some("Document. Annex".into());
-        bare.filename = compose_filename(&bare.proposal, "", &[]).value;
-        assert_eq!(bare.filename, format!("{DATE} Document. Annex"));
-        assert_eq!(balanced(&bare), Readiness::ready());
+        // A file with no extension is named with none. Words after a
+        // period and a space in its name are words of the type.
+        let bare = |word: &str| {
+            let mut analysis = reading(&[ReviewReason::TypeUnsupported]);
+            analysis.proposal.document_type = Some(word.into());
+            analysis.filename = compose_filename(&analysis.proposal, "", &[]).value;
+            assert_eq!(analysis.filename, format!("{DATE} {word}"));
+            analysis
+        };
+        assert_eq!(balanced(&bare("Document. Annex")), Readiness::ready());
+        // Letters and digits right after the last period of such a name
+        // are read as the file's extension, at any length, and taken off
+        // the type: "Document.Policy", a type on a PDF, waits here.
+        assert_eq!(
+            balanced(&bare("Document.Policy")),
+            waits(&[ReviewReason::TypeUnsupported])
+        );
     }
 
     /// Clause 5: a title that stood in for a type the document did not
