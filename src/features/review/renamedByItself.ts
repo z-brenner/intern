@@ -8,11 +8,17 @@ import type { QueueItem } from '../../types';
 
   The window says so, and only when the backend says the document was
   renamed with nobody's approval (renamedWithoutApproval). Every approval
-  marks the document's record approved and filing leaves the record as it
-  was, so a rename the person approved is never marked, however it was
-  finished: at once, by the queue once it was free, by Check again, or by a
-  reconciliation after an error. The window used to tell whose rename it was
-  from the rows going by, and told some of the person's own renames as made
+  the backend carries out marks the document's record approved, and filing
+  leaves the record as it was, so a rename the person approved is not
+  marked once their approval is done, however it was finished: at once, by
+  the queue once it was free, by Check again, by a reconciliation after an
+  error, or by the check an approval makes first, of a rename Intern had
+  started by itself that the approval names exactly. That last one is
+  marked while the approval is carried out, until the backend records it:
+  a queue read made then finds it so. So the window judges no document
+  while a decision of the person's on it is carried out, and judges it
+  once the decision ends. The window used to tell whose rename it was from
+  the rows going by, and told some of the person's own renames as made
   without them, with an Undo that would have undone them.
 
   It says a rename it sees happen, once: a document it saw not yet filed
@@ -37,15 +43,22 @@ export const renamedWithoutApproval = (item: QueueItem) => item.status === 'comp
  *
  * A document being renamed is left as it was: an undo carried out passes
  * through it from completed, and an undo the backend refuses comes back
- * completed and marked, which is no new rename. A document seen renamed is
- * no longer looked for, so it is said once; one that comes back waiting is
- * looked for again.
+ * completed and marked, which is no new rename. So is the document a
+ * decision of the person's is being carried out for (`deciding`), whatever
+ * it shows: their approval of exactly what Intern was filing by itself,
+ * finished as it is approved, shows completed and marked until the backend
+ * records the approval. Once the decision ends it is judged as it then is:
+ * an approval carried out has forgotten what was typed for it, and one the
+ * backend refused has not. A document seen renamed is no longer looked
+ * for, so it is said once; one that comes back waiting is looked for again.
  */
-export function watchRenames(unfiled: ReadonlySet<string>, rows: readonly QueueItem[], typed: (id: string) => boolean): { unfiled: Set<string>; seen: RenameSaid[] } {
+export function watchRenames(unfiled: ReadonlySet<string>, rows: readonly QueueItem[], typed: (id: string) => boolean, deciding?: string): { unfiled: Set<string>; seen: RenameSaid[] } {
   const next = new Set<string>();
   const seen: RenameSaid[] = [];
   for (const row of rows) {
-    if (row.status === 'completed') {
+    if (row.id === deciding) {
+      if (unfiled.has(row.id)) next.add(row.id);
+    } else if (row.status === 'completed') {
       if (unfiled.has(row.id) && renamedWithoutApproval(row) && typed(row.id)) seen.push({ id: row.id, name: row.originalFilename });
     } else if (!beingRenamed(row) || unfiled.has(row.id)) {
       next.add(row.id);

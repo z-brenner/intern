@@ -279,11 +279,13 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // then a new button, which a press made the moment it changed does not
   // take (aimedPress), so a press meant for one rename does not undo two.
   // `unfiledSeen`: the documents last seen not yet filed, the only ones a
-  // rename of can be seen happen.
+  // rename of can be seen happen. The document a decision of the person's
+  // is being carried out for is judged once the decision ends, so the look
+  // is taken again then (watchRenames).
   const unfiledSeen = useRef(new Set<string>());
   const [renamedHere, setRenamedHere] = useState<{ key: number; renames: readonly RenameSaid[] }>({ key: 0, renames: [] });
   useEffect(() => {
-    const look = watchRenames(unfiledSeen.current, items, typedOver);
+    const look = watchRenames(unfiledSeen.current, items, typedOver, own.deciding);
     unfiledSeen.current = look.unfiled;
     const { seen } = look;
     // A rename said that the queue no longer shows so, by itself, is taken
@@ -298,7 +300,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
     // Announced through the app's Action status as well, as every outcome
     // is, once: when a rename is seen.
     if (seen.length) setActionMessage(renamedByItselfText(stillSo(withRenames(renamedHere.renames, seen, gone), items, typedOver)));
-  }, [items]);
+  }, [items, own.deciding]);
   // Only while what it says is so, with what was typed still kept in the
   // document's details (stillSo), and Undo only for the renames still
   // completed.

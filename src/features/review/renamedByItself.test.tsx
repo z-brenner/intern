@@ -33,7 +33,8 @@ const NOTICE = sentProposal('2025-05-03 Notice to Contoso Ltd.pdf', 'Notice to C
  * Filed as the backend reports a filing: completed, with the receipt's name
  * and path, and undoable. `byItself`: renamed by Intern with nobody's
  * approval, which the backend marks (renamedWithoutApproval); a filing a
- * person approved is not marked, however it was finished.
+ * person approved is not marked once the backend has carried out their
+ * approval, however it was finished.
  */
 const filed = (name: unknown, byItself = false) => ({ status: 'completed', filedName: name, filedPath: `C:\\Filed\\${String(name)}`, keptOriginal: false, undoable: true, renamedWithoutApproval: byItself });
 const filedByItself = (name: unknown) => filed(name, true);
@@ -170,7 +171,7 @@ describe('a rename over what was typed, seen in the queue as it is read', () => 
     expect((await look(rows.map((row) => ({ ...row, ...filedByItself(row.proposedFilename) })))).map(({ id }) => id)).toEqual(['31', '32']);
   });
 
-  it('is not seen for a rename made before the queue was first read, nor again once an Undo the backend refused leaves it renamed; undone, and renamed by itself again, it is seen', async () => {
+  it('is not seen for a rename made before the queue was first read, nor again once an Undo the backend refused leaves it renamed; undone, read again at the person\'s word, and renamed by itself, it is seen', async () => {
     const look = looker(() => true);
     const invoice = sentRow(32, 'Scan 0602.pdf', 'ready', INVOICE);
     const renamed = { ...invoice, ...filedByItself(INVOICE.proposedFilename) };
@@ -179,9 +180,53 @@ describe('a rename over what was typed, seen in the queue as it is read', () => 
     // An Undo carried out passes through being renamed, unmarked, and the backend refuses it.
     expect(await look([{ ...renamed, status: 'applying', renamedWithoutApproval: false }])).toEqual([]);
     expect(await look([renamed])).toEqual([]);
-    // Undone: waiting again, under UNDONE. Renamed by itself once more, that is a rename of its own.
+    // Undone: waiting again, under UNDONE. Intern never files such a
+    // document by itself; a new reading the person asks for can be. Read
+    // again, typed for again, and renamed by itself: a rename of its own.
     expect(await look([{ ...invoice, status: 'needs_review', reason: 'UNDONE' }])).toEqual([]);
-    expect(await look([renamed])).toEqual([{ id: '32', name: 'Scan 0602.pdf' }]);
+    expect(await look([{ ...invoice, status: 'analyzing', proposedFilename: null, description: null }])).toEqual([]);
+    const reread = { ...invoice, ...sentProposal('2025-05-02 Invoice 4471 from Brightwater Supply Co.pdf', 'Invoice 4471.', 0.99), proposalRevision: '2' };
+    expect(await look([{ ...reread, ...filedByItself(reread.proposedFilename) }])).toEqual([{ id: '32', name: 'Scan 0602.pdf' }]);
+  });
+
+  it('leaves the document a decision of the person\'s is carried out for as it was, whatever it shows, and judges it once the decision ends', async () => {
+    let typed = true;
+    let unfiled: ReadonlySet<string> = new Set();
+    const look = async (rows: Sent[], deciding?: string) => {
+      const seen = watchRenames(unfiled, await asTheWindowReads(rows), () => typed, deciding);
+      unfiled = seen.unfiled;
+      return seen.seen;
+    };
+    const invoice = sentRow(32, 'Scan 0602.pdf', 'needs_review', { ...INVOICE, reason: 'SOURCE_DELETE_FAILED', errorCode: 'SOURCE_DELETE_FAILED', parked: true });
+    const finished = { ...invoice, ...filedByItself(INVOICE.proposedFilename), reason: null, errorCode: null, parked: false };
+    expect(await look([invoice])).toEqual([]);
+    // The person approves Intern's proposal as shown, and the check the
+    // approval makes first finishes Intern's rename: marked, until the
+    // backend records the approval. Not seen, and still looked for.
+    expect(await look([finished], '32')).toEqual([]);
+    expect(unfiled.has('32')).toBe(true);
+    // Carried out: what was typed is forgotten, and the approval recorded.
+    typed = false;
+    expect(await look([finished], undefined)).toEqual([]);
+    expect(unfiled.has('32')).toBe(false);
+
+    // Check again, which approves nothing, finishes Intern's rename: seen
+    // once the check is done.
+    typed = true;
+    unfiled = new Set();
+    expect(await look([invoice])).toEqual([]);
+    expect(await look([finished], '32')).toEqual([]);
+    expect(await look([finished], undefined)).toEqual([{ id: '32', name: 'Scan 0602.pdf' }]);
+    expect(await look([finished], undefined)).toEqual([]);
+
+    // A document not looked for stays so while it is decided: an Undo from
+    // its details, carried out.
+    unfiled = new Set();
+    expect(await look([finished])).toEqual([]);
+    expect(await look([{ ...finished, status: 'needs_review', reason: 'UNDONE', renamedWithoutApproval: false }], '32')).toEqual([]);
+    expect(unfiled.has('32')).toBe(false);
+    expect(await look([{ ...finished, status: 'needs_review', reason: 'UNDONE', renamedWithoutApproval: false }], undefined)).toEqual([]);
+    expect(unfiled.has('32')).toBe(true);
   });
 });
 
@@ -279,7 +324,16 @@ describe('the window, when a document typed for is renamed by something other th
     const renamed = (id: number) => change(id, filedByItself(at(id).proposedFilename));
     render(<App bridge={bridge} />);
     await screen.findByRole('grid', { name: 'Queue' });
-    return { bridge, byItself, renaming, renamed, change };
+    // The backend says the queue changed while a command of the window's is
+    // still being carried out, and the command goes on once the window shows
+    // that read (`shown`).
+    const publishRead = async (shown: () => boolean) => {
+      queueChanged();
+      for (let tries = 0; tries < 200 && !shown(); tries += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+      if (!shown()) throw new Error('the read published during the command was not shown');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    };
+    return { bridge, byItself, renaming, renamed, change, publishRead };
   }
   const typeName = async (document: string, name = TYPED) => {
     const panel = await openDetails(document);
@@ -331,7 +385,7 @@ describe('the window, when a document typed for is renamed by something other th
     expect(toast()).toBeNull();
   });
 
-  it('watches again a document whose approval the backend refused, and says so when it is then renamed by itself', async () => {
+  it('says so of a document renamed by itself after the backend refused the person\'s approval of it: it was still not filed', async () => {
     const { bridge, byItself, renamed } = await start();
     bridge.approve.mockRejectedValueOnce({ code: 'STATE_CONFLICT', message: 'the queue is busy' });
     const panel = await typeName('Scan 0601.pdf');
@@ -366,6 +420,80 @@ describe('the window, when a document typed for is renamed by something other th
 
   it('says so of a document renamed by itself as the person keeps it under its own name, the backend refusing that', async () => {
     await decidedAsRenamedByItself('keepOriginal', 'Keep original');
+  });
+
+  /** The read that shows Scan 0602.pdf filed, the only document filed in these tests, is on screen. */
+  const filedShown = () => screen.queryByRole('button', { name: 'Completed, 1' }) !== null;
+  /** Everything the window put on screen as it went, for "never said, at any moment". */
+  const everythingShown = () => {
+    const shown = { toasts: [] as string[], statuses: [] as string[] };
+    const observer = new MutationObserver(() => {
+      const byItself = document.querySelector('[aria-label="Renamed without you"]');
+      if (byItself) shown.toasts.push(byItself.textContent ?? '');
+      const status = document.querySelector('[aria-label="Action status"]')?.textContent;
+      if (status && status !== shown.statuses.at(-1)) shown.statuses.push(status);
+    });
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+    return { shown, stop: () => observer.disconnect() };
+  };
+
+  // Automatic renaming files a document whose name the person typed, and
+  // the move parks: the original is open in another program. What was typed
+  // is set aside when a read shows the document changed (the rename under
+  // way, or read again by itself first), and Details shows Intern's
+  // proposal. The person approves it as shown. The check the approval makes
+  // first finishes Intern's rename, and the backend takes the approval as
+  // done and records it (already_filed). Until it does, the row is
+  // completed and marked, and the read the check publishes can land while
+  // the approval is still being carried out.
+  for (const setAside of ['the rename under way', 'a new reading by itself'] as const) {
+    it(`never says the person's approval of Intern's proposal that finishes a parked rename by itself, at any moment (typed text set aside by ${setAside})`, async () => {
+      const { bridge, byItself, change, publishRead } = await start(true);
+      const { shown, stop } = everythingShown();
+      await typeName('Scan 0602.pdf', '2025-05-02 Invoice 4471 from Brightwater');
+      fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+      const proposal = setAside === 'the rename under way' ? INVOICE
+        : { ...sentProposal('2025-05-02 Invoice 4471 from Brightwater Supply Co.pdf', 'Invoice 4471.', 0.99), proposalRevision: '2' };
+      await byItself(() => change(32, setAside === 'the rename under way' ? { status: 'applying' } : proposal));
+      await byItself(() => change(32, { status: 'needs_review', reason: 'SOURCE_DELETE_FAILED', errorCode: 'SOURCE_DELETE_FAILED', parked: true }));
+      const panel = await openDetails('Scan 0602.pdf');
+      expect(within(panel).getByLabelText('Filename')).toHaveValue(proposal.proposedFilename.replace(/\.pdf$/, ''));
+      expect(within(panel).getByLabelText('What you had typed')).toHaveValue(`2025-05-02 Invoice 4471 from Brightwater\n\n${INVOICE.description}`);
+      bridge.approve.mockImplementationOnce(async () => {
+        change(32, { ...filedByItself(proposal.proposedFilename), reason: null, errorCode: null, parked: false });
+        await publishRead(filedShown);
+        change(32, { renamedWithoutApproval: false });
+      });
+      fireEvent.click(within(panel).getByRole('button', { name: /^(Approve & rename|Apply rename)/ }));
+      await waitFor(() => expect(said()).toHaveTextContent('Renamed Scan 0602.pdf.'));
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+      stop();
+      expect(bridge.approve).toHaveBeenCalledWith('32', proposal.proposedFilename, proposal.description);
+      expect(shown.toasts).toEqual([]);
+      expect(shown.statuses.filter((status) => status.includes('without anyone approving'))).toEqual([]);
+      expect(toast()).toBeNull();
+      expect(bridge.undo).not.toHaveBeenCalled();
+    });
+  }
+
+  it('says a parked rename by itself that the person\'s Check again finishes, once the check is done, and once', async () => {
+    const { bridge, byItself, change, publishRead } = await start(true);
+    await typeName('Scan 0602.pdf', '2025-05-02 Invoice 4471 from Brightwater');
+    await byItself(() => change(32, { status: 'needs_review', reason: 'SOURCE_DELETE_FAILED', errorCode: 'SOURCE_DELETE_FAILED', parked: true }));
+    const panel = await openDetails('Scan 0602.pdf');
+    // Check again approves nothing: Intern's rename, finished, is still nobody's.
+    bridge.retry.mockImplementationOnce(async () => {
+      change(32, { ...filedByItself(INVOICE.proposedFilename), reason: null, errorCode: null, parked: false });
+      await publishRead(filedShown);
+    });
+    fireEvent.click(within(panel).getByRole('button', { name: /Check again/ }));
+    await waitFor(() => expect(toast()).toHaveTextContent(oneSaid('Scan 0602.pdf')));
+    expect(said()).toHaveTextContent(oneSaid('Scan 0602.pdf'));
+    expect(within(toast()!).getByRole('button', { name: 'Undo the rename of Scan 0602.pdf' })).toBeEnabled();
+    const message = toast();
+    await byItself(() => {});
+    expect(toast()).toBe(message);
+    expect(bridge.retry).toHaveBeenCalledWith('32');
   });
 
   it('says nothing of a document with nothing typed for it, renamed by itself as before', async () => {
