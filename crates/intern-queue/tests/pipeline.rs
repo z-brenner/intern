@@ -12089,6 +12089,460 @@ fn a_rename_check_again_rolls_back_is_named_under_the_names_saved_meanwhile() {
     assert!(path.exists(), "nothing was filed");
 }
 
+/// What the organization's names in Settings make of `AGREEMENT_NAME`.
+const WITHOUT_THE_ORGANIZATION: &str = "2024-04-12 Employment Agreement with John Smith.pdf";
+
+/// Names the organization "Acme Corporation" in the Settings at `settings`,
+/// keeping the rest as stored, and has `pipeline` compose the waiting names
+/// again: what a Settings save does, on its own thread.
+fn name_the_organization(settings: &Path, pipeline: &Pipeline) {
+    let store = SettingsStore::new(settings);
+    let mut saved = store.load().unwrap();
+    saved.our_names = vec!["Acme Corporation".into()];
+    store.save(&saved).unwrap();
+    pipeline
+        .refresh_own_names(&["Acme Corporation".to_owned()])
+        .unwrap();
+}
+
+/// Says nothing about duplicates. Once armed, it names the organization in
+/// Settings the next time a filing nobody approved looks for a near
+/// duplicate, as one does at Balanced: after the queue has read the name it
+/// is about to file, and before that rename begins.
+struct OrganizationNamedAtTheLook {
+    settings: PathBuf,
+    pipeline: std::sync::OnceLock<std::sync::Weak<Pipeline>>,
+    armed: AtomicBool,
+}
+
+impl DuplicateOracle for OrganizationNamedAtTheLook {
+    fn filed_elsewhere(&self, _source_hash: &str, _source_path: &Path) -> Option<KnownFiling> {
+        None
+    }
+
+    fn similar_elsewhere(&self, _fingerprint: u64) -> Option<SimilarFiling> {
+        if self.armed.swap(false, Ordering::SeqCst)
+            && let Some(pipeline) = self.pipeline.get().and_then(std::sync::Weak::upgrade)
+        {
+            name_the_organization(&self.settings, &pipeline);
+        }
+        None
+    }
+}
+
+/// The organization named in Settings while automatic renaming, at
+/// Balanced, looks for a near duplicate of a ready agreement it has read
+/// the name of and is about to file. Nothing is filed under the name read:
+/// the agreement stays ready under the name the save composed, and the next
+/// pass files that. The name read was filed, and parked with the original
+/// held open, while the record named the other: Details showed a name the
+/// file was not getting, and an exact approval of it was refused as a
+/// change to what was filed.
+#[test]
+fn own_names_saved_while_a_filing_looks_for_a_near_duplicate_are_filed_on_the_next_pass() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    let folder = root.join("a");
+    fs::create_dir_all(&folder).unwrap();
+    let path = source(&folder, "scan.pdf");
+    let settings = root.join("settings.json");
+    SettingsStore::new(&settings)
+        .save(&AppSettings {
+            review_level: intern_engine::ReviewLevel::Balanced,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let oracle = Arc::new(OrganizationNamedAtTheLook {
+        settings: settings.clone(),
+        pipeline: std::sync::OnceLock::new(),
+        armed: AtomicBool::new(false),
+    });
+    let filesystem = Arc::new(UndeletableOriginalFileSystem::default());
+    let pipeline = Arc::new(
+        Pipeline::with_file_system(
+            root.join("queue.sqlite3"),
+            Arc::new(FakeWorker::new(vec![Ok(parsed(AGREEMENT))])),
+            Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))])),
+            Arc::new(RecordingEvents::default()),
+            SettingsStore::new(&settings),
+            filesystem.clone(),
+        )
+        .unwrap()
+        .with_duplicate_oracle(oracle.clone()),
+    );
+    let _ = oracle.pipeline.set(Arc::downgrade(&pipeline));
+    let id = ready_document(&pipeline, &path);
+    assert_eq!(record_of(&pipeline, id).filename, AGREEMENT_NAME);
+
+    SettingsStore::new(&settings)
+        .save(&AppSettings {
+            automatic_rename: true,
+            review_level: intern_engine::ReviewLevel::Balanced,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    oracle.armed.store(true, Ordering::SeqCst);
+    filesystem.refuse.store(true, Ordering::SeqCst);
+    pipeline.run_until_idle().unwrap();
+    filesystem.refuse.store(false, Ordering::SeqCst);
+
+    assert!(!oracle.armed.load(Ordering::SeqCst), "the filing looked");
+    let waiting = item_of(&pipeline, id);
+    assert_eq!(waiting.status, QueueStatus::Ready);
+    assert!(waiting.receipt.is_none(), "no rename began");
+    assert_eq!(waiting.proposal.unwrap().filename, WITHOUT_THE_ORGANIZATION);
+    assert!(path.exists());
+    assert!(!folder.join(AGREEMENT_NAME).exists());
+
+    pipeline.run_until_idle().unwrap();
+    let filed = item_of(&pipeline, id);
+    assert_eq!(filed.status, QueueStatus::Completed);
+    assert_eq!(
+        filed.filed_receipt.unwrap().destination,
+        folder
+            .canonicalize()
+            .unwrap()
+            .join(WITHOUT_THE_ORGANIZATION)
+    );
+    let record = filed.proposal.unwrap();
+    assert_eq!(record.filename, WITHOUT_THE_ORGANIZATION);
+    assert!(!record.approved, "filed by itself, approved by nobody");
+}
+
+/// Holds the first copy to another volume until released, as a long
+/// document's copy takes its time, and once `watching` is set says when
+/// `watched` is next fingerprinted: a filing of it has checked the file and
+/// goes straight on to read its name.
+struct SlowCopyFileSystem {
+    blocked: AtomicBool,
+    entered: Barrier,
+    release: Barrier,
+    watched: PathBuf,
+    watching: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+}
+
+impl FileSystem for SlowCopyFileSystem {
+    fn exists(&self, path: &Path) -> bool {
+        StdFileSystem.exists(path)
+    }
+    fn hash(&self, path: &Path) -> io::Result<String> {
+        if path == self.watched
+            && let Some(said) = self.watching.lock().unwrap().take()
+        {
+            said.send(()).unwrap();
+        }
+        StdFileSystem.hash(path)
+    }
+    fn same_volume(&self, _source: &Path, _destination: &Path) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        StdFileSystem.rename_no_replace(source, destination)
+    }
+    fn copy_new_locked(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> io::Result<Box<dyn LockedFile>> {
+        let copied = StdFileSystem.copy_new_locked(source, destination)?;
+        if !self.blocked.swap(true, Ordering::SeqCst) {
+            self.entered.wait();
+            self.release.wait();
+        }
+        Ok(copied)
+    }
+    fn lock_for_delete(&self, path: &Path) -> io::Result<Box<dyn LockedFile>> {
+        StdFileSystem.lock_for_delete(path)
+    }
+}
+
+/// The organization named in Settings while automatic renaming, at
+/// Strict, waits to file a ready agreement behind a person's approval of
+/// another, whose copy to another volume is in flight; the queue read the
+/// waiting agreement's name before it began to wait. Nothing is filed under
+/// that name: the agreement stays ready under the name the save composed,
+/// and an exact approval of the name Details shows files that name. The
+/// name read was filed while the record named the other one.
+#[test]
+fn own_names_saved_while_a_filing_waits_for_another_rename_are_not_filed_over() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    let (first_folder, second_folder) = (root.join("a"), root.join("b"));
+    fs::create_dir_all(&first_folder).unwrap();
+    fs::create_dir_all(&second_folder).unwrap();
+    let first = source(&first_folder, "first.pdf");
+    let second = source(&second_folder, "second.pdf");
+    let (said, heard) = std::sync::mpsc::channel();
+    let filesystem = Arc::new(SlowCopyFileSystem {
+        blocked: AtomicBool::new(false),
+        entered: Barrier::new(2),
+        release: Barrier::new(2),
+        watched: second.clone(),
+        watching: Mutex::new(None),
+    });
+    let pipeline = Arc::new(reviewed_queue(root, filesystem.clone(), 2));
+    let ids = pipeline
+        .enqueue_files(&[first, second.clone()])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    for &id in &ids {
+        assert_eq!(item_of(&pipeline, id).status, QueueStatus::Ready);
+    }
+
+    let approving = {
+        let pipeline = Arc::clone(&pipeline);
+        let id = ids[0];
+        thread::spawn(move || pipeline.approve(id, AGREEMENT_NAME, "An employment agreement."))
+    };
+    filesystem.entered.wait();
+    SettingsStore::new(root.join("settings.json"))
+        .save(&AppSettings {
+            automatic_rename: true,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    *filesystem.watching.lock().unwrap() = Some(said);
+    let filing = {
+        let pipeline = Arc::clone(&pipeline);
+        thread::spawn(move || pipeline.run_until_idle())
+    };
+    // The pass has checked the second agreement's file; it reads the name
+    // and waits for the copy in flight.
+    heard.recv_timeout(Duration::from_secs(30)).unwrap();
+    thread::sleep(Duration::from_millis(100));
+    assert!(!filing.is_finished());
+    name_the_organization(&root.join("settings.json"), &pipeline);
+    filesystem.release.wait();
+    approving.join().unwrap().unwrap();
+    filing.join().unwrap().unwrap();
+
+    // Left ready, as the pass files nothing. Were the pass ever slow
+    // enough to read the name only after the save, it filed the new name
+    // at once, which is as right.
+    let waiting = item_of(&pipeline, ids[1]);
+    let shown = waiting.proposal.unwrap();
+    assert_eq!(shown.filename, WITHOUT_THE_ORGANIZATION);
+    if waiting.status == QueueStatus::Ready {
+        assert!(waiting.receipt.is_none(), "no rename began");
+        assert!(second.exists());
+        pipeline
+            .approve(ids[1], &shown.filename, &shown.description)
+            .unwrap();
+    }
+    let filed = item_of(&pipeline, ids[1]);
+    assert_eq!(filed.status, QueueStatus::Completed);
+    assert_eq!(
+        filed.filed_receipt.unwrap().destination,
+        second_folder
+            .canonicalize()
+            .unwrap()
+            .join(WITHOUT_THE_ORGANIZATION)
+    );
+}
+
+/// What a thread of its own does, in [`AsTheRenameBegins`], while the queue
+/// holds the file operations to begin a rename of `item`.
+type Meanwhile = Box<dyn Fn(&Arc<Pipeline>, &QueueItem) + Send + Sync>;
+
+/// The real file operations, running `meanwhile` once armed as the next
+/// rename is handed to them: the queue has read the document's name for the
+/// last time and holds the file operations, and the rename has not begun.
+/// A Settings save or an approval, on a thread of its own, can land just
+/// there.
+struct AsTheRenameBegins {
+    inner: CoreFileActions,
+    pipeline: std::sync::OnceLock<std::sync::Weak<Pipeline>>,
+    armed: AtomicBool,
+    meanwhile: Meanwhile,
+}
+
+impl FileActions for AsTheRenameBegins {
+    fn fingerprint(&self, path: &Path) -> Result<String, PipelineError> {
+        self.inner.fingerprint(path)
+    }
+
+    fn apply(&self, item: &QueueItem, destination: &Path) -> Result<(), PipelineError> {
+        if self.armed.swap(false, Ordering::SeqCst)
+            && let Some(pipeline) = self.pipeline.get().and_then(std::sync::Weak::upgrade)
+        {
+            (self.meanwhile)(&pipeline, item);
+        }
+        self.inner.apply(item, destination)
+    }
+
+    fn undo(&self, item: &QueueItem, receipt: &OperationReceipt) -> Result<(), PipelineError> {
+        self.inner.undo(item, receipt)
+    }
+
+    fn reconcile(&self, item: &QueueItem) -> Result<(), PipelineError> {
+        self.inner.reconcile(item)
+    }
+}
+
+/// A queue at `root` whose renames go through [`AsTheRenameBegins`] over
+/// `filesystem`, with one agreement at `path` read to ready and automatic
+/// renaming then turned on, and `meanwhile` armed. Returns the queue, its
+/// file operations and the agreement's id. The file operations keep a store
+/// of their own, so the queue cannot settle what they leave unfinished.
+fn ready_as_renames_begin(
+    root: &Path,
+    path: &Path,
+    filesystem: Arc<dyn FileSystem>,
+    meanwhile: Meanwhile,
+) -> (Arc<Pipeline>, Arc<AsTheRenameBegins>, i64) {
+    let database = root.join("queue.sqlite3");
+    let settings = SettingsStore::new(root.join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    let files = Arc::new(AsTheRenameBegins {
+        inner: CoreFileActions::with_file_system(
+            Arc::new(QueueStore::open(&database).unwrap()),
+            filesystem,
+        ),
+        pipeline: std::sync::OnceLock::new(),
+        armed: AtomicBool::new(false),
+        meanwhile,
+    });
+    let pipeline = Arc::new(
+        Pipeline::open(
+            &database,
+            Arc::new(FakeWorker::new(vec![Ok(parsed(SIGNED_AGREEMENT))])),
+            Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))])),
+            files.clone(),
+            Arc::new(RecordingEvents::default()),
+            SettingsStore::new(root.join("settings.json")),
+        )
+        .unwrap(),
+    );
+    let _ = files.pipeline.set(Arc::downgrade(&pipeline));
+    let id = ready_document(&pipeline, path);
+    settings
+        .save(&AppSettings {
+            automatic_rename: true,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    files.armed.store(true, Ordering::SeqCst);
+    (pipeline, files, id)
+}
+
+/// The organization named in Settings at the last moment before a rename
+/// automatic renaming makes begins, after the queue has read the name for
+/// the last time. The rename files the name read and parks with the
+/// original held open. The record keeps that name, so Details shows the
+/// name being filed, and an exact approval of it is an approval of what is
+/// filed. The save named the record otherwise in that moment, and the
+/// approval was refused as a change to what was filed.
+#[test]
+fn own_names_saved_as_a_rename_by_itself_begins_leave_the_name_it_is_filing() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    let folder = root.join("a");
+    fs::create_dir_all(&folder).unwrap();
+    let path = source(&folder, "scan.pdf");
+    let filesystem = Arc::new(UndeletableOriginalFileSystem::default());
+    let settings = root.join("settings.json");
+    let (pipeline, files, id) = ready_as_renames_begin(
+        root,
+        &path,
+        filesystem.clone(),
+        Box::new(move |pipeline, _item| name_the_organization(&settings, pipeline)),
+    );
+    filesystem.refuse.store(true, Ordering::SeqCst);
+    pipeline.run_until_idle().unwrap();
+    filesystem.refuse.store(false, Ordering::SeqCst);
+
+    assert!(
+        !files.armed.load(Ordering::SeqCst),
+        "the rename was handed over"
+    );
+    let parked = item_of(&pipeline, id);
+    assert_eq!(parked.status, QueueStatus::NeedsReview);
+    assert_eq!(parked.error_code, Some(ErrorCode::SourceDeleteFailed));
+    let filing = parked.unsettled_receipt.unwrap().destination;
+    assert_eq!(filing.file_name().unwrap(), AGREEMENT_NAME);
+    let shown = parked.proposal.unwrap();
+    assert_eq!(shown.filename, AGREEMENT_NAME, "the name being filed");
+    assert!(!shown.approved);
+
+    // Approved after Intern is opened again, by a queue whose file
+    // operations share its own store, as the app's do.
+    drop(pipeline);
+    drop(files);
+    let pipeline = reviewed_queue(root, filesystem, 0);
+    pipeline
+        .approve(id, &shown.filename, &shown.description)
+        .unwrap();
+    assert_approved_as_filed(
+        &pipeline,
+        id,
+        &folder.canonicalize().unwrap(),
+        "named as it began",
+    );
+}
+
+/// A person approves another name for a ready agreement at the last moment
+/// before the rename automatic renaming makes begins, after the queue has
+/// read the agreement's name for the last time. The approval comes too
+/// late, as it does once the rename has begun: it is refused, and the
+/// agreement is filed under the name read, approved by nobody. It was
+/// recorded, and the person told it was done: the record said approved
+/// under the name typed, while the file took the other.
+#[test]
+fn an_approval_as_a_rename_by_itself_begins_is_refused() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    let folder = root.join("a");
+    fs::create_dir_all(&folder).unwrap();
+    let path = source(&folder, "scan.pdf");
+    let approving = Arc::new(Mutex::new(None));
+    let meanwhile: Meanwhile = {
+        let approving = Arc::clone(&approving);
+        Box::new(move |pipeline, item| {
+            let (queue, id) = (Arc::clone(pipeline), item.id);
+            let approval = thread::spawn(move || {
+                queue.approve(
+                    id,
+                    "2024-04-12 Employment Agreement with Acme.pdf",
+                    "An employment agreement.",
+                )
+            });
+            // Until it is answered, or recorded and waiting for the file
+            // operations this thread holds.
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !approval.is_finished()
+                && !record_of(pipeline, id).approved
+                && Instant::now() < deadline
+            {
+                thread::sleep(Duration::from_millis(1));
+            }
+            *approving.lock().unwrap() = Some(approval);
+        })
+    };
+    let (pipeline, files, id) =
+        ready_as_renames_begin(root, &path, Arc::new(StdFileSystem), meanwhile);
+    pipeline.run_until_idle().unwrap();
+
+    assert!(
+        !files.armed.load(Ordering::SeqCst),
+        "the rename was handed over"
+    );
+    let approval = approving.lock().unwrap().take().unwrap();
+    let refused = approval.join().unwrap().unwrap_err();
+    assert_eq!(refused.code, "STATE_CONFLICT");
+    let filed = item_of(&pipeline, id);
+    assert_eq!(filed.status, QueueStatus::Completed);
+    assert_eq!(
+        filed.filed_receipt.unwrap().destination,
+        folder.canonicalize().unwrap().join(AGREEMENT_NAME)
+    );
+    let record = filed.proposal.unwrap();
+    assert_eq!(record.filename, AGREEMENT_NAME);
+    assert!(!record.approved, "filed by itself, approved by nobody");
+}
+
 /// A rename an older build left planned, beside a document read again since
 /// and sent to review - the model asked for a person. Checking it again
 /// rolls the rename back, and used to leave the document ready: with

@@ -2175,6 +2175,17 @@ pub struct Pipeline {
     /// copy still being verified. Taken after `run_lock`, never before it,
     /// and never held twice.
     file_ops: Mutex<()>,
+    /// The item whose filing holds `file_ops`, has read its name for the
+    /// last time and is renaming it now; `None` between filings. Until the
+    /// rename is journaled the row is still ready, and nothing in the store
+    /// stops a write to its record. So a recomposition leaves that item's
+    /// record alone, and an approval of it is refused, as one is once the
+    /// row is applying. Each reads the mark and writes under this lock,
+    /// which the filing holds to read the name and set the mark
+    /// ([`Pipeline::begin_filing`]): a name written before is the one the
+    /// filing reads, and it files nothing when that is not the name it set
+    /// out to file; none is written after.
+    filing_now: Mutex<Option<i64>>,
     /// Intern's own data folder - the queue database's - where the reader's
     /// self-test writes its file.
     data_folder: PathBuf,
@@ -2396,6 +2407,7 @@ impl Pipeline {
             lease_renewal_interval: LEASE_RENEWAL_INTERVAL,
             run_lock: Mutex::new(()),
             file_ops: Mutex::new(()),
+            filing_now: Mutex::new(None),
             data_folder,
             memo: ExtractionMemo::default(),
             release: String::new(),
@@ -3933,7 +3945,12 @@ impl Pipeline {
     /// name with nothing left saying nobody approved it. The record keeps
     /// its name until the rename is settled (see
     /// [`PipelineRepository::replace_proposal_if`]), and one that Check
-    /// again rolls back is composed again then ([`Self::retry`]).
+    /// again rolls back is composed again then ([`Self::retry`]). So does a
+    /// ready document from the moment a filing reads its name for the last
+    /// time to rename it, before the rename is journaled (see `filing_now`);
+    /// a name composed again before that moment is the one the filing
+    /// finds, and it then files nothing and leaves that name to the next
+    /// pass.
     fn recompose_waiting(&self, own_names: Option<&[String]>) -> PipelineResult<()> {
         let spellings = self.repository.spellings()?;
         let mut changed = false;
@@ -4042,7 +4059,17 @@ impl Pipeline {
         }
         // Written only over the record read: whatever was written since - an
         // approval above all - stands, and so does the name a rename left
-        // unfinished is filing (see `replace_proposal_if`).
+        // unfinished is filing (see `replace_proposal_if`). Nor over the
+        // name a filing has read for the last time and is renaming the
+        // document to now, while its row is still ready and no rename is
+        // journaled yet (see `filing_now`).
+        let filing = self
+            .filing_now
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *filing == Some(item.id) {
+            return Ok(false);
+        }
         self.repository
             .replace_proposal_if(item.id, read, &record, held)
     }
@@ -4671,6 +4698,17 @@ impl Pipeline {
         }
         let applied = {
             let _files = self.hold_file_ops();
+            // The name was read before this waited for the hold, behind
+            // another file operation, and before the look for a near
+            // duplicate: a Settings save, a change of spellings or a
+            // person's approval may have given the record another since.
+            // Then nothing is filed here, and the name the record has now
+            // is filed by the approval that gave it or by the next pass.
+            // Filed, the name read went to the file while the record named
+            // the other, and Details showed a name the file was not getting.
+            let Some(_filing) = self.begin_filing(item.id, proposal.as_ref())? else {
+                return Ok(());
+            };
             let applied = self.files.apply(item, &destination);
             if let Err(error) = &applied
                 && error.code != APPLY_DEFERRED
@@ -5270,6 +5308,29 @@ impl Pipeline {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Marks item `id` as the one being filed now (see `filing_now`),
+    /// provided its record still has the name it had when `read` - the
+    /// record as the filing read it, if it had one - was read. `None` when
+    /// the record has been given another name since: nothing is to be filed
+    /// now. Only for a holder of the file hold, about to rename the item;
+    /// the mark goes with the guard returned.
+    fn begin_filing(
+        &self,
+        id: i64,
+        read: Option<&ProposalRecord>,
+    ) -> PipelineResult<Option<FilingNow<'_>>> {
+        let mut filing = self
+            .filing_now
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let named = self.repository.load_proposal(id)?;
+        if named.as_ref().map(|record| &record.filename) != read.map(|record| &record.filename) {
+            return Ok(None);
+        }
+        *filing = Some(id);
+        Ok(Some(FilingNow(&self.filing_now)))
+    }
+
     fn find_item(&self, id: i64) -> PipelineResult<QueueItem> {
         self.store
             .get(id)?
@@ -5454,7 +5515,10 @@ impl Pipeline {
     /// Settings save and change of spellings passed the document over (see
     /// [`Self::recompose_waiting`]), so its name may be composed under the
     /// names and spellings of its day. A check that finished the rename, or
-    /// left it unsettled, leaves nothing to compose.
+    /// left it unsettled, leaves nothing to compose. Nor does a filing that
+    /// takes the row back up first, with automatic renaming on: it files
+    /// the name of its day, and the record keeps that name, as it does for
+    /// any document a filing has begun to rename (see `filing_now`).
     ///
     /// Only for Check again itself. An approval runs the same check first,
     /// and then the name the person approved takes the record's place: it is
@@ -5977,8 +6041,25 @@ impl Pipeline {
             }
             _ => Vec::new(),
         };
-        self.repository
-            .approve_user_edit(id, item.status, &filename, description, rejected)?;
+        {
+            // A filing that has read this document's name for the last time
+            // is renaming it now, its row still ready: the approval comes
+            // too late, as it does once the row is applying. Recorded, it
+            // said approved under the name typed while the file took the
+            // name the filing read, and reported success.
+            let filing = self
+                .filing_now
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *filing == Some(id) {
+                return Err(PipelineError::new(
+                    "STATE_CONFLICT",
+                    "the document is being renamed",
+                ));
+            }
+            self.repository
+                .approve_user_edit(id, item.status, &filename, description, rejected)?;
+        }
         // A preference store, not a filing step: a lesson that cannot be
         // written must not stop the rename that was just approved. A name
         // with no reading behind it corrects nothing.
@@ -6413,6 +6494,21 @@ fn undo_failure(
             "Another rename is in progress. Try Undo again in a moment.",
         ),
         Ok(true) => error,
+    }
+}
+
+/// Takes the mark of the item being filed now off when its filing is over,
+/// however it ends (see `Pipeline::filing_now`). By then the row is filed,
+/// or its rename is journaled and a recomposition leaves it for that
+/// (`PipelineRepository::replace_proposal_if`), or nothing was renamed.
+struct FilingNow<'a>(&'a Mutex<Option<i64>>);
+
+impl Drop for FilingNow<'_> {
+    fn drop(&mut self) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 
