@@ -246,8 +246,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 /* Wide enough for the longest label on one line - "Ready to file as a copy",
    and "Completed with a note", which is as long - with room to spare: a
    label's width moves a few pixels between fonts and machines, and a status
-   that does not fit paints over the next column. */
-.table-wrap th.col-status { width: 204px; }
+   that does not fit paints over the next column. DejaVu Sans, which Linux
+   uses where Segoe UI is missing, is the widest measured: "Completed with a
+   note" needs 180px of the cell there, its icon and gap included. */
+.table-wrap th.col-status { width: 208px; }
 .table-wrap th.col-proposed { width: 30%; }
 .table-wrap th.col-description { width: 24%; }
 .table-wrap th.col-check { width: 22%; }
@@ -681,7 +683,7 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
   .workspace:has(> .inspector) .cell-filename { gap: 8px; }
   .workspace:has(> .inspector) .status { gap: 6px; }
   .workspace:has(> .inspector) .table-wrap th.col-original { width: 24%; }
-  .workspace:has(> .inspector) .table-wrap th.col-status { width: 196px; }
+  .workspace:has(> .inspector) .table-wrap th.col-status { width: 198px; }
   .workspace:has(> .inspector) .table-wrap th.col-proposed { width: 32%; }
   .workspace:has(> .inspector) .table-wrap th.col-description { width: 18%; }
   .workspace:has(> .inspector) .table-wrap th.col-check { width: 20%; }
@@ -704,7 +706,7 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
   .header-actions button:not(.icon-button) .button-label { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .queue-panel { padding-top: 12px; }
   .table-wrap th, .table-wrap td { padding-left: 8px; padding-right: 8px; }
-  .table-wrap th.col-status { width: 188px; }
+  .table-wrap th.col-status { width: 200px; }
   .inspector { width: min(370px, 100vw); }
 }
 

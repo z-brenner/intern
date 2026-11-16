@@ -426,9 +426,11 @@ test('a checkbox whose line was in view when it brought the warning stays in vie
   cut off under it: 5px of the checkbox's, and most of Balanced's, whose
   words stand under it. The sections used to scroll only for a line that
   had been whole in view, so such a control stayed behind the footer with
-  the focus on it. In the demo that was the checkbox in a window 728 to
-  764px high, or 1048 to 1068px, and Balanced in one 836 to 936px high
-  (partly behind it up to 944px). Now
+  the focus on it. In the demo, with the fonts of the machine that found
+  it, that was the checkbox in a window 728 to 764px high, or 1048 to
+  1068px, and Balanced in one 836 to 936px high (partly behind it up to
+  944px); with DejaVu Sans, as Linux CI has, the heights differ, so the
+  journey measures the height it needs. Now
   what must have been in view is the control itself, and the scroll is by
   all that is cut of its line: here, more than the footer grew.
 
@@ -457,6 +459,42 @@ const onTop = (control: Locator) => control.evaluate((input) => {
 /** Where the sections' view ends, in the window. */
 const viewEnd = (sections: Locator) => sections.evaluate((view) => view.getBoundingClientRect().bottom);
 /**
+ * The window height at which the end of the sections' view, nothing
+ * scrolled, falls where the journey needs it on the control's own box:
+ * `across` its middle, so that Tab, reaching the control, scrolls it into
+ * view at the end of the view, whole, with its line cut off under it; or
+ * just `under` it, so that the control is whole in view and its line cut
+ * off without any key reaching it. Measured in the open dialog, not
+ * assumed, since the fonts a machine has move the control by tens of
+ * pixels. The view ends a fixed distance above the window's bottom at these
+ * heights, so it moves with the height pixel for pixel.
+ */
+/**
+ * Whether the control's own box is in the sections' view: whole, or cut off
+ * by the end of the view by less than a pixel. The browser scrolls a
+ * focused control into view by whole pixels, and a box that sits on a
+ * fraction of one can then end 0.3px past the view's end. The rule that
+ * keeps a chosen control in view allows that pixel too.
+ */
+async function boxInView(control: Locator) {
+  const past = await control.evaluate((input) => input.getBoundingClientRect().bottom - input.closest('.dialog-body')!.getBoundingClientRect().bottom);
+  expect(past).toBeLessThan(1);
+  await expect(control).toBeInViewport({ ratio: 0.9 });
+}
+async function heightWithViewEnd(page: Page, control: Locator, where: 'across' | 'under') {
+  const { top, height, end, scrolled } = await control.evaluate((input) => {
+    const view = input.closest('.dialog-body')!;
+    const box = input.getBoundingClientRect();
+    return { top: box.top, height: box.height, end: view.getBoundingClientRect().bottom, scrolled: view.scrollTop };
+  });
+  expect(scrolled).toBe(0);
+  const wanted = where === 'across' ? top + height / 2 : top + height + 2;
+  const tall = Math.round(page.viewportSize()!.height + wanted - end);
+  expect(tall).toBeGreaterThanOrEqual(600);
+  expect(tall).toBeLessThanOrEqual(1400);
+  return tall;
+}
+/**
  * After the key that brought the warning: the control chosen with it has
  * the focus and is whole in view with nothing over it, its line is whole
  * above the footer, and to show it the sections scrolled, all of a piece,
@@ -476,7 +514,7 @@ async function keptInView(settings: ReturnType<typeof inSettings>, control: Loca
   expect(Math.min(...scrolled)).toBeGreaterThan(grew);
 }
 
-test('a choice made from the keyboard stays in view where its line was cut off before the key: the checkbox at 1280 by 740, Balanced at 1280 by 860', async ({ page }) => {
+test('a choice made from the keyboard stays in view where its line was cut off before the key: the checkbox and Balanced, each at the height where Tab brings it to the end of the view', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/');
   await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
@@ -484,14 +522,19 @@ test('a choice made from the keyboard stays in view where its line was cut off b
   await panel.getByLabel('Filename').fill('2023-09-15 Lease of 123 Main St');
 
   // The checkbox. Tab brings it into view at the end of the view: whole itself, its line cut off under it.
-  await page.setViewportSize({ width: 1280, height: 740 });
+  // In the demo with this machine's fonts that is a window 1280 by about 740.
   let settings = await openSettingsByKeys(page);
+  const forCheckbox = await heightWithViewEnd(page, settings.automatic, 'across');
+  await page.keyboard.press('Escape');
+  await expect(settings.dialog).toBeHidden();
+  await page.setViewportSize({ width: 1280, height: forCheckbox });
+  settings = await openSettingsByKeys(page);
   await tabTo(page, settings.balanced);
   await page.keyboard.press('Space');
   await expect(settings.balanced).toBeChecked();
   await expect(settings.warning).toHaveCount(0);
   await tabTo(page, settings.automatic);
-  await expect(settings.automatic).toBeInViewport({ ratio: 1 });
+  await boxInView(settings.automatic);
   expect(await clear(settings.automatic)).toBeLessThan(0);
   let before = { tops: await tops(settings.dialog), viewEnd: await viewEnd(settings.sections) };
   await page.keyboard.press('Space');
@@ -511,11 +554,15 @@ test('a choice made from the keyboard stays in view where its line was cut off b
   await page.keyboard.press('Enter');
   await expect(settings.dialog).toBeHidden();
   // Tab stops at Strict, the level chosen, and the arrow key chooses Balanced under it. Balanced itself is whole
-  // in view, near the end of the view, and most of its words are cut off below it.
-  await page.setViewportSize({ width: 1280, height: 860 });
+  // in view, near the end of the view, and most of its words are cut off below it (here about 1280 by 860).
+  settings = await openSettingsByKeys(page);
+  const forBalanced = await heightWithViewEnd(page, settings.balanced, 'under');
+  await page.keyboard.press('Escape');
+  await expect(settings.dialog).toBeHidden();
+  await page.setViewportSize({ width: 1280, height: forBalanced });
   settings = await openSettingsByKeys(page);
   await tabTo(page, settings.strict);
-  await expect(settings.balanced).toBeInViewport({ ratio: 1 });
+  await boxInView(settings.balanced);
   expect(await clear(settings.balanced)).toBeLessThan(0);
   before = { tops: await tops(settings.dialog), viewEnd: await viewEnd(settings.sections) };
   await page.keyboard.press('ArrowDown');
