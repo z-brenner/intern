@@ -419,14 +419,16 @@ test('a checkbox whose line was in view when it brought the warning stays in vie
 });
 
 /*
-  From the keyboard the browser scrolls first, by itself: it shows the
-  control the focus comes to, and no more of its line. A control reached at
-  the end of the sections' view then ends at the view's end, with its line
+  From the keyboard the browser scrolls first, by itself. For a control
+  partly in view it shows the control and no more of its line (one wholly
+  out of view it scrolls much further). A control reached at the end of the
+  sections' view then ends at the view's end, with its line
   cut off under it: 5px of the checkbox's, and most of Balanced's, whose
   words stand under it. The sections used to scroll only for a line that
   had been whole in view, so such a control stayed behind the footer with
   the focus on it. In the demo that was the checkbox in a window 728 to
-  764px high, or 1048 to 1068px, and Balanced in one 836 to 944px high. Now
+  764px high, or 1048 to 1068px, and Balanced in one 836 to 936px high
+  (partly behind it up to 944px). Now
   what must have been in view is the control itself, and the scroll is by
   all that is cut of its line: here, more than the footer grew.
 

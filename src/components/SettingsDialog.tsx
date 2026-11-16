@@ -283,10 +283,12 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     // the sections scroll to show its line whole, and 4px under it.
     //
     // In view is asked of the control itself, not of its line. From the
-    // keyboard the browser has scrolled already, to show the control the
-    // focus came to and no more: reached at the end of the view, it ends
-    // there and its line is cut off under it, 5px of the checkbox's and
-    // most of Balanced's, whose words stand under it. Asked of the line,
+    // keyboard the browser has scrolled already. For a control partly in
+    // view when the focus came, it scrolls just enough to show the control:
+    // reached at the end of the view, it ends there and its line is cut off
+    // under it, 5px of the checkbox's and most of Balanced's, whose words
+    // stand under it. (For one wholly out of view it scrolls much further,
+    // and the line is in view already.) Asked of the line,
     // that control counted as out of view and was left behind the footer.
     // A pixel is allowed: the browser scrolls by whole pixels, so a control
     // it has brought into view can end a part of one past the end (0.3px
