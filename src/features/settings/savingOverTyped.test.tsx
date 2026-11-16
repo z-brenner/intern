@@ -873,6 +873,7 @@ describe('a document Intern renamed by itself while it had something typed', () 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Completed, 1' })).toBeInTheDocument());
     // Said where the outcome of an action is; nothing else: the document has only left the queue for Completed.
     expect(screen.getByRole('group', { name: 'Renamed without you' })).toHaveTextContent("Scan 0602.pdf was renamed under Intern's proposal. What you typed for it was not filed, and is kept in its details.");
+    expect([...document.querySelector('.toasts')!.children].map((each) => each.getAttribute('aria-label'))).toEqual(['Renamed without you']);
     expect(kept()).toHaveLength(0);
     expect(screen.queryByRole('group', { name: /^Kept from/ })).not.toBeInTheDocument();
 
