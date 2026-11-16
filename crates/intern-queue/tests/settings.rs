@@ -1,6 +1,6 @@
 use std::fs;
 
-use intern_engine::{HostedProvider, ModelPreference};
+use intern_engine::{HostedProvider, ModelPreference, ReviewLevel};
 use intern_queue::settings::{AppSettings, DestinationLayout, ModelSource, SettingsStore};
 use tempfile::tempdir;
 
@@ -24,6 +24,7 @@ fn settings_saved_before_the_intake_fields_existed_load_with_defaults() {
             our_names: Vec::new(),
             start_minimized: true,
             automatic_rename: true,
+            review_level: ReviewLevel::Strict,
             intake_folder: String::new(),
             intake_enabled: false,
             intake_local_only: false,
@@ -56,6 +57,7 @@ fn save_replaces_existing_content_atomically_and_round_trips_the_intake_fields()
         our_names: vec!["Contoso Worldwide, Inc.".into(), "Contoso".into()],
         start_minimized: false,
         automatic_rename: true,
+        review_level: ReviewLevel::Balanced,
         intake_folder: "/somewhere/intake".into(),
         intake_enabled: true,
         intake_local_only: true,
@@ -91,6 +93,7 @@ fn save_replaces_existing_content_atomically_and_round_trips_the_intake_fields()
         "\"ourNames\": [",
         "\"modelSource\": \"hosted\"",
         "\"modelPreference\": \"fast\"",
+        "\"reviewLevel\": \"balanced\"",
         "\"hostedProvider\": \"openai_compatible\"",
         "\"hostedBaseUrl\": \"https://gateway.example.com/v1\"",
         "\"hostedModel\": \"filing-model\"",
@@ -155,6 +158,85 @@ fn the_model_preference_round_trips_and_defaults_to_automatic() {
     assert_eq!(loaded.settings.model_preference, ModelPreference::Automatic);
     assert!(loaded.settings.automatic_rename);
     assert_eq!(loaded.unreadable, ["modelPreference"]);
+}
+
+/// The review level is stored by its lowercase name and read back. A file
+/// from before the levels does not say, and is strict. So is a file that
+/// names a level this build does not know, whatever kind of value it gives:
+/// that field is named among what could not be read, and everything else in
+/// the file is kept. Strict is never looser than what the file asked for.
+#[test]
+fn the_review_level_round_trips_and_a_missing_or_unknown_one_is_strict() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("settings.json");
+    let store = SettingsStore::new(&path);
+    for level in ReviewLevel::ALL {
+        let settings = AppSettings {
+            destination: "/somewhere/out".into(),
+            review_level: level,
+            ..AppSettings::default()
+        };
+        store.save(&settings).unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains(&format!("\"reviewLevel\": \"{}\"", level.as_str()))
+        );
+        let loaded = store.load_with_report().unwrap();
+        assert_eq!(loaded.settings, settings);
+        assert!(loaded.unreadable.is_empty());
+    }
+    assert_eq!(AppSettings::default().review_level, ReviewLevel::Strict);
+
+    // Every settings file written before the levels.
+    fs::write(
+        &path,
+        br#"{ "destination": "/somewhere/out", "automaticRename": true }"#,
+    )
+    .unwrap();
+    let loaded = store.load_with_report().unwrap();
+    assert_eq!(loaded.settings.review_level, ReviewLevel::Strict);
+    assert!(loaded.settings.automatic_rename);
+    assert!(loaded.unreadable.is_empty());
+
+    for unknown in [
+        "\"relaxed\"",
+        "\"Balanced\"",
+        "\"\"",
+        "2",
+        "true",
+        "null",
+        "[\"balanced\"]",
+    ] {
+        fs::write(
+            &path,
+            format!(
+                r#"{{ "destination": "/somewhere/out", "reviewLevel": {unknown}, "automaticRename": true }}"#
+            ),
+        )
+        .unwrap();
+        let loaded = store.load_with_report().unwrap();
+        assert_eq!(
+            loaded.settings.review_level,
+            ReviewLevel::Strict,
+            "{unknown}"
+        );
+        assert_eq!(loaded.settings.destination, "/somewhere/out");
+        assert!(loaded.settings.automatic_rename, "{unknown}");
+        assert_eq!(loaded.unreadable, ["reviewLevel"], "{unknown}");
+        assert_eq!(store.load().unwrap().review_level, ReviewLevel::Strict);
+    }
+
+    // Beside another field that cannot be read, each is named once.
+    fs::write(
+        &path,
+        br#"{ "destination": "/somewhere/out", "destinationLayout": "none", "reviewLevel": "relaxed" }"#,
+    )
+    .unwrap();
+    let loaded = store.load_with_report().unwrap();
+    assert_eq!(loaded.settings.review_level, ReviewLevel::Strict);
+    assert_eq!(loaded.settings.destination_layout, DestinationLayout::Flat);
+    assert_eq!(loaded.unreadable, ["destinationLayout", "reviewLevel"]);
 }
 
 #[test]

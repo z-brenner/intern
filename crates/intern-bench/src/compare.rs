@@ -25,6 +25,7 @@
 
 use std::{collections::BTreeSet, fmt::Write as _};
 
+use intern_engine::ReviewLevel;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -59,6 +60,10 @@ pub struct Side {
     pub only: Vec<String>,
     #[serde(default)]
     pub gold_sha256: String,
+    /// The review level the run's readiness was judged at; left out at
+    /// strict, as a report leaves it out.
+    #[serde(default, skip_serializing_if = "ReviewLevel::is_strict")]
+    pub review_level: ReviewLevel,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -212,6 +217,7 @@ fn side(report: &Report) -> Side {
             .map(|recording| recording.recorded_at.clone()),
         only: report.corpus.only.clone(),
         gold_sha256: report.corpus.gold_sha256.clone(),
+        review_level: report.review_level,
     }
 }
 
@@ -571,6 +577,13 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
         comparison.notes.push(format!(
             "A {} run is compared with a {} run: only the scores both have - extraction's - are comparable.",
             comparison.before.mode, comparison.after.mode
+        ));
+    }
+    if comparison.before.review_level != comparison.after.review_level {
+        comparison.notes.push(format!(
+            "The runs were judged at different review levels ({} and {}): `ready`, `unsafe_ready`, `needless_review`, `readiness_match` and the review rate can differ for that alone.",
+            comparison.before.review_level.as_str(),
+            comparison.after.review_level.as_str()
         ));
     }
     let unscored = pairs.len() - comparison.aligned;

@@ -5805,6 +5805,18 @@ pub(crate) trait SettingsRuntime {
     /// earlier save never reached is finished by the next; one already
     /// named by `names` is left as it is.
     fn own_names_changed(&self, names: &[String]) -> Result<(), CommandError>;
+    /// The review level as just saved, where the save changed it from
+    /// `from` to `to`: documents still waiting are judged again at once,
+    /// from their stored readings, with no model asked. Some become ready
+    /// toward a looser level, and ready ones no person approved go back to
+    /// review toward a stricter one. None is filed by this: `Ok(true)`
+    /// says some became ready, which the scheduler files when it is woken
+    /// (`wake_for_judged`).
+    fn review_level_changed(
+        &self,
+        from: intern_engine::ReviewLevel,
+        to: intern_engine::ReviewLevel,
+    ) -> Result<bool, CommandError>;
     /// The paths a completed SharePoint activation owns, if one is active.
     fn managed_sharepoint(
         &self,
@@ -5882,6 +5894,16 @@ impl SettingsRuntime for AppState {
     fn own_names_changed(&self, names: &[String]) -> Result<(), CommandError> {
         self.pipeline
             .refresh_own_names(names)
+            .map_err(CommandError::from)
+    }
+
+    fn review_level_changed(
+        &self,
+        from: intern_engine::ReviewLevel,
+        to: intern_engine::ReviewLevel,
+    ) -> Result<bool, CommandError> {
+        self.pipeline
+            .review_level_changed(from, to)
             .map_err(CommandError::from)
     }
 
@@ -6002,6 +6024,69 @@ fn save_settings_with_microsoft_protection(
         |enabled| state.set_autostart(enabled),
     )?;
     state.refresh_hosted_active(&settings);
+    let applied = apply_saved_settings(state, &previous, &settings);
+    // The waiting documents are judged again where this save changed the
+    // review level, whatever came of the steps above: none of them decides
+    // which readings are ready. Only on a change, unlike the names: judging
+    // again moves documents between ready and review, and a save that
+    // leaves the level alone must leave them where they are. So no later
+    // save makes up for this one, and a step above that failed must not
+    // keep the queue from being judged: the level is stored by now, and the
+    // documents would wait in review at a level that calls them ready.
+    // Settings that could not be read before this save were strict to the
+    // queue too, which is what `previous` says of them.
+    //
+    // A judging that itself fails is reported and not tried again by a
+    // later save. Nothing is then filed at a level that holds it
+    // (`Pipeline::review_level_changed`), and choosing the level again
+    // after choosing the other one judges the queue once more.
+    let judged = if previous.review_level == settings.review_level {
+        Ok(false)
+    } else {
+        state.review_level_changed(previous.review_level, settings.review_level)
+    };
+    let woken = wake_for_judged(state, &judged);
+    // Like the model's answer, the judging's is reported only once every
+    // other part of the save has been applied, and the wake's after it:
+    // a scheduler that could not be woken takes back nothing the judging
+    // did.
+    applied.and(judged.map(|_made_ready| ())).and(woken)
+}
+
+/// Wakes the scheduler for what judging the queue at a changed review level
+/// (`SettingsRuntime::review_level_changed`) left it to file.
+///
+/// The judging files nothing. It runs on the thread of the save, and a name
+/// no person approved is filed only by the scheduler, which at a level
+/// looser than strict looks for a near duplicate before each such filing
+/// and so must make them one at a time (`Pipeline::review_level_changed`).
+/// Woken now, it files what the judging made ready at once when automatic
+/// renaming is on, where it would otherwise come to them at its next wake
+/// or its 65-second look. It files only while a model is ready to read, as
+/// it does everything else in the queue (`AppState::schedule`): until then
+/// they wait ready.
+///
+/// Not when the judging made nothing ready: there is nothing to file that
+/// was not there before. A judging that failed says nothing of what it made
+/// ready before it failed, so the scheduler is woken for that too.
+fn wake_for_judged(
+    state: &impl SettingsRuntime,
+    judged: &Result<bool, CommandError>,
+) -> Result<(), CommandError> {
+    match judged {
+        Ok(false) => Ok(()),
+        Ok(true) | Err(_) => state.schedule(),
+    }
+}
+
+/// What a save does to the running app once the settings are stored, the
+/// review level apart: the model, the tray, the watcher and the names of
+/// the documents still waiting.
+fn apply_saved_settings(
+    state: &impl SettingsRuntime,
+    previous: &AppSettings,
+    settings: &AppSettings,
+) -> Result<(), CommandError> {
     // The settings are saved whatever the local model makes of the change,
     // so its answer - SETUP_BUSY, say - is reported once the rest of the
     // save has been applied rather than in place of it.
@@ -6022,7 +6107,7 @@ fn save_settings_with_microsoft_protection(
         || previous.process_others_uploads != settings.process_others_uploads
         || previous.machine_label != settings.machine_label
     {
-        state.restart_intake(&settings, starts_a_new_watch(&previous, &settings))?;
+        state.restart_intake(settings, starts_a_new_watch(previous, settings))?;
         state.emit_intake_changed()?;
     }
     // Last, because it renames only what is still waiting: a queue that
@@ -6169,6 +6254,22 @@ fn restore_settings_unlocked(
     // by the restored list are left as they are.
     if let Err(error) = runtime.own_names_changed(&previous.own_names()) {
         failures.push(error);
+    }
+    // The review level goes back with the rest: what the activated
+    // settings' level made ready or sent to review is judged again at the
+    // restored one. Settings that cannot be read now were strict to the
+    // queue.
+    let level_now = current
+        .as_ref()
+        .map(|current| current.review_level)
+        .unwrap_or_default();
+    if level_now != previous.review_level {
+        let judged = runtime.review_level_changed(level_now, previous.review_level);
+        // The wake above came before this judging, so what the judging
+        // made ready gets one of its own.
+        let woken = wake_for_judged(runtime, &judged);
+        failures.extend(judged.err());
+        failures.extend(woken.err());
     }
     let Some(first) = failures.first() else {
         return Ok(());
@@ -6857,8 +6958,8 @@ pub fn queue_discard_waiting(state: State<'_, AppState>) -> Result<usize, Comman
 fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
     let waiting = waiting_in_doubt(&item);
     let proposal = item.proposal.as_ref();
-    // Offered only where a person is deciding the name: a ready name
-    // passed every check, and a settled one is no longer anyone's to change.
+    // Offered only where a person is deciding the name: a ready name waits
+    // on nobody, and a settled one is no longer anyone's to change.
     let party_choices = proposal
         .filter(|_| item.status == QueueStatus::NeedsReview)
         .map(ProposalRecord::party_choices)
@@ -15008,6 +15109,351 @@ mod own_names_tests {
     }
 }
 
+#[cfg(test)]
+mod review_level_tests {
+    use std::sync::atomic::Ordering;
+
+    use intern_engine::ReviewLevel;
+    use intern_queue::{AppSettings, ModelSource};
+
+    use super::test_runtime::RecordingRuntime;
+    use super::{restore_sharepoint_settings, save_settings};
+
+    const STRICT: ReviewLevel = ReviewLevel::Strict;
+    const BALANCED: ReviewLevel = ReviewLevel::Balanced;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("intern-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn at(level: ReviewLevel) -> AppSettings {
+        AppSettings {
+            review_level: level,
+            ..AppSettings::default()
+        }
+    }
+
+    /// The level goes to the settings file and comes back as the window
+    /// sends and reads it, and the queue judges its waiting documents
+    /// again only when a save changes it: a save that leaves the level
+    /// alone must leave them where they are.
+    #[test]
+    fn a_save_that_changes_the_review_level_tells_the_queue_and_no_other_save_does() {
+        let dir = scratch("review-level");
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime.store.save(&AppSettings::default()).unwrap();
+        let heard = || runtime.review_levels.lock().unwrap().clone();
+
+        save_settings(
+            &runtime,
+            AppSettings {
+                machine_label: "Front desk".into(),
+                ..AppSettings::default()
+            },
+        )
+        .unwrap();
+        assert!(heard().is_empty(), "strict before and after");
+
+        // As the window sends it: the field by its camelCase name.
+        let chosen: AppSettings = serde_json::from_value(serde_json::json!({
+            "destination": "",
+            "machineLabel": "Front desk",
+            "reviewLevel": "balanced",
+        }))
+        .unwrap();
+        assert_eq!(chosen.review_level, BALANCED);
+        save_settings(&runtime, chosen).unwrap();
+        assert_eq!(heard(), [(STRICT, BALANCED)]);
+        let stored = runtime.store.load().unwrap();
+        assert_eq!(stored.review_level, BALANCED);
+        assert_eq!(
+            serde_json::to_value(&stored).unwrap()["reviewLevel"],
+            "balanced",
+            "as the window reads it"
+        );
+
+        save_settings(
+            &runtime,
+            AppSettings {
+                machine_label: "Back office".into(),
+                ..at(BALANCED)
+            },
+        )
+        .unwrap();
+        assert_eq!(heard(), [(STRICT, BALANCED)], "balanced before and after");
+
+        // A payload that does not name the level is strict, as a settings
+        // file that does not name it is.
+        let silent: AppSettings =
+            serde_json::from_value(serde_json::json!({ "destination": "" })).unwrap();
+        save_settings(&runtime, silent).unwrap();
+        assert_eq!(heard(), [(STRICT, BALANCED), (BALANCED, STRICT)]);
+        assert_eq!(runtime.store.load().unwrap().review_level, STRICT);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The level is stored before the queue judges again, and a judging
+    /// that fails is reported once the rest of the save has been applied,
+    /// the organization's names included. Settings that could not be read
+    /// before the save were strict to the queue, and count as strict here.
+    #[test]
+    fn a_judging_that_fails_is_reported_after_the_level_is_stored() {
+        let dir = scratch("review-level-failure");
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        std::fs::write(dir.join("settings.json"), b"{ this is not json").unwrap();
+        runtime.fail_review_level.store(true, Ordering::SeqCst);
+
+        let refused = save_settings(
+            &runtime,
+            AppSettings {
+                our_names: vec!["Contoso".into()],
+                ..at(BALANCED)
+            },
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, "DATABASE_UNAVAILABLE");
+        assert_eq!(
+            *runtime.review_levels.lock().unwrap(),
+            [(STRICT, BALANCED)],
+            "unreadable settings were strict"
+        );
+        assert_eq!(runtime.store.load().unwrap().review_level, BALANCED);
+        assert_eq!(
+            *runtime.own_names.lock().unwrap(),
+            vec![vec!["Contoso".to_owned()]],
+            "the rest of the save was applied"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A save that changes the review level judges the queue at it whatever
+    /// came of the save's other steps. The level is stored by then, so the
+    /// next save finds it unchanged and does not judge: a model that could
+    /// not be scheduled, or a watcher that could not be restarted or
+    /// announced, left the waiting documents in review at a level that
+    /// calls them ready, until the level was changed twice more. The other
+    /// step's failure is still the one reported.
+    #[test]
+    fn a_save_whose_other_steps_fail_still_judges_at_the_new_level() {
+        for (step, failure) in [
+            ("schedule", "injected scheduler failure"),
+            ("restart", "injected watcher restart failure"),
+            ("announce", "injected intake event failure"),
+        ] {
+            let dir = scratch(&format!("review-level-{step}"));
+            let runtime = RecordingRuntime::new(dir.join("settings.json"));
+            runtime.store.save(&AppSettings::default()).unwrap();
+            let mut chosen = AppSettings {
+                machine_label: "Front desk".into(),
+                ..at(BALANCED)
+            };
+            match step {
+                "schedule" => {
+                    runtime.fail_schedule.store(true, Ordering::SeqCst);
+                    chosen.model_source = ModelSource::Hosted;
+                }
+                "restart" => {
+                    *runtime.fail_intake_restart.lock().unwrap() = Some(Box::new(|_| true));
+                }
+                _ => runtime.fail_intake_events.store(true, Ordering::SeqCst),
+            }
+            // The judging failing too does not hide the step that failed
+            // first.
+            runtime.fail_review_level.store(true, Ordering::SeqCst);
+
+            let refused = save_settings(&runtime, chosen).unwrap_err();
+            assert_eq!(refused.message, failure, "{step}");
+            assert_eq!(runtime.store.load().unwrap().review_level, BALANCED);
+            assert_eq!(
+                *runtime.review_levels.lock().unwrap(),
+                [(STRICT, BALANCED)],
+                "{step}: the queue was judged all the same"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// Putting back the settings stored before a failed SharePoint
+    /// activation puts their review level back, and the queue judges again
+    /// when that is another level than the one being replaced.
+    #[test]
+    fn restoring_settings_puts_the_review_level_back() {
+        let dir = scratch("review-level-restore");
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime.store.save(&at(BALANCED)).unwrap();
+
+        restore_sharepoint_settings(&runtime, &at(STRICT)).unwrap();
+        assert_eq!(runtime.store.load().unwrap().review_level, STRICT);
+        assert_eq!(*runtime.review_levels.lock().unwrap(), [(BALANCED, STRICT)]);
+
+        restore_sharepoint_settings(&runtime, &at(STRICT)).unwrap();
+        assert_eq!(
+            *runtime.review_levels.lock().unwrap(),
+            [(BALANCED, STRICT)],
+            "already strict"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The judging files nothing: what it made ready is the scheduler's to
+    /// file, so the save wakes the scheduler once the queue is judged. A
+    /// judging that made nothing ready wakes nobody, and neither does a
+    /// save that leaves the level alone.
+    #[test]
+    fn the_scheduler_is_woken_after_a_judging_that_made_something_ready() {
+        let dir = scratch("review-level-wake");
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime.store.save(&AppSettings::default()).unwrap();
+        let wakes = || runtime.wakes.lock().unwrap().clone();
+        let judgings = || runtime.review_levels.lock().unwrap().len();
+
+        // Nothing waits that balanced calls ready, and toward strict
+        // nothing ever becomes ready.
+        save_settings(&runtime, at(BALANCED)).unwrap();
+        save_settings(&runtime, at(STRICT)).unwrap();
+        assert_eq!(judgings(), 2);
+        assert!(wakes().is_empty(), "nothing became ready");
+
+        runtime.judging_makes_ready.store(true, Ordering::SeqCst);
+        save_settings(&runtime, at(BALANCED)).unwrap();
+        assert_eq!(judgings(), 3);
+        assert_eq!(wakes(), [3], "one wake, sent after the third judging");
+
+        // The level left alone: no judging, so nothing new to file.
+        save_settings(
+            &runtime,
+            AppSettings {
+                our_names: vec!["Contoso".into()],
+                ..at(BALANCED)
+            },
+        )
+        .unwrap();
+        assert_eq!(judgings(), 3);
+        assert_eq!(wakes(), [3]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A judging that fails says nothing of what it made ready before it
+    /// failed. The scheduler is woken all the same, and the judging's
+    /// failure is the one reported.
+    #[test]
+    fn a_judging_that_fails_still_wakes_the_scheduler() {
+        let dir = scratch("review-level-wake-after-failure");
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime.store.save(&AppSettings::default()).unwrap();
+        runtime.fail_review_level.store(true, Ordering::SeqCst);
+
+        let refused = save_settings(&runtime, at(BALANCED)).unwrap_err();
+        assert_eq!(refused.message, "injected queue judging failure");
+        assert_eq!(*runtime.wakes.lock().unwrap(), [1]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A scheduler that cannot be woken is reported as the save's other
+    /// failures are, after them, and takes back nothing: the level is
+    /// stored and the queue was judged at it, so what became ready is filed
+    /// at the scheduler's next look. With nothing made ready the save does
+    /// not ask for the scheduler at all.
+    #[test]
+    fn a_wake_that_fails_is_reported_and_takes_back_nothing() {
+        let dir = scratch("review-level-wake-refused");
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime.store.save(&AppSettings::default()).unwrap();
+        runtime.fail_schedule.store(true, Ordering::SeqCst);
+
+        save_settings(&runtime, at(BALANCED)).unwrap();
+        assert!(
+            runtime.wakes.lock().unwrap().is_empty(),
+            "nothing became ready, so no scheduler is needed"
+        );
+        save_settings(&runtime, at(STRICT)).unwrap();
+
+        runtime.judging_makes_ready.store(true, Ordering::SeqCst);
+        let refused = save_settings(
+            &runtime,
+            AppSettings {
+                our_names: vec!["Contoso".into()],
+                ..at(BALANCED)
+            },
+        )
+        .unwrap_err();
+        assert_eq!(refused.message, "injected scheduler failure");
+        assert_eq!(runtime.store.load().unwrap().review_level, BALANCED);
+        assert_eq!(
+            *runtime.review_levels.lock().unwrap(),
+            [(STRICT, BALANCED), (BALANCED, STRICT), (STRICT, BALANCED)],
+            "the queue was judged, and is not judged back"
+        );
+        assert_eq!(
+            *runtime.own_names.lock().unwrap().last().unwrap(),
+            ["Contoso".to_owned()],
+            "the rest of the save was applied"
+        );
+
+        // The judging failing first is the failure reported.
+        runtime.judging_makes_ready.store(false, Ordering::SeqCst);
+        save_settings(&runtime, at(STRICT)).unwrap();
+        runtime.fail_review_level.store(true, Ordering::SeqCst);
+        let refused = save_settings(&runtime, at(BALANCED)).unwrap_err();
+        assert_eq!(refused.message, "injected queue judging failure");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Putting settings back judges the queue after the restore's own wake
+    /// of the scheduler, so what that judging made ready gets a wake of its
+    /// own, and only then.
+    #[test]
+    fn restoring_settings_wakes_the_scheduler_for_what_the_level_made_ready() {
+        let dir = scratch("review-level-restore-wake");
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime.store.save(&at(STRICT)).unwrap();
+
+        restore_sharepoint_settings(&runtime, &at(BALANCED)).unwrap();
+        assert_eq!(*runtime.review_levels.lock().unwrap(), [(STRICT, BALANCED)]);
+        assert_eq!(
+            *runtime.wakes.lock().unwrap(),
+            [0],
+            "the restore's own wake, before the judging, and none after"
+        );
+
+        runtime.store.save(&at(STRICT)).unwrap();
+        runtime.judging_makes_ready.store(true, Ordering::SeqCst);
+        restore_sharepoint_settings(&runtime, &at(BALANCED)).unwrap();
+        assert_eq!(
+            *runtime.wakes.lock().unwrap(),
+            [0, 1, 2],
+            "the restore's own wake, then one after the second judging"
+        );
+
+        // A scheduler that cannot be woken for it is one more failure of
+        // the restore, reported with the rest.
+        runtime.store.save(&at(STRICT)).unwrap();
+        runtime.fail_schedule.store(true, Ordering::SeqCst);
+        let refused = restore_sharepoint_settings(&runtime, &at(BALANCED)).unwrap_err();
+        assert_eq!(
+            refused.message,
+            "STATE_CONFLICT: injected scheduler failure; \
+             STATE_CONFLICT: injected scheduler failure",
+            "the restore's own wake and the judging's"
+        );
+        assert_eq!(runtime.store.load().unwrap().review_level, BALANCED);
+
+        // So is a judging that fails.
+        runtime.store.save(&at(STRICT)).unwrap();
+        runtime.fail_schedule.store(false, Ordering::SeqCst);
+        runtime.fail_review_level.store(true, Ordering::SeqCst);
+        let refused = restore_sharepoint_settings(&runtime, &at(BALANCED)).unwrap_err();
+        assert_eq!(
+            refused.message,
+            "DATABASE_UNAVAILABLE: injected queue judging failure"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// A `SettingsRuntime` over a real settings file whose live effects are
 /// recorded instead of reaching Tauri. Shared by the settings and SharePoint
 /// activation tests so both drive the production application code.
@@ -15054,6 +15500,19 @@ pub(crate) mod test_runtime {
         /// Renaming the waiting documents fails, as a queue database that
         /// is briefly unavailable does. The names are still recorded.
         pub fail_own_names: AtomicBool,
+        /// Every change of review level the queue was told about, in
+        /// order: the level before and the level after.
+        pub review_levels: Mutex<Vec<(intern_engine::ReviewLevel, intern_engine::ReviewLevel)>>,
+        /// Judging the waiting documents again fails the same way. The
+        /// change is still recorded.
+        pub fail_review_level: AtomicBool,
+        /// Whether a judging that does not fail says it made documents
+        /// ready, which the scheduler is then woken to file.
+        pub judging_makes_ready: AtomicBool,
+        /// Every wake asked of the scheduler, also one it refused, by how
+        /// many changes of review level the queue had been told about by
+        /// then.
+        pub wakes: Mutex<Vec<usize>>,
         /// Every watcher restart, by whether it asked for a first look.
         pub intake_restarts: Mutex<Vec<bool>>,
         /// Every change of model the runtime was told about, in order.
@@ -15061,6 +15520,8 @@ pub(crate) mod test_runtime {
         /// The local model answers a change of model the way it does while
         /// another setup operation runs.
         pub setup_busy: AtomicBool,
+        /// The scheduler cannot be woken, as when its thread has stopped.
+        pub fail_schedule: AtomicBool,
         gate: Mutex<()>,
         activation: AtomicBool,
     }
@@ -15078,9 +15539,14 @@ pub(crate) mod test_runtime {
                 after_persist: Mutex::new(None),
                 own_names: Mutex::new(Vec::new()),
                 fail_own_names: AtomicBool::new(false),
+                review_levels: Mutex::new(Vec::new()),
+                fail_review_level: AtomicBool::new(false),
+                judging_makes_ready: AtomicBool::new(false),
+                wakes: Mutex::new(Vec::new()),
                 intake_restarts: Mutex::new(Vec::new()),
                 source_changes: Mutex::new(Vec::new()),
                 setup_busy: AtomicBool::new(false),
+                fail_schedule: AtomicBool::new(false),
                 gate: Mutex::new(()),
                 activation: AtomicBool::new(false),
             }
@@ -15174,6 +15640,14 @@ pub(crate) mod test_runtime {
         }
 
         fn schedule(&self) -> Result<(), CommandError> {
+            let judged = self.review_levels.lock().unwrap().len();
+            self.wakes.lock().unwrap().push(judged);
+            if self.fail_schedule.load(Ordering::SeqCst) {
+                return Err(Self::injected(
+                    "STATE_CONFLICT",
+                    "injected scheduler failure",
+                ));
+            }
             Ok(())
         }
 
@@ -15225,6 +15699,21 @@ pub(crate) mod test_runtime {
                 ));
             }
             Ok(())
+        }
+
+        fn review_level_changed(
+            &self,
+            from: intern_engine::ReviewLevel,
+            to: intern_engine::ReviewLevel,
+        ) -> Result<bool, CommandError> {
+            self.review_levels.lock().unwrap().push((from, to));
+            if self.fail_review_level.load(Ordering::SeqCst) {
+                return Err(Self::injected(
+                    "DATABASE_UNAVAILABLE",
+                    "injected queue judging failure",
+                ));
+            }
+            Ok(self.judging_makes_ready.load(Ordering::SeqCst))
         }
 
         fn managed_sharepoint(

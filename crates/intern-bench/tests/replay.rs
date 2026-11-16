@@ -19,7 +19,7 @@ use intern_bench::{
 };
 use intern_engine::{
     DateRole, DigestBudget, DocumentSource, Evidence, ModelProposal, ModelRequest, ModelTimings,
-    PageOrigin, PartyRelation, Pipeline, SourcePage, distill, source_from_text,
+    PageOrigin, PartyRelation, Pipeline, ReviewLevel, SourcePage, distill, source_from_text,
 };
 use serde_json::{Value, json};
 
@@ -701,6 +701,85 @@ fn a_replay_that_cannot_score_everything_never_writes_the_baseline() {
     assert_eq!(exit, EXIT_REGRESSED);
     assert_eq!(report.record("scan-delta").unwrap().status, "stale_fixture");
     assert_eq!(std::fs::read(bench.path("baseline.json")).unwrap(), before);
+}
+
+/// A replay says which review level it was judged at only when that is not
+/// strict: at strict, asked for or not, the report is written as every
+/// report before the levels was. No baseline is written at another level,
+/// and a comparison of two levels says that is what it compares.
+#[test]
+fn a_replay_judged_at_balanced_says_so_and_one_at_strict_is_written_as_before() {
+    let bench = Bench::new();
+    let scorable = vec!["invoice-alpha".to_owned(), "scan-delta".to_owned()];
+    let at = |output: &str, level: Option<ReviewLevel>| {
+        bench
+            .replay(output, |options| {
+                options.only = scorable.clone();
+                if let Some(level) = level {
+                    options.engine.review_level = level;
+                }
+            })
+            .1
+    };
+    let strict = at("strict.json", None);
+    let asked = at("asked.json", Some(ReviewLevel::Strict));
+    let balanced = at("balanced.json", Some(ReviewLevel::Balanced));
+    let written = |name: &str| -> Value {
+        serde_json::from_slice(&std::fs::read(bench.path(name)).unwrap()).unwrap()
+    };
+    assert!(written("strict.json").get("review_level").is_none());
+    assert!(written("asked.json").get("review_level").is_none());
+    assert_eq!(written("balanced.json")["review_level"], "balanced");
+    // Strict asked for is strict: every record reads the same.
+    for (default, asked) in strict.records.iter().zip(&asked.records) {
+        assert_eq!(default.readiness, asked.readiness);
+        assert_eq!(default.scores, asked.scores);
+    }
+    assert_eq!(balanced.review_level, ReviewLevel::Balanced);
+    assert_eq!(strict.review_level, ReviewLevel::Strict);
+
+    // Balanced only adds to what strict calls ready.
+    let ready = |report: &Report| {
+        report
+            .records
+            .iter()
+            .filter(|record| record.readiness.as_deref() == Some("ready"))
+            .map(|record| record.id.clone())
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        ready(&strict)
+            .iter()
+            .all(|id| ready(&balanced).contains(id))
+    );
+
+    let page = markdown::render(&balanced);
+    assert!(page.contains("- **Review level:** balanced"), "{page}");
+    assert!(!markdown::render(&strict).contains("Review level"));
+
+    let levels = |before: &Report, after: &Report| {
+        compare::compare(before, after)
+            .notes
+            .into_iter()
+            .filter(|note| note.contains("review levels"))
+            .collect::<Vec<_>>()
+    };
+    assert!(levels(&strict, &asked).is_empty());
+    let noted = levels(&strict, &balanced);
+    assert_eq!(noted.len(), 1);
+    assert!(noted[0].contains("(strict and balanced)"), "{noted:?}");
+
+    let mut options = bench.options("refused.json");
+    options.only = scorable.clone();
+    options.engine.review_level = ReviewLevel::Balanced;
+    options.write_baseline = Some(bench.path("baseline.json"));
+    let refused = run(options).unwrap_err();
+    assert!(
+        refused.contains("--write-baseline is for runs at the strict review level"),
+        "{refused}"
+    );
+    assert!(!bench.path("baseline.json").exists());
+    assert!(!bench.path("refused.json").exists());
 }
 
 #[test]

@@ -139,6 +139,13 @@ fn header(out: &mut String, report: &Report) {
         let _ = write!(corpus, " · only {}", report.corpus.only.join(", "));
     }
     let _ = writeln!(out, "- **Corpus:** {corpus}");
+    if !report.review_level.is_strict() {
+        let _ = writeln!(
+            out,
+            "- **Review level:** {} · readiness, unsafe ready, needless review and the review rate are judged at it, not at strict",
+            report.review_level.as_str()
+        );
+    }
     if let Some(wall) = report.wall_ms {
         let _ = writeln!(
             out,

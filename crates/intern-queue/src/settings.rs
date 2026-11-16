@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use intern_engine::{HostedProvider, ModelPreference};
+use intern_engine::{HostedProvider, ModelPreference, ReviewLevel};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -98,6 +98,15 @@ pub struct AppSettings {
     pub start_minimized: bool,
     #[serde(default)]
     pub automatic_rename: bool,
+    /// Which finished readings count as ready: shown as ready, filed by
+    /// "Rename all ready", and filed with no person when automatic renaming
+    /// is on ([`intern_engine::readiness`]). A file that does not say, every
+    /// file written before the levels, is strict, which is what Intern did
+    /// then. So is a file that says something this build does not know:
+    /// strict files the least on its own, and the field is reported as not
+    /// understood ([`LoadedSettings::unreadable`]).
+    #[serde(default)]
+    pub review_level: ReviewLevel,
     #[serde(default)]
     pub intake_folder: String,
     #[serde(default)]
@@ -257,6 +266,8 @@ impl SettingsStore {
         let Value::Object(fields) = document else {
             return Err(settings_invalid());
         };
+        // Looked at before `fields` is taken apart: see `unknown_review_level`.
+        let unknown_level = unknown_review_level(&fields);
         let mut loaded = match serde_json::from_value::<AppSettings>(Value::Object(fields.clone()))
         {
             Ok(settings) => Ok(LoadedSettings {
@@ -265,6 +276,9 @@ impl SettingsStore {
             }),
             Err(_) => keep_what_parses(fields),
         }?;
+        if unknown_level {
+            loaded.unreadable.push(REVIEW_LEVEL_FIELD.to_owned());
+        }
         if self.local_analysis_only {
             loaded.settings.model_source = ModelSource::Local;
         }
@@ -306,6 +320,24 @@ fn io_error(_: std::io::Error) -> PipelineError {
 
 fn settings_invalid() -> PipelineError {
     PipelineError::new("SETTINGS_INVALID", "settings are not valid")
+}
+
+/// The settings file's name for [`AppSettings::review_level`].
+const REVIEW_LEVEL_FIELD: &str = "reviewLevel";
+
+/// Whether the file gives a review level this build does not know.
+///
+/// Unlike every other field, the level reads without an error whatever the
+/// file says: an unknown one is strict (see [`ReviewLevel`]'s reader), so a
+/// file a later build wrote never opens at a looser level than it can be
+/// understood to ask for. That reading says nothing by itself, and a person
+/// who believes they chose another level should hear that theirs was not
+/// understood, as for any other field. So the field is named among the
+/// unreadable ones here.
+fn unknown_review_level(fields: &Map<String, Value>) -> bool {
+    fields
+        .get(REVIEW_LEVEL_FIELD)
+        .is_some_and(|stored| stored.as_str().and_then(ReviewLevel::parse).is_none())
 }
 
 /// Reads a settings document a field at a time, keeping every field that is
