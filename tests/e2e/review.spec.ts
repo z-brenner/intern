@@ -642,8 +642,7 @@ for (const size of [WIDE, NARROW]) for (const how of ['read again', 'filed elsew
       await expect(kept).toBeFocused();
       await expect(kept).toHaveValue(typed);
       await expect(page.getByRole('group', { name: 'Confirm removal' })).toHaveCount(0);
-      // No outcome of an action: nothing was decided. Only a document filed elsewhere is said to be, in a toast of its own.
-      await expect(page.locator(how === 'filed elsewhere' ? '.toasts > :not([aria-label="Renamed without you"])' : '.toasts')).toHaveCount(0);
+      await expect(page.locator('.toasts')).toHaveCount(0);
       expect(await otherRows(page)).toEqual(before);
     };
 
@@ -670,11 +669,7 @@ for (const size of [WIDE, NARROW]) for (const how of ['read again', 'filed elsew
     // In the panel, which still shows the document.
     await expect(panel).toContainText(LEASE);
     await expect(panel.getByRole('group', { name: 'Kept from before this document changed' })).toBeVisible();
-    if (how === 'filed elsewhere') {
-      // Filed under the name Intern proposed, with nobody here deciding it: the window says so.
-      await expect(page.getByRole('group', { name: 'Renamed without you' }).locator('p')).toHaveText(`${LEASE} was renamed under Intern's proposal. What you typed for it was not filed, and is kept in its details.`);
-      return;
-    }
+    if (how === 'filed elsewhere') return;
 
     // The new reading is shown as it is, beside what was typed: the caret is not in it, and nothing typed goes into it.
     await queueByItself(page, 'new reading');

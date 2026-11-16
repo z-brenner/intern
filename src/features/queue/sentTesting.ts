@@ -15,7 +15,7 @@ export const sentRow = (id: number, originalFilename: string, status: string, mo
   id: String(id), originalFilename, status,
   proposedFilename: null, confidence: null, description: null, evidence: null, reason: null, errorCode: null,
   undoable: false, approved: false, proposalRevision: null, reconciliation: null,
-  filedPath: null, filedName: null, keptOriginal: false, parked: false,
+  filedPath: null, filedName: null, keptOriginal: false, renamedWithoutApproval: false, parked: false,
   ...more,
 });
 

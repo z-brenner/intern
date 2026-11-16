@@ -41,8 +41,8 @@ interface Props {
  * reliably spoken. A success or progress is announced once through the app's
  * "Action status" and is not read a second time from here.
  *
- * One that came by itself (`byItself`: a document renamed with nobody in
- * this window deciding it) can come while nobody is looking, so it does not
+ * One that came by itself (`byItself`: a document Intern renamed with
+ * nobody approving it) can come while nobody is looking, so it does not
  * leave after ten seconds. And it can come under a pointer at rest, on its
  * way to a row of the queue: so the button that dismisses it is marked as a
  * control that acts, as Undo always is, and a press that lands on either

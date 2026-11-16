@@ -89,17 +89,17 @@ test('at Strict with automatic renaming off, a save that leaves the level as it 
 /*
   The demo does not rename anything by itself: automatic renaming is not
   acted out there. `?queue=changes` is the demo's queue with
-  `window.internQueue` to change it as the backend does, and it can file a
-  document as if from somewhere else. That is what is played here: the
-  lease, with a name typed for it, is filed under the name Intern proposed
-  with nobody in this window deciding it. The press on Undo is a real one,
-  at a place, made the moment the message comes.
+  `window.internQueue` to change it as the backend does. That is what is
+  played here: the lease, with a name typed for it, is filed under the name
+  Intern proposed, marked as the backend marks a rename made with nobody's
+  approval (renamedWithoutApproval). The press on Undo is a real one, at a
+  place, made the moment the message comes.
 */
 type QueueByItself = { change(id: string, change: Record<string, unknown>): void };
 const filedByItself = (page: Page) => page.evaluate(() => {
   const queue = (window as unknown as { internQueue: QueueByItself }).internQueue;
   const name = '2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf';
-  queue.change('lease', { status: 'completed', filedName: name, filedPath: `C:\\Intern\\Output\\${name}`, keptOriginal: false, undoable: true });
+  queue.change('lease', { status: 'completed', filedName: name, filedPath: `C:\\Intern\\Output\\${name}`, keptOriginal: false, undoable: true, renamedWithoutApproval: true });
   (window as unknown as { changedAt: number }).changedAt = performance.now();
 });
 const sinceItChanged = (page: Page) => page.evaluate(() => performance.now() - (window as unknown as { changedAt: number }).changedAt);
@@ -110,7 +110,7 @@ test('a document with a name typed for it, renamed with nobody here deciding it,
   const renamed = page.getByRole('group', { name: 'Renamed without you' });
   const words = renamed.locator('p');
   const undo = renamed.getByRole('button', { name: `Undo the rename of ${LEASE}` });
-  const said = `${LEASE} was renamed under Intern's proposal. What you typed for it was not filed, and is kept in its details.`;
+  const said = `${LEASE} was renamed under Intern's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.`;
   for (let attempt = 1; ; attempt += 1) {
     if (attempt > 1) await page.evaluate(() => window.localStorage.clear());
     await page.goto('/?queue=changes');
@@ -154,10 +154,10 @@ test('a document with a name typed for it, renamed with nobody here deciding it,
   ready, when automatic renaming is on: on the desktop the backend files it
   on the same pass, so a read of the queue seldom shows it ready between.
   Played here with the same harness: the lease is read again, then filed,
-  with no read of it waiting between. The window never saw the name it was
-  filed under proposed, so it says so: from somewhere else.
+  with no read of it waiting between. The backend marks the rename all the
+  same, so the window says it.
 */
-test('a document with a name typed for it, read again by itself and renamed before any read shows it waiting, is said: from somewhere else', async ({ page }) => {
+test('a document with a name typed for it, read again by itself and renamed before any read shows it waiting, is said', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/?queue=changes');
   const panel = await openDetails(page, LEASE);
@@ -168,7 +168,7 @@ test('a document with a name typed for it, read again by itself and renamed befo
   await expect(page.locator('.toasts')).toHaveCount(0);
   await filedByItself(page);
   const renamed = page.getByRole('group', { name: 'Renamed without you' });
-  await expect(renamed.locator('p')).toHaveText(`${LEASE} was renamed from somewhere else. What you typed for it was not filed, and is kept in its details.`);
+  await expect(renamed.locator('p')).toHaveText(`${LEASE} was renamed under Intern's proposal, without anyone approving it. What you typed for it was not filed, and is kept in its details.`);
   await expect(renamed.getByRole('button', { name: `Undo the rename of ${LEASE}` })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Action result' })).toHaveCount(0);
 });

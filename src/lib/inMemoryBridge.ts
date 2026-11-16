@@ -539,8 +539,12 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   const queueChanged = () => queueListeners.forEach((listener) => listener({ type: 'changed' }));
   // Long enough to see the item wait before it is back in review.
   const analysisDelayMs = options.analysisDelayMs ?? 800;
-  /** What review leaves behind, by queue status: no proposal while waiting, no failure once settled. */
-  const settledFields = ({ stage: _stage, progress: _progress, reason: _reason, errorCode: _errorCode, parked: _parked, ...rest }: QueueItem): QueueItem => rest;
+  /**
+   * What review leaves behind, by queue status: no proposal while waiting, no
+   * failure once settled. Nor a mark `byItself` gave the row: a filing that
+   * settles here is the person's, and the backend marks none of those.
+   */
+  const settledFields = ({ stage: _stage, progress: _progress, reason: _reason, errorCode: _errorCode, parked: _parked, renamedWithoutApproval: _renamed, ...rest }: QueueItem): QueueItem => rest;
   // What an approval leaves: the backend clears the proposal's reasons with
   // it (approve_user_edit), so the codes behind them go too. A document a
   // person approved is renamed with no note left on it, whatever it carried.
@@ -590,9 +594,11 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // Strict is the queue as it was. Automatic renaming is not acted out, as
   // it never has been here: nothing in the demo is renamed by itself. So the
   // window says what a level change did here (levelChanged), from the rows
-  // this re-judging leaves; but it has no rename by itself over what was
-  // typed to say (renamedByItself), and none is made up for it. Only
-  // `byItself` files a document as from somewhere else.
+  // this re-judging leaves; but no row here is marked renamed with nobody's
+  // approval (renamedWithoutApproval), so the window has no such rename to
+  // say (renamedByItself), and none is made up for it. A copy filed here is
+  // not marked either: the backend's copy record is approved by the queue
+  // itself. Only `byItself` can mark a row, changing it as the backend does.
   const readings = new Map(Object.entries(options.readings ?? (options.items ? {} : seedReadings)));
   const waitedWith = new Map<string, Pick<QueueItem, 'reason' | 'errorCode' | 'reasonCodes'>>();
   /** A waiting row made ready at Balanced when its codes allow it; otherwise as it is. */
@@ -921,7 +927,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       const item = find(id);
       if (item.status !== 'completed') throw { code: 'INVALID_TRANSITION', message: 'only completed operations can be undone' };
       if (!item.undoable) throw { code: 'STATE_CONFLICT', message: 'completed item has no durable operation receipt' };
-      const { filedName: _filedName, filedPath: _filedPath, keptOriginal: _keptOriginal, ...rest } = item;
+      // Back to waiting: a mark `byItself` gave the filing goes with it.
+      const { filedName: _filedName, filedPath: _filedPath, keptOriginal: _keptOriginal, renamedWithoutApproval: _renamed, ...rest } = item;
       // A copy back where it came from waits as the duplicate it is, and
       // nothing moves it again on its own; Process anyway reads it.
       if (copyIds.has(id)) {

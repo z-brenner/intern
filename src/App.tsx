@@ -50,7 +50,7 @@ import { accuracyStatus } from './features/settings/LocalModel';
 import { typedWaiting } from './features/settings/savingOverTyped';
 import { levelChanged, levelChangedText } from './features/settings/levelChanged';
 import { renamedByItselfText, stillSo, undoableRenames, watchRenames, withRenames } from './features/review/renamedByItself';
-import type { RenameSeen, Waiting } from './features/review/renamedByItself';
+import type { RenameSaid } from './features/review/renamedByItself';
 import { reviewLevelOf } from './lib/reviewLevel';
 import type { AddReport, AppSettings, QueueItem, QueueView, SetupState } from './types';
 
@@ -223,19 +223,13 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const byThePerson = () => setOwn((now) => ({ ...now, seq: now.seq + 1 }));
   // The documents the window decided since a Settings save began, for
   // saying what a level change did (levelChanged): a decision of the
-  // person's is not the level's doing. Nothing is said of a rename by
-  // itself (watchRenames) of a document while a decision of the person's
-  // is carried out for it, but it stays watched until the backend answers:
-  // the backend can refuse the decision because the document is being
-  // renamed by itself at that moment, and that rename is then said. Once
-  // the backend accepted it, whatever becomes of the document is the
-  // decision's, and it is no longer watched (unlessRefused). Rename all
-  // ready and Undo stop watching at once (decidedHere): the one decides
-  // only documents with nothing typed for them, the other only renamed
-  // ones, which are not watched.
+  // person's is not the level's doing. Every decision is recorded here:
+  // through `deciding` while it is carried out (approve, keep, remove, read
+  // again, retry, cancel, Undo from Details), and through `decidedHere` for
+  // each document Rename all ready approves and each rename a toast's Undo
+  // puts back.
   const decidedSinceSave = useRef(new Set<string>());
-  const renameWatch = useRef(new Map<string, Waiting>());
-  const decidedHere = (id: string) => { decidedSinceSave.current.add(id); renameWatch.current.delete(id); };
+  const decidedHere = (id: string) => { decidedSinceSave.current.add(id); };
   const deciding = (id: string) => { decidedSinceSave.current.add(id); setOwn((now) => ({ ...now, deciding: id })); };
   const decided = (id: string) => setOwn((now) => now.deciding === id ? { seq: now.seq + 1 } : now);
   // A decision the backend refused is not what takes a field. The document
@@ -243,10 +237,8 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // is refused, the queue read for the refusal shows the fields gone, and
   // that is the document changing by itself. So `deciding` ends with the
   // refusal, before that read, and `decided` then has nothing to mark.
-  // A decision the backend accepted is what becomes of the document from
-  // then on, so it is no longer watched for a rename by itself.
   const unlessRefused = (id: string, run: () => Promise<void>) => async () => {
-    try { await run(); renameWatch.current.delete(id); }
+    try { await run(); }
     catch (error) { setOwn((now) => now.deciding === id ? { ...now, deciding: undefined } : now); throw error; }
   };
   // The queue table's active cell and selected cells, in a store beside the
@@ -278,41 +270,38 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const toastKey = useRef(0);
   const showToast = (kind: 'progress' | 'done', text: string, undo?: string[]) => setToast({ key: ++toastKey.current, kind, text, undo });
   // Documents with a name or a description typed here and not filed that
-  // were seen renamed, or being renamed, while the window was not deciding
-  // them (watchRenames): said in a toast of their own, above the one for
-  // the person's own actions. In that one an action of theirs would have
+  // the backend says Intern renamed with nobody's approval, seen happen
+  // (watchRenames): said in a toast of their own, above the one for the
+  // person's own actions. In that one an action of theirs would have
   // replaced it, or it theirs, with its Undo, whenever the two came close
   // together; and it stays until dismissed, since nobody may be looking
   // when it comes. A new key each time what it says changes: its Undo is
   // then a new button, which a press made the moment it changed does not
   // take (aimedPress), so a press meant for one rename does not undo two.
-  const [renamedHere, setRenamedHere] = useState<{ key: number; renames: readonly RenameSeen[] }>({ key: 0, renames: [] });
+  // `unfiledSeen`: the documents last seen not yet filed, the only ones a
+  // rename of can be seen happen.
+  const unfiledSeen = useRef(new Set<string>());
+  const [renamedHere, setRenamedHere] = useState<{ key: number; renames: readonly RenameSaid[] }>({ key: 0, renames: [] });
   useEffect(() => {
-    const look = watchRenames(renameWatch.current, items, { typed: typedOver, decidedHere: (id) => id === own.deciding });
-    renameWatch.current = look.watched;
+    const look = watchRenames(unfiledSeen.current, items, typedOver);
+    unfiledSeen.current = look.unfiled;
     const { seen } = look;
-    // A rename said that the queue no longer shows so, by its status alone,
-    // is taken out for good: undone, cleared from the history, or gone.
-    // Only hidden (stillSo), it would be said again once the document is
-    // completed again, and that can be the person's own rename: an approval
-    // that stopped halfway keeps what was typed until Check again finishes
-    // it. An Undo the backend refused leaves the document completed, so what
-    // was said of it stays.
-    const noLongerSo = renamedHere.renames.filter((rename) => stillSo([rename], items, () => true).length === 0).map(({ id }) => id);
-    const back = [...look.back, ...noLongerSo];
-    if (!seen.length && !back.length) return;
-    setRenamedHere((said) => { const renames = withRenames(said.renames, seen, back); return renames === said.renames ? said : { key: said.key + 1, renames }; });
+    // A rename said that the queue no longer shows so, by itself, is taken
+    // out for good: undone, cleared from the history, or gone. Only hidden
+    // (stillSo), it would be shown again if the document were renamed by
+    // itself again, without that rename being seen happen. An Undo carried
+    // out passes through being renamed, which keeps it, so one the backend
+    // refuses leaves what was said as it was.
+    const gone = renamedHere.renames.filter((rename) => stillSo([rename], items, () => true).length === 0).map(({ id }) => id);
+    if (!seen.length && !gone.length) return;
+    setRenamedHere((said) => { const renames = withRenames(said.renames, seen, gone); return renames === said.renames ? said : { key: said.key + 1, renames }; });
     // Announced through the app's Action status as well, as every outcome
-    // is, each time a rename is seen: being renamed, and again once renamed.
-    if (seen.length) setActionMessage(renamedByItselfText(stillSo(withRenames(renamedHere.renames, seen, back), items, typedOver)));
-    // Looked at again when a decision ends, as well: the document of one the
-    // backend refused is still watched, and what became of it meanwhile is
-    // seen then. It may still wait, or it may have been renamed by itself,
-    // which can be why the decision was refused.
-  }, [items, own.deciding]);
+    // is, once: when a rename is seen.
+    if (seen.length) setActionMessage(renamedByItselfText(stillSo(withRenames(renamedHere.renames, seen, gone), items, typedOver)));
+  }, [items]);
   // Only while what it says is so, with what was typed still kept in the
-  // document's details (stillSo), and Undo only for the renames the window
-  // saw complete.
+  // document's details (stillSo), and Undo only for the renames still
+  // completed.
   const renamedShown = stillSo(renamedHere.renames, items, typedOver);
   const renamedUndo = undoableRenames(renamedShown, items);
   const dismissRenamed = () => setRenamedHere((said) => ({ key: said.key + 1, renames: [] }));
@@ -1307,7 +1296,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       */}
       {(toast || actionError || renamedShown.length > 0) && <div className="toasts">
         {/* First, so that it comes above the outcome of an action and moves nothing of it. */}
-        {renamedShown.length > 0 && <Toast byItself key={`${renamedHere.key} ${renamedShown.map(({ id, done }) => `${id}${done ? '' : '…'}`).join(' ')} ${renamedUndo.join(' ')}`} tone="success" label="Renamed without you"
+        {renamedShown.length > 0 && <Toast byItself key={`${renamedHere.key} ${renamedShown.map(({ id }) => id).join(' ')} ${renamedUndo.join(' ')}`} tone="success" label="Renamed without you"
           action={renamedUndo.length ? { label: 'Undo', name: renamedUndo.length === 1 ? `Undo the rename of ${renamedShown.find(({ id }) => id === renamedUndo[0])!.name}` : `Undo the renames of these ${renamedUndo.length} documents`, disabled: actionPending, onClick: () => { const ids = renamedUndo; dismissRenamed(); void undoRenames(ids); } } : undefined}
           onDismiss={dismissRenamed}>{renamedByItselfText(renamedShown)}</Toast>}
         {toast && <Toast key={toast.key} tone={toast.kind === 'progress' ? 'progress' : 'success'} label={toast.kind === 'progress' ? 'Action progress' : 'Action result'}
