@@ -168,6 +168,25 @@ is one of `TYPE_MISSING`, `TYPE_UNSUPPORTED`, `TYPE_INFERRED`, `DESCRIPTION_UNSU
 every party reason, `DESCRIPTION_INVALID`, `PARSER_WARNING`, the quick model's hold and the
 queue's own holds keep a document waiting at both levels.
 
+## The build agrees with the analysis
+
+The rule is written once, in `crates/intern-engine/src/review_level.rs`, and the bench applies
+it with `intern-bench run --review-level balanced`. Two things were added while it was
+verified, and neither changes a document counted here: a type that is "Document" with a file
+extension after it, or with any ending of a period and one to five letters or digits, counts
+as no type; and at balanced the queue looks once more for a near duplicate before it files a
+name nobody approved, so two scans of one document made ready together are not both filed.
+
+- **Development, 1,224 replayed readings** (both models, every recording): the built bench's
+  ready set equals the analysis's expected set for each of 20 reports at each level, 121
+  ready at strict and 580 at balanced. Its default report equals alpha.19's in every record
+  field apart from measured timings.
+- **Held-out, 109 documents**, replayed by the coordinator through the integrated build at a
+  0.8 gate: ready at strict 3 and 4, at balanced 26 and 19, document for document the sets
+  the analysis above counted, and every name and reason identical to alpha.19's. So the 45
+  filed at balanced, 7 of them really wrong, are what this build would file from those
+  recordings.
+
 ## What this does not tell you
 
 - **Almost nothing here is corporate paper.** The documents are mostly public letters,
@@ -184,8 +203,13 @@ queue's own holds keep a document waiting at both levels.
   right, and at least 5 of those 10 state something false (the wrong date again, or the
   sides the wrong way round).
 - **The queue's side** (learned spellings, near-duplicates, name clashes, a level changed
-  with documents waiting) is covered by tests, not by this measurement: the bench has no
-  queue.
+  with documents waiting) is covered by tests and by adversarial probes, not by this
+  measurement: the bench has no queue. The probes ran two threads, a Settings save and the
+  scheduler, over thousands of pairs of scans, and found both scans filed in none once the
+  save stopped filing by itself.
+- **Same-day documents from one template** (option grants, consents signed the same day)
+  look like scans of one document to the near-duplicate check: at balanced, as at strict
+  when they are read with automatic renaming on, the first is filed and the rest wait.
 - A date that comes from a spreadsheet's `TODAY()` cannot be seen in a replay of a recording
   made before the worker reported formulas; one development document is counted as held on
   the strength of the code, not of a run.

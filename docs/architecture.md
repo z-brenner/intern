@@ -542,6 +542,115 @@ Each is deterministic, unit-tested against the corpus's own date lines and
 titles, and never invents a fact: a role, a type, or a relation is inferred
 only from text the validation has already found in the document.
 
+### The review level
+
+Everything above says what the engine doubts about a reading: each doubt is a
+review reason, and the engine's own status is ready only when it raised none.
+A review level is applied on top of that and changes neither. It says which
+readings are shown as ready, which Rename all ready renames, and which are
+renamed with no person when automatic renaming is on.
+`review_level::readiness` in intern-engine is the only place the rule is
+written. The queue asks it for every reading it stores (`record_for`) and the
+benchmark for every reading it scores (`intern-bench run --review-level`).
+
+* **`strict`**, the default: the engine's own status, exactly, as in every
+  release before the levels. Settings with no `reviewLevel`, or with a value
+  this build does not know, are strict; an unknown value is also named in the
+  notice that says which settings could not be read.
+* **`balanced`**: a reading strict holds is ready when all of these are true.
+  1. It has a date and its name starts with it.
+  2. Every reason on it is one of `TYPE_MISSING`, `TYPE_UNSUPPORTED`,
+     `TYPE_INFERRED`, `DESCRIPTION_UNSUPPORTED` and `LOW_CONFIDENCE`. The
+     list names what does not hold a reading, so everything else does: every
+     date reason, every party reason, `DESCRIPTION_INVALID`,
+     `PARSER_WARNING`, the model's own request for review, the quick model's
+     `FAST_MODEL_READING`, and any reason added after this was written.
+  3. A `LOW_CONFIDENCE` on it is there for the token probabilities only. A
+     reading whose model rated itself below `READY_CONFIDENCE`, or that
+     stores no reply to read that from, waits.
+  4. It has a document type. A name that would say "Document" waits, also
+     when the type is that word with a file extension after it.
+  5. A title did not stand in for a type the document did not support:
+     `TYPE_UNSUPPORTED` with `TYPE_INFERRED` and without `TYPE_MISSING`
+     waits.
+
+A level takes no reason off a reading. At balanced a ready record carries its
+reasons, and the window shows them as notes: "Ready with a note", and
+"Completed with a note" once Intern has renamed the document by itself. A
+person's approval clears the reasons, as it always has, so "Completed with a
+note" marks exactly the names nobody looked at.
+
+What a level does not decide:
+
+* The queue's own holds stand at both levels: a near duplicate, a learned
+  spelling nobody has checked, a name with no leading date at filing, a
+  changed file, an uploader that could not be verified, a document that could
+  not be read.
+* The quick model's readings wait at both levels.
+* The quick-then-accurate cascade (`tiers::escalation_with`) goes on deciding
+  by the engine's own status, so the level never changes which model reads a
+  document.
+* A recording, a stored reading and the CI replay gates see the same status
+  and the same reasons as before. The bench's default is strict and its
+  report says its level only when it is not.
+
+**Changing the level.** A Settings save that changes the level tells the
+queue (`Pipeline::review_level_changed`), whatever the save's other steps
+did. Nothing is read again: each waiting document is judged from its stored
+reading. The save renames nothing itself. When the judging made a document
+ready, or failed part-way, it wakes the scheduler, which renames what
+automatic renaming would rename after any reading, one document at a time
+under the run lock. So every name nobody approved is looked at and filed on
+one thread, in order, and a Settings save returns once the queue is judged,
+however large the backlog. A pass that is reading a backlog files only
+approvals between documents, so what a save made ready meanwhile is renamed
+by the pass after the backlog; nothing is renamed while the queue is paused
+or no model is ready to read.
+
+* Toward balanced, a waiting document becomes ready only where the level is
+  what changes the answer and its record waits on nothing but its reading. A
+  document in review for another reason stays there. Its revision does not
+  move, so the queue keeps a reviewer's place.
+* Toward strict, a ready document nobody approved whose reading strict holds
+  goes back to review, and its revision moves, as for anything sent to
+  review. This is also a standing guard (`held_for_review_level`): before
+  every filing without approval, on each scheduler pass, when the queue
+  opens and on recovery. Settings that cannot be read count as strict there.
+  A document already renamed stays renamed.
+* At balanced, two scans of one document are not both renamed with no
+  person. A reading is held as a near duplicate when it is stored, against
+  the filings there are then. A level can make two waiting scans ready
+  before either is filed (the queue paused, another document being read,
+  automatic renaming off), so at balanced the same look is made again at
+  filing (`held_as_near_duplicate`) for every record nobody approved: the
+  second scan waits as `NEAR_DUPLICATE`, naming the first. Which scan is
+  kept is the one the queue reaches first. At strict that look is not made
+  and filing is as released: two scans strict calls ready, both waiting
+  while automatic renaming is off, are both filed when it is turned on. A
+  name a person approved is filed whatever it repeats, at both levels.
+
+**Why strict is the default.** Balanced was designed on the development
+documents, fixed, and read once on two held-out sets under a bar written down
+first: no more than one in ten of the names it renames by itself really
+wrong. It renamed 45 of 109 where strict renamed 7, and 7 of the 45 were
+really wrong (5 read by hand). It missed the bar, so it is a choice and not
+the default, and it was not tuned afterwards
+([`bench/reports/review-levels-2026-11`](../bench/reports/review-levels-2026-11/README.md)).
+Both held-out sets have now been read under these levels: a change to a
+level, or a new one, has to be confirmed on a new set.
+
+What it costs and what is left. At balanced every filing nobody approved
+makes one more near-duplicate lookup; with a shared filed index each lookup
+reads the index's markers. A judging that itself fails (the queue's database
+unavailable) is reported and not tried again by the next save; choosing the
+other level and back judges again, and nothing the level holds is filed
+meanwhile. A release before the levels treats a ready document with a note
+as ready: choose Strict before going back to one. The queue does not know
+what a person typed in the review panel and did not file. The window warns
+above Save when a save would let Intern rename such a document
+(`src/features/settings/savingOverTyped.ts`), and after the rename keeps
+what was typed beside the document, read-only.
+
 ## The filename
 
 ```text

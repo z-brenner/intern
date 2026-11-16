@@ -313,8 +313,8 @@ Intern has one way in: a document is processed because it is in the **Queue
 folder**, which Intern always watches, and it is filed into the **output
 folder**. Documents that appear in the Queue folder — put there in Explorer,
 synced down by OneDrive, or copied in by a drop — are analyzed and, once
-approved (or automatically, if you enable high-confidence renames), moved to
-the Completed folder under their new name.
+approved (or by Intern itself, if you turn on **Automatically rename ready
+documents**), moved to the Completed folder under their new name.
 
 ### Choosing the folders
 
@@ -460,6 +460,60 @@ before they can rename anything.
 
 Full details, thresholds, and measurements are in
 [`docs/architecture.md`](docs/architecture.md).
+
+### Which documents are ready
+
+Settings, under **Naming and filing**, has a choice of two levels. The level
+decides which documents are ready: the ones **Rename all ready** renames, and
+the ones Intern renames by itself when **Automatically rename ready
+documents** is on.
+
+- **Strict**, the default and what every earlier release did: a document is
+  ready only when every check passes.
+- **Balanced**: a document can also be ready when the only doubts are about
+  its type or its description, or when the model was unsure of the words it
+  read. It still waits for you when Intern could not confirm its date or a
+  party from the document, when its name would have no document type, when
+  the quick model read it, or when Intern could not read it. The queue's own
+  holds stand at both levels: a near duplicate, a spelling you have not
+  checked, a file that changed.
+
+What Balanced costs, measured on 109 public documents nobody had tuned
+anything on: it renamed 45 by itself where Strict renamed 7, and 7 of the 45
+names were really wrong (5 when read by hand): five named the wrong party,
+mostly who a document is from or to, one a date that was not the document's,
+one the wrong kind of document. Strict renamed none really wrong.
+The bar written down before that test was no more than one in ten, so
+Balanced is a choice and not the default. Almost none of those documents are
+corporate records, and how Balanced does on yours has not been measured. The
+report is [`bench/reports/review-levels-2026-11`](bench/reports/review-levels-2026-11/README.md).
+
+A ready document with a doubt says so: its status is **Ready with a note**,
+and Details shows the note first. Once Intern has renamed it by itself it is
+**Completed with a note**, and Completed has a **with a note** filter that
+lists exactly those, so the names nobody approved can be found and checked
+later. Approving a name, one at a time or with Rename all ready, clears its
+notes.
+
+Changing the level judges the documents waiting in the queue again from what
+Intern has already read; nothing is read again. To Balanced: a document only
+Balanced calls ready becomes ready, and with automatic renaming on Intern
+renames it shortly after the save, not while the queue is paused and not in
+the middle of reading a backlog. Back to Strict: a ready document nobody
+approved that Strict would hold goes back to review; a document already
+renamed stays renamed, and Undo still works on it. At Balanced, of two scans
+of one document only the first is renamed by itself and the other waits as
+a near duplicate, also where Strict would have renamed both.
+
+Intern does not know what you typed in Details and did not file. When a save
+would let it rename such a document - turning on automatic renaming while
+one is ready, or choosing Balanced with automatic renaming on while one
+waits - Settings says how many above **Save**. Save anyway, and Intern can
+rename them under its own names; what you typed stays beside each document,
+read-only, and is not filed. Nothing else on screen says it happened.
+
+An earlier release does not know the levels and treats a ready document with
+a note as ready. Choose Strict before going back to one.
 
 ## The filename
 
