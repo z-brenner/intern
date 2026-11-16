@@ -246,7 +246,7 @@ describe('the window, when a document typed for is renamed by something other th
   afterEach(() => cleanup());
   const TYPED = '2025-05-01 Letter to Halvorsen about the fixtures';
 
-  async function start() {
+  async function start(automaticRename = false) {
     const sent: Sent[] = [
       sentRow(31, 'Scan 0601.pdf', 'needs_review', { ...LETTER, reason: 'TYPE_INFERRED, LOW_CONFIDENCE' }),
       sentRow(32, 'Scan 0602.pdf', 'ready', INVOICE),
@@ -256,15 +256,19 @@ describe('the window, when a document typed for is renamed by something other th
     const change = (id: number | string, to: Record<string, unknown>) => { const index = sent.findIndex((row) => row.id === String(id)); sent[index] = { ...sent[index], ...to }; };
     const at = (id: number) => sent.find((row) => row.id === String(id))!;
     const desktop = desktopOver(() => sent);
-    const base = createInMemoryBridge({ liveEvents: true }) as ReturnType<typeof createInMemoryBridge> & QueueEventSource;
+    const base = createInMemoryBridge({ liveEvents: true, settings: { automaticRename } }) as ReturnType<typeof createInMemoryBridge> & QueueEventSource;
     let queueChanged = () => {};
     const bridge = {
       ...base,
       listItems: () => desktop.listItems(),
       // A person's approval: their name becomes the proposal, its reasons go, and it is filed.
       approve: vi.fn(async (id: string, name: string, description: string) => { change(id, { proposedFilename: name, description, reason: null, ...filed(name) }); }),
+      // Kept under its own name: completed, nothing renamed, nothing to undo.
+      keepOriginal: vi.fn(async (id: string) => { change(id, { status: 'completed', keptOriginal: true, undoable: false }); }),
       // As an undone rename is left: back under its own name, waiting, with UNDONE beside what it carried.
       undo: vi.fn(async (id: string) => { const row = at(Number(id)); change(id, { status: 'needs_review', reason: [row.reason, 'UNDONE'].filter(Boolean).join(', '), filedName: null, filedPath: null, undoable: false }); }),
+      // Check again on a parked document; each test says what it finds.
+      retry: vi.fn(async (_id: string) => {}),
       subscribeQueue: (listener: Parameters<QueueEventSource['subscribeQueue']>[0]) => { queueChanged = () => listener({ type: 'changed' }); return base.subscribeQueue(listener); },
     };
     /** The backend does something with nobody asking, and says the queue changed. */
@@ -453,6 +457,71 @@ describe('the window, when a document typed for is renamed by something other th
     await waitFor(() => expect(bridge.approve).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByRole('group', { name: 'Action result' })).toHaveTextContent('Renamed 1 document.'));
     expect(toast()).toBeNull();
+  });
+
+  // The person's approval can stop halfway: the original cannot be removed
+  // (open in a viewer, say), and the document is parked in review with what
+  // was typed still kept. Check again then finishes their own rename. The
+  // backend can say so as a refusal, or accept the approval and leave the
+  // document in review.
+  const renamedUndoneThenMineFinishedByCheckAgain = async (parked: 'refused' | 'accepted') => {
+    const { bridge, byItself, renamed, change } = await start();
+    await typeName('Scan 0602.pdf', '2025-05-02 Invoice 4471 from Brightwater');
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    await byItself(() => renamed(32));
+    await waitFor(() => expect(toast()).toHaveTextContent("Scan 0602.pdf was renamed under Intern's proposal."));
+    fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
+    const filedPanel = await openDetails('Scan 0602.pdf');
+    fireEvent.click(within(filedPanel).getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Completed, 0' })).toBeInTheDocument());
+    expect(toast()).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Queue, / }));
+    const panel = await openDetails('Scan 0602.pdf');
+    fireEvent.change(within(panel).getByLabelText('Filename'), { target: { value: '2025-05-02 Invoice 4471 from Brightwater' } });
+    const mine = '2025-05-02 Invoice 4471 from Brightwater.pdf';
+    bridge.approve.mockImplementationOnce(async () => {
+      change(32, { status: 'needs_review', proposedFilename: mine, reason: 'SOURCE_DELETE_FAILED', errorCode: 'SOURCE_DELETE_FAILED', parked: true });
+      if (parked === 'refused') throw { code: 'SOURCE_DELETE_FAILED', message: 'the original could not be removed' };
+    });
+    fireEvent.click(within(panel).getByRole('button', { name: /^Approve & rename/ }));
+    await waitFor(() => expect(bridge.approve).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole('complementary', { name: 'Review item' })).toHaveTextContent('Check again'));
+
+    bridge.retry.mockImplementationOnce(async () => { change(32, { ...filed(mine), reason: null, errorCode: null, parked: false }); });
+    fireEvent.click(within(screen.getByRole('complementary', { name: 'Review item' })).getByRole('button', { name: /Check again/ }));
+    await waitFor(() => expect(said()).toHaveTextContent('Checked Scan 0602.pdf: it is filed.'));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    // Their own rename, finished: not said to be a rename without them, under any name, and no Undo of it from such a message.
+    expect(toast()).toBeNull();
+    expect(bridge.retry).toHaveBeenCalledWith('32');
+    expect(bridge.undo).toHaveBeenCalledTimes(1);
+  };
+
+  it('never says a rename the window decided: one renamed by itself, undone, then approved here, the approval refused halfway and finished by Check again', async () => {
+    await renamedUndoneThenMineFinishedByCheckAgain('refused');
+  });
+
+  it('never says a rename the window decided: one renamed by itself, undone, then approved here, the approval left in review halfway and finished by Check again', async () => {
+    await renamedUndoneThenMineFinishedByCheckAgain('accepted');
+  });
+
+  it('keeps saying a rename whose Undo from its details the backend refused: the document is still renamed', async () => {
+    const { bridge, byItself, renamed } = await start();
+    await typeName('Scan 0602.pdf', '2025-05-02 Invoice 4471 from Brightwater');
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    await byItself(() => renamed(32));
+    await waitFor(() => expect(toast()).toHaveTextContent("Scan 0602.pdf was renamed under Intern's proposal."));
+    fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
+    const filedPanel = await openDetails('Scan 0602.pdf');
+    bridge.undo.mockRejectedValueOnce({ code: 'STATE_CONFLICT', message: 'the queue is busy' });
+    fireEvent.click(within(filedPanel).getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(screen.getByRole('alert', { name: 'Action error' })).toBeInTheDocument());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(bridge.undo).toHaveBeenCalledWith('32');
+    expect(screen.getByRole('button', { name: 'Completed, 1' })).toBeInTheDocument();
+    expect(toast()).toHaveTextContent("Scan 0602.pdf was renamed under Intern's proposal. What you typed for it was not filed, and is kept in its details.");
+    expect(within(toast()!).getByRole('button', { name: 'Undo the rename of Scan 0602.pdf' })).toBeEnabled();
   });
 
   it('takes the message away once what was typed is discarded: it no longer is kept in the details', async () => {

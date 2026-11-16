@@ -279,8 +279,18 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // take (aimedPress), so a press meant for one rename does not undo two.
   const [renamedHere, setRenamedHere] = useState<{ key: number; renames: readonly RenameSeen[] }>({ key: 0, renames: [] });
   useEffect(() => {
-    const { watched, seen, back } = watchRenames(renameWatch.current, items, { typed: typedOver, decidedHere: (id) => id === own.deciding });
-    renameWatch.current = watched;
+    const look = watchRenames(renameWatch.current, items, { typed: typedOver, decidedHere: (id) => id === own.deciding });
+    renameWatch.current = look.watched;
+    const { seen } = look;
+    // A rename said that the queue no longer shows so, by its status alone,
+    // is taken out for good: undone, cleared from the history, or gone.
+    // Only hidden (stillSo), it would be said again once the document is
+    // completed again, and that can be the person's own rename: an approval
+    // that stopped halfway keeps what was typed until Check again finishes
+    // it. An Undo the backend refused leaves the document completed, so what
+    // was said of it stays.
+    const noLongerSo = renamedHere.renames.filter((rename) => stillSo([rename], items, () => true).length === 0).map(({ id }) => id);
+    const back = [...look.back, ...noLongerSo];
     if (!seen.length && !back.length) return;
     setRenamedHere((said) => { const renames = withRenames(said.renames, seen, back); return renames === said.renames ? said : { key: said.key + 1, renames }; });
     // Announced through the app's Action status as well, as every outcome

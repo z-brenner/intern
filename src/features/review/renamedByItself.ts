@@ -129,9 +129,13 @@ export function withRenames(said: readonly RenameSeen[], seen: readonly RenameSe
  * each with what was typed for it still kept in its details. One undone
  * since, cleared from the history, or gone is no longer said to be renamed.
  * Nor is one whose typed text is no longer kept: the person discarded it,
- * or approved or kept the document here, which files what was typed or
- * gives it up. So a rename the window decided is never said, even of a
- * document renamed by itself before, undone, and then approved here.
+ * or a decision of theirs here filed it or gave it up.
+ *
+ * This only hides. A document undone and then renamed by the person's own
+ * approval can be completed again with what was typed still kept (an
+ * approval that stopped halfway and was finished by Check again), and would
+ * show here again. So the window takes out for good a rename the queue no
+ * longer shows so by its status (App), before it is said again.
  */
 export function stillSo(said: readonly RenameSeen[], rows: readonly QueueItem[], typed: (id: string) => boolean): RenameSeen[] {
   const now = new Map(rows.map((row) => [row.id, row]));
