@@ -3,6 +3,9 @@
  * "DATE_UNSUPPORTED", "SOURCE_LOCKED" - and until now the inspector showed
  * those codes to the person deciding what to do about them. Each sentence here
  * says what actually happened and, where one exists, what the person can do.
+ * At most two short sentences: the review panel leads with a few words for
+ * each code (`LABELS`), and these are its "why", one press away. Several of
+ * them used to be paragraphs, and a document in review read like a manual.
  *
  * A code with no entry passes through unchanged: an unmapped code is a bug to
  * notice, not something to dress up as prose.
@@ -22,8 +25,8 @@ const SENTENCES: Record<string, string> = {
   // a letter typed by its matter, "Email" for a header block, "Notice" for
   // a heading that opens on it - whether or not the model gave a type.
   // Neither sentence says the type is absent or that the model gave none.
-  TYPE_UNSUPPORTED: 'The document does not confirm the proposed type as its own. The type does not appear verbatim in the document, or appears only where the document says what it is about, such as a subject line or the text of a letter. Check the type.',
-  TYPE_INFERRED: 'Intern supplied the type in this name: the document\'s own title, or the kind its layout shows, such as “Letter” or “Email”. Check that it names the document.',
+  TYPE_UNSUPPORTED: 'The document does not state this type as its own, or names it only in a subject line or the body of a letter. Check the type.',
+  TYPE_INFERRED: 'Intern took the type from the document\'s title or from its layout, such as “Letter” or “Email”. Check that it names the document.',
   // Both are raised in more cases than a party missing from the text
   // (ReviewReason in domain.rs; raised in facts.rs and validate.rs, on the
   // relation compose.rs reads). PARTY_UNSUPPORTED: most often a name that
@@ -61,8 +64,10 @@ const SENTENCES: Record<string, string> = {
   // in every case. PARTY_MISSING comes with PARTY_UNSUPPORTED (all three in
   // each model's replays), though PARTY_UNSUPPORTED mostly comes without
   // it, and the place to look, PARTY_CHECK below, follows the last of them
-  // only.
-  PARTY_UNSUPPORTED: 'Intern could not confirm from the document which party this name should give. Most often the document does not say which side a party is on, so the side rests on the model\'s reading alone or is left out of the name. A party the model named may also be absent from the document, or be one word such as a first name, and is then left out of the name. Or the name may give a party picked only for coming first or against the model\'s own reading, or a release between two of its parties, or the document may be addressed to a group of recipients such as “all staff”. A party more than 70 characters long is held as well: it is rarely one name, and the filename may have had to leave it out. So is an organization Intern read from one word under the addressee\'s name, such as “PacifiCorp”.',
+  // only. The sentence names the usual cause and no other: the rest are
+  // the cases listed above, and a reviewer checks the parties the same way
+  // for each of them.
+  PARTY_UNSUPPORTED: 'The document does not confirm which party this name should give, most often because it never says which side a party is on.',
   PARTY_MISSING: 'The name lacks a party it needs, such as the other side of an agreement or who issued the document.',
   DESCRIPTION_UNSUPPORTED: 'The description asserts something the document does not contain.',
   DESCRIPTION_INVALID: 'The description was not a single usable sentence.',
@@ -157,15 +162,14 @@ const SENTENCES: Record<string, string> = {
   // person checked it (LearnedRule::confirmed in pipeline.rs): an edit's
   // wording cannot always tell a spelling from a decision about one
   // document, so a rule files nothing on its own until a person chooses
-  // "Use on its own" for it, in Settings under Learned spellings: the review
+  // "Always use" for it, in Settings under Learned spellings: the review
   // window does not ask. Approving the name checks nothing, so the sentence
-  // says both: approve a right name, and choose Use on its own in Settings
-  // to stop being asked. Putting the document's own word back retracts the
-  // rule when nothing else in the name changed; an approval that changes
-  // another part too teaches nothing, so the sentence says when. Not "for
-  // the first time": a spelling an earlier release learned has been used
-  // before, and is unchecked after the update all the same.
-  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits. Until you tell it to use that spelling on its own, a name it changes waits for you. If the name is right, approve it; to stop being asked, choose Use on its own for the spelling in Settings, under Learned spellings. If not, put the document\'s own words back - when that is the only change, Intern stops using that spelling.',
+  // says both: approve a right name, and choose Always use in Settings to
+  // stop being asked. Putting the document's own word back retracts the
+  // rule when nothing else in the name changed. Not "for the first time": a
+  // spelling an earlier release learned has been used before, and is
+  // unchecked after the update all the same.
+  LEARNED_SPELLING_UNCONFIRMED: 'Intern used a spelling it learned from your edits, and a name it changes waits for you until you choose Always use for it in Settings, under Learned spellings. Approve the name if it is right; if not, put the document\'s own words back.',
   // Set when a person undoes a rename. The file is back under its original
   // name and the proposal is still here, so the document waits for a decision
   // rather than being renamed again by the next automatic pass.
@@ -251,13 +255,18 @@ export function humanizeReason(reason: string): string {
  * code with no sentence is said as it came.
  */
 function sentences(codes: readonly string[], instead: Record<string, string>): string {
+  return eachSaid(codes, instead).join(' ');
+}
+
+/** The sentences of `sentences`, one a code, each with its closing unless a later code says the same one. */
+function eachSaid(codes: readonly string[], instead: Record<string, string>): string[] {
   const closingOf = (code: string) => instead[code] === undefined ? CLOSINGS[code] : undefined;
   return codes.map((code, index) => {
     const closing = closingOf(code);
     const saidLater = closing !== undefined && codes.slice(index + 1).some((later) => closingOf(later) === closing);
     const sentence = instead[code] ?? SENTENCES[code] ?? code;
     return closing === undefined || saidLater ? sentence : `${sentence} ${closing}`;
-  }).join(' ');
+  });
 }
 
 /**
@@ -281,8 +290,8 @@ function sentences(codes: readonly string[], instead: Record<string, string>): s
  * document type", do not, so a note has its own (SHORT_NOTES).
  */
 const NOTE_SENTENCES: Record<string, string> = {
-  TYPE_UNSUPPORTED: 'The document does not confirm the type in this name as its own. The type does not appear verbatim in the document, or appears only where the document says what it is about, such as a subject line or the text of a letter.',
-  TYPE_INFERRED: 'Intern supplied the type in this name: the document\'s own title, or the kind its layout shows, such as “Letter” or “Email”.',
+  TYPE_UNSUPPORTED: 'The document does not state the type in this name as its own, or names it only in a subject line or the body of a letter.',
+  TYPE_INFERRED: 'Intern took the type from the document\'s title or from its layout, such as “Letter” or “Email”.',
   LOW_CONFIDENCE: 'The model was unsure of its reading. If you look at this name, start with the date and the parties.',
 };
 
@@ -325,26 +334,33 @@ export function reasonCodes(reason: string): string[] {
 }
 
 /**
- * The same reasons in a few words, for the queue's Check column: what a
- * person scanning forty rows needs to see to know which to open first. The
- * sentence above is the cell's tooltip and the review panel's.
+ * Each code in a few words: the review panel's chips, the queue's Check
+ * column, the history's notes - what a person scanning forty rows, or one
+ * panel, needs to see to know what to look at. Two to five words, no
+ * sentence: the sentence above is one press or one hover away (the chip's
+ * "why", the cell's tooltip).
+ *
+ * A code with a sentence and no entry here - one added since - is said in
+ * its own words (`codeWords`), so it is never shown as a bare code; a code
+ * with no sentence either is shown as it came (`reasonLabel`).
  */
-const SHORT: Record<string, string> = {
+const LABELS: Record<string, string> = {
   DATE_MISSING: 'No date found',
   DATE_UNSUPPORTED: 'Date not in document',
-  DATE_AMBIGUOUS: 'Date could be day- or month-first',
+  DATE_AMBIGUOUS: 'Date order unclear',
   DATE_IS_DEADLINE: 'Date is a deadline',
-  DATE_IS_PERIOD: 'Date is a period\'s start or end',
-  DATE_IS_FORMULA: 'Date comes from a formula',
+  DATE_IS_PERIOD: 'Date is a period end',
+  DATE_IS_FORMULA: 'Date from a formula',
   DATE_IMPLAUSIBLE: 'Year looks wrong',
+  DATE_REQUIRED: 'Needs a date',
   TYPE_MISSING: 'No document type',
-  TYPE_UNSUPPORTED: 'Type uncertain',
-  TYPE_INFERRED: 'Type supplied by Intern',
-  PARTY_UNSUPPORTED: 'Party uncertain',
+  TYPE_UNSUPPORTED: 'Type not confirmed',
+  TYPE_INFERRED: 'Type guessed',
+  PARTY_UNSUPPORTED: 'Party unclear',
   PARTY_MISSING: 'Party missing',
-  DESCRIPTION_UNSUPPORTED: 'Description not supported',
+  DESCRIPTION_UNSUPPORTED: 'Description unsupported',
   DESCRIPTION_INVALID: 'Description unusable',
-  LOW_CONFIDENCE: 'Model unsure of its reading',
+  LOW_CONFIDENCE: 'Model unsure',
   MODEL_REQUESTED_REVIEW: 'Model asked for a check',
   PARSER_WARNING: 'Text may be misread',
   FAST_MODEL_READING: 'Quick model\'s reading',
@@ -355,19 +371,98 @@ const SHORT: Record<string, string> = {
   SOURCE_DELETE_FAILED: 'Original not removed',
   RECONCILIATION_REQUIRED: 'Compare two files',
   PROPOSAL_MISSING: 'No proposal',
+  IO_ERROR: 'File error',
   PASSWORD_PROTECTED: 'Password-protected',
   UNSUPPORTED_CONTENT: 'Not the format it claims',
   DOCUMENT_TOO_LARGE: 'Too large to read',
+  OCR_UNAVAILABLE: 'Text recognition missing',
   EXTRACTION_FAILED: 'Could not be read',
+  ANALYSIS_FAILED: 'Internal error',
+  MODEL_FAILED: 'Model failed',
+  MODEL_OUTPUT_INVALID: 'Model answer unusable',
   MODEL_INPUT_TOO_LARGE: 'Too long for the model',
+  MODEL_REPLY_TRUNCATED: 'Model answer cut off',
+  MODEL_DECLINED: 'Model declined',
+  HOSTED_MODEL_UNAVAILABLE: 'Hosted model unavailable',
+  HOSTED_MODEL_BILLING: 'Hosted billing problem',
+  HOSTED_MODEL_MISCONFIGURED: 'Hosted model misconfigured',
+  HOSTED_MODEL_KEY_MISSING: 'No API key',
+  HOSTED_MODEL_UNAUTHORIZED: 'API key rejected',
+  HOSTED_MODEL_UNREACHABLE: 'Hosted service unreachable',
+  HOSTED_MODEL_RATE_LIMITED: 'Rate limited',
+  HOSTED_MODEL_REJECTED: 'Request rejected',
+  HOSTED_MODEL_REFUSED: 'Model declined',
+  SECRET_SERVICE_UNAVAILABLE: 'Key store unavailable',
+  STATE_CONFLICT: 'Busy, try again',
+  INVALID_TRANSITION: 'Not possible now',
   DUPLICATE: 'Already filed',
   NEAR_DUPLICATE: 'Possible duplicate',
-  LEARNED_SPELLING_UNCONFIRMED: 'Learned spelling',
   EXACT_COPY: 'Exact copy',
+  LEARNED_SPELLING_UNCONFIRMED: 'Uses a learned spelling',
   UNDONE: 'Rename undone',
   ALREADY_NAMED: 'Already had this name',
-  DATE_REQUIRED: 'Needs a date',
+  INTAKE_WITHDRAWN: 'Taken over elsewhere',
 };
+
+/**
+ * A code's own words, for a code with a sentence and no label yet:
+ * DATE_FROM_FILENAME reads "Date from filename".
+ */
+function codeWords(code: string): string {
+  const words = code.toLowerCase().replace(/_+/g, ' ').trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Whether a code is one this build has words for. */
+const isKnown = (code: string) => SENTENCES[code] !== undefined || LABELS[code] !== undefined;
+
+/**
+ * The few words for one code: its label, its own words when it has a
+ * sentence but no label yet, and otherwise the code as it came - an
+ * unmapped code is a bug to notice.
+ */
+export function reasonLabel(code: string): string {
+  const key = code.trim().toUpperCase();
+  return LABELS[key] ?? (SENTENCES[key] !== undefined ? codeWords(key) : code.trim());
+}
+
+/** The few words for a code on a document that is not waiting, where a review's would be false of it (SHORT_NOTES). */
+export function noteLabel(code: string): string {
+  return SHORT_NOTES[code.trim().toUpperCase()] ?? reasonLabel(code);
+}
+
+/**
+ * Why, for one code: its sentence, with the closing it shares with others
+ * (where to look about the parties) after it, as the code stands alone
+ * beside its few words. Empty for a code with no sentence.
+ */
+export function reasonWhy(code: string): string {
+  const key = code.trim().toUpperCase();
+  return SENTENCES[key] === undefined ? '' : sentences([key], {});
+}
+
+/** The same for a code on a document that is not waiting: its note, where it has one. */
+export function noteWhy(code: string): string {
+  const key = code.trim().toUpperCase();
+  return SENTENCES[key] === undefined && NOTE_SENTENCES[key] === undefined ? '' : sentences([key], NOTE_SENTENCES);
+}
+
+/**
+ * A list of codes as a tooltip says it: each code's few words and its why,
+ * a line each - for a cell or a status that shows one reason in words and
+ * counts the rest, so the rest are named too. `note`: on a document that is
+ * not waiting, each note's words and sentence. Where to look about the
+ * parties is said once, after the last code that shares it, as
+ * humanizeReason says it; a code with no sentence is its words alone.
+ */
+export function reasonLines(codes: readonly string[], { note = false }: { note?: boolean } = {}): string {
+  const keys = codes.map((code) => code.trim().toUpperCase());
+  const whys = eachSaid(keys, note ? NOTE_SENTENCES : {});
+  return keys.map((code, index) => {
+    const label = note ? noteLabel(code) : reasonLabel(code);
+    return isKnown(code) || NOTE_SENTENCES[code] !== undefined ? `${label}: ${whys[index]}` : label;
+  }).join('\n');
+}
 
 /** Which part of a proposal a code is about, for marking that part where it is shown. */
 export type ReasonField = 'date' | 'type' | 'parties' | 'description';
@@ -410,11 +505,11 @@ const aboutAPart = (code: string) => Number(reasonField(code) !== undefined);
  * first (the higher, the sooner; codes of one rank in the order they came),
  * with the rest counted rather than listed.
  */
-function fewWords(codes: readonly string[], words: Record<string, string>, rank: (code: string) => number): { text: string; more: number } | undefined {
-  const known = codes.filter((code) => words[code] !== undefined);
+function fewWords(codes: readonly string[], words: (code: string) => string, rank: (code: string) => number): { text: string; more: number } | undefined {
+  const known = codes.filter(isKnown);
   if (!known.length) return undefined;
   const ranked = [...known].sort((left, right) => rank(right) - rank(left));
-  return { text: words[ranked[0]], more: ranked.length - 1 };
+  return { text: words(ranked[0]), more: ranked.length - 1 };
 }
 
 /**
@@ -423,7 +518,7 @@ function fewWords(codes: readonly string[], words: Record<string, string>, rank:
  * and the rest are counted rather than listed.
  */
 export function shortReason(codes: readonly string[]): { text: string; more: number } | undefined {
-  return fewWords(codes, SHORT, aboutAPart);
+  return fewWords(codes, reasonLabel, aboutAPart);
 }
 
 /**
@@ -431,7 +526,7 @@ export function shortReason(codes: readonly string[]): { text: string; more: num
  * words, except where those would be false of it (SHORT_NOTES).
  */
 export function shortNote(codes: readonly string[]): { text: string; more: number } | undefined {
-  return fewWords(codes, { ...SHORT, ...SHORT_NOTES }, aboutAPart);
+  return fewWords(codes, noteLabel, aboutAPart);
 }
 
 /**
@@ -442,5 +537,5 @@ export function shortNote(codes: readonly string[]): { text: string; more: numbe
  * own name has always shown them.
  */
 export function shortOutcome(codes: readonly string[]): { text: string; more: number } | undefined {
-  return fewWords(codes, SHORT, (code) => OUTCOME_CODES.has(code) ? 2 : aboutAPart(code));
+  return fewWords(codes, reasonLabel, (code) => OUTCOME_CODES.has(code) ? 2 : aboutAPart(code));
 }

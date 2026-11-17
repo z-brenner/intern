@@ -266,7 +266,7 @@ describe('the queue after the level is saved', () => {
 
     await save(balanced);
     await waitFor(() => expect(queueCell(LEASE, 'status')).toHaveTextContent('Ready with a note'));
-    expect(queueCell(LEASE, 'check')).toHaveTextContent('Note: Type uncertain +1 more');
+    expect(queueCell(LEASE, 'check')).toHaveTextContent('Note: Type not confirmed +1 more');
     expect(screen.queryByRole('button', { name: /needs? review/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '4 ready, 1 with a note' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Rename all ready' })).toHaveTextContent('Rename all ready 4');

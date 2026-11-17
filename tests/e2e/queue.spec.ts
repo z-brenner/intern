@@ -73,7 +73,7 @@ test('naming your organization in Settings files a waiting proposal by the other
   const inspector = await openDetails(page, 'Lease Agreement - 123 Main St.pdf');
   // The extension is locked beside the field; the field holds the name before it.
   await expect(inspector.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement with ABC Properties LLC');
-  await expect(inspector.getByRole('note', { name: 'Filed by the other side' })).toHaveText('Filed by the other side: TenantCo Inc. is your organization, so it is left out of the name. Change this under Settings.');
+  await expect(inspector.getByRole('note', { name: 'Filed by the other side' })).toHaveText('Left out as your organization: TenantCo Inc.');
   await expect(inspector.getByText('TenantCo Inc.', { exact: true }).first()).toBeVisible();
 
   // Saved as the backend stores it.

@@ -31,6 +31,9 @@ const ACTS: Array<[RegExp, boolean]> = [
   [/^Install .+ and restart$/, true],
   // These only move the view, open something, or take back a question.
   [/^(Close review|Next undecided|Open|Show in folder|More review actions|Copy description|Cancel|Dismiss|Not now)$/, false],
+  // A reason's few words, which open its why; and the document viewer, which reads only.
+  [/^(Model unsure|Already filed|Password-protected|File changed since read|Model failed)$/, false],
+  [/^(View document|Original|Text Intern read|Zoom in|Zoom out|Fit to width|Zoom \d+%, fit to width|Open in its program|Close document|Try again|Show the text Intern read)$/, false],
   [/^(Queue, \d+|Completed, \d+|\d+ needs? review|\d+ ready|Copy table|Copy selection|Details|More queue actions|History)$/, false],
   [/^(Add files|Add folder|Pause queue|Resume queue|Help & support|Settings|Private · .*)$/, false],
 ];

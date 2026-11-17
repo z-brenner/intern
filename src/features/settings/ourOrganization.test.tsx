@@ -86,6 +86,6 @@ describe('your organization\'s names', () => {
     // The inspector follows the new proposal rather than offering the old
     // name to approve.
     await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement with ABC Properties LLC'));
-    expect(screen.getByRole('note', { name: 'Filed by the other side' })).toHaveTextContent('TenantCo Inc. is your organization');
+    expect(screen.getByRole('note', { name: 'Filed by the other side' })).toHaveTextContent('Left out as your organization: TenantCo Inc.');
   });
 });

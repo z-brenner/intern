@@ -84,7 +84,7 @@ test('Shift+click, Ctrl+A and the keyboard select cells; Escape clears', async (
   await queueCell(page, 'Scan 0103.pdf', 'check').click({ modifiers: ['Shift'] });
   await page.keyboard.press('ControlOrMeta+C');
   expect((await readClipboard(page)).text).toBe([
-    'Invoice INV-3301 from Fabrikam Inc. for February consulting hours.\tDate could be day- or month-first',
+    'Invoice INV-3301 from Fabrikam Inc. for February consulting hours.\tDate order unclear',
     'Notice terminating the services agreement with Contoso Ltd.\tAll checks passed',
   ].join('\r\n'));
 
@@ -107,7 +107,7 @@ test('the Copy button copies the whole table with headings when nothing is selec
   const copied = await readClipboard(page);
   const lines = copied.text.split('\r\n');
   expect(lines[0]).toBe('Original filename\tProposed filename\tDescription\tCheck');
-  expect(lines[1]).toBe('Scan 0101.pdf\t2024-02-01 Engagement Letter with Northwind Traders.pdf\tEngagement letter between Northwind Traders and the firm for 2024 advisory work.\tModel unsure of its reading');
+  expect(lines[1]).toBe('Scan 0101.pdf\t2024-02-01 Engagement Letter with Northwind Traders.pdf\tEngagement letter between Northwind Traders and the firm for 2024 advisory work.\tModel unsure');
   expect(lines).toHaveLength(8);
   expect(copied.cells[0]).toEqual(['Original filename', 'Proposed filename', 'Description', 'Check']);
   expect(copied.cells).toHaveLength(8);
@@ -119,7 +119,7 @@ test('the Copy button copies a selection, and leaves the Details panel as it was
   await queueCell(page, 'Scan 0104.pdf', 'check').click();
   await expect(panel).toContainText('Scan 0104.pdf');
   await page.getByRole('button', { name: 'Copy selection' }).click();
-  expect((await readClipboard(page)).text).toBe('Model unsure of its reading');
+  expect((await readClipboard(page)).text).toBe('Model unsure');
   await expect(panel).toBeVisible();
 });
 

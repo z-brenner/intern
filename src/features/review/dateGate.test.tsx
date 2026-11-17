@@ -48,7 +48,8 @@ describe('the date gate', () => {
 
     const suggestion = screen.getByRole('group', { name: 'Suggested date' });
     expect(suggestion).toHaveTextContent('2024-06-18');
-    expect(suggestion).toHaveTextContent(/unverified.*Check it against the document/);
+    // Said not to be the document's own, so it is checked before it is used.
+    expect(suggestion).toHaveTextContent('Suggested date 2024-06-18, not found in the document.');
 
     fireEvent.click(within(suggestion).getByRole('button', { name: 'Use date & rename' }));
 

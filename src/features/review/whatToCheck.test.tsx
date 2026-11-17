@@ -1,13 +1,12 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
-import { ANALYSIS_DETAILS_KEY, SELF_RATED_UNSURE } from '../../components/ReviewInspector';
+import { ANALYSIS_DETAILS_KEY } from '../../components/ReviewInspector';
 import { openRow } from '../queue/gridTesting';
 import { createInMemoryBridge, createReviewBatchBridge } from '../../lib/inMemoryBridge';
 import { humanizeReason } from '../../lib/reasons';
 import { TauriBridge } from '../../lib/tauriBridge';
 import type { QueueItem } from '../../types';
-import validateSource from '../../../crates/intern-engine/src/validate.rs?raw';
 
 const ambiguous: QueueItem = {
   id: 'ambiguous',
@@ -31,7 +30,7 @@ describe('what to check', () => {
     expect(screen.getByRole('button', { name: 'Approve & rename' })).toBeVisible();
     fireEvent.click(screen.getByText('Analysis details'));
     expect(disclosure).toHaveAttribute('open');
-    expect(screen.getByText("Model's own confidence")).toBeVisible();
+    expect(screen.getByText('Confidence')).toBeVisible();
   });
 
   // It closed itself for every document, so a reviewer who checks each name
@@ -44,7 +43,7 @@ describe('what to check', () => {
 
     fireEvent.click(within(panel).getByText('Analysis details'));
     expect(disclosure()).toHaveAttribute('open');
-    expect(within(panel).getByText("Model's own confidence")).toBeVisible();
+    expect(within(panel).getByText('Confidence')).toBeVisible();
 
     // Approving moves on to the next document, and its details are open too.
     const filename = within(panel).getByLabelText('Filename');
@@ -52,7 +51,7 @@ describe('what to check', () => {
     fireEvent.keyDown(filename, { key: 'Enter', ctrlKey: true });
     await waitFor(() => expect(panel).toHaveTextContent('Scan 0102.pdf'));
     expect(disclosure()).toHaveAttribute('open');
-    expect(within(panel).getByText("Model's own confidence").closest('p')).toHaveTextContent('81%');
+    expect(within(panel).getByText('Confidence').closest('p')).toHaveTextContent('81%');
 
     // Selecting another row, and one with nothing to disclose in between, changes nothing.
     await openRow(screen.getByRole('row', { name: /Scan 0107.pdf/i }));
@@ -112,7 +111,7 @@ describe('what to check', () => {
     const row = await screen.findByRole('row', { name: /Scan 0102.pdf/i });
     // The model's own percentage is gone from the table; the failed check is there instead.
     expect(row).not.toHaveTextContent('81%');
-    expect(within(row).getByText('Date could be day- or month-first')).toBeInTheDocument();
+    expect(within(row).getByText('Date order unclear')).toBeInTheDocument();
     expect(row).toHaveTextContent('+1 more');
     const mark = row.querySelector('mark.flagged');
     expect(mark).toHaveTextContent('2024-02-09');
@@ -125,7 +124,15 @@ describe('what to check', () => {
     const panel = await screen.findByRole('complementary', { name: 'Review item' });
 
     const check = within(panel).getByRole('heading', { name: 'What to check' }).closest('section')!;
-    expect(check).toHaveTextContent(/day-first or month-first/);
+    // In a few words a reason, each with its why a press away.
+    expect(within(within(check).getByRole('list', { name: 'What to check' })).getAllByRole('button').map((chip) => chip.textContent)).toEqual(['Date order unclear', 'Model unsure']);
+    const chip = within(check).getByRole('button', { name: 'Date order unclear' });
+    const why = document.getElementById(chip.getAttribute('aria-controls')!)!;
+    expect(why).not.toBeVisible();
+    expect(chip).toHaveAccessibleDescription(humanizeReason('DATE_AMBIGUOUS'));
+    fireEvent.click(chip);
+    expect(why).toBeVisible();
+    expect(why).toHaveTextContent(/day-first or month-first/);
     // Before the name it is about, not after the evidence.
     const filename = within(panel).getByLabelText('Filename');
     expect(check.compareDocumentPosition(filename) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -137,67 +144,28 @@ describe('what to check', () => {
 
     const evidence = within(panel).getByRole('heading', { name: 'Evidence' }).closest('section')!;
     expect(within(evidence).getByText('Date')).toHaveTextContent('Date (check this)');
-    // The model's figure is still there, as a detail.
-    expect(panel).toHaveTextContent("Model's own confidence");
+    // The confidence is still there, as a detail.
+    expect(panel).toHaveTextContent('Confidence');
   });
 
-  // 173 of 204 real review items: the model rated itself at 100% and Intern
-  // measured doubt in the words of the date or a party. The panel used to say
-  // "The model reported low confidence in its own proposal" above a readout
-  // of "Model's confidence 100%".
-  it('does not let the unsure-reading reason and the model\'s own figure contradict each other', async () => {
-    const unsure: QueueItem = { ...ambiguous, id: 'unsure', originalFilename: 'Scan 0103.pdf', confidence: 1, reason: humanizeReason('LOW_CONFIDENCE'), reasonCodes: ['LOW_CONFIDENCE'] };
-    const dated: QueueItem = { ...ambiguous, id: 'dated', originalFilename: 'Scan 0104.pdf', confidence: 1, reason: humanizeReason('DATE_AMBIGUOUS'), reasonCodes: ['DATE_AMBIGUOUS'] };
-    render(<App bridge={createInMemoryBridge({ items: [unsure, dated] })} />);
+  // The confidence used to be the model's own figure, which a small model
+  // rates high, beside "The model was unsure of its reading", with a
+  // paragraph to reconcile the two. It is one figure now, consistent with
+  // the document's status (the backend's), shown once and explained by
+  // nothing beside it.
+  it('shows the confidence once, as a detail, with no paragraph about the model\'s own figure', async () => {
+    const unsure: QueueItem = { ...ambiguous, id: 'unsure', originalFilename: 'Scan 0103.pdf', confidence: 0.55, reason: humanizeReason('LOW_CONFIDENCE'), reasonCodes: ['LOW_CONFIDENCE'] };
+    render(<App bridge={createInMemoryBridge({ items: [unsure] })} />);
     await openRow(await screen.findByRole('row', { name: /Scan 0103.pdf/i }));
     const panel = await screen.findByRole('complementary', { name: 'Review item' });
 
     const check = within(panel).getByRole('heading', { name: 'What to check' }).closest('section')!;
-    expect(check).toHaveTextContent('The model was unsure of its reading. Check the name against the document, starting with the date and the parties.');
-    // Nothing says the model reported the doubt: it reported 100%.
-    expect(panel).not.toHaveTextContent(/reported low confidence/i);
+    expect(within(check).getByRole('button', { name: 'Model unsure' })).toBeVisible();
 
     fireEvent.click(within(panel).getByText('Analysis details'));
-    const readout = within(panel).getByText("Model's own confidence").closest('p')!;
-    expect(readout).toHaveTextContent("Model's own confidence100%");
-    const note = within(panel).getByRole('note', { name: "About the model's own confidence" });
-    expect(note).toHaveTextContent(/the model's rating of its whole answer.*can be flagged as unsure while this figure is high/);
-    // Straight after the figure it explains.
-    expect(readout.nextElementSibling).toBe(note);
-
-    // Without that reason there is nothing to reconcile, and no note. (The
-    // section is still open: it stays as it was left from one document to the next.)
-    await openRow(screen.getByRole('row', { name: /Scan 0104.pdf/i }));
-    expect(within(panel).getByText("Model's own confidence")).toBeVisible();
-    expect(within(panel).queryByRole('note', { name: "About the model's own confidence" })).not.toBeInTheDocument();
-  });
-
-  // The note is left out where the model's own figure is itself the cause.
-  // That line is the engine's, so the panel's copy of it is held to it.
-  it('draws the line for the note where the engine sends a low self-rating to review', async () => {
-    const declared = /pub const READY_CONFIDENCE: f32 = ([0-9.]+);/.exec(validateSource)?.[1];
-    expect(declared, 'READY_CONFIDENCE is declared in intern-engine').toBeDefined();
-    expect(SELF_RATED_UNSURE).toBe(Number(declared));
-
-    const at = (id: string, name: string, confidence: number): QueueItem => ({ ...ambiguous, id, originalFilename: name, confidence, reason: humanizeReason('LOW_CONFIDENCE'), reasonCodes: ['LOW_CONFIDENCE'] });
-    render(<App bridge={createInMemoryBridge({ items: [at('on', 'Scan 0201.pdf', SELF_RATED_UNSURE), at('under', 'Scan 0202.pdf', SELF_RATED_UNSURE - 0.01)] })} />);
-    const panel = await openRow(await screen.findByRole('row', { name: /Scan 0201.pdf/i }));
-    fireEvent.click(within(panel).getByText('Analysis details'));
-    // On the line the engine did not flag the figure, so something else did.
-    expect(within(panel).getByRole('note', { name: "About the model's own confidence" })).toBeInTheDocument();
-    await openRow(screen.getByRole('row', { name: /Scan 0202.pdf/i }));
-    expect(within(panel).getByText("Model's own confidence")).toBeVisible();
-    expect(within(panel).queryByRole('note', { name: "About the model's own confidence" })).not.toBeInTheDocument();
-  });
-
-  it('adds no explanation when the model\'s own figure is low too: the two agree', async () => {
-    const low: QueueItem = { ...ambiguous, id: 'low', originalFilename: 'Scan 0105.pdf', confidence: 0.41, reason: humanizeReason('LOW_CONFIDENCE'), reasonCodes: ['LOW_CONFIDENCE'] };
-    render(<App bridge={createInMemoryBridge({ items: [low] })} />);
-    await openRow(await screen.findByRole('row', { name: /Scan 0105.pdf/i }));
-    const panel = await screen.findByRole('complementary', { name: 'Review item' });
-    fireEvent.click(within(panel).getByText('Analysis details'));
-    expect(within(panel).getByText("Model's own confidence").closest('p')).toHaveTextContent('41%');
-    expect(within(panel).queryByRole('note', { name: "About the model's own confidence" })).not.toBeInTheDocument();
+    expect(within(panel).getAllByText('Confidence')).toHaveLength(1);
+    expect(within(panel).getByText('Confidence').closest('p')).toHaveTextContent('Confidence55%');
+    expect(panel).not.toHaveTextContent(/model's own|rates? (itself|themselves) high|rating of its whole answer/i);
   });
 
   it('quotes the document only when the evidence is the document\'s own lines', async () => {

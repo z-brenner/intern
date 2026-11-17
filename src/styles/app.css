@@ -373,16 +373,22 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
 .review-position .link-button { display: inline-flex; align-items: center; gap: 2px; font-size: 12.5px; text-decoration: none; }
 .review-position .link-button:hover { text-decoration: underline; }
 .review-position svg { width: 15px; height: 15px; }
-.source-file { display: grid; gap: 6px; margin: 16px 0 20px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+.source-file { display: grid; gap: 6px; margin: 16px 0 16px; }
 .selected-file { margin: 0; display: flex; align-items: flex-start; gap: 8px; font-size: 14px; line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
 .selected-file .file-kind { flex: 0 0 22px; }
 .filed-outcome { margin: 0 0 2px 30px; font-size: 13px; line-height: 1.45; color: var(--text-soft); overflow-wrap: anywhere; }
 .filed-outcome strong { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; color: var(--text); }
 /* The file's own actions, beside the file: quieter than the decision below. */
-.document-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.document-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 6px; }
 .document-actions button { min-height: 30px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 12.5px; font-weight: 500; transition: background-color .12s ease, border-color .12s ease; }
 .document-actions button:hover { background: var(--surface-subtle); border-color: var(--text-muted); }
 .document-actions svg { width: 15px; height: 15px; }
+/* View document leads: reading the document is the check every review needs.
+   Open and Show in folder hand it to the system, and are quiet links beside it. */
+.document-actions .view-document { flex: 1 0 100%; justify-content: flex-start; min-height: 34px; padding: 0 12px; font-size: 13px; font-weight: 600; }
+.document-actions .view-document .shortcut { margin-left: auto; }
+.document-actions .quiet-action { min-height: 26px; padding: 0; border: 0; background: transparent; color: var(--text-soft); font-weight: 500; }
+.document-actions .quiet-action:hover { background: transparent; color: var(--accent); text-decoration: underline; }
 
 .inspector label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 14px; }
 .inspector input, .inspector textarea, .settings-dialog input:not([type=checkbox]) { width: 100%; display: block; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 9px 10px; margin-top: 6px; font-weight: 400; background: var(--surface); font-size: 14px; }
@@ -422,21 +428,19 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
    Its corners are half its least height, so a one-line chip is still a pill
    and one that wraps is a rounded box whose text clears its border. */
 .party-choices .chip { max-width: 100%; overflow-wrap: anywhere; text-align: start; padding-block: 4px; line-height: 1.3; border-radius: 15px; }
-/* The model's figure for its own reading, kept for anyone who wants it but
-   set as a detail: what is wrong, said above, is what decides a review. The
-   selector outweighs ".inspector section p", whose zero margin used to butt
-   this line against the Description label under it. */
+/* The reading's confidence, shown once and set as a detail: what is wrong,
+   said above, is what decides a review. The selector outweighs ".inspector
+   section p", whose zero margin used to butt this line against the
+   Description label under it. */
 .inspector .confidence-readout { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; }
 .inspector .confidence-readout .confidence-meter--panel { max-width: 200px; }
-/* What the figure above is, when the review reason seems to contradict it; tucked under it. */
-.inspector .confidence-note { margin: -8px 0 16px; }
 
 /* What to check, first. The reason a document is in review used to come
    last, under the name, the description and the evidence - below the fold
    for the documents that most needed it. */
-.check-first { margin: 14px 0 18px; padding: 12px 14px; border: 1px solid var(--review-edge); border-left: 3px solid var(--review); border-radius: var(--radius-md); background: var(--review-surface); }
+.check-first { margin: 0 0 18px; padding: 10px 12px 12px; border: 1px solid var(--review-edge); border-left: 3px solid var(--review); border-radius: var(--radius-md); background: var(--review-surface); }
 .check-first.failed { border-color: var(--failed-edge); border-left-color: var(--failed); background: var(--failed-surface); }
-.check-first h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; color: var(--review-strong); }
+.check-first h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 13px; color: var(--review-strong); }
 .check-first.failed h3 { color: var(--failed-text); }
 .check-first h3 svg { width: 16px; height: 16px; flex: none; }
 .inspector .check-first p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text); }
@@ -445,6 +449,24 @@ mark.flagged { padding: 0 2px; border-radius: 3px; background: var(--review-mark
    without its amber. It is something to read, not something to do. */
 .check-first.noted { border-color: var(--border); border-left-color: var(--text-muted); background: var(--surface-subtle); }
 .check-first.noted h3 { color: var(--text); }
+.inspector .check-first .note-lead { margin: -4px 0 8px; font-size: 12.5px; color: var(--text-soft); }
+/* The reasons as chips, a few words each: tokens to take in at a glance,
+   not buttons that change the name (those are the date and party chips).
+   Each opens its "why" under the row. */
+.reason-chips ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.reason-chip { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 0 6px 0 9px; border: 1px solid var(--review-edge); border-radius: 13px; background: var(--surface); color: var(--review-strong); font: inherit; font-size: 12.5px; font-weight: 600; line-height: 1.2; text-align: start; }
+span.reason-chip { padding-right: 9px; }
+button.reason-chip { cursor: pointer; }
+button.reason-chip:hover { border-color: var(--review-edge-hover); background: var(--review-surface-hover); }
+.reason-chip svg { width: 14px; height: 14px; opacity: .7; transition: transform .12s ease; }
+.reason-chip[aria-expanded='true'] svg { transform: rotate(180deg); }
+.check-first.failed .reason-chip { border-color: var(--failed-edge); color: var(--failed-text); }
+.check-first.noted .reason-chip { border-color: var(--border-strong); color: var(--text); }
+.check-first.noted button.reason-chip:hover { background: var(--surface-subtle); border-color: var(--text-muted); }
+.inspector .check-first .reason-why { margin: 8px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text-soft); }
+.inspector .check-first .reason-why[hidden] { display: none; }
+.inspector .check-first .reason-chips + .reason-text { margin-top: 8px; }
+.inspector .check-first .reason-text { color: var(--text-soft); }
 .flag-line { margin: -8px 0 14px; font-size: 12.5px; line-height: 1.5; color: var(--review-strong); }
 
 /* Evidence, as evidence: what the document says, attributed to the part of

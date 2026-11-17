@@ -1,4 +1,4 @@
-import { describeNotes, flaggedFields, humanizeReason, noteCodes, outcomeFirst, reasonCodes, shortNote, shortOutcome, shortReason } from '../../lib/reasons';
+import { describeNotes, flaggedFields, humanizeReason, noteCodes, outcomeFirst, reasonCodes, reasonLines, shortNote, shortOutcome, shortReason } from '../../lib/reasons';
 import type { ReasonField } from '../../lib/reasons';
 import type { QueueItem } from '../../types';
 import { keptOriginal } from '../review/actions';
@@ -18,10 +18,15 @@ export function itemFlaggedFields(item: QueueItem): ReasonField[] {
   return item.status === 'review' ? flaggedFields(itemReasonCodes(item)) : [];
 }
 
-/** What Intern noted about a document that is not waiting: the codes, and the sentences for them. */
+/** What Intern noted about a document that is not waiting: the codes, and what they say. */
 export interface ItemNote {
   /** The codes noted; none when the reason came as words this build has no codes for. */
   codes: string[];
+  /**
+   * Each code's few words and its note, a line each (`reasonLines`), for a
+   * tooltip - the Check cell's, the status's, the history's; or the words
+   * that came, for a reason with no codes.
+   */
   text: string;
 }
 
@@ -47,12 +52,12 @@ export function itemNote(item: QueueItem): ItemNote | undefined {
   if (item.status === 'ready' && !item.approved) {
     const codes = itemReasonCodes(item);
     const noted = noteCodes(codes);
-    if (noted.length) return { codes: noted, text: describeNotes(noted) };
+    if (noted.length) return { codes: noted, text: reasonLines(noted, { note: true }) };
     return item.reason && !codes.length ? { codes: [], text: item.reason } : undefined;
   }
   if (item.status === 'completed' && !keptOriginal(item)) {
     const noted = noteCodes(itemReasonCodes(item));
-    return noted.length ? { codes: noted, text: describeNotes(noted) } : undefined;
+    return noted.length ? { codes: noted, text: reasonLines(noted, { note: true }) } : undefined;
   }
   return undefined;
 }
@@ -89,12 +94,12 @@ export function carriedNotes(item: QueueItem): string | undefined {
 export type CheckTone = 'review' | 'failed' | 'ready' | 'noted' | 'quiet';
 
 export interface CheckCell {
-  /** A few words: "Date could be day- or month-first". */
+  /** A few words: "Date order unclear". */
   text: string;
   /** Further reasons, counted rather than listed. */
   more: number;
   tone: CheckTone;
-  /** The full sentence, for the tooltip. */
+  /** For the tooltip: each reason's few words and why, a line each, or the words that came. */
   title?: string;
 }
 
@@ -108,7 +113,10 @@ export interface CheckCell {
  * Undefined for a row with nothing to say yet (waiting, or being read).
  */
 export function checkCell(item: QueueItem): CheckCell | undefined {
-  const title = item.reason ? humanizeReason(item.reason) : undefined;
+  // Every reason by name, the ones counted as "+1 more" too, when the
+  // reason is the codes'; free text as it came.
+  const codes = itemReasonCodes(item);
+  const title = item.reason ? (codes.length && humanizeReason(item.reason) === humanizeReason(codes.join(', ')) ? reasonLines(codes) : humanizeReason(item.reason)) : undefined;
   if (item.status === 'ready') {
     if (item.approved) return { text: 'Approved', more: 0, tone: 'ready', title };
     if (item.copyOf !== undefined) return { text: 'Exact copy', more: 0, tone: 'quiet', title };
@@ -119,7 +127,7 @@ export function checkCell(item: QueueItem): CheckCell | undefined {
   }
   if (item.status === 'review' || item.status === 'failed') {
     const tone: CheckTone = item.status === 'failed' ? 'failed' : 'review';
-    const short = shortReason(itemReasonCodes(item));
+    const short = shortReason(codes);
     if (short) return { ...short, tone, title };
     // Free text - "Duplicate of ...", "Canceled." - is its own short form.
     if (title) return { text: title, more: 0, tone, title };
@@ -131,8 +139,10 @@ export function checkCell(item: QueueItem): CheckCell | undefined {
     const note = itemNote(item);
     if (note) return noteCell(note);
     // Not renamed with a note: what became of the file leads, and anything it carried is said as a note.
-    const short = shortOutcome(itemReasonCodes(item));
-    return short ? { ...short, tone: 'quiet', title: carriedNotes(item) ?? title } : undefined;
+    const short = shortOutcome(codes);
+    // What it carried, as notes, with what became of the file first (carriedNotes).
+    const carried = carriedNotes(item) !== undefined ? reasonLines(outcomeFirst(item.reasonCodes ?? []), { note: true }) : undefined;
+    return short ? { ...short, tone: 'quiet', title: carried ?? title } : undefined;
   }
   return undefined;
 }

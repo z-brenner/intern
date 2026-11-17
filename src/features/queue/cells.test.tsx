@@ -276,7 +276,7 @@ describe('queue cells', () => {
 
     const { data } = copyFrom(document.activeElement!);
     expect(data.get('text/plain')!.split('\r\n')).toEqual([
-      'Scan 1.pdf\t2024-01-02 Lease.pdf\t"Says ""hi""\tthen\nbreaks"\tModel unsure of its reading',
+      'Scan 1.pdf\t2024-01-02 Lease.pdf\t"Says ""hi""\tthen\nbreaks"\tModel unsure',
       'Scan 2 東京.pdf\t2024-02-03 Invoice — Café.pdf\tPlain.\tAll checks passed',
       'Scan 3.pdf\t\t\t',
     ]);
@@ -336,7 +336,7 @@ describe('queue cells', () => {
     const item = write.mock.calls[0][0][0] as FakeClipboardItem;
     expect(await item.parts['text/plain'].text()).toBe([
       'Original filename\tProposed filename\tDescription\tCheck',
-      'Scan 1.pdf\t2024-01-02 Lease.pdf\t"Says ""hi""\tthen\nbreaks"\tModel unsure of its reading',
+      'Scan 1.pdf\t2024-01-02 Lease.pdf\t"Says ""hi""\tthen\nbreaks"\tModel unsure',
       'Scan 2 東京.pdf\t2024-02-03 Invoice — Café.pdf\tPlain.\tAll checks passed',
       'Scan 3.pdf\t\t\t',
     ].join('\r\n'));

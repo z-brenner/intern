@@ -173,6 +173,16 @@ every rename and undo Intern has ever applied, exportable as CSV. A long queue h
 above it that narrows the rows by original name, proposed name, or a word
 from the description.
 
+The review panel leads with the document and what to check in it. **View
+document** (Alt+V, or V when no field has the cursor) opens the document
+inside Intern: a PDF or a PNG or JPEG picture as it is, and any document as
+the text Intern read from it, page by page, with the lines and the parties
+the proposed name rests on marked; Escape closes it. Nothing leaves the
+computer for it, and a file over 50 MB is shown only as its text. **Open**
+and **Show in folder** still hand the document to its own program or its
+folder. What to check is a row of a few words each - "Party unclear", "Date
+order unclear", "Model unsure" - and pressing one shows why.
+
 Clicking a row selects it; the **Details** button above the table opens the
 review panel for the selected row, and it stays open, following the selection,
 until it is closed. A name or a description typed there and not filed stays
