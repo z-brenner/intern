@@ -15,9 +15,9 @@ use intern_core::{
     crash_doubt_kind, source_path_key,
 };
 use intern_engine::{
-    DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
-    ReviewLevel, ReviewReason, RuleKind, Support, ValidatedProposal, approved_party,
-    compose_filename, compose_styled_filename, counterparty_view,
+    DocumentAnalysis, DocumentSource, EditedName, EntityKind, ExtractProgress, HouseRule,
+    HouseStyle, NameView, ProposalStatus, ReviewLevel, ReviewReason, RuleKind, Support,
+    ValidatedProposal, approved_party, compose_filename, compose_styled_filename,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
     is_a_spelling, is_own_name, lesson_from_edit, named_parties, party_and_more, party_as_named,
@@ -690,12 +690,19 @@ pub struct ProposalRecord {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub house_rules: Vec<HouseRule>,
     /// The person's own organization as Settings named it when `filename`
-    /// was composed. A party it names is left out of the name, so the name
-    /// and the Party folder carry the other side. Kept with the record so the
-    /// name can be read back exactly as it was composed, whatever Settings
-    /// says by then.
+    /// was composed. A name leads with it where the document names it, and
+    /// the subject and the Party folder carry the other side (see
+    /// [`NameView`]). Kept with the record so the name can be read back
+    /// exactly as it was composed, whatever Settings says by then.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub own_names: Vec<String>,
+    /// The document's own file name when it was read, without a
+    /// `NEEDS REVIEW - ` mark: where it says what the reading found, its
+    /// words for the type are kept, and a date it gives dates a reading
+    /// that found none (see [`NameView::with_original`]). Kept with the
+    /// record, as `own_names` is, so the name reads back as it was composed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_name: Option<String>,
     /// The name a document with nearly this text was already filed under -
     /// a second scan, a re-export, a copy saved again - when there is one.
     /// Such a document waits for a person rather than being filed twice.
@@ -804,6 +811,7 @@ impl ProposalRecord {
             revision: 1,
             house_rules: Vec::new(),
             own_names: Vec::new(),
+            original_name: None,
             near_duplicate_of: None,
             approved: false,
             reviewed: false,
@@ -840,22 +848,40 @@ impl ProposalRecord {
         Some(name_confidence(&self.analysis, doubts, waits))
     }
 
-    /// The validated facts as the name carries them: the document's words,
-    /// respelled the way the reviewer has taught Intern to, with the
-    /// person's own organization left out where the document names someone
-    /// else too. The one view the filename, the layout folder, a lesson
-    /// from an edit, and a filing report are all read from.
-    pub fn styled_proposal(&self) -> ValidatedProposal {
-        self.name_view().0
+    /// The validated facts as the name carries them (see [`NameView`]): the
+    /// document's words, respelled the way the reviewer has taught Intern
+    /// to, led by the organization the document is filed for - the
+    /// person's own where the document names it - with the subject after
+    /// it, and the document's own filename's words for its type where they
+    /// agree with the reading. The one view the filename, the layout
+    /// folder, a lesson from an edit, and a filing report are all read
+    /// from.
+    pub fn view(&self) -> NameView {
+        name_view_of(
+            &self.analysis,
+            &self.house_rules,
+            &self.own_names,
+            self.original_name.as_deref(),
+        )
     }
 
-    /// [`Self::styled_proposal`], and the parties it left out because they
-    /// are the person's own organization.
+    /// The name [`Self::view`] composes, with no other name to collide
+    /// with. `extension` is the source file's.
+    pub fn composed_name(&self, extension: &str) -> String {
+        self.view().compose(extension, &[]).value
+    }
+
+    /// The validated facts a filing is put away and reported under, as the
+    /// name carries them (see [`NameView::filed`]).
+    pub fn styled_proposal(&self) -> ValidatedProposal {
+        self.view().filed()
+    }
+
+    /// [`Self::styled_proposal`], and the person's own organization's
+    /// parties the name leaves out because it names someone else.
     pub fn name_view(&self) -> (ValidatedProposal, Vec<String>) {
-        let styled = HouseStyle::new(self.house_rules.clone())
-            .apply(&self.analysis.proposal)
-            .0;
-        counterparty_view(&styled, &self.own_names)
+        let view = self.view();
+        (view.filed(), view.left_out)
     }
 
     /// Whether a learned spelling no person has checked yet changed this
@@ -887,10 +913,15 @@ impl ProposalRecord {
             return false;
         }
         let named = |rules: Vec<HouseRule>| {
-            let (styled, applied) = HouseStyle::new(rules).apply(&self.analysis.proposal);
-            let (named, _) = counterparty_view(&styled, &self.own_names);
-            let name = compose_styled_filename(&named, &applied, extension, &[]).value;
-            (name, named.document_type, named.parties)
+            let view = name_view_of(
+                &self.analysis,
+                &rules,
+                &self.own_names,
+                self.original_name.as_deref(),
+            );
+            let name = view.compose(extension, &[]).value;
+            let filed = view.filed();
+            (name, filed.document_type, filed.parties)
         };
         let kept = self
             .house_rules
@@ -992,11 +1023,21 @@ impl ProposalRecord {
             .collect()
     }
 
-    /// The parties [`Self::filename`] gives, each exactly as the name writes
-    /// it (see [`named_parties`]): the words a party chosen in review takes
-    /// the place of. `extension` is the source file's.
+    /// The parties [`Self::filename`] gives after its entity, each exactly as
+    /// the name writes it (see [`named_parties`]): the words a party chosen
+    /// in review takes the place of. The entity is not among them: a party
+    /// chosen in review names the other side. A name an earlier build
+    /// composed is read as it composed it. `extension` is the source file's.
     pub fn named_parties(&self, extension: &str) -> Vec<String> {
-        named_parties(&self.styled_proposal(), extension, &self.filename)
+        match self
+            .view()
+            .read_edit(extension, &self.filename, &self.filename)
+        {
+            EditedName::Subject {
+                grammar, proposed, ..
+            } => named_parties(grammar, extension, &proposed),
+            _ => Vec::new(),
+        }
     }
 
     /// The validated facts as the name `filename` the document is filed
@@ -1076,23 +1117,77 @@ impl ProposalRecord {
     /// its own is as often the party - "Trustee for Acme Corp", typed short
     /// where "Trustee for Acme Corporation" is offered - and nothing here
     /// tells the two apart.
+    ///
+    /// The name's entity is read first (see [`NameView::read_edit`]). Kept
+    /// as proposed, or with no entity, what follows it is read as above,
+    /// and the entity's party is filed beside the parties read (see
+    /// [`NameView::with_parties`]). Where only the entity changed, the words
+    /// put in its place stand for its party, and the other side is as
+    /// proposed. A name an earlier build proposed, before names led with
+    /// their entity, is read as that build read it.
     pub fn as_filed(&self, extension: &str, filename: &str) -> ValidatedProposal {
-        let styled = self.styled_proposal();
-        let mut filed = proposal_as_applied(&styled, filename);
+        let view = self.view();
         if self.is_synthetic() {
-            return filed;
+            return proposal_as_applied(&view.filed(), filename);
         }
-        let proposed = compose_styled_filename(&styled, &self.house_rules, extension, &[]).value;
-        // A name approved as proposed - unchanged, or filed without review,
-        // its date or a collision suffix aside - edits nothing, and none of
-        // what reads an edit below comes into it: it is filed exactly as
-        // alpha.17 filed it, under the party the name gives (see
-        // `proposed_party`).
-        if same_stem(extension, &proposed, filename) {
-            if let Some(party) = proposed_party(&styled, extension, &proposed) {
+        let proposed = view.compose(extension, &[]).value;
+        if view.entity.is_some() && !same_stem(extension, &proposed, filename) {
+            let legacy = view.legacy();
+            let earlier = compose_styled_filename(legacy, &self.house_rules, extension, &[]).value;
+            if same_stem(extension, &earlier, filename) {
+                let mut filed = proposal_as_applied(legacy, filename);
+                filed.parties = self.parties_read(legacy, extension, &earlier, filename).0;
+                return filed;
+            }
+        }
+        let entity = view.entity.as_ref().map(|entity| entity.party.clone());
+        let (filed, edited) = match view.read_edit(extension, &proposed, filename) {
+            EditedName::Subject {
+                grammar,
+                proposed,
+                approved,
+            } => {
+                let (parties, edited) = self.parties_read(grammar, extension, &proposed, &approved);
+                (view.with_parties(entity, parties), edited)
+            }
+            EditedName::Entity { words } => (
+                view.with_parties(Some(words), view.subject.parties.clone()),
+                true,
+            ),
+            EditedName::Rewritten => {
+                let (parties, edited) =
+                    self.parties_read(&view.subject, extension, &proposed, filename);
+                (view.with_parties(entity, parties), edited)
+            }
+        };
+        let mut filed = proposal_as_applied(&filed, filename);
+        if edited {
+            self.put_back_rejected(&mut filed, extension, filename);
+        }
+        filed
+    }
+
+    /// The parties `grammar` gives as the name `approved` gives them, where
+    /// `grammar` composed the name `proposed` (see [`Self::as_filed`]), and
+    /// whether `approved` edits `proposed` at all: a name approved as
+    /// proposed - unchanged, or filed without review, its date or a
+    /// collision suffix aside - edits nothing, and none of what reads an
+    /// edit comes into it: it is filed exactly as alpha.17 filed it, under
+    /// the party the name gives (see [`proposed_party`]).
+    fn parties_read(
+        &self,
+        grammar: &ValidatedProposal,
+        extension: &str,
+        proposed: &str,
+        filename: &str,
+    ) -> (Vec<String>, bool) {
+        let styled = grammar;
+        let mut filed = grammar.clone();
+        if same_stem(extension, proposed, filename) {
+            if let Some(party) = proposed_party(styled, extension, proposed) {
                 put_first(&mut filed.parties, party);
             }
-            return filed;
+            return (filed.parties, false);
         }
         let choices = self.party_choices();
         let chosen = named_choices(
@@ -1100,7 +1195,7 @@ impl ProposalRecord {
                 choices.iter().map(String::as_str),
                 &self.house_rules,
                 extension,
-                &proposed,
+                proposed,
                 filename,
             )
             .into_iter()
@@ -1114,21 +1209,19 @@ impl ProposalRecord {
             &self.house_rules,
             &chosen,
             extension,
-            &proposed,
+            proposed,
             filename,
         ) {
-            filed.parties = parties;
-            self.put_back_rejected(&mut filed, extension, filename);
-            return filed;
+            return (parties, true);
         }
         let (chosen, chosen_spellings) = match chosen.as_slice() {
             [(party, spellings, _)] => (Some(party.clone()), spellings.clone()),
             _ => (None, Vec::new()),
         };
-        let mut lesson = respelled_party(&styled, extension, &proposed, filename);
+        let mut lesson = respelled_party(styled, extension, proposed, filename);
         let mut read = match &lesson {
             Some(edit) => Some(edit.to.clone()),
-            None => approved_party(&styled, extension, &proposed, filename),
+            None => approved_party(styled, extension, proposed, filename),
         };
         // The document's own word for a party a rule respelled, kept with
         // another party or a note after it ("Acme Corporation from Jane
@@ -1198,8 +1291,7 @@ impl ProposalRecord {
         } else if let Some(party) = chosen.or(read) {
             put_first(&mut filed.parties, party);
         }
-        self.put_back_rejected(&mut filed, extension, filename);
-        filed
+        (filed.parties, true)
     }
 
     /// The document's own words, in `filed`, for each spelling the person
@@ -1256,7 +1348,7 @@ impl ProposalRecord {
                         .document_type
                         .as_deref()
                         .is_some_and(|spelled| HouseRule::key(spelled) == HouseRule::key(&rule.to))
-                        && keeps_spelling(&undone, extension, filename)
+                        && keeps_in(&self.view(), &undone, extension, filename)
                     {
                         filed.document_type = Some(own.clone());
                     }
@@ -1879,6 +1971,51 @@ fn keeps_spelling(rule: &HouseRule, extension: &str, approved: &str) -> bool {
     }
 }
 
+/// [`keeps_spelling`] of a name `view` composes: a type's spelling where
+/// the subject starts, after the entity the name leads with, and a party's
+/// anywhere in the name - the entity is a party too. `extension` is the
+/// source file's.
+fn keeps_in(view: &NameView, rule: &HouseRule, extension: &str, name: &str) -> bool {
+    match rule.kind {
+        RuleKind::Party => keeps_spelling(rule, extension, name),
+        RuleKind::DocumentType => keeps_spelling(
+            rule,
+            extension,
+            &view.without_entity(name).unwrap_or_else(|| name.to_owned()),
+        ),
+    }
+}
+
+/// The view of `analysis`'s reading a name is composed from (see
+/// [`NameView`]): respelled by the house-style rules `rules`, led by the
+/// person's own organization's names `own_names` where the document names
+/// it, and given the words of the document's own file name `original`
+/// where they agree with the reading.
+fn name_view_of(
+    analysis: &DocumentAnalysis,
+    rules: &[HouseRule],
+    own_names: &[String],
+    original: Option<&str>,
+) -> NameView {
+    let (styled, applied) = HouseStyle::new(rules.to_vec()).apply(&analysis.proposal);
+    let stem = original.map(|name| {
+        Path::new(name).file_stem().map_or_else(
+            || name.to_owned(),
+            |stem| stem.to_string_lossy().into_owned(),
+        )
+    });
+    NameView::of(&styled, &applied, analysis.facts.as_ref(), own_names)
+        .with_original(stem.as_deref())
+}
+
+/// The file name a document has where it waits, without the
+/// `NEEDS REVIEW - ` mark Intern gives one it could not read: the name a
+/// person or another system gave it.
+fn original_name_of(source_path: &Path) -> Option<String> {
+    let name = source_path.file_name()?.to_string_lossy().into_owned();
+    Some(intern_core::strip_needs_review_prefix(&name).map_or(name.clone(), str::to_owned))
+}
+
 /// Each run of `words` that is the key `party`, as word ranges: where a
 /// name written as house style compares spellings (see [`name_words`])
 /// holds the party whole.
@@ -2026,22 +2163,23 @@ impl Spellings {
         )
     }
 
-    /// `proposal` respelled by the rules in force that a name composed
-    /// from it applies (see [`shown_rules`]), with those rules: every
-    /// checked rule that fires, and an unchecked one only where the name
-    /// shows it. `own_names` are the person's organization's names the name
-    /// is composed by, and `extension` the source file's.
-    fn styled(
+    /// The rules in force that a name composed from `analysis`'s reading
+    /// applies (see [`shown_rules`]): every checked rule that fires, and an
+    /// unchecked one only where the name shows it. `own_names` are the
+    /// person's organization's names the name is composed by, `original`
+    /// the document's own file name (see [`NameView::with_original`]), and
+    /// `extension` the source file's.
+    fn shown(
         &self,
-        proposal: &ValidatedProposal,
+        analysis: &DocumentAnalysis,
         own_names: &[String],
+        original: Option<&str>,
         extension: &str,
-    ) -> (ValidatedProposal, Vec<HouseRule>) {
-        let (_, fired) = self.style().apply(proposal);
-        let rules = shown_rules(proposal, fired, own_names, extension, |rule| {
+    ) -> Vec<HouseRule> {
+        let (_, fired) = self.style().apply(&analysis.proposal);
+        shown_rules(analysis, fired, own_names, original, extension, |rule| {
             self.checked(rule)
-        });
-        HouseStyle::new(rules).apply(proposal)
+        })
     }
 
     /// Whether a person has checked `rule`, as a name applied it: learned
@@ -2082,30 +2220,32 @@ impl Spellings {
 /// leaves room for one the name shed - so the rules are asked again until
 /// none is taken out.
 fn shown_rules(
-    proposal: &ValidatedProposal,
+    analysis: &DocumentAnalysis,
     fired: Vec<HouseRule>,
     own_names: &[String],
+    original: Option<&str>,
     extension: &str,
     checked: impl Fn(&HouseRule) -> bool,
 ) -> Vec<HouseRule> {
-    let name = |rules: Vec<HouseRule>| {
-        let (styled, applied) = HouseStyle::new(rules).apply(proposal);
-        let (named, _) = counterparty_view(&styled, own_names);
-        compose_styled_filename(&named, &applied, extension, &[]).value
+    let compose = |rules: &[HouseRule]| {
+        let view = name_view_of(analysis, rules, own_names, original);
+        let name = view.compose(extension, &[]).value;
+        (view, name)
     };
     let mut rules = fired;
     loop {
-        let named = name(rules.clone());
+        let (view, named) = compose(&rules);
         let hidden = rules.iter().position(|rule| {
             !checked(rule)
-                && (!keeps_spelling(rule, extension, &named)
-                    || name(
-                        rules
+                && (!keeps_in(&view, rule, extension, &named)
+                    || compose(
+                        &rules
                             .iter()
                             .filter(|other| *other != rule)
                             .cloned()
-                            .collect(),
-                    ) == named)
+                            .collect::<Vec<_>>(),
+                    )
+                    .1 == named)
         });
         match hidden {
             Some(index) => {
@@ -3588,10 +3728,18 @@ impl Pipeline {
         let mut analysis = analysis;
         let dated_from = date_from_the_file(&mut analysis, &item.source_path, extension, existing);
         let spellings = self.repository.spellings()?;
-        let (styled, house_rules) = spellings.styled(&analysis.proposal, &own_names, extension);
-        let (named, _) = counterparty_view(&styled, &own_names);
-        let filename =
-            self.compose_for_target(&item.source_path, &named, &house_rules, extension, existing);
+        // The name the document arrived with, whose words a name keeps
+        // where they say what the reading found.
+        let original_name = original_name_of(&item.source_path);
+        let house_rules =
+            spellings.shown(&analysis, &own_names, original_name.as_deref(), extension);
+        let view = name_view_of(
+            &analysis,
+            &house_rules,
+            &own_names,
+            original_name.as_deref(),
+        );
+        let filename = self.compose_for_target(&item.source_path, &view, extension, existing);
         // The exact-bytes check ran before analysis. This one needs the text
         // and the date, so it runs after: a second scan, a re-export, or a
         // copy saved again with new metadata says what a filed document
@@ -3627,6 +3775,7 @@ impl Pipeline {
             revision: 1,
             house_rules,
             own_names,
+            original_name,
             near_duplicate_of,
             approved: false,
             reviewed: false,
@@ -3866,32 +4015,28 @@ impl Pipeline {
     /// document is going to. Without readable settings the source folder's
     /// names (`fallback`) stand in.
     ///
-    /// `proposal` is the styled proposal and `house_rules` the rules that
-    /// styled it: what a rule spelled is the reviewer's, and is written as
-    /// they typed it.
+    /// `view` is what the name is composed from (see [`NameView`]): what a
+    /// rule spelled is the reviewer's, and is written as they typed it.
     fn compose_for_target(
         &self,
         source_path: &Path,
-        proposal: &ValidatedProposal,
-        house_rules: &[HouseRule],
+        view: &NameView,
         extension: &str,
         fallback: &[String],
     ) -> String {
-        let named = compose_styled_filename(proposal, house_rules, extension, &[]).value;
+        let named = view.compose(extension, &[]).value;
         let existing = match self.settings.load() {
             Ok(settings) => names_beside(
                 &target_folder(
                     &settings,
                     source_path,
-                    &proposal_as_applied(proposal, &named),
+                    &proposal_as_applied(&view.filed(), &named),
                 ),
                 source_path,
             ),
             Err(_) => fallback.to_vec(),
         };
-        compose_styled_filename(
-            proposal,
-            house_rules,
+        view.compose(
             extension,
             &existing.iter().map(String::as_str).collect::<Vec<_>>(),
         )
@@ -4097,8 +4242,18 @@ impl Pipeline {
             .and_then(|value| value.to_str())
             .unwrap_or_default()
             .to_owned();
-        let (styled, house_rules) =
-            spellings.styled(&record.analysis.proposal, &own_names, &extension);
+        // A record an earlier build stored kept no file name: the one the
+        // document waits under is the one it arrived with.
+        let original_name = record
+            .original_name
+            .clone()
+            .or_else(|| original_name_of(&item.source_path));
+        let house_rules = spellings.shown(
+            &record.analysis,
+            &own_names,
+            original_name.as_deref(),
+            &extension,
+        );
         // A name held for a spelling checked since - "Use on its own" -
         // says the spelling has not been checked: the reason is taken back,
         // though the name is as it was.
@@ -4110,22 +4265,22 @@ impl Pipeline {
         if house_rules == record.house_rules && own_names == record.own_names && !checked_since {
             return Ok(false);
         }
-        let (named, _) = counterparty_view(&styled, &own_names);
+        let view = name_view_of(
+            &record.analysis,
+            &house_rules,
+            &own_names,
+            original_name.as_deref(),
+        );
         let existing = names_beside(
             item.source_path.parent().unwrap_or_else(|| Path::new(".")),
             &item.source_path,
         );
-        let filename = self.compose_for_target(
-            &item.source_path,
-            &named,
-            &house_rules,
-            &extension,
-            &existing,
-        );
+        let filename = self.compose_for_target(&item.source_path, &view, &extension, &existing);
         let renamed = filename != record.filename;
         record.filename = filename;
         record.house_rules = house_rules;
         record.own_names = own_names;
+        record.original_name = original_name;
         let held = hold_unchecked_spelling(&mut record, &extension, spellings);
         if renamed || (held && item.status == QueueStatus::Ready) {
             record.revision += 1;
@@ -4341,13 +4496,29 @@ impl Pipeline {
         extension: &str,
         approved: &str,
     ) -> PipelineResult<()> {
-        let Some(lesson) = lesson_from_edit(
-            &record.styled_proposal(),
-            extension,
-            &record.filename,
-            approved,
-        )
-        .map(|lesson| {
+        let view = record.view();
+        // What the edit is read as around the name's entity: a respelling of
+        // the entity's party where only the entity changed and it is one of
+        // the name's parties - the person's own organization is named as
+        // Settings names it, and an issuer the name's parties do not hold is
+        // spelled by no rule - and otherwise what follows it, read with the
+        // grammar that composed it. A type the document's own filename
+        // gave is that file's word, not the reading's, and teaches nothing.
+        let lesson = match view.read_edit(extension, &record.filename, approved) {
+            EditedName::Subject {
+                grammar,
+                proposed,
+                approved,
+            } => lesson_from_edit(grammar, extension, &proposed, &approved)
+                .filter(|lesson| lesson.kind == RuleKind::Party || view.original_type.is_none()),
+            EditedName::Entity { words } => view
+                .entity
+                .as_ref()
+                .filter(|entity| entity.kind == EntityKind::Party)
+                .map(|entity| HouseRule::new(RuleKind::Party, entity.party.clone(), words)),
+            EditedName::Rewritten => None,
+        };
+        let Some(lesson) = lesson.map(|lesson| {
             match record.house_rules.iter().find(|applied| {
                 applied.kind == lesson.kind && HouseRule::key(&applied.to) == lesson.from_key()
             }) {
@@ -6108,6 +6279,7 @@ impl Pipeline {
         let rejected = match proposed.as_ref().filter(|record| !record.is_synthetic()) {
             Some(record) if !record.house_rules.is_empty() => {
                 let spellings = self.repository.spellings().ok();
+                let view = record.view();
                 record
                     .house_rules
                     .iter()
@@ -6115,7 +6287,7 @@ impl Pipeline {
                         !spellings
                             .as_ref()
                             .is_some_and(|spellings| spellings.checked(rule))
-                            && !keeps_spelling(rule, source_extension, &filename)
+                            && !keeps_in(&view, rule, source_extension, &filename)
                     })
                     .cloned()
                     .collect()
@@ -8964,15 +9136,22 @@ mod party_choice_tests {
 mod as_filed_tests {
     use intern_engine::{
         Evidence, HouseRule, ModelFacts, ModelProposal, PartyFact, PartyRelation, RuleKind,
-        Support, ValidatedFacts, ValidatedParty, ValidatedProposal, compose_styled_filename,
+        Support, ValidatedFacts, ValidatedParty, ValidatedProposal,
     };
 
     use super::{ProposalRecord, layout_subfolder, shown_rules};
     use crate::settings::DestinationLayout;
 
+    /// The person's own organization, which every document here names
+    /// besides its parties: the name leads with it, and what follows it -
+    /// the subject these read - gives the parties as the engine's grammar
+    /// composes them, each of the document's parties among them.
+    const OWN: &str = "Wingtip Partners";
+
     /// A `document_type` whose proposal gives `parties` behind `relation`,
-    /// in a document validation found `found` in as well, named with the
-    /// party rules `rules` ("from -> to") applied, as Intern proposes it.
+    /// in a document validation found `found` and the person's own
+    /// organization ([`OWN`]) in as well, named with the party rules
+    /// `rules` ("from -> to") applied, as Intern proposes it.
     fn record(
         document_type: &str,
         (relation, parties): (PartyRelation, &[&str]),
@@ -8982,9 +9161,11 @@ mod as_filed_tests {
         let all = parties
             .iter()
             .chain(found)
+            .chain([&OWN])
             .map(|name| (*name).to_owned())
             .collect::<Vec<_>>();
         let mut record = ProposalRecord::synthetic(String::new(), String::new());
+        record.own_names = vec![OWN.to_owned()];
         record.analysis.proposal = ValidatedProposal {
             document_type: Some(document_type.into()),
             document_date: Some("2024-04-12".into()),
@@ -9025,9 +9206,7 @@ mod as_filed_tests {
             .map(|(from, to)| HouseRule::new(RuleKind::Party, *from, *to))
             .collect();
         record.manual = false;
-        record.filename =
-            compose_styled_filename(&record.styled_proposal(), &record.house_rules, "pdf", &[])
-                .value;
+        record.filename = record.composed_name("pdf");
         record
     }
 
@@ -9035,7 +9214,7 @@ mod as_filed_tests {
     /// the name `approved` (without date or extension) is approved for it.
     fn filed(record: &ProposalRecord, approved: &str) -> Vec<String> {
         record
-            .as_filed("pdf", &format!("2024-04-12 {approved}.pdf"))
+            .as_filed("pdf", &format!("2024-04-12 {OWN} - {approved}.pdf"))
             .parties
     }
 
@@ -9470,13 +9649,11 @@ mod as_filed_tests {
             agreement,
             "Employment Agreement - Jane Doe",
         )];
-        record.filename =
-            compose_styled_filename(&record.styled_proposal(), &record.house_rules, "pdf", &[])
-                .value;
+        record.filename = record.composed_name("pdf");
         record.rejected_rules = record.house_rules.clone();
         let filed = record.as_filed(
             "pdf",
-            "2024-04-12 Employment Agreement with John Smith re Probate.pdf",
+            &format!("2024-04-12 {OWN} - Employment Agreement with John Smith re Probate.pdf"),
         );
         if filed.document_type.as_deref() != Some(agreement) {
             failed.push(format!("type filed as {:?}", filed.document_type));
@@ -9509,12 +9686,13 @@ mod as_filed_tests {
             "Beacon Staffing LLC and Jane Doe",
         );
         let short = HouseRule::new(RuleKind::Party, "Acme Corporation", "Acme");
-        let proposal = &third.analysis.proposal;
+        let analysis = &third.analysis;
         let used = |fired: &[&HouseRule], checked: bool| {
             shown_rules(
-                proposal,
+                analysis,
                 fired.iter().map(|rule| (*rule).clone()).collect(),
-                &[],
+                &[OWN.to_owned()],
+                None,
                 "pdf",
                 |_| checked,
             )
@@ -9524,9 +9702,10 @@ mod as_filed_tests {
         assert_eq!(used(&[&short, &joined], false), vec![short.clone()]);
         assert_eq!(
             shown_rules(
-                proposal,
+                analysis,
                 vec![short.clone(), joined.clone()],
-                &[],
+                &[OWN.to_owned()],
+                None,
                 "pdf",
                 |rule| *rule == joined
             ),
@@ -9537,9 +9716,10 @@ mod as_filed_tests {
         let own = HouseRule::new(RuleKind::Party, "Acme Corporation", "ACME CORPORATION");
         assert_eq!(
             shown_rules(
-                proposal,
+                analysis,
                 vec![own.clone()],
                 &["Acme Corporation".into()],
+                None,
                 "pdf",
                 |_| false
             ),
@@ -10061,8 +10241,7 @@ mod hold_tests {
     use intern_core::QueueStatus;
     use intern_engine::{
         DocumentAnalysis, DocumentSource, Evidence, ExtractProgress, HouseRule, PartyRelation,
-        ProposalStatus, ReviewLevel, ReviewReason, RuleKind, ValidatedProposal,
-        compose_styled_filename, fingerprint,
+        ProposalStatus, ReviewLevel, ReviewReason, RuleKind, ValidatedProposal, fingerprint,
     };
     use rusqlite::{Connection, params};
 
@@ -10144,9 +10323,7 @@ mod hold_tests {
             evidence: Evidence::default(),
         };
         record.house_rules = vec![HouseRule::new(RuleKind::Party, "Acme Corporation", "Acme")];
-        record.filename =
-            compose_styled_filename(&record.styled_proposal(), &record.house_rules, "pdf", &[])
-                .value;
+        record.filename = record.composed_name("pdf");
         let connection = Connection::open(&database).unwrap();
         connection
             .execute(
@@ -10238,8 +10415,7 @@ mod hold_tests {
                 confidence: 0.9,
                 evidence: Evidence::default(),
             };
-            record.filename =
-                compose_styled_filename(&record.styled_proposal(), &[], "pdf", &[]).value;
+            record.filename = record.composed_name("pdf");
             record.analysis.filename.clone_from(&record.filename);
             // A note at balanced that strict holds: a type the document
             // does not confirm. (A type its title gave is minor, and
@@ -10349,8 +10525,7 @@ mod hold_tests {
                 confidence: 0.9,
                 evidence: Evidence::default(),
             };
-            record.filename =
-                compose_styled_filename(&record.styled_proposal(), &[], "pdf", &[]).value;
+            record.filename = record.composed_name("pdf");
             record.analysis.filename.clone_from(&record.filename);
             record.analysis.status = ProposalStatus::Ready;
             record.analysis.text_fingerprint = Some(fingerprint::encode(FINGERPRINT));
@@ -10441,8 +10616,7 @@ mod hold_tests {
                 confidence: 0.9,
                 evidence: Evidence::default(),
             };
-            record.filename =
-                compose_styled_filename(&record.styled_proposal(), &[], "pdf", &[]).value;
+            record.filename = record.composed_name("pdf");
             let connection = Connection::open(&database).unwrap();
             connection
                 .execute(
@@ -10527,13 +10701,15 @@ mod hold_tests {
             document_type: Some("Employment Agreement".into()),
             document_date: Some("2024-04-12".into()),
             date_role: None,
-            parties: vec!["John Smith".into(), "Acme Corporation".into()],
+            // Led by the first organization until Settings names the
+            // second as the person's own.
+            parties: vec!["Beacon Staffing LLC".into(), "Acme Corporation".into()],
             party_relation: PartyRelation::Between,
             description: "An agreement.".into(),
             confidence: 0.9,
             evidence: Evidence::default(),
         };
-        record.filename = compose_styled_filename(&record.styled_proposal(), &[], "pdf", &[]).value;
+        record.filename = record.composed_name("pdf");
         let filing = record.filename.clone();
         let connection = Connection::open(&database).unwrap();
         connection

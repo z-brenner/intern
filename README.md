@@ -16,6 +16,12 @@ The first line is the point of the whole thing: `2026-04-09` was the date the
 statement of work was signed, and `2026-04-01` is the date it takes effect. Only
 one of those is what the document *is*.
 
+Those are the names the corpus scores. The name a document is filed under
+leads with the organization it is for - `2026-04-01 Ridgeline Cartography -
+Statement of Work with Contoso Worldwide, Inc.pdf`, or, with Contoso named as
+your organization, `2026-04-01 Contoso Worldwide - Statement of Work with
+Ridgeline Cartography LLC.pdf` (see [The filename](#the-filename)).
+
 Alongside the name it produces one sentence saying what the document actually
 concerns, composed from the facts it found, and the line of the document behind
 every one of them. If anything is unsupported, the document goes to review
@@ -555,8 +561,25 @@ a note as ready. Choose Strict before going back to one.
 ## The filename
 
 ```text
-YYYY-MM-DD <what the document is> <the party or parties>.<original extension>
+YYYY-MM-DD <Entity> - <Subject>.<original extension>
+
+2026-10-16 Vistage International - Host Chair SOW for John Smith.pdf
+2024-11-09 EGN Denmark - Incorporation Email Communications.pdf
+2025-04-30 Nimbus Orchard Supply - Invoice.pdf
+2026-12-29 Notice of Termination - John Smith.pdf
 ```
+
+The entity is the organization the document is filed for: your own, where
+Settings names it under **Your organization** and the document names it;
+otherwise the first organization among the document's parties, or the one
+that issued it where the name is about the other side (a termination notice
+"for John Smith" is the employer's). It is written without its legal form -
+`Vistage Malaysia`, not `Vistage Malaysia Sdn. Bhd.` - and where you list
+several of your organization's names (`Vistage International`, `Vistage
+Malaysia`, `EGN Denmark`), the one that matches the document most specifically
+leads. The subject is what the document is, the connecting word, and the
+other side (`Host Chair SOW for John Smith`); it never repeats the entity. A
+document that names only people keeps the plain shape, the last line above.
 
 The date is the one that *defines* the document, not the first, last, or
 easiest one to find: an agreement's effective date, a notice's notice date, an
@@ -571,6 +594,18 @@ is read from the document's own wording around it (`Effective Date:`,
 model's habit, and a document the model could not type but whose title names
 a type (`MUTUAL NON-DISCLOSURE AGREEMENT`, `Board Meeting Minutes`) is named
 from the title and sent to review with the reason shown.
+
+A file that arrives already named well keeps its words. A name already in this
+shape, with the document's date, is kept as it is, and the file is not
+renamed. One without the date in front - `Vistage Malaysia - Employment
+Termination Letter for Johnny Appleseed 26.03.2025` - or with its parts in
+another order - `Host Chair SOW - John Smith - Vistage International` - keeps
+its words for the type, put in order with the date first. Only a name that
+agrees with what Intern read counts: it must name the organization and the
+other side, its words must give the document's type, and any date in it must
+be the document's (written one way only - `03.04.2025` could be either). A
+scanner's or a camera's name (`scan0001`, `IMG_1234`, `Document1`) says
+nothing and is ignored.
 
 Names are sanitized for Windows, keep the original extension, shed the least
 identifying detail first when they would be too long to scan, and get a numeric
@@ -604,7 +639,9 @@ what was left on the table.
 The document says "Contoso Worldwide, Inc."; you call it "Contoso". Respell a
 party or a document type in review and Intern remembers it. The second time you
 make the same change it becomes the spelling Intern uses. One edit is a
-decision about one document; two are a preference.
+decision about one document; two are a preference. The organization a name
+leads with is respelled the same way, except your own, which is spelled as
+Settings names it.
 
 A spelling in use still fills in names, but every name it changes waits for
 you in review, even with automatic renaming on, until you choose "Use on its

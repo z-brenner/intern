@@ -6127,7 +6127,8 @@ const BODY_NOUNS: &[&str] = &[
 /// ("Director, Office of Prescription Drug Promotion", "Member, Board of
 /// Directors"). Only a party's name is read this way: a line of an address
 /// or a signature block that ends on "Committee" may still be a post's.
-fn is_organization_name(name: &str) -> bool {
+/// The name's entity is chosen with it too ([`crate::own_names`]).
+pub(crate) fn is_organization_name(name: &str) -> bool {
     if is_organization(name) {
         return true;
     }

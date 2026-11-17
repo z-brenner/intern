@@ -96,7 +96,7 @@ fn undated(date: (&'static str, &'static str), notes: &[ReviewReason]) -> Doc {
 }
 
 fn name_for(iso: &str) -> String {
-    format!("{iso} Employment Agreement between John Smith and Acme Corporation.pdf")
+    format!("{iso} Acme - Employment Agreement with John Smith.pdf")
 }
 
 /// The reader and the model in one: it reads each file as the agreement of
@@ -591,14 +591,14 @@ fn a_near_duplicate_and_an_unchecked_spelling_still_hold_at_balanced() {
     rig.pipeline
         .approve(
             taught,
-            "2024-04-12 Employment Agreement between John Smith and Acme.pdf",
+            "2024-04-12 ACME Corp - Employment Agreement with John Smith.pdf",
             "A sentence about the agreement.",
         )
         .unwrap();
     let rule = rig.pipeline.learned_rules().unwrap().remove(0);
     assert_eq!(
         (rule.from.as_str(), rule.to.as_str()),
-        ("Acme Corporation", "Acme")
+        ("Acme Corporation", "ACME Corp")
     );
     rig.pipeline.use_rule(rule.id).unwrap();
     rig.save(|settings| settings.automatic_rename = true);
@@ -607,7 +607,7 @@ fn a_near_duplicate_and_an_unchecked_spelling_still_hold_at_balanced() {
     let record = rig.record(respelled);
     assert_eq!(
         record.filename,
-        "2024-05-03 Employment Agreement between John Smith and Acme.pdf"
+        "2024-05-03 ACME Corp - Employment Agreement with John Smith.pdf"
     );
     assert_eq!(
         record.reasons,
@@ -1553,7 +1553,7 @@ fn a_document_both_levels_judge_alike_is_left_where_it_is() {
     rig.pipeline
         .approve(
             taught,
-            "2024-04-12 Employment Agreement between John Smith and Acme.pdf",
+            "2024-04-12 ACME Corp - Employment Agreement with John Smith.pdf",
             "A sentence about the agreement.",
         )
         .unwrap();

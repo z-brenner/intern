@@ -9,9 +9,19 @@
 //! 2026-04-01 Statement of Work between Acme and Contoso.pdf
 //! ```
 //!
+//! That is the engine's own name, and the subject of the name the queue
+//! files under, which leads with the organization the document is filed
+//! for when there is one (see [`crate::own_names::NameView`]):
+//!
+//! ```text
+//! YYYY-MM-DD <entity> - <subject>.<original extension>
+//! 2026-10-16 Vistage International - Host Chair SOW for John Smith.pdf
+//! ```
+//!
 //! When the name would be too long to scan, detail is shed from the least
 //! identifying end first: the second party, then the party clause, then the
-//! document type.
+//! document type. The entity at the front is kept while the type still has
+//! room beside it.
 //!
 //! A type or a party printed in capitals - a letterhead, an OCR'd scan - is
 //! title-cased for the name (`display_case`); a spelling a reviewer chose
@@ -28,6 +38,12 @@ use crate::domain::{ComposedName, PartyRelation, ValidatedProposal};
 /// Long enough to stay specific, short enough to read in a folder listing.
 pub const MAX_FILENAME_CHARS: usize = 120;
 const MIN_STEM_CHARS: usize = 4;
+/// The fewest characters of a type a name keeps beside its entity once the
+/// type has to be cut: fewer, and the entity goes rather than leave a type
+/// nobody can read.
+const MIN_TYPE_BESIDE_ENTITY: usize = 12;
+/// What stands between a name's entity and its subject.
+pub(crate) const ENTITY_SEPARATOR: &str = " - ";
 /// What a name says where the document type should be when there is none.
 pub(crate) const DEFAULT_TYPE: &str = "Document";
 
@@ -51,6 +67,29 @@ pub(crate) fn compose_spelled(
     chosen_types: &[&str],
     chosen_parties: &[&str],
 ) -> ComposedName {
+    compose_led(
+        proposal,
+        None,
+        extension,
+        existing_names,
+        chosen_types,
+        chosen_parties,
+    )
+}
+
+/// [`compose_spelled`] for a name that leads with an entity: `lead` is the
+/// entity's words and how they are written, put between the date and the
+/// type with [`ENTITY_SEPARATOR`]. `None`, or words with nothing printable
+/// in them, compose the name [`compose_spelled`] does.
+pub(crate) fn compose_led(
+    proposal: &ValidatedProposal,
+    lead: Option<(&str, Spelling)>,
+    extension: &str,
+    existing_names: &[&str],
+    chosen_types: &[&str],
+    chosen_parties: &[&str],
+) -> ComposedName {
+    let lead = lead.and_then(|(words, spelling)| entity_segment(words, spelling));
     let spelling = |chosen: &[&str], value: &str| {
         if chosen.contains(&value) {
             Spelling::Chosen
@@ -92,6 +131,7 @@ pub(crate) fn compose_spelled(
         };
         let value = fit(
             &date,
+            lead.as_deref(),
             &document_type,
             &parties,
             proposal.party_relation,
@@ -108,9 +148,11 @@ pub(crate) fn compose_spelled(
     }
 }
 
-/// Builds `date + type + party clause`, shedding detail until it fits.
+/// Builds `date + [entity - ] type + party clause`, shedding detail until it
+/// fits.
 fn fit(
     date: &str,
+    lead: Option<&str>,
     document_type: &str,
     parties: &[String],
     relation: PartyRelation,
@@ -138,9 +180,10 @@ fn fit(
     };
 
     let attempts = [
-        stem(date, document_type, parties, relation),
+        stem(date, lead, document_type, parties, relation),
         stem(
             date,
+            lead,
             document_type,
             parties
                 .first()
@@ -148,13 +191,38 @@ fn fit(
                 .unwrap_or_default(),
             single_party_relation(relation),
         ),
-        stem(date, document_type, &[], PartyRelation::None),
+        stem(date, lead, document_type, &[], PartyRelation::None),
     ];
     for attempt in &attempts {
         if attempt.chars().count() <= available {
             return format!("{attempt}{suffix}{extension_part}");
         }
     }
+    // The type cut short beside the entity, while enough of it is left to
+    // read; past that the entity goes too, and the type alone is cut.
+    if let Some(lead) = lead {
+        let front = stem(date, Some(lead), "", &[], PartyRelation::None);
+        let room = available.saturating_sub(front.chars().count() + 1);
+        if room >= MIN_TYPE_BESIDE_ENTITY {
+            let mut cut = document_type.chars().take(room).collect::<String>();
+            // At a word's end where one is in reach, not inside a word.
+            if document_type
+                .chars()
+                .nth(room)
+                .is_some_and(|next| next != ' ')
+                && let Some(space) = cut.rfind(' ')
+            {
+                cut.truncate(space);
+            }
+            while cut.ends_with(' ') || cut.ends_with('.') {
+                cut.pop();
+            }
+            if !cut.is_empty() {
+                return format!("{front} {cut}{suffix}{extension_part}");
+            }
+        }
+    }
+    let attempts = [stem(date, None, document_type, &[], PartyRelation::None)];
     let mut truncated = attempts
         .last()
         .cloned()
@@ -179,11 +247,21 @@ fn single_party_relation(relation: PartyRelation) -> PartyRelation {
     }
 }
 
-fn stem(date: &str, document_type: &str, parties: &[String], relation: PartyRelation) -> String {
+fn stem(
+    date: &str,
+    lead: Option<&str>,
+    document_type: &str,
+    parties: &[String],
+    relation: PartyRelation,
+) -> String {
     let mut value = String::new();
     if !date.is_empty() {
         value.push_str(date);
         value.push(' ');
+    }
+    if let Some(lead) = lead {
+        value.push_str(lead);
+        value.push_str(ENTITY_SEPARATOR);
     }
     value.push_str(document_type);
     if let Some(clause) = party_clause(parties, relation) {
@@ -319,6 +397,15 @@ pub(crate) fn type_segment(
 /// left of the name. The counterpart of [`type_segment`].
 pub(crate) fn party_segment(party: &str, spelling: Spelling) -> Option<String> {
     spell(party, spelling)
+}
+
+/// An entity as a name leads with it, or `None` when nothing printable is
+/// left of it. The counterpart of [`party_segment`]: the words are a
+/// party's, a configured name's or a reviewer's spelling, already without
+/// the legal form the entity slot leaves off (see
+/// [`crate::own_names::without_legal_form`]).
+pub(crate) fn entity_segment(words: &str, spelling: Spelling) -> Option<String> {
+    spell(words, spelling)
 }
 
 /// One of the document's parties as a composed name writes it - what a
@@ -664,6 +751,284 @@ pub fn windows_name_key(value: &str) -> String {
         .nfc()
         .collect::<String>()
         .to_lowercase()
+}
+
+/// The one date a filename's stem gives, as `YYYY-MM-DD`, when it reads one
+/// way only: "2025-03-26", "2025_03_26", "20250326", "26.03.2025",
+/// "03-26-2025", "March 26, 2025", "26 Mar 2025" and "2025 March 26th" are
+/// each 26 March 2025, wherever they stand in the stem. `None` for a stem
+/// with no date, and for one whose date could be read another way: day and
+/// month both twelve or under and different ("03.04.2025"), a two-digit
+/// year ("26.03.25"), or two different dates. A date is a real calendar
+/// day of a year from 1900 to 2099, and a run of eight digits is one only
+/// as year, month and day ("20250326"), so an invoice number is not read as
+/// a date by accident often.
+///
+/// A person, a scanner or another system wrote the name, not the document,
+/// so the date is a fallback for a reading that found none, and a check on
+/// a name a reading did date - never a replacement for the document's own.
+pub fn date_in_filename(stem: &str) -> Option<String> {
+    let dates = filename_dates(stem)?;
+    let (first, _) = dates.first()?;
+    dates
+        .iter()
+        .all(|(date, _)| date == first)
+        .then(|| first.clone())
+}
+
+/// Every date [`date_in_filename`] reads in `stem`, with the bytes it
+/// stands in, in the order they stand; `None` where one of them could be
+/// read more than one way.
+pub(crate) fn filename_dates(stem: &str) -> Option<Vec<(String, std::ops::Range<usize>)>> {
+    let tokens = filename_tokens(stem);
+    let mut found = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        match date_at(stem, &tokens[index..]) {
+            Some(DateToken::Date(date, taken)) => {
+                found.push((date, tokens[index].start..tokens[index + taken - 1].end));
+                index += taken;
+            }
+            Some(DateToken::Ambiguous) => return None,
+            None => index += 1,
+        }
+    }
+    Some(found)
+}
+
+/// A run of letters and digits in a filename's stem, and where it stands.
+struct FilenameToken<'a> {
+    text: &'a str,
+    start: usize,
+    end: usize,
+}
+
+fn filename_tokens(stem: &str) -> Vec<FilenameToken<'_>> {
+    let mut tokens = Vec::new();
+    let mut start = None;
+    for (at, character) in stem.char_indices() {
+        match (character.is_alphanumeric(), start) {
+            (true, None) => start = Some(at),
+            (false, Some(from)) => {
+                tokens.push(FilenameToken {
+                    text: &stem[from..at],
+                    start: from,
+                    end: at,
+                });
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = start {
+        tokens.push(FilenameToken {
+            text: &stem[from..],
+            start: from,
+            end: stem.len(),
+        });
+    }
+    tokens
+}
+
+enum DateToken {
+    /// A date, and how many tokens it took.
+    Date(String, usize),
+    /// Something written as a date that reads more than one way.
+    Ambiguous,
+}
+
+const MONTH_NAMES: [(&str, u32); 24] = [
+    ("january", 1),
+    ("jan", 1),
+    ("february", 2),
+    ("feb", 2),
+    ("march", 3),
+    ("mar", 3),
+    ("april", 4),
+    ("apr", 4),
+    ("may", 5),
+    ("june", 6),
+    ("jun", 6),
+    ("july", 7),
+    ("jul", 7),
+    ("august", 8),
+    ("aug", 8),
+    ("september", 9),
+    ("sept", 9),
+    ("sep", 9),
+    ("october", 10),
+    ("oct", 10),
+    ("november", 11),
+    ("nov", 11),
+    ("december", 12),
+    ("dec", 12),
+];
+
+/// The date that starts at the first of `tokens`, if one does.
+fn date_at(stem: &str, tokens: &[FilenameToken<'_>]) -> Option<DateToken> {
+    let digits = |token: &FilenameToken<'_>| token.text.bytes().all(|byte| byte.is_ascii_digit());
+    let number = |token: &FilenameToken<'_>| token.text.parse::<u32>().ok();
+    let gap = |left: &FilenameToken<'_>, right: &FilenameToken<'_>| &stem[left.end..right.start];
+    if let [a, b, c, ..] = tokens {
+        // Numbers with one separator, the same one twice: 2025-03-26,
+        // 26.03.2025, 03_26_2025.
+        let (first_gap, second_gap) = (gap(a, b), gap(b, c));
+        if digits(a)
+            && digits(b)
+            && digits(c)
+            && first_gap == second_gap
+            && matches!(first_gap, "-" | "." | "_" | " ")
+        {
+            let (x, y, z) = (number(a)?, number(b)?, number(c)?);
+            let short = |token: &FilenameToken<'_>| (1..=2).contains(&token.text.len());
+            if a.text.len() == 4 && short(b) && short(c) {
+                return calendar_date(x, y, z).map(|date| DateToken::Date(date, 3));
+            }
+            if c.text.len() == 4 && short(a) && short(b) {
+                return if x == y || (x > 12) != (y > 12) {
+                    let (month, day) = if x > 12 { (y, x) } else { (x, y) };
+                    calendar_date(z, month, day).map(|date| DateToken::Date(date, 3))
+                } else if x <= 12 && y <= 12 {
+                    Some(DateToken::Ambiguous)
+                } else {
+                    None
+                };
+            }
+            if c.text.len() == 2 && short(a) && short(b) && first_gap != " " {
+                // "26.03.25": the century is a guess.
+                return Some(DateToken::Ambiguous);
+            }
+        }
+        // A month by name: 26 March 2025, March 26, 2025, 2025-Mar-26.
+        let named_gap =
+            |text: &str| (1..=2).contains(&text.len()) && text.chars().all(|c| " ,-._".contains(c));
+        if named_gap(first_gap) && named_gap(second_gap) {
+            let month = |token: &FilenameToken<'_>| {
+                let lower = token.text.to_lowercase();
+                MONTH_NAMES
+                    .iter()
+                    .find(|(name, _)| *name == lower)
+                    .map(|(_, month)| *month)
+            };
+            let day = |token: &FilenameToken<'_>| {
+                let lower = token.text.to_ascii_lowercase();
+                let figures = lower.trim_end_matches(['s', 't', 'n', 'd', 'r', 'h']);
+                let suffix = &lower[figures.len()..];
+                (matches!(suffix, "" | "st" | "nd" | "rd" | "th")
+                    && (1..=2).contains(&figures.len())
+                    && figures.bytes().all(|byte| byte.is_ascii_digit()))
+                .then(|| figures.parse::<u32>().ok())
+                .flatten()
+            };
+            let year = |token: &FilenameToken<'_>| {
+                (token.text.len() == 4 && digits(token))
+                    .then(|| number(token))
+                    .flatten()
+            };
+            let read = match (day(a), month(b), year(c)) {
+                (Some(d), Some(m), Some(y)) => Some((y, m, d)),
+                _ => match (month(a), day(b), year(c)) {
+                    (Some(m), Some(d), Some(y)) => Some((y, m, d)),
+                    _ => match (year(a), month(b), day(c)) {
+                        (Some(y), Some(m), Some(d)) => Some((y, m, d)),
+                        _ => None,
+                    },
+                },
+            };
+            if let Some((y, m, d)) = read {
+                return calendar_date(y, m, d).map(|date| DateToken::Date(date, 3));
+            }
+        }
+    }
+    // Eight digits as year, month and day: 20250326.
+    let token = tokens.first()?;
+    if token.text.len() == 8 && digits(token) {
+        let (y, m, d) = (
+            token.text[..4].parse().ok()?,
+            token.text[4..6].parse().ok()?,
+            token.text[6..].parse().ok()?,
+        );
+        return calendar_date(y, m, d).map(|date| DateToken::Date(date, 1));
+    }
+    None
+}
+
+/// `YYYY-MM-DD` for a real calendar day of a year from 1900 to 2099.
+fn calendar_date(year: u32, month: u32, day: u32) -> Option<String> {
+    let date = format!("{year:04}-{month:02}-{day:02}");
+    ((1900..=2099).contains(&year) && crate::evidence::is_valid_iso_date(&date)).then_some(date)
+}
+
+/// Words a filename is given by a scanner, a camera, an editor or a copy,
+/// which say nothing about the document: "scan0001", "IMG_1234",
+/// "Document1", "untitled", "Copy of", "final_v2".
+const FILENAME_NOISE: &[&str] = &[
+    "scan",
+    "scanned",
+    "scanner",
+    "img",
+    "image",
+    "dsc",
+    "dscn",
+    "dcim",
+    "pxl",
+    "photo",
+    "pic",
+    "doc",
+    "docx",
+    "document",
+    "documents",
+    "untitled",
+    "unnamed",
+    "file",
+    "new",
+    "copy",
+    "of",
+    "final",
+    "version",
+    "rev",
+    "page",
+    "pages",
+    "attachment",
+    "download",
+    "export",
+    "print",
+    "printed",
+    "output",
+    "temp",
+    "tmp",
+    "test",
+    "pdf",
+];
+
+/// Whether a filename's stem says nothing about its document: once its
+/// dates, digits, hashes and the words a scanner, a camera, an editor or a
+/// copy writes ([`FILENAME_NOISE`]) are set aside, no word of two letters or
+/// more is left. "scan0001", "IMG_1234", "Document1", "untitled", "Doc
+/// (3)", "Copy of final_v2" and a hash are junk; "Host Chair SOW" is not.
+pub fn is_junk_filename(stem: &str) -> bool {
+    let dated = filename_dates(stem).unwrap_or_default();
+    let mut words = String::with_capacity(stem.len());
+    let mut last = 0;
+    for (_, range) in &dated {
+        words.push_str(&stem[last..range.start]);
+        words.push(' ');
+        last = range.end;
+    }
+    words.push_str(&stem[last..]);
+    !filename_tokens(&words).iter().any(|token| {
+        let lower = token.text.to_lowercase();
+        let letters = lower
+            .chars()
+            .filter(|character| character.is_alphabetic())
+            .count();
+        // A hash, or a piece of one: hexadecimal digits with a figure among
+        // them ("3f9a8b7c", the "e29b" of a UUID).
+        let hexadecimal = lower.chars().all(|character| character.is_ascii_hexdigit())
+            && lower.chars().any(|character| character.is_ascii_digit());
+        let noise = lower.trim_end_matches(|character: char| character.is_ascii_digit());
+        letters >= 2 && !hexadecimal && !FILENAME_NOISE.contains(&noise)
+    })
 }
 
 #[cfg(test)]
